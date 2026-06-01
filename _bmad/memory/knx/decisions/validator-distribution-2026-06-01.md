@@ -71,9 +71,27 @@ Public distribution requires a later explicit decision that names:
 - safety review target,
 - publication mechanism.
 
+## Private-Repo Distribution Planning
+
+Status: accepted for planning.
+
+Decision record: `ksev-private-repo-distribution-plan-2026-06-01.md`
+
+`ksev` may be prepared for future public distribution while the repository remains private/local and no GitHub, remote, push, publication, or external-send workflow is performed.
+
+The current manifest remains local-only:
+
+- owner: `KendallAI vNext local`
+- author: `KendallAI vNext local`
+- license: `UNLICENSED`
+- homepage: `local-only`
+- repository: `local-only`
+
+Public metadata values require a later explicit distribution metadata decision.
+
 ## Recommended Next Workflow
 
-Recommended next workflow: pause validator packaging expansion and route future work by concrete capability.
+Recommended next workflow: keep manifest values local-only until a repository, license, owner, homepage, release channel, and publication mechanism are explicitly approved.
 
 Safe next options:
 

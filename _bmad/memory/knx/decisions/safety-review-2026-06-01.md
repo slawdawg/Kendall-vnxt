@@ -1636,3 +1636,74 @@ Future approval is required before:
 Recommended next gate: public distribution path for `ksev`.
 
 Why gated: public distribution requires decisions about owner, license, homepage, repository, release channel, publication mechanism, and whether any data leaves the local machine. It may also imply GitHub/remotes or marketplace publication, which remain blocked unless separately approved.
+
+---
+
+# Safety Review - KSEV Private-Repo Distribution Planning
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass with concerns
+
+Target reviewed: `decisions/ksev-private-repo-distribution-plan-2026-06-01.md`
+
+## Short Summary
+
+Plan `ksev` for future public distribution while keeping the repository private/local and performing no GitHub, remote, push, publication, or external-send workflow now.
+
+## Why This Was Gated
+
+Distribution planning can imply ownership, licensing, repository identity, publication readiness, and future data egress. The plan is safe only because it records future requirements locally and does not change repo visibility, remotes, credentials, publication state, or public metadata.
+
+## Blockers
+
+No blockers found for local distribution-readiness planning.
+
+## Concerns
+
+1. Manifest metadata remains local-only.
+   - Impact: `ksev` is not public-release ready.
+   - Mitigation: keep it local-only until public owner, license, homepage, repository, release channel, and publication mechanism are explicitly approved.
+2. Future repository setup may require credentials and GitHub/remotes.
+   - Impact: this remains a hard boundary.
+   - Mitigation: require a separate gate before any remote, push, or GitHub operation.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+The plan is local documentation only. It does not send data externally, create remotes, publish, or access credentials.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The plan does not require package installation, external providers, local model/GPU processing, source mutation, GitHub/remotes, credentials, customer/production access, or runtime assistant behavior.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass
+
+The plan is recorded as a decision record and links to existing validator distribution evidence.
+
+## Required User Decisions
+
+Future gates:
+
+1. Distribution metadata posture.
+2. License selection.
+3. Private repository target and remote policy.
+4. Publication mechanism.
+5. Release-candidate safety review.
+
+## Recommended Next Gate
+
+Next gate: distribution metadata posture.
+
+Summary: decide whether to keep manifest values local-only until a repo exists, or replace some fields now with provisional non-public placeholders.
+
+Why gated: manifest metadata can imply public ownership, license rights, repository authority, or publication readiness.
+
+Recommendation: keep manifest values local-only for now and only record future metadata requirements in decision records.

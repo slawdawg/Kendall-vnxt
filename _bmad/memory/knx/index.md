@@ -43,6 +43,7 @@ Last updated: 2026-06-01
 - Latest approval gate flow decision: [decisions/approval-gate-flow-2026-06-01.md](decisions/approval-gate-flow-2026-06-01.md)
 - Latest runtime evidence inventory: [runtime/runtime-inventory/runtime-inventory-2026-06-01.md](runtime/runtime-inventory/runtime-inventory-2026-06-01.md)
 - Latest runtime evidence inventory validation: [runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json](runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json)
+- Latest `ksev` private-repo distribution plan: [decisions/ksev-private-repo-distribution-plan-2026-06-01.md](decisions/ksev-private-repo-distribution-plan-2026-06-01.md)
 
 ## Current Routing
 
@@ -56,6 +57,7 @@ Last updated: 2026-06-01
 - Data-boundary and execution-policy open questions for the current governance/local-evidence scope are resolved.
 - Runtime evidence inventory is materialized. It is metadata-only and excludes `_bmad/memory/knx/runtime/runtime-inventory/**` to avoid self-inclusion.
 - Gate flow: present summary and why gated, execute after approval, then immediately present the next gate details.
+- `ksev` public-distribution readiness planning is active. Current manifest remains local-only; next gate is distribution metadata posture.
 
 ## Active Boundaries
 
