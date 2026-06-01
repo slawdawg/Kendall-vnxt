@@ -281,10 +281,11 @@ Source: execution-policy-derived from `execution-policy.md`.
 ## Open Questions
 
 1. What identifier convention should downstream operational workflows use for artifact IDs?
-2. Should the first materialized inventory include runtime evidence paths, or only governance/validator source paths?
-3. Which source classes should the first real source packets cover?
-4. Should any workflow expand beyond read/planning into source mutation?
-5. Who can approve risk score `9` waivers?
+2. Should generated reports be grouped separately from source records?
+3. Should future inventories include checksums, or would that add unnecessary detail for planning?
+4. Which source classes should the first real source packets cover?
+5. Should any workflow expand beyond read/planning into source mutation?
+6. Who can approve risk score `9` waivers?
 
 ## Decision Sources
 

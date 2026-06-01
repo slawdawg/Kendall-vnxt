@@ -4,13 +4,13 @@ Last updated: 2026-06-01
 
 ## Decision Status
 
-Status: accepted for planning; materialization requires next approval
+Status: accepted for planning; first-pass scope selected; materialization requires next approval
 
 Decision: plan a narrow, local, read-only source inventory evidence pass for KNX governance and validator artifacts before any broader repository inventory or operational source intake.
 
 ## Planning Scope
 
-The first planned inventory scope is limited to KNX governance and validator artifacts:
+The first planned inventory scope is limited to KNX governance and validator source artifacts:
 
 - `_bmad/memory/knx/index.md`
 - `_bmad/memory/knx/profile.md`
@@ -21,11 +21,16 @@ The first planned inventory scope is limited to KNX governance and validator art
 - `_bmad/memory/knx/daily/`
 - `_bmad/memory/knx/decisions/`
 - `_bmad/memory/knx/fixtures/synthetic/`
-- `_bmad/memory/knx/runtime/`
 - `.agents/skills/knx-source-evidence-validator/`
 - `.agents/skills/.claude-plugin/marketplace.json`
 - `skills/reports/module-validation-knx-2026-06-01.md`
 - `skills/reports/module-validation-ksev-2026-06-01.md`
+
+Explicitly excluded from the first pass:
+
+- `_bmad/memory/knx/runtime/`
+
+Runtime evidence inventory is deferred to a separate later inventory artifact if needed.
 
 The broader approved source root remains:
 
@@ -111,15 +116,26 @@ The planned inventory must:
 
 ## Open Questions
 
-1. Should the first materialized inventory include runtime evidence paths, or only governance/validator source paths?
-2. Should generated reports be grouped separately from source records?
-3. Should future inventories include checksums, or would that add unnecessary detail for planning?
+1. Should generated reports be grouped separately from source records?
+2. Should future inventories include checksums, or would that add unnecessary detail for planning?
 
 ## Next Workflow
 
 Recommended next workflow: `knx-safety-validation-review` for this planned source inventory materialization.
 
-Do not materialize the inventory until the safety review records pass or manageable concerns and the user approves proceeding with materialization.
+Do not materialize the inventory until the user approves proceeding with materialization.
+
+## User Scope Decision
+
+Decision: exclude runtime evidence paths from the first source inventory pass.
+
+Rationale:
+
+- Keeps the first inventory focused on governance/validator source and report artifacts.
+- Avoids mixing source records with generated runtime evidence.
+- Leaves runtime evidence inventory available as a separate later artifact with its own validation record.
+
+Source: user decision on 2026-06-01.
 
 ## Decision Sources
 

@@ -1072,13 +1072,10 @@ Inventory materialization itself remains gated until the user approves proceedin
 
 ## Concerns
 
-1. The planned scope includes `_bmad/memory/knx/runtime/`, which contains generated validation evidence and handoff artifacts.
-   - Impact: useful for provenance, but it may mix source records and generated evidence records.
-   - Mitigation: group runtime evidence separately if materialized.
-2. The approved source root is broad.
+1. The approved source root is broad.
    - Impact: accidental broad inventory remains possible if commands are not scoped.
    - Mitigation: materialization commands must enumerate only the scoped KNX governance/validator paths from the planning decision.
-3. Filename/path inventory is still metadata about the local project.
+2. Filename/path inventory is still metadata about the local project.
    - Impact: lower risk than file contents, but still local source metadata.
    - Mitigation: keep the artifact local under approved runtime storage and do not copy file contents.
 
@@ -1102,10 +1099,14 @@ The planned artifact fields match the source inventory evidence contract and lin
 
 ## Required User Decisions
 
+Resolved user decision:
+
+- Runtime evidence paths are excluded from the first inventory pass.
+- Runtime evidence inventory is deferred to a separate later artifact if needed.
+
 Before materialization, decide:
 
-1. Include runtime evidence paths in the first inventory, or limit the first pass to governance/validator source paths only?
-2. Proceed with materializing the planned source inventory evidence under `_bmad/memory/knx/runtime/source-inventory/`?
+1. Proceed with materializing the planned source inventory evidence under `_bmad/memory/knx/runtime/source-inventory/`?
 
 ## Recommended Next Workflow
 

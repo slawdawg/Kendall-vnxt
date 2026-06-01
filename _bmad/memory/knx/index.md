@@ -37,7 +37,7 @@ Last updated: 2026-06-01
 - Latest coordinator decision: [decisions/governance-coordinator-2026-06-01.md](decisions/governance-coordinator-2026-06-01.md)
 - Latest data-boundary decision: [decisions/data-boundary-2026-06-01.md](decisions/data-boundary-2026-06-01.md)
 - Current recommended next workflow: route by concrete capability. Use `knx-source-evidence-contract` for fixture/evidence changes, `knx-mature-tool-review` before any source inventory materialization workflow, and `knx-safety-validation-review` before any new optional pack, public release path, external send, source mutation, or operational source intake.
-- Source inventory planning is active. Next required choice: include runtime evidence paths in the first inventory or limit the first pass to governance/validator source paths only.
+- Source inventory planning is active. First pass excludes runtime evidence paths and is limited to governance/validator source and report artifacts. Next required choice: approve materializing source inventory evidence under `_bmad/memory/knx/runtime/source-inventory/`.
 
 ## Active Boundaries
 
