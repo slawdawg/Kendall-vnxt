@@ -52,6 +52,27 @@ Before local commit, run:
 - Synthetic fixture validation.
 - Targeted secret-pattern scan over the staged KNX scope.
 
+## First Commit Completed
+
+Local commit:
+
+- `c8da043 Add KNX source evidence validator pack and governance records`
+
+Result:
+
+- Commit completed locally on branch `main`.
+- Working tree was clean immediately after commit.
+- No remote was configured or used.
+
+Validation before commit:
+
+- `git diff --cached --check`: pass.
+- KNX governance-core module validation: pass, 0 findings.
+- Optional `ksev` module validation: pass, 0 findings.
+- Packaged `ksev` tests: 10 passed.
+- Fixture validation: PASS, 14 fixtures, 0 errors, 0 warnings.
+- Targeted secret-pattern scan: no secret material found.
+
 ## Decision Sources
 
 - `_bmad/memory/knx/decisions/mature-tool-commit-readiness-2026-06-01.md`
