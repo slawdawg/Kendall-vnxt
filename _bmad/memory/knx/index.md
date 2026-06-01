@@ -54,6 +54,7 @@ Last updated: 2026-06-01
 - Latest evaluation packet hardening review: [runtime/evaluation-packet/hardening-review-2026-06-01.md](runtime/evaluation-packet/hardening-review-2026-06-01.md)
 - Latest external discussion-guide scope: [decisions/external-discussion-guide-scope-2026-06-01.md](decisions/external-discussion-guide-scope-2026-06-01.md)
 - Latest local discussion-guide draft: [runtime/evaluation-packet/discussion-guide-2026-06-01.md](runtime/evaluation-packet/discussion-guide-2026-06-01.md)
+- Latest company-facing discussion posture: [decisions/company-facing-discussion-parked-2026-06-01.md](decisions/company-facing-discussion-parked-2026-06-01.md)
 
 ## Current Routing
 
@@ -73,7 +74,7 @@ Last updated: 2026-06-01
 - Company evaluation access protocol is accepted for planning: no sharing, access, demo, repository access, or rights grant is approved.
 - Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only.
 - Local evaluation packet draft is materialized and hardened under approved runtime storage. It remains local-only and not approved for sharing.
-- External discussion-guide scope is accepted for planning. The local guide draft is materialized under approved runtime storage and external sharing remains blocked. IDE one-click action planning is closed at user request. Next hard gate is discussion-guide sharing-readiness scope.
+- External discussion-guide scope is accepted for planning, but the company-facing discussion path is parked at user request. The local guide draft remains local-only and unshared. IDE one-click action planning is closed. Current recommended next workflow is local KNX backlog consolidation under the fast-lane profile.
 
 ## Active Boundaries
 

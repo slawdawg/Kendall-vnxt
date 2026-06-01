@@ -111,13 +111,13 @@ Resolved follow-up: IDE one-click action declined.
 
 Decision: do not create an IDE button or IDE/workspace configuration for this packet.
 
-Next hard gate: discussion-guide sharing-readiness scope.
+Resolved follow-up: company-facing discussion parked.
 
-Summary: decide whether the local-only discussion guide should be reviewed for possible future company-facing sharing readiness, without sending it or granting rights.
+Decision record: `company-facing-discussion-parked-2026-06-01.md`
 
-Why gated: sharing-readiness moves closer to external use and must define exact audience, sharing mechanism, legal review path, restrictions, safety checks, and explicit send approval before anything leaves the local workspace.
+Decision: do not continue toward sharing-readiness, external discussion, company evaluation, or external send planning unless the user explicitly reopens that path later.
 
-Recommendation: run sharing-readiness scope next only if company-facing discussion is still desired. Keep all external sharing blocked.
+Next recommended local workflow: KNX local backlog consolidation.
 
 ## Decision Sources
 

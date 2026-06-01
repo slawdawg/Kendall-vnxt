@@ -740,9 +740,9 @@ The guide draft used deterministic local writing and validation. It did not requ
 
 ## Recommended Fixes Or Next Workflow
 
-Recommended next workflow: discussion-guide sharing-readiness scope, only if company-facing discussion is still desired.
+Recommended next workflow: local KNX backlog consolidation.
 
-Keep external sharing blocked unless a later exact-scope sharing gate is approved.
+Keep external sharing blocked unless the user explicitly reopens the company-facing path and a later exact-scope sharing gate is approved.
 
 ## Residual Risks
 
@@ -800,7 +800,9 @@ The profile relies on deterministic local processing and mature local checks. It
 
 ## Recommended Fixes Or Next Workflow
 
-Recommended next workflow: discussion-guide sharing-readiness scope, only if company-facing discussion is still desired.
+Recommended next workflow: local KNX backlog consolidation.
+
+The company-facing discussion path is parked at user request. Do not continue sharing-readiness planning unless the user explicitly reopens that path.
 
 ## Residual Risks
 
