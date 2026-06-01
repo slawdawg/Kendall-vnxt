@@ -64,6 +64,7 @@ Last updated: 2026-06-01
 - Latest greenfield implementation lane: [decisions/greenfield-implementation-lane-2026-06-01.md](decisions/greenfield-implementation-lane-2026-06-01.md)
 - Latest greenfield implementation runway: [runtime/greenfield-implementation/implementation-runway-2026-06-01.md](runtime/greenfield-implementation/implementation-runway-2026-06-01.md)
 - Latest `ksev` local registration trace: [runtime/greenfield-implementation/work-trace-ksev-registration-2026-06-01.md](runtime/greenfield-implementation/work-trace-ksev-registration-2026-06-01.md)
+- Latest hard-gate workthrough plan: [runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md](runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md)
 
 ## Current Routing
 
@@ -87,6 +88,7 @@ Last updated: 2026-06-01
 - Current KNX work is reopened only for the approved local-only greenfield implementation lane. Parked and hard-gated paths remain closed unless explicitly reopened. Operational source packets remain hard-gated.
 - Current local implementation runway is materialized under `runtime/greenfield-implementation/`.
 - `ksev` is registered in shared local config and help registry.
+- Remaining hard-gated paths are sequenced in `runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
 
 ## Active Boundaries
 

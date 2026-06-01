@@ -18,6 +18,7 @@ Status: local-only greenfield implementation lane open
 - User approval established default-proceed local workflow: eligible local KNX work proceeds automatically until a hard gate or user pause.
 - Greenfield implementation runway is materialized under `_bmad/memory/knx/runtime/greenfield-implementation/`.
 - `ksev` is registered in shared local config/help registry.
+- Hard-gated paths are sequenced in `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
 
 ## Latest Validation
 
@@ -75,5 +76,7 @@ Route by concrete capability:
 For eligible local KNX governance, evidence, validation, packaging, handoff, and local commit work, proceed by default under `decisions/default-proceed-local-workflow-2026-06-01.md`.
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/implementation-runway-2026-06-01.md` as the current local implementation runway.
+
+Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` to work through gated paths.
 
 Parked and hard-gated paths remain closed unless explicitly reopened.
