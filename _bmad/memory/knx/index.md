@@ -27,8 +27,8 @@ Last updated: 2026-06-01
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01.md](runtime/handoffs/handoff-2026-06-01.md)
-- Latest local commit: `c8da043 Add KNX source evidence validator pack and governance records`
-- Latest local commit status sync: `88aa647 Record KNX local commit status`
+- Latest local commit: `053f7c5 Materialize KNX source inventory evidence`
+- Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
 - Latest source inventory evidence: [runtime/source-inventory/source-inventory-2026-06-01.md](runtime/source-inventory/source-inventory-2026-06-01.md)
