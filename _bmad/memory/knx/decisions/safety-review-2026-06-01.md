@@ -804,6 +804,95 @@ Recommended next workflow: local KNX backlog consolidation.
 
 The company-facing discussion path is parked at user request. Do not continue sharing-readiness planning unless the user explicitly reopens that path.
 
+---
+
+# Safety Review - Local Backlog Consolidation
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass
+
+Target reviewed: `_bmad/memory/knx/decisions/local-backlog-consolidation-2026-06-01.md`
+
+Review intent: determine whether active routing has returned to internal-only KNX governance/evidence hardening after company-facing and IDE paths were parked or closed.
+
+## Blockers
+
+No safety blockers found.
+
+The backlog consolidation does not approve external sends, company sharing, GitHub/remotes, public distribution, license grants, IDE/workspace configuration, source mutation outside scoped KNX governance/evidence records, customer/production access, credential/account-security workflows, local model/GPU processing, destructive actions, or runtime assistant behavior.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+The records are stored under approved KNX memory/runtime locations and do not expand source, storage, processing, or destination boundaries.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The consolidation is deterministic local governance work and fits the fast-lane local governance profile.
+
+## Recommended Next Workflow
+
+Create metadata-only source packet templates/examples for the three approved first classes.
+
+## Decision Sources
+
+- `_bmad/memory/knx/decisions/fast-lane-local-governance-2026-06-01.md`
+- `_bmad/memory/knx/decisions/company-facing-discussion-parked-2026-06-01.md`
+- `_bmad/memory/knx/decisions/source-packet-classes-2026-06-01.md`
+
+---
+
+# Safety Review - Source Packet Examples
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass
+
+Target reviewed: `_bmad/memory/knx/runtime/source-packets/`
+
+Review intent: determine whether metadata-only source packet examples fit the approved first source packet classes and source/evidence contract.
+
+## Blockers
+
+No safety blockers found.
+
+The examples cover only approved classes, are metadata-only, and do not copy source contents, mutate source, send externally, use GitHub/remotes, include customer/production data, include credential/account-security material, access local model/GPU processing, or add runtime assistant behavior.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+Artifacts are stored under approved KNX runtime storage and remain local-only.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The examples use deterministic local governance records and do not require external providers, package installation, local model/GPU processing, credentials, customer systems, production systems, GitHub/remotes, or runtime assistant behavior.
+
+## Residual Risks
+
+- Future operational source packets remain hard-gated.
+- Deferred classes remain blocked until separately approved.
+
+## Recommended Next Workflow
+
+Source packet example validation hardening, only if more rigor is needed. Otherwise pause internal evidence hardening and leave hard-gated paths parked.
+
+## Decision Sources
+
+- `_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json`
+- `_bmad/memory/knx/decisions/source-packet-classes-2026-06-01.md`
+- `_bmad/memory/knx/source-evidence-contract.md`
+
 ## Residual Risks
 
 - The assistant must continue to distinguish fast-lane local work from hard-gated boundary expansion.

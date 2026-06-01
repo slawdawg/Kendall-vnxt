@@ -1,0 +1,35 @@
+{
+  "validation_evidence_id": "knx-validation-2026-06-01-002",
+  "artifact_under_validation": "metadata-only source packet examples",
+  "validation_type": "contract-check",
+  "result": "PASS",
+  "failed_rules": [],
+  "risk_score": 2,
+  "blocking_status": "nonblocking",
+  "evidence_references": [
+    "_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json",
+    "_bmad/memory/knx/decisions/source-packet-classes-2026-06-01.md",
+    "_bmad/memory/knx/source-evidence-contract.md"
+  ],
+  "command_or_check_run": "json parse, field coverage review, boundary review",
+  "waiver_id": "none",
+  "waiver_reason": "none",
+  "reviewer": "KNX workflow",
+  "created_at": "2026-06-01",
+  "checks": {
+    "json_parse_result": "PASS",
+    "packet_contract_check_result": "PASS",
+    "diff_check_result": "PASS",
+    "secret_pattern_scan_result": "PASS_POLICY_MENTIONS_ONLY",
+    "ksev_module_validation_result": "PASS_0_FINDINGS",
+    "required_source_packet_fields_present": true,
+    "approved_classes_only": true,
+    "metadata_only": true,
+    "source_contents_copied": false,
+    "source_mutation_performed": false,
+    "external_send_performed": false,
+    "github_or_remote_operation_performed": false,
+    "customer_or_production_data_included": false,
+    "credential_or_account_security_material_included": false
+  }
+}

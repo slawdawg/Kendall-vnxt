@@ -23,6 +23,15 @@ Reason: the artifact contracts are defined, the storage root is approved, and th
 | Output metadata | Links generated outputs to source packets, traces, validation evidence, and decisions | Provisional; allowed under `_bmad/memory/knx` or approved storage root |
 | Validator run evidence bundle | Links optional-pack validator reports to work trace, validation evidence, output metadata, and boundary flags | Provisional; allowed under approved storage root |
 
+## Current Source Packet Examples
+
+Metadata-only source packet examples for the three approved first classes are stored under:
+
+- `_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json`
+- `_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.md`
+
+These examples do not copy source contents, do not approve source mutation, and do not approve external sends or operational source intake.
+
 ## Required Fields
 
 ## Artifact ID Convention
