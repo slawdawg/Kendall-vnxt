@@ -47,6 +47,14 @@ This flow does not pre-approve:
 
 Those still require explicit gate approval.
 
+## Fast-Lane Local Governance Profile
+
+Decision record: `fast-lane-local-governance-2026-06-01.md`
+
+Decision: low-risk local KNX governance, evidence, validation, runtime packet, and local commit work may proceed without per-step user interaction when all fast-lane conditions are satisfied.
+
+Hard gates still require approval, including IDE/workspace configuration writes, external sends, company sharing, GitHub/remotes, public distribution, license grants, customer/production access, credential/account-security workflows, local model/GPU processing, destructive actions, risk score `9` waivers, and writes outside approved KNX memory/runtime locations.
+
 ## Decision Sources
 
 - User instruction on 2026-06-01.

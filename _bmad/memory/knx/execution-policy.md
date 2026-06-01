@@ -110,6 +110,12 @@ Accepted exceptions must be written to `decisions/execution-policy-YYYY-MM-DD.md
 
 Source: defaulted from KNX workflow.
 
+## Fast-Lane Local Governance
+
+Decision: low-risk local KNX governance, evidence, validation, runtime packet, and local commit work may proceed without per-step user interaction when it satisfies `decisions/fast-lane-local-governance-2026-06-01.md`.
+
+This does not approve IDE/workspace configuration writes, source mutation outside scoped KNX governance/evidence records, external sends, company sharing, GitHub/remotes, public distribution, license grants, customer/production access, credential/account-security workflows, local model/GPU processing, destructive actions, risk score `9` waivers, or writes outside approved KNX memory/runtime locations.
+
 ## Handoffs To `knx-mature-tool-review`
 
 Use `knx-mature-tool-review` before trusting a capability recommendation when:

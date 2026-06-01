@@ -753,6 +753,64 @@ Define the IDE, target config path, action behavior, rollback plan, and validati
 
 - Review status: local safety review of local discussion-guide draft.
 - No blockers finding: target artifact review and current boundary records.
+
+---
+
+# Safety Review - Fast-Lane Local Governance Profile
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass with concerns
+
+Target reviewed: `_bmad/memory/knx/decisions/fast-lane-local-governance-2026-06-01.md`
+
+Review intent: determine whether the fast-lane interaction profile preserves hard gates while reducing per-step approvals for low-risk local KNX work.
+
+## Blockers
+
+No safety blockers found for the fast-lane local governance profile.
+
+The profile is limited to local KNX governance, evidence, validation, runtime packet, and local commit work. It does not approve IDE/workspace config writes, writes outside approved KNX memory/runtime locations, source mutation outside scoped KNX records, external sends, company sharing, GitHub/remotes, public distribution, license grants, commercial terms intended for external use, customer/production access, credential/account-security workflows, local model/GPU processing, destructive actions, risk score `9` waivers, or runtime assistant behavior.
+
+## Concerns
+
+1. Reduced interaction increases the importance of boundary discipline.
+   - Impact: the assistant must classify hard gates correctly and stop before any boundary expansion.
+   - Severity: concern.
+   - Source: fast-lane profile.
+
+2. IDE one-click action remains a hard gate.
+   - Impact: the user's requested IDE button still requires exact IDE target, target file path, action behavior, validation, and rollback plan.
+   - Severity: concern.
+   - Source: fast-lane profile and user request.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The profile keeps writes inside KNX memory/runtime locations unless a hard gate approves otherwise. It does not expand source roots, storage roots, destinations, or sharing permissions.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The profile relies on deterministic local processing and mature local checks. It does not require external providers, local model/GPU processing, package installation, credentials, company systems, customer systems, production systems, GitHub/remotes, or runtime assistant behavior.
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: IDE one-click action scope as a hard gate.
+
+## Residual Risks
+
+- The assistant must continue to distinguish fast-lane local work from hard-gated boundary expansion.
+- No IDE configuration is approved yet.
+
+## Decision Sources
+
+- Review status: local safety review of fast-lane interaction profile.
+- No blockers finding: target artifact review and current boundary records.
 - Concerns: profile-derived, data-boundary-derived, source/evidence-contract-derived, and local repository-state observation.
 - Fixture coverage evidence: `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`.
 - Deterministic checks: local JSON parse, fixture category coverage check, fixture field presence check, and secret-pattern text search.
