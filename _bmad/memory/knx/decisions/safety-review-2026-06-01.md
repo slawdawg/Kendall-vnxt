@@ -633,6 +633,66 @@ Keep sharing blocked. If the user wants a company-facing path, scope a short loc
 
 - Review status: local safety review of hardened local packet.
 - No blockers finding: target artifact review, hardening review, data-boundary fit, and execution-policy fit.
+
+---
+
+# Safety Review - External Discussion Guide Scope
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass with concerns
+
+Target reviewed: `_bmad/memory/knx/decisions/external-discussion-guide-scope-2026-06-01.md`
+
+Review intent: determine whether the discussion-guide scope keeps future company-facing material local-only, summary-only, and blocked from external sharing.
+
+## Blockers
+
+No safety blockers found for the planning-only scope.
+
+The scope does not approve drafting a final external artifact, company sharing, external sends, repository access, GitHub/remotes, public distribution, public license activation, evaluation permission, production-use rights, redistribution rights, ownership transfer, pricing or contract terms, customer/production access, credentials/account-security workflows, source mutation, local model/GPU processing, or runtime assistant behavior.
+
+## Concerns
+
+1. The discussion guide will be closer to company-facing material than prior artifacts.
+   - Impact: wording must avoid implied offer, license, evaluation permission, warranty, support, pricing, or production-use commitments.
+   - Severity: concern.
+   - Source: external discussion-guide scope.
+
+2. Legal, employment/IP, confidentiality, audience, and sharing mechanism remain unresolved.
+   - Impact: no external send or company-facing use can proceed.
+   - Severity: concern.
+   - Source: company evaluation access protocol and commercial license posture.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The scope is local planning only and recommends storage under approved KNX runtime storage. Future draft material must be checked for excluded source, runtime, customer, production, credential, account-security, GitHub/remote, and operational deployment content.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The scope requires no external providers, local model/GPU processing, package installation, credentials, company systems, customer systems, production systems, GitHub/remotes, or runtime assistant behavior.
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: local discussion-guide draft.
+
+Keep sharing blocked. Draft a short local-only guide under approved runtime storage, then run targeted scan and safety review.
+
+## Residual Risks
+
+- A concrete guide draft does not exist yet.
+- No company-facing use is approved.
+
+## Decision Sources
+
+- Review status: local safety review of planning-only discussion-guide scope.
+- No blockers finding: target artifact review and current boundary records.
 - Concerns: profile-derived, data-boundary-derived, source/evidence-contract-derived, and local repository-state observation.
 - Fixture coverage evidence: `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`.
 - Deterministic checks: local JSON parse, fixture category coverage check, fixture field presence check, and secret-pattern text search.
