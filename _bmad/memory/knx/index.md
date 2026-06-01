@@ -31,13 +31,15 @@ Last updated: 2026-06-01
 - Latest local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
+- Latest source inventory evidence: [runtime/source-inventory/source-inventory-2026-06-01.md](runtime/source-inventory/source-inventory-2026-06-01.md)
+- Latest source inventory validation evidence: [runtime/source-inventory/validation-source-inventory-2026-06-01.json](runtime/source-inventory/validation-source-inventory-2026-06-01.json)
 
 ## Current Routing
 
 - Latest coordinator decision: [decisions/governance-coordinator-2026-06-01.md](decisions/governance-coordinator-2026-06-01.md)
 - Latest data-boundary decision: [decisions/data-boundary-2026-06-01.md](decisions/data-boundary-2026-06-01.md)
 - Current recommended next workflow: route by concrete capability. Use `knx-source-evidence-contract` for fixture/evidence changes, `knx-mature-tool-review` before any source inventory materialization workflow, and `knx-safety-validation-review` before any new optional pack, public release path, external send, source mutation, or operational source intake.
-- Source inventory planning is active. First pass excludes runtime evidence paths and is limited to governance/validator source and report artifacts. Next required choice: approve materializing source inventory evidence under `_bmad/memory/knx/runtime/source-inventory/`.
+- First-pass source inventory evidence is materialized. It excludes runtime evidence paths and is limited to governance/validator source and report artifacts. Next routing should be by concrete capability.
 
 ## Active Boundaries
 

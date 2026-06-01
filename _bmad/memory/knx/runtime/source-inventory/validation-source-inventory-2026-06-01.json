@@ -1,0 +1,58 @@
+{
+  "validation_evidence_id": "knx-source-inventory-validation-2026-06-01-001",
+  "created_at": "2026-06-01",
+  "artifact_under_validation": "_bmad/memory/knx/runtime/source-inventory/source-inventory-2026-06-01.json",
+  "result": "PASS",
+  "failed_rules": [],
+  "risk_score": 3,
+  "blocking": false,
+  "checks": [
+    {
+      "check_id": "approved-storage-root",
+      "result": "PASS",
+      "evidence": "Inventory artifacts are under _bmad/memory/knx/runtime/source-inventory/."
+    },
+    {
+      "check_id": "runtime-excluded-from-first-pass",
+      "result": "PASS",
+      "evidence": "Inventory scope excludes _bmad/memory/knx/runtime/** from path enumeration."
+    },
+    {
+      "check_id": "read-planning-only",
+      "result": "PASS",
+      "evidence": "Commands enumerate file paths and group metadata only."
+    },
+    {
+      "check_id": "no-file-contents-copied",
+      "result": "PASS",
+      "evidence": "Inventory records paths, counts, extensions, source classes, commands, and provenance only."
+    },
+    {
+      "check_id": "no-source-mutation",
+      "result": "PASS",
+      "evidence": "No source mutation command was run."
+    },
+    {
+      "check_id": "no-external-send",
+      "result": "PASS",
+      "evidence": "No network, provider, GitHub, or remote workflow was used."
+    },
+    {
+      "check_id": "tracked-visible-count-match",
+      "result": "PASS",
+      "evidence": "Tracked scoped files: 39; visible scoped files: 39."
+    }
+  ],
+  "evidence_references": [
+    "_bmad/memory/knx/runtime/source-inventory/source-inventory-2026-06-01.json",
+    "_bmad/memory/knx/runtime/source-inventory/source-inventory-2026-06-01.md",
+    "_bmad/memory/knx/runtime/source-inventory/work-trace-source-inventory-2026-06-01.md",
+    "_bmad/memory/knx/decisions/mature-tool-source-inventory-2026-06-01.md",
+    "_bmad/memory/knx/decisions/source-inventory-planning-2026-06-01.md"
+  ],
+  "waiver": null,
+  "residual_risk": [
+    "Path metadata can reveal local project structure.",
+    "No content inspection was performed, so sensitive-content absence is not proven."
+  ]
+}

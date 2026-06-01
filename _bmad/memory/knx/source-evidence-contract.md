@@ -301,3 +301,5 @@ Source: execution-policy-derived from `execution-policy.md`.
 - Execution-policy dependencies: execution-policy-derived.
 - Source inventory evidence fields: mature-tool-review-derived from `decisions/mature-tool-source-inventory-2026-06-01.md`.
 - First source inventory materialization plan: `decisions/source-inventory-planning-2026-06-01.md`.
+- First materialized source inventory evidence: `_bmad/memory/knx/runtime/source-inventory/source-inventory-2026-06-01.json`.
+- First materialized source inventory validation evidence: `_bmad/memory/knx/runtime/source-inventory/validation-source-inventory-2026-06-01.json`.

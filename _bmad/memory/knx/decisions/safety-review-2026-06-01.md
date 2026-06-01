@@ -1117,3 +1117,103 @@ Recommended next workflow: ask for the materialization choice above. If approved
 - Metadata-only inventory can still reveal local project structure.
 - Manual scoped commands can drift unless captured exactly in work trace and validation evidence.
 - The inventory does not prove sensitive content is absent because it does not inspect file contents.
+
+---
+
+# Safety Review - Materialized Source Inventory Evidence
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass with concerns
+
+Target reviewed: `_bmad/memory/knx/runtime/source-inventory/`
+
+Review intent: validate the first materialized KNX source inventory evidence pass after runtime paths were excluded from the inventory scope.
+
+## Governance Artifacts Read
+
+- `_bmad/memory/knx/source-evidence-contract.md`
+- `_bmad/memory/knx/data-boundaries.md`
+- `_bmad/memory/knx/execution-policy.md`
+- `_bmad/memory/knx/decisions/mature-tool-source-inventory-2026-06-01.md`
+- `_bmad/memory/knx/decisions/source-inventory-planning-2026-06-01.md`
+- `_bmad/memory/knx/runtime/source-inventory/source-inventory-2026-06-01.json`
+- `_bmad/memory/knx/runtime/source-inventory/source-inventory-2026-06-01.md`
+- `_bmad/memory/knx/runtime/source-inventory/work-trace-source-inventory-2026-06-01.md`
+- `_bmad/memory/knx/runtime/source-inventory/validation-source-inventory-2026-06-01.json`
+
+## Blockers
+
+No safety blockers found for the materialized first-pass source inventory evidence.
+
+## Concerns
+
+1. The inventory records path metadata.
+   - Impact: local project structure is visible in the evidence artifact.
+   - Mitigation: artifact remains local under approved KNX runtime storage.
+2. The inventory does not inspect file contents.
+   - Impact: it does not prove sensitive content is absent.
+   - Mitigation: evidence states this limitation and is used for planning, not sensitive-content certification.
+
+## Verification
+
+- Inventory JSON parse: pass.
+- Validation JSON parse: pass.
+- Enumerated path count: 39.
+- Tracked scoped files: 39.
+- Visible scoped files: 39.
+- Runtime paths inside enumerated inventory paths: 0.
+- Boundary result: PASS.
+- `git diff --check`: pass.
+- KNX governance-core module validation: pass, 0 findings.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+The inventory evidence was written under `_bmad/memory/knx/runtime/source-inventory/`, inside the approved storage root. The enumerated paths are within the approved source root and explicitly exclude `_bmad/memory/knx/runtime/` from the first pass.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The materialization used mature deterministic local tools: Git, ripgrep, and PowerShell grouping. It did not use custom source indexing code, package installation, GitHub/remotes, external providers, local model/GPU processing, credentials, or account/security workflows.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass with concerns
+
+The source inventory evidence includes the required fields, links to the mature-tool decision, links to validation evidence, links to a work trace, records boundary flags, and states uncertainty. The remaining concern is inherent to path-only metadata: it is useful for planning but not content safety certification.
+
+## Required User Decisions
+
+No additional user decision is required for this first-pass inventory evidence.
+
+Future user decisions are required before:
+
+- inventorying `_bmad/memory/knx/runtime/`,
+- broadening inventory beyond the selected KNX governance/validator scope,
+- adding checksums,
+- inspecting file contents,
+- creating source packets from real source material,
+- source mutation,
+- external sends/providers,
+- GitHub/remotes,
+- public distribution,
+- local model/GPU processing,
+- customer/production access,
+- credentials or account/security workflows.
+
+## Recommended Next Workflow
+
+Recommended next workflow: update the KNX index and daily log, then commit the materialized source inventory evidence locally.
+
+After that, route by concrete capability. A sensible next planning topic is whether generated reports should be grouped separately from source records in future inventories.
+
+## Residual Risks
+
+- Metadata-only inventory can still reveal local project structure.
+- The inventory does not prove sensitive content is absent because it does not inspect file contents.
+- Future broader inventories must repeat the safety review before materialization.
