@@ -1388,3 +1388,49 @@ Future approval is required before any named workflow mutates source files.
 ## Residual Risks
 
 Future implementation work may be confused with source mutation unless each workflow names its target paths and operation class clearly.
+
+---
+
+# Safety Review - Artifact IDs And Risk Waiver Authority
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass
+
+Targets reviewed:
+
+- `decisions/artifact-id-convention-2026-06-01.md`
+- `decisions/risk-waiver-authority-2026-06-01.md`
+
+## Decisions Reviewed
+
+- Artifact IDs use local deterministic format `knx-{artifact-kind}-{yyyy-mm-dd}-{sequence}`.
+- Risk score `9` waivers require explicit user approval and a durable decision record. KNX workflows may recommend waiver requests but may not self-approve them.
+
+## Blockers
+
+No blockers found.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+The artifact ID convention does not encode sensitive details and does not require external services. The waiver authority rule preserves hard stops for credentials, customer/production access, external sends, destructive/data-loss operations, and source mutation without a named mutation decision.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The decisions require no custom code, package install, external provider, GitHub/remote workflow, local model/GPU processing, or source mutation.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass
+
+The decisions close the remaining open source/evidence contract questions for the current governance and local evidence scope.
+
+## Residual Risks
+
+Future workflows must consistently apply the ID format and must not treat a waiver recommendation as waiver approval.

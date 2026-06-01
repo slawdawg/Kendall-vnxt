@@ -24,6 +24,18 @@ Reason: the artifact contracts are defined, the storage root is approved, and th
 
 ## Required Fields
 
+## Artifact ID Convention
+
+Use deterministic, human-readable local artifact IDs:
+
+```text
+knx-{artifact-kind}-{yyyy-mm-dd}-{sequence}
+```
+
+Recommended artifact kinds include `source-packet`, `work-trace`, `validation`, `user-input`, `decision`, `fixture`, `output`, `source-inventory`, and `validator-run`.
+
+IDs are local, stable after creation, and must not encode customer, credential, account, production, private-source, or external-provider details.
+
 ### Source Packet
 
 - `source_packet_id`: stable local identifier.
@@ -250,7 +262,11 @@ Risk score is an integer from 0 through 9:
 - 6-8: high risk.
 - 9: blocking risk.
 
-Score `9` is blocking unless explicitly waived by a decision record. A waiver must record rationale, scope, approval basis, and review condition.
+Score `9` is blocking unless explicitly waived by a user-approved decision record. KNX workflows may recommend a waiver request, but may not self-approve it.
+
+A risk score `9` waiver must record rationale, exact scope, approval basis, expiration or review condition, linked source/evidence references, linked validation evidence, and residual risk.
+
+Do not waive risk score `9` for credentials, tokens, MFA, account/security material, customer/production system access, external sends of ambiguous or sensitive material, destructive or ambiguous data-loss operations, or source mutation without a named mutation decision and rollback plan.
 
 ## Negative Fixture Categories
 
@@ -303,8 +319,7 @@ Source: execution-policy-derived from `execution-policy.md`.
 
 ## Open Questions
 
-1. What identifier convention should downstream operational workflows use for artifact IDs?
-2. Who can approve risk score `9` waivers?
+No open source/evidence contract questions remain for the current governance and local evidence scope.
 
 ## Decision Sources
 
@@ -326,3 +341,5 @@ Source: execution-policy-derived from `execution-policy.md`.
 - Checksum rule: deferred by default because checksums require file-content reads; user-approved on 2026-06-01 and recorded in `decisions/source-inventory-planning-2026-06-01.md`.
 - First source packet class decision: `decisions/source-packet-classes-2026-06-01.md`.
 - Source mutation posture: `decisions/source-mutation-posture-2026-06-01.md`.
+- Artifact ID convention: `decisions/artifact-id-convention-2026-06-01.md`.
+- Risk score `9` waiver authority: `decisions/risk-waiver-authority-2026-06-01.md`.

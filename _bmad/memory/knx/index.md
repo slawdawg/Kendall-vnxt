@@ -35,6 +35,8 @@ Last updated: 2026-06-01
 - Latest source inventory validation evidence: [runtime/source-inventory/validation-source-inventory-2026-06-01.json](runtime/source-inventory/validation-source-inventory-2026-06-01.json)
 - Latest source packet class decision: [decisions/source-packet-classes-2026-06-01.md](decisions/source-packet-classes-2026-06-01.md)
 - Latest source mutation posture decision: [decisions/source-mutation-posture-2026-06-01.md](decisions/source-mutation-posture-2026-06-01.md)
+- Latest artifact ID convention decision: [decisions/artifact-id-convention-2026-06-01.md](decisions/artifact-id-convention-2026-06-01.md)
+- Latest risk waiver authority decision: [decisions/risk-waiver-authority-2026-06-01.md](decisions/risk-waiver-authority-2026-06-01.md)
 
 ## Current Routing
 
@@ -44,6 +46,7 @@ Last updated: 2026-06-01
 - First-pass source inventory evidence is materialized. It excludes runtime evidence paths and is limited to governance/validator source and report artifacts. Next routing should be by concrete capability.
 - First real source packet classes are selected: `user-authored-planning-document`, `public-or-synthetic-sample-data`, and `generated-report`.
 - Source mutation remains blocked by default; future mutation requires a named workflow, exact target paths, rollback/recovery plan, validation plan, safety review, and explicit approval.
+- Source/evidence contract open questions for the current governance/local-evidence scope are resolved.
 
 ## Active Boundaries
 
