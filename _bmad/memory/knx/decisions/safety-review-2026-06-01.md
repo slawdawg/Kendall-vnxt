@@ -1279,3 +1279,62 @@ This decision does not approve file-content inspection, content copying, source 
 ## Recommended Next Workflow
 
 Route by concrete capability. A sensible next governance decision is selecting which source classes should be covered by the first real source packets.
+
+---
+
+# Safety Review - First Source Packet Classes
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass with concerns
+
+Target reviewed: `decisions/source-packet-classes-2026-06-01.md`
+
+## Decision Reviewed
+
+First real source packets should cover:
+
+1. `user-authored-planning-document`
+2. `public-or-synthetic-sample-data`
+3. `generated-report`
+
+## Blockers
+
+No blockers found for using these classes as the first real source packet classes.
+
+## Concerns
+
+1. Generated reports are secondary evidence, not primary source.
+   - Mitigation: generated reports must link to source packets, work traces, and validation evidence.
+2. Source packets can accidentally become content copies.
+   - Mitigation: first packets should record source location, class, approval basis, allowed use, uncertainty, and provenance; avoid copying file contents unless separately approved.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+The approved classes stay within the approved source root and read/planning-only operation. They exclude runtime evidence inventory, exported files/attachments, customer/project data, production systems, credentials/tokens/MFA/account-security material, GitHub/remotes, external providers, local model/GPU-derived outputs, source mutation records, and operational source intake.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The decision does not require custom code, package installation, external providers, local model/GPU processing, GitHub/remotes, or source mutation.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass with concerns
+
+The classes align with the contract and first source inventory evidence. Remaining concern is that generated reports must stay clearly labeled as generated evidence and not be treated as independent truth.
+
+## Required User Decisions
+
+No additional decision is needed for class selection.
+
+Future approval is required before creating packets for deferred classes or copying source contents into packets.
+
+## Recommended Next Workflow
+
+Recommended next workflow: decide whether to create source packet templates/examples for the three approved first classes, still metadata-only and local.

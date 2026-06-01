@@ -198,6 +198,19 @@ Required uncertainty vocabulary:
 
 Generated outputs must not be treated as trusted unless they link to source packets, a work trace, and validation evidence.
 
+## Approved First Source Packet Classes
+
+The first real source packets should use these classes:
+
+1. `user-authored-planning-document`
+   - KNX memory records, decisions, contracts, policies, and daily logs.
+2. `public-or-synthetic-sample-data`
+   - Synthetic fixtures and safe examples only.
+3. `generated-report`
+   - Generated validation/report outputs that support provenance.
+
+Deferred classes include runtime evidence inventory, exported files or attachments, customer/project data, production systems, credentials/tokens/MFA/account-security material, GitHub/remotes, external providers, local model/GPU-derived outputs, source mutation records, and operational source intake.
+
 ## Required Link Rules
 
 - Every generated output must link to at least one source packet, one work trace, and one validation evidence record.
@@ -283,9 +296,8 @@ Source: execution-policy-derived from `execution-policy.md`.
 ## Open Questions
 
 1. What identifier convention should downstream operational workflows use for artifact IDs?
-2. Which source classes should the first real source packets cover?
-3. Should any workflow expand beyond read/planning into source mutation?
-4. Who can approve risk score `9` waivers?
+2. Should any workflow expand beyond read/planning into source mutation?
+3. Who can approve risk score `9` waivers?
 
 ## Decision Sources
 
@@ -305,3 +317,4 @@ Source: execution-policy-derived from `execution-policy.md`.
 - First materialized source inventory validation evidence: `_bmad/memory/knx/runtime/source-inventory/validation-source-inventory-2026-06-01.json`.
 - Generated-report grouping rule: user-approved on 2026-06-01 and recorded in `decisions/source-inventory-planning-2026-06-01.md`.
 - Checksum rule: deferred by default because checksums require file-content reads; user-approved on 2026-06-01 and recorded in `decisions/source-inventory-planning-2026-06-01.md`.
+- First source packet class decision: `decisions/source-packet-classes-2026-06-01.md`.
