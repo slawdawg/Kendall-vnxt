@@ -1,0 +1,219 @@
+{
+  "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+  "title": "First KNX Synthetic Fixture Pack",
+  "synthetic_only_statement": "All examples in this pack are synthetic and contain no real customer data, credentials, tokens, secrets, production data, source-system content, private user content, or account/security material.",
+  "created_at": "2026-05-31",
+  "created_by": "KNX source evidence contract workflow",
+  "contract_reference": "../../source-evidence-contract.md",
+  "fixtures": [
+    {
+      "fixture_type": "valid-source-packet",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic source packet example only.",
+      "artifact_ids": ["sp-synth-valid-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "source_packet_id": "sp-synth-valid-001",
+        "title": "Synthetic planning note",
+        "source_class": "synthetic-fixture",
+        "source_location_or_description": "Inline synthetic note created for contract fixture testing.",
+        "source_owner_or_provider": "synthetic",
+        "approval_basis": "synthetic",
+        "source_support_level": "synthetic",
+        "permitted_processing_boundary": "deterministic-local",
+        "permitted_storage_boundary": "synthetic-fixture-folder",
+        "downstream_allowed_use": "fixture-test",
+        "uncertainty": "none",
+        "forbidden_content_check": "pass",
+        "created_at": "2026-05-31",
+        "created_by": "KNX workflow",
+        "source_references": ["_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"],
+        "open_questions": []
+      }
+    },
+    {
+      "fixture_type": "valid-work-trace",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic work trace example only.",
+      "artifact_ids": ["wt-synth-valid-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "work_trace_id": "wt-synth-valid-001",
+        "trigger": "workflow",
+        "source_packet_ids": ["sp-synth-valid-001"],
+        "generated_artifact_ids": ["out-synth-valid-001"],
+        "validation_evidence_ids": ["ve-synth-valid-001"],
+        "decision_record_ids": [],
+        "steps_taken": [
+          "Read synthetic source packet.",
+          "Created synthetic fixture output metadata.",
+          "Recorded validation evidence."
+        ],
+        "tools_used": ["KNX source evidence contract workflow", "deterministic local file edit"],
+        "execution_layer": 2,
+        "assumptions": ["Fixture examples are not real operational data."],
+        "uncertainty": "none",
+        "residual_risk": "low",
+        "next_action": "validate",
+        "created_at": "2026-05-31"
+      }
+    },
+    {
+      "fixture_type": "valid-validation-evidence",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic validation evidence example only.",
+      "artifact_ids": ["ve-synth-valid-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "validation_evidence_id": "ve-synth-valid-001",
+        "artifact_under_validation": "fixture",
+        "validation_type": "fixture-check",
+        "result": "PASS",
+        "failed_rules": [],
+        "risk_score": 1,
+        "blocking_status": "nonblocking",
+        "evidence_references": [
+          "sp-synth-valid-001",
+          "wt-synth-valid-001",
+          "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
+        ],
+        "command_or_check_run": "manual contract review",
+        "waiver_id": "none",
+        "waiver_reason": "",
+        "reviewer": "KNX workflow",
+        "created_at": "2026-05-31"
+      }
+    },
+    {
+      "fixture_type": "valid-user-input-required",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic user-input-required example only.",
+      "artifact_ids": ["uir-synth-valid-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "user_input_required_id": "uir-synth-valid-001",
+        "decision_needed": "Choose whether the synthetic example should be kept as a fixture-test artifact.",
+        "why_automation_cannot_proceed": "ambiguity",
+        "source_references": ["sp-synth-valid-001"],
+        "allowed_choices": ["keep synthetic fixture", "remove synthetic fixture", "defer fixture expansion"],
+        "blocked_downstream_work": ["validator acceptance test using this fixture"],
+        "risk_if_guessed": "medium",
+        "due_or_review_condition": "before validator implementation",
+        "status": "open",
+        "created_at": "2026-05-31"
+      }
+    },
+    {
+      "fixture_type": "missing-source-negative",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic missing-source negative example only.",
+      "artifact_ids": ["out-synth-neg-missing-source-001"],
+      "expected_validation_result": "FAIL",
+      "expected_failed_rules": ["generated output must link to at least one source packet"],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "output_artifact_id": "out-synth-neg-missing-source-001",
+        "output_type": "fixture-output",
+        "source_packet_ids": [],
+        "work_trace_id": "wt-synth-valid-001",
+        "validation_evidence_ids": ["ve-synth-neg-missing-source-001"],
+        "decision_record_ids": [],
+        "generation_boundary": "deterministic-local",
+        "storage_location": "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+        "source_support_summary": "unsupported",
+        "uncertainty": "blocking",
+        "result_status": "blocked",
+        "created_at": "2026-05-31"
+      }
+    },
+    {
+      "fixture_type": "external-action-negative",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic external-action negative example only; it must not be executed.",
+      "artifact_ids": ["wt-synth-neg-external-action-001"],
+      "expected_validation_result": "FAIL",
+      "expected_failed_rules": ["external provider processing requires explicit approval or recorded policy", "fixtures must not trigger external sends"],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "work_trace_id": "wt-synth-neg-external-action-001",
+        "trigger": "workflow",
+        "source_packet_ids": ["sp-synth-valid-001"],
+        "generated_artifact_ids": ["out-synth-neg-external-action-001"],
+        "validation_evidence_ids": ["ve-synth-neg-external-action-001"],
+        "decision_record_ids": [],
+        "steps_taken": [
+          "Proposed sending synthetic fixture content to an unapproved external provider."
+        ],
+        "tools_used": ["unapproved external provider placeholder"],
+        "execution_layer": 5,
+        "assumptions": ["No explicit approval or standing policy exists."],
+        "uncertainty": "blocking",
+        "residual_risk": "blocking",
+        "next_action": "block",
+        "created_at": "2026-05-31"
+      }
+    },
+    {
+      "fixture_type": "unsupported-inference-negative",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic unsupported-inference negative example only.",
+      "artifact_ids": ["out-synth-neg-unsupported-inference-001"],
+      "expected_validation_result": "CONCERNS",
+      "expected_failed_rules": ["unsupported or inferred claim must be labeled and reviewed before being treated as validated"],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "output_artifact_id": "out-synth-neg-unsupported-inference-001",
+        "output_type": "fixture-output",
+        "source_packet_ids": ["sp-synth-valid-001"],
+        "work_trace_id": "wt-synth-valid-001",
+        "validation_evidence_ids": ["ve-synth-neg-unsupported-inference-001"],
+        "decision_record_ids": [],
+        "generation_boundary": "deterministic-local",
+        "storage_location": "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+        "source_support_summary": "inferred",
+        "uncertainty": "high",
+        "result_status": "ready-for-review",
+        "created_at": "2026-05-31"
+      }
+    },
+    {
+      "fixture_type": "forbidden-destination-negative",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic forbidden-destination negative example only; it must not be written outside the synthetic fixture folder.",
+      "artifact_ids": ["out-synth-neg-forbidden-destination-001"],
+      "expected_validation_result": "FAIL",
+      "expected_failed_rules": ["fixtures must live under _bmad/memory/knx/fixtures/synthetic", "live/runtime assistant state outside _bmad/memory/knx remains forbidden until storage root is approved"],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "output_artifact_id": "out-synth-neg-forbidden-destination-001",
+        "output_type": "fixture-output",
+        "source_packet_ids": ["sp-synth-valid-001"],
+        "work_trace_id": "wt-synth-valid-001",
+        "validation_evidence_ids": ["ve-synth-neg-forbidden-destination-001"],
+        "decision_record_ids": [],
+        "generation_boundary": "deterministic-local",
+        "storage_location": "C:/unapproved-runtime-state/synthetic-output.json",
+        "source_support_summary": "synthetic",
+        "uncertainty": "blocking",
+        "result_status": "blocked",
+        "created_at": "2026-05-31"
+      }
+    }
+  ]
+}

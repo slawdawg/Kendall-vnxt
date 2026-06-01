@@ -1,0 +1,20 @@
+document_output_language: English
+output_folder: '{project-root}/_bmad-output'
+knx:
+  name: KendallAI vNext
+  description: Reusable BMad module strategy for a local-first, source-packet-first
+    assistant that preserves safety, evidence, draft-only behavior, and Builder-ready
+    workflows.
+  version: 1.0.0
+  default_selected: false
+  knx_user_label: 'Primary user: Bob'
+  knx_storage_mode: local-folder
+  knx_storage_root: ''
+  knx_repo_remote: ''
+  knx_local_compute_policy: local-first
+  knx_external_llm_policy: last-resort-with-approval-or-policy
+  knx_gpu_available: unknown
+  knx_allowed_source_roots: ''
+  knx_forbidden_destinations: external-providers-without-policy, customer-systems,
+    production-systems
+  knx_approval_policy: no-send/no-mutation/credentials/account-security/customer-production/destructive
