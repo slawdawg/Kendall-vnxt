@@ -18,6 +18,7 @@ Reason: the artifact contracts are defined, the storage root is approved, and th
 | User-input-required item | Explicit blocker or human decision request when automation cannot proceed safely | Provisional; allowed under `_bmad/memory/knx` |
 | Decision record | Governance decision with accepted, rejected, deferred, blocked, or waived outcome and rationale | Allowed under `_bmad/memory/knx/decisions` |
 | Source inventory evidence | Deterministic inventory summary for approved read/planning source roots | Allowed under approved storage root |
+| Runtime evidence inventory | Deterministic inventory summary for generated evidence under approved runtime storage | Allowed under approved storage root |
 | Fixture pack | Synthetic valid and negative examples for future validation | Allowed only under `_bmad/memory/knx/fixtures/synthetic` |
 | Output metadata | Links generated outputs to source packets, traces, validation evidence, and decisions | Provisional; allowed under `_bmad/memory/knx` or approved storage root |
 | Validator run evidence bundle | Links optional-pack validator reports to work trace, validation evidence, output metadata, and boundary flags | Provisional; allowed under approved storage root |
@@ -51,6 +52,31 @@ IDs are local, stable after creation, and must not encode customer, credential, 
 - `source_operation`: read-planning, mutation-requested, mutation-approved, external-send-requested, or blocked.
 - `uncertainty`: none, low, medium, high, or blocking.
 - `forbidden_content_check`: pass, concerns, fail, or not-run.
+- `created_at`: ISO date.
+- `created_by`: user, KNX workflow, or other local actor.
+
+### Runtime Evidence Inventory
+
+- `runtime_inventory_id`: stable local identifier.
+- `storage_root`: approved runtime storage root path.
+- `storage_root_approval_basis`: user-specified, profile-derived, data-boundary-derived, decision-record, or unresolved.
+- `inventory_scope`: runtime-evidence-paths, extension-summary, runtime-evidence-category-summary, or mixed.
+- `allowed_operation`: metadata-only read-planning.
+- `inventory_tool`: ripgrep, PowerShell, or approved-custom-glue.
+- `inventory_command_or_check`: exact command/check name or not-run.
+- `excluded_paths_or_patterns`: list.
+- `file_count`: integer or unresolved.
+- `top_file_groups`: list when available.
+- `runtime_evidence_groups`: list when available.
+- `generated_artifact_path`: approved local path or not-materialized.
+- `forbidden_content_check`: pass, concerns, fail, or not-run.
+- `boundary_check_result`: PASS, CONCERNS, FAIL, or WAIVED.
+- `source_mutation_performed`: must be false unless separately approved.
+- `external_send_performed`: must be false unless separately approved.
+- `package_install_performed`: must be false unless separately approved.
+- `runtime_assistant_behavior_added`: must be false unless separately approved.
+- `checksums`: omitted by default unless a later safety-reviewed decision approves content reads for drift detection.
+- `uncertainty`: none, low, medium, high, or blocking.
 - `created_at`: ISO date.
 - `created_by`: user, KNX workflow, or other local actor.
 - `source_references`: list of local references or descriptions.
@@ -343,3 +369,4 @@ No open source/evidence contract questions remain for the current governance and
 - Source mutation posture: `decisions/source-mutation-posture-2026-06-01.md`.
 - Artifact ID convention: `decisions/artifact-id-convention-2026-06-01.md`.
 - Risk score `9` waiver authority: `decisions/risk-waiver-authority-2026-06-01.md`.
+- Runtime evidence inventory planning: `decisions/runtime-evidence-inventory-planning-2026-06-01.md`.

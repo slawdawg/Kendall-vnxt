@@ -1480,3 +1480,78 @@ Future user approval is required before local model/GPU processing or any GitHub
 ## Residual Risks
 
 Future workflows may need these capabilities, but they must request them explicitly with concrete scope and evidence.
+
+---
+
+# Safety Review - Runtime Evidence Inventory Planning
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: concerns
+
+Target reviewed: `decisions/runtime-evidence-inventory-planning-2026-06-01.md`
+
+## Review Intent
+
+Determine whether a separate metadata-only runtime evidence inventory can be planned safely before materializing runtime inventory artifacts.
+
+## Governance Artifacts Read
+
+- `_bmad/memory/knx/data-boundaries.md`
+- `_bmad/memory/knx/source-evidence-contract.md`
+- `_bmad/memory/knx/decisions/runtime-evidence-inventory-planning-2026-06-01.md`
+
+## Blockers
+
+No safety blockers found for planning a metadata-only runtime evidence inventory.
+
+Materialization remains gated until the user approves proceeding with the planned scope.
+
+## Concerns
+
+1. Runtime evidence paths are generated artifacts and may include validation reports, handoffs, and audit records.
+   - Impact: useful for provenance, but should not be mixed with source records.
+   - Mitigation: keep this as a separate runtime evidence inventory.
+2. Path metadata still reveals local project structure.
+   - Impact: lower risk than file contents, but still local metadata.
+   - Mitigation: keep artifacts under approved runtime storage and do not copy file contents.
+3. Runtime inventory under `_bmad/memory/knx/runtime/` may include the inventory output folder itself after materialization.
+   - Impact: inventory could self-include generated inventory artifacts.
+   - Mitigation: exclude `_bmad/memory/knx/runtime/runtime-inventory/**` from enumeration or record self-inclusion explicitly.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The plan stays under the approved runtime storage root and records path metadata only. It does not expand approved source roots or operational source intake.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The plan uses mature deterministic local tools: ripgrep and PowerShell grouping. It does not require custom code, package installation, GitHub/remotes, external providers, local model/GPU processing, source mutation, credentials, or account/security workflows.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass with concerns
+
+The contract now defines runtime evidence inventory fields. Concerns remain until materialized artifacts prove runtime inventory output paths are under approved storage, contents are not copied, checksums are omitted, and self-inclusion is handled.
+
+## Required User Decisions
+
+Before materialization, decide:
+
+1. Proceed with materializing runtime evidence inventory under `_bmad/memory/knx/runtime/runtime-inventory/`?
+2. Exclude `_bmad/memory/knx/runtime/runtime-inventory/**` from enumeration to avoid self-inclusion?
+
+## Recommended Next Workflow
+
+Recommended next workflow: ask for materialization approval and self-inclusion handling. If approved, create runtime inventory artifacts under approved runtime storage and rerun safety validation against the materialized artifacts.
+
+## Residual Risks
+
+- Metadata-only runtime inventory can still reveal local evidence structure.
+- It does not prove sensitive content is absent because it does not inspect file contents.
+- Future broader runtime analysis must repeat safety review before materialization.
