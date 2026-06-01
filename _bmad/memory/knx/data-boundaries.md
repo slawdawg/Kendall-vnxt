@@ -6,24 +6,25 @@ Last updated: 2026-06-01
 
 Status: provisional
 
-Reason: storage mode and local Git source/review boundary are known, but storage root, allowed source roots, Git remote/GitHub boundary, local model runtime, and standing external-provider approvals are unresolved.
+Reason: storage root, allowed source root, local Git source/review boundary, GitHub/remote disablement, and per-use external-provider approval policy are recorded. The plan remains provisional because local model runtime and GPU/local accelerator availability are unresolved, and source mutation remains approval-gated.
 
 ## Storage Mode And Root
 
 - Storage mode: local-folder
 - Storage mode source: profile-derived from `_bmad/config.yaml` and `_bmad/config.user.yaml`.
-- Storage root: unresolved
-- Storage root source: profile-derived; config value is empty.
+- Storage root: `C:/Users/slaw_dawg/Kendall_Nxt/_bmad/memory/knx/runtime`
+- Storage root source: user-specified on 2026-06-01.
 - Current durable setup storage: `_bmad/memory/knx`
-- Runtime/live assistant state: forbidden outside `_bmad/memory/knx` until a storage root is explicitly approved.
+- Runtime/live assistant state: allowed only under the approved storage root when a workflow is explicitly approved to create it.
 
 ## Repo Boundary
 
 - Git repository: detected at `C:/Users/slaw_dawg/Kendall_Nxt`.
 - Current branch: `main`.
-- Repo remote: unresolved; no remote is configured.
+- Repo remote: none approved for now; no remote is configured.
+- Current working tree note: local governance memory files are modified from profile and boundary refresh work; this does not expand Git or GitHub permissions.
 - Local Git role: approved for source control, local review, diff/status inspection, and commit history for this project only.
-- GitHub/remote role: unresolved; no push, pull, PR, issue, action, release, deployment, or remote review workflow is approved by this boundary plan.
+- GitHub/remote role: disabled for now; no push, pull, PR, issue, action, release, deployment, or remote review workflow is approved by this boundary plan.
 - Git/GitHub runtime rule: Git and GitHub are source/review boundaries only, not live deployment/runtime state.
 - Effective rule: do not use Git, GitHub, branches, commits, remotes, PRs, releases, or actions as live assistant state or deployment storage unless a later decision explicitly records the risk and approval.
 
@@ -33,25 +34,25 @@ Source: local Git detection and data-boundary decision `decisions/data-boundary-
 
 | Source or output class | Storage location | Processing engine | Destination | Status | Source |
 | --- | --- | --- | --- | --- | --- |
-| Public or synthetic sample data | `_bmad/memory/knx/fixtures/synthetic` or approved local storage root when defined | Deterministic local processing; mature local tools | Local generated artifacts under approved storage | Provisional | Defaulted |
-| User-authored planning documents | `_bmad/memory/knx` for KNX memory; approved source roots once defined | Deterministic local processing; mature local tools | Local drafts and review packages | Provisional | Defaulted; source roots unresolved |
-| Operational assistant state | `_bmad/memory/knx` during setup only; approved storage root when defined | Deterministic local processing | Approved local storage only | Provisional | Profile-derived |
+| Public or synthetic sample data | `_bmad/memory/knx/fixtures/synthetic` or approved storage root | Deterministic local processing; mature local tools | Local generated artifacts under approved storage | Provisional | Defaulted and user-specified storage root |
+| User-authored planning documents | Approved source root `C:/Users/slaw_dawg/Kendall_Nxt`; `_bmad/memory/knx` for KNX memory | Deterministic local processing; mature local tools | Local drafts and review packages under approved storage | Provisional | User-specified source root for read/planning |
+| Operational assistant state | Approved storage root only when the workflow is explicitly approved to create runtime/live state | Deterministic local processing | Approved local storage only | Provisional | Profile-derived and user-specified storage root |
 | Email/calendar/meeting content | Not approved | Not approved | Not approved | Unresolved | Defaulted conservative class |
 | Attachments and exported files | Not approved unless placed in an approved source root and classified | Deterministic local processing only after approval | Approved local storage only | Unresolved | Defaulted conservative class |
 | Customer/project data | Not approved | Not approved | Not approved | Forbidden | Profile-derived forbidden destinations |
 | Credentials, secrets, tokens, MFA, account/security material | Not approved | Not approved | Not approved | Forbidden | Profile-derived and defaulted safety rules |
-| Generated drafts and review packages | `_bmad/memory/knx` or approved storage root when defined | Deterministic local processing; mature local tools; custom glue only after policy review | Approved local storage only | Provisional | Execution-policy-derived |
-| Logs, caches, fixtures, indexes, and temporary files | `_bmad/memory/knx` for setup notes; approved storage root when defined | Deterministic local processing; mature local tools | Approved local storage only | Provisional | Defaulted; storage root unresolved |
+| Generated drafts and review packages | `_bmad/memory/knx` or approved storage root | Deterministic local processing; mature local tools; custom glue only after policy review | Approved local storage only | Provisional | Execution-policy-derived and user-specified storage root |
+| Logs, caches, fixtures, indexes, and temporary files | `_bmad/memory/knx` for setup notes; approved storage root for workflow artifacts | Deterministic local processing; mature local tools | Approved local storage only | Provisional | Defaulted and user-specified storage root |
 | Git repository metadata and history | Existing local `.git` metadata for source/review only | Git CLI and deterministic local inspection | Local source/review records only; no remote destination until approved | Provisional | Local detection and data-boundary decision |
 
 ## Allowed Storage Locations
 
 - `_bmad/memory/knx` for KNX setup memory, policy files, decision records, daily logs, and synthetic fixtures.
 - `_bmad/memory/knx/fixtures/synthetic` for synthetic test data only.
+- `C:/Users/slaw_dawg/Kendall_Nxt/_bmad/memory/knx/runtime` for approved KNX live/generated artifacts.
 
 Provisional or unresolved:
 
-- A local-folder storage root is intended but unresolved.
 - The existing local Git repository may store source-control metadata for this project only.
 - Git repository directories are not approved as live assistant state or generated-artifact storage destinations.
 - OneDrive, Microsoft 365 surfaces, app data directories, sync providers, Git remotes, GitHub, and external storage are not approved as storage destinations by this plan.
@@ -62,11 +63,13 @@ Allowed:
 
 - Mature local tools already inside approved project/user boundaries.
 - Deterministic local processing for parsing, filtering, indexing, validation, extraction, formatting, fixtures, and repeatable transforms.
+- Read/planning workflows over `C:/Users/slaw_dawg/Kendall_Nxt`.
 
 Provisional:
 
 - Custom glue code only after mature-tool-first and deterministic-first checks are recorded.
 - Local model runtimes only after availability and boundaries are explicitly confirmed.
+- GPU/local accelerator processing only after availability and boundaries are explicitly confirmed. Local `nvidia-smi` was not found on 2026-06-01, which does not confirm accelerator absence.
 
 Forbidden without later exception:
 
@@ -83,7 +86,7 @@ Source: execution-policy-derived and profile-derived.
 - Production systems.
 - Credential stores.
 - Account/security settings.
-- Unapproved source roots.
+- Unapproved source roots or source mutation without explicit approval.
 - Unapproved storage or sync destinations.
 - Git/GitHub as live assistant runtime/deployment state.
 - Git remotes, GitHub PRs/issues/actions/releases, and remote review workflows unless explicitly approved by a later boundary decision.
@@ -99,7 +102,7 @@ Effective rule while this plan is provisional:
 
 - No external provider sends unless the user gives explicit approval for the specific send or a recorded policy permits that specific class of send.
 - Never send credentials, account/security material, customer data, production data, or ambiguous source material.
-- External-provider processing for sensitive classes requires a later recorded policy exception and approval path; this workflow does not approve it.
+- External-provider processing for any source class requires explicit per-use approval. Sensitive classes require a later recorded policy exception and approval path; this workflow does not approve it.
 
 Source: execution-policy-derived.
 
@@ -124,6 +127,7 @@ Before operational workflows run:
 
 - Verify the target storage path is explicitly recorded and exists or can be created safely.
 - Verify each source root is explicitly listed and classified.
+- Verify source operations are read/planning only unless a later source-mutation approval exists.
 - Verify generated artifacts are written only to approved local storage.
 - Verify synthetic fixtures are stored under `_bmad/memory/knx/fixtures/synthetic`.
 - Verify no credential, token, MFA, account/security, customer, or production data is copied into KNX memory.
@@ -134,21 +138,18 @@ Before operational workflows run:
 
 ## Open Questions
 
-1. What local folder is approved as the KNX storage root for live state and generated artifacts?
-2. Which source roots are approved for reading, planning, and possible mutation?
-3. Should a Git remote or GitHub boundary be enabled for source and review work, and what remote should be recorded?
-4. Which source classes should KNX handle first: planning docs, generated drafts, exported files, fixtures, or something else?
-5. Is any local model runtime or GPU-backed processing approved?
-6. Are any external provider sends approved by standing policy, or should all sends require per-use approval?
+1. Which source classes should KNX handle first: planning docs, generated drafts, exported files, fixtures, or something else?
+2. Is any local model runtime or GPU-backed processing approved? Local `nvidia-smi` was not found on 2026-06-01, so this remains unresolved unless another accelerator path is confirmed.
+3. Should any workflow expand beyond read/planning into source mutation?
 
 ## Decision Sources
 
 - Boundary status: profile-derived, local Git detection, and defaulted.
 - Storage mode: profile-derived.
-- Storage root: unresolved.
+- Storage root: user-specified.
 - Repo boundary: local Git detection and data-boundary decision `decisions/data-boundary-2026-06-01.md`.
-- Source class table: defaulted, profile-derived, and execution-policy-derived.
-- Allowed storage locations: defaulted and profile-derived.
+- Source class table: defaulted, profile-derived, execution-policy-derived, and user-specified source root.
+- Allowed storage locations: defaulted, profile-derived, and user-specified storage root.
 - Allowed processing engines: execution-policy-derived.
 - Forbidden destinations: profile-derived and defaulted.
 - External provider rules: execution-policy-derived.

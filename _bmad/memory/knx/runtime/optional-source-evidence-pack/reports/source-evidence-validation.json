@@ -1,0 +1,14 @@
+{
+  "validator": "knx-source-evidence-stdlib",
+  "created_at": "2026-06-01T03:03:03+00:00",
+  "input_path": "_bmad\\memory\\knx\\fixtures\\synthetic\\first-fixture-pack.json",
+  "approved_storage_root": "C:\\Users\\slaw_dawg\\Kendall_Nxt\\_bmad\\memory\\knx\\runtime",
+  "status": "PASS",
+  "summary": {
+    "fixture_count": 14,
+    "errors": 0,
+    "warnings": 0,
+    "findings": 0
+  },
+  "findings": []
+}

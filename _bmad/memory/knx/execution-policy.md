@@ -6,7 +6,7 @@ Last updated: 2026-05-31
 
 Status: provisional
 
-Reason: the base execution ladder is defined, but the install profile still has unresolved storage root, allowed source roots, repo remote, GPU/local accelerator availability, and local model status.
+Reason: the base execution ladder is defined, storage root and read/planning source root are approved, and GitHub/remote workflows are disabled for now. The policy remains provisional because GPU/local accelerator availability and local model status are unresolved, and source mutation remains approval-gated.
 
 ## Effective Execution Ladder
 
@@ -39,7 +39,7 @@ Source: defaulted from KNX workflow.
 - Local compute policy: local-first.
 - Source: profile-derived from `_bmad/config.yaml` and `_bmad/config.user.yaml`.
 - GPU/local accelerator availability: unknown.
-- Source: profile-derived; not probed or confirmed.
+- Source: profile-derived; local `nvidia-smi` was not found on 2026-06-01, which does not confirm accelerator absence.
 - Local model runtime: unresolved.
 - Effective rule: do not recommend GPU-specific or local-model-specific execution as confirmed until availability is explicitly recorded.
 
@@ -58,7 +58,7 @@ Custom code may be recommended for:
 Custom code is deferred or blocked when:
 
 - It would mutate unapproved source roots.
-- It would write live deployment/runtime state to an unresolved storage root.
+- It would write live deployment/runtime state outside the approved storage root.
 - It would access credentials, account/security settings, customer systems, or production systems.
 - It replaces a mature tool without a recorded reason.
 
@@ -68,11 +68,11 @@ Source: defaulted from KNX workflow and profile safety rules.
 
 External provider use is layer 5 and last-resort only.
 
-Current policy: `last-resort-with-approval-or-policy`.
+Current policy: `per-use-approval-only`.
 
 Effective rule while the profile is partial:
 
-- No external provider sends unless the user gives explicit approval for the specific send or a recorded policy permits that specific class of send.
+- No external provider sends unless the user gives explicit approval for the specific send.
 - Do not send credentials, account/security data, customer data, production data, or ambiguous source material.
 - Do not treat provider availability as approval.
 
@@ -80,7 +80,7 @@ Source: profile-derived from config and expanded with KNX safety defaults.
 
 ## Exception Process
 
-Any exception that allows custom full workflow logic, source mutation, external provider use, or writes outside `_bmad/memory/knx` must record:
+Any exception that allows custom full workflow logic, source mutation, external provider use, or writes outside the approved storage root must record:
 
 - Capability and intended outcome.
 - Requested execution layer.
@@ -105,11 +105,9 @@ Source: defaulted from KNX workflow.
 
 ## Open Questions
 
-1. What local folder is approved as the KNX storage root for live state and generated artifacts?
-2. Which source roots are approved for reading, planning, and possible mutation?
-3. Should this project use Git/GitHub source-control boundaries, and what remote should be recorded?
-4. Is a GPU, local accelerator, or local model runtime available and approved?
-5. Are any external LLM providers approved by standing policy, or should every provider send require per-use approval?
+1. Is a GPU, local accelerator, or local model runtime available and approved?
+2. Should any future workflow expand beyond read/planning into source mutation?
+3. Should any future workflow enable GitHub/remote source-review behavior?
 
 ## Decision Sources
 
@@ -118,9 +116,9 @@ Source: defaulted from KNX workflow.
 - Mature-tool-first rule: defaulted.
 - Deterministic-first rule: defaulted.
 - Local compute policy: profile-derived.
-- GPU/local accelerator availability: profile-derived as unknown.
+- GPU/local accelerator availability: profile-derived as unknown; `nvidia-smi` not found locally on 2026-06-01.
 - Local model status: unresolved.
 - Custom-code rule: defaulted.
-- External provider rule: profile-derived and defaulted.
+- External provider rule: user-specified per-use approval only.
 - Exception process: defaulted.
 - Handoffs: defaulted.

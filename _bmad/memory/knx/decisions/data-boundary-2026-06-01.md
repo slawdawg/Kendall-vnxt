@@ -84,6 +84,79 @@ Blocking status: nonblocking for local source/review use; blocking for GitHub/re
 3. What storage root should be approved for live state and generated artifacts?
 4. Which source roots are approved for reading, planning, or mutation?
 
+---
+
+# Data Boundary Decision - Storage Root And Source Root
+
+Last updated: 2026-06-01
+
+## Decision Status
+
+Status: accepted
+
+## Capability Or Boundary Reviewed
+
+Approve a local KNX storage root and a local read/planning source root.
+
+## Decision
+
+Accept the following local boundary:
+
+- Storage root: `C:/Users/slaw_dawg/Kendall_Nxt/_bmad/memory/knx/runtime`
+- Allowed source root: `C:/Users/slaw_dawg/Kendall_Nxt`
+- Allowed source operations: read and planning only
+- Source mutation: not approved without explicit later approval
+- GitHub/remote workflow: none approved for now
+- External provider policy: per-use approval only
+- GPU/local model status: unknown for now
+
+## Approval Basis
+
+Approval basis: user approved the recommended KNX profile setup choices on 2026-06-01.
+
+## Fit Against Data Boundary Plan
+
+Fit: pass with concerns
+
+The boundary stays local and keeps generated artifacts under KNX memory. Concerns remain because source mutation, GitHub/remote workflows, local model runtime, GPU/local accelerator processing, and external provider sends are not broadly approved.
+
+## Fit Against Execution Policy
+
+Fit: pass
+
+The approved scope supports mature local tools and deterministic local read/planning workflows. It does not approve custom operational code, external providers, credentials, account/security access, customer systems, production systems, or destructive actions.
+
+## Boundary Rules
+
+- Generated KNX artifacts must stay under the approved storage root unless a later decision expands storage.
+- The approved source root may be used for read/planning workflows.
+- Source mutation requires explicit later approval.
+- Git remains source/review only.
+- GitHub and remotes remain disabled for now.
+- External provider sends require explicit per-use approval.
+
+## Validation Checks
+
+- Verify the storage root exists before writing generated artifacts.
+- Verify source paths are under `C:/Users/slaw_dawg/Kendall_Nxt`.
+- Verify the workflow is read/planning only unless mutation has a separate approval record.
+- Verify no external provider call is made without per-use approval.
+- Verify GitHub/remote workflows are not used.
+
+## Risk Score
+
+Risk score: 4
+
+Risk basis: local read/planning and local generated artifact storage are moderate risk because the approved source root is broad, but mutation, remotes, external sends, credentials, customer systems, and production systems remain blocked.
+
+Blocking status: nonblocking for local read/planning workflows that write generated artifacts under the approved storage root; blocking for mutation, remotes, external sends, local model/GPU workflows, customer/production access, credentials, and account/security workflows.
+
+## Open Questions
+
+1. Which source classes should be handled first?
+2. Is any local model runtime or GPU-backed processing approved later?
+3. Should any future workflow expand into source mutation?
+
 ## Decision Sources
 
 - User request to refresh the KNX Git boundary.

@@ -261,3 +261,782 @@ Recommended follow-up governance update: refresh `knx-profile-setup` or `knx-dat
 - Concerns: profile-derived, data-boundary-derived, source/evidence-contract-derived, and local repository-state observation.
 - Fixture coverage evidence: `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`.
 - Deterministic checks: local JSON parse, fixture category coverage check, fixture field presence check, and secret-pattern text search.
+
+---
+
+# Safety Review - Source Inventory Evidence Contract
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: concerns
+
+Target reviewed: updated KNX source/evidence contract for local source inventory evidence.
+
+Review intent: determine whether the updated contract is safe to use as the governance basis before materializing source inventory artifacts or creating validators.
+
+## Governance Artifacts Read
+
+- `_bmad/memory/knx/profile.md`
+- `_bmad/memory/knx/execution-policy.md`
+- `_bmad/memory/knx/data-boundaries.md`
+- `_bmad/memory/knx/source-evidence-contract.md`
+- `_bmad/memory/knx/decisions/mature-tool-source-inventory-2026-06-01.md`
+- `_bmad/memory/knx/decisions/safety-review-2026-06-01.md`
+
+Missing governance artifacts: none for this review scope.
+
+## Target Artifacts Read
+
+- `_bmad/memory/knx/source-evidence-contract.md`
+- `_bmad/memory/knx/fixtures/synthetic/README.md`
+- `_bmad/memory/knx/decisions/source-evidence-contract-2026-06-01.md`
+
+## Blockers
+
+No safety blockers found for using the updated contract as a governance/planning contract.
+
+The updated contract does not approve source mutation, GitHub/remotes, external sends, local model/GPU processing, credentials, account/security workflows, customer systems, production systems, destructive actions, or writes outside approved storage.
+
+## Concerns
+
+1. Contract remains provisional.
+   - Impact: safe for governance planning, but not a complete operational-pack approval.
+   - Severity: concern.
+   - Source: profile, execution policy, data-boundary plan, and contract status.
+
+2. Source inventory artifacts have not been materialized or validated yet.
+   - Impact: the contract defines required fields, but no concrete source inventory evidence record exists yet.
+   - Severity: concern.
+   - Source: source/evidence contract and mature-tool review.
+
+3. New negative fixture categories are defined but not yet represented in the concrete fixture pack.
+   - Impact: future validator coverage should expand beyond the existing eight fixture categories.
+   - Severity: concern.
+   - Source: updated contract and fixture README.
+
+4. The approved source root is broad.
+   - Impact: local read/planning is approved, but workflows must avoid copying sensitive content into KNX memory and must keep mutation blocked.
+   - Severity: concern.
+   - Source: data-boundary plan and source/evidence contract.
+
+## Notes
+
+- The contract correctly records the approved source root: `C:/Users/slaw_dawg/Kendall_Nxt`.
+- The contract correctly limits source operations to read/planning unless a later decision approves more.
+- The contract correctly records the approved storage root: `C:/Users/slaw_dawg/Kendall_Nxt/_bmad/memory/knx/runtime`.
+- Source inventory evidence now has required fields for source root, approval basis, scope, tool, command/check, excluded paths, file count, generated artifact path, forbidden-content check, boundary result, mutation flag, external-send flag, uncertainty, and provenance.
+- Link rules require materialized source inventory to connect to validation evidence and the mature-tool decision.
+- The mature-tool review accepted `git ls-files`, `rg --files`, and PowerShell grouping and deferred custom code.
+
+## Evidence Coverage Required
+
+Before materializing inventory artifacts:
+
+- Create a source inventory evidence record under the approved storage root.
+- Create validation evidence for boundary fit, storage location, read/planning-only behavior, and no external sends.
+- Link the inventory evidence to `decisions/mature-tool-source-inventory-2026-06-01.md`.
+- Record a work trace for the inventory run.
+
+Before validator or operational-pack work:
+
+- Add or update synthetic fixtures for source mutation without approval and inventory stored outside approved storage.
+- Decide whether negative fixture validation evidence should be materialized as standalone examples.
+- Run safety validation again against any concrete validator, script, or materialized inventory workflow.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The contract fits the data-boundary plan because it keeps source inventory local, read/planning-only, and under the approved storage root when materialized. Concerns remain because the source root is broad and no artifact has yet proven the boundary checks.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The contract relies on mature local tools and deterministic local processing. It does not require custom code, local model runtime, GPU, GitHub/remote workflows, or external providers.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass with concerns
+
+The updated contract is internally consistent for governance/planning use and includes required source inventory evidence fields and link rules. Concerns remain because concrete inventory evidence and expanded fixtures are not yet present.
+
+## Required User Decisions
+
+1. Should inventory artifacts be materialized now, or only when a consuming workflow needs them?
+2. Which source classes should the first real source packets cover?
+3. Who can approve risk score `9` waivers?
+4. Should the approved source root be narrowed before operational pack planning?
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: `knx-module-strategy`.
+
+Reason: the governance contract can support planning, but operational work should still be staged through module strategy before creating inventory artifacts, validators, or optional packs.
+
+If the immediate goal is concrete source inventory instead, run a narrowly scoped workflow to materialize source inventory evidence under the approved storage root and then rerun safety validation.
+
+## Residual Risks
+
+- Manual Markdown contracts can drift until validators exist.
+- The approved source root may include sensitive project material by path or filename even when content is not copied.
+- Generated inventory artifacts could become misleading if not linked to validation evidence and work traces.
+- Local model/GPU workflows, external providers, GitHub/remotes, source mutation, credentials, account/security, customer systems, and production systems remain blocked.
+
+## Decision Sources
+
+- Review status: local safety review of the updated source/evidence contract.
+- No blockers finding: target artifact review, data-boundary-derived, execution-policy-derived, mature-tool-review-derived.
+- Concerns: profile-derived, data-boundary-derived, source/evidence-contract-derived, and fixture coverage review.
+- Mature-tool evidence: `_bmad/memory/knx/decisions/mature-tool-source-inventory-2026-06-01.md`.
+- Contract decision evidence: `_bmad/memory/knx/decisions/source-evidence-contract-2026-06-01.md`.
+
+---
+
+# Safety Review - Expanded Synthetic Fixture Pack
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: concerns
+
+Target reviewed: `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json` after adding source mutation and source inventory storage-boundary negative fixtures.
+
+Review intent: determine whether the expanded synthetic fixture pack safely covers the two new negative source/evidence cases without expanding governance-core scope.
+
+## Governance Artifacts Read
+
+- `_bmad/memory/knx/profile.md`
+- `_bmad/memory/knx/execution-policy.md`
+- `_bmad/memory/knx/data-boundaries.md`
+- `_bmad/memory/knx/source-evidence-contract.md`
+- `_bmad/memory/knx/fixtures/synthetic/README.md`
+- `_bmad/memory/knx/decisions/mature-tool-source-inventory-2026-06-01.md`
+- `_bmad/memory/knx/decisions/source-evidence-contract-2026-06-01.md`
+
+Missing governance artifacts: none for this review scope.
+
+## Target Artifacts Read
+
+- `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`
+
+Deterministic local checks performed:
+
+- Parsed fixture pack JSON with PowerShell `ConvertFrom-Json`.
+- Checked required expanded fixture category coverage.
+- Checked required synthetic-only statements.
+- Checked expected validation result presence.
+- Checked expected failed rules for negative fixtures.
+- Searched the fixture pack for secret-like assignments and private key markers.
+
+## Blockers
+
+No safety blockers found for the expanded synthetic fixture pack.
+
+The two added negative fixtures are synthetic expected-failure records only. They do not execute source mutation, create source inventory artifacts, write outside approved storage, send externally, access credentials, touch account/security settings, or access customer/production systems.
+
+## Concerns
+
+1. The broader KNX governance contracts remain provisional.
+   - Impact: this fixture pack is safe for fixture and validator testing, but it does not approve operational source intake, live runtime state, source mutation, GitHub/remotes, external providers, customer/production access, local model/GPU processing, or writes outside approved KNX boundaries.
+   - Severity: concern.
+   - Source: profile, execution policy, data-boundary plan, and source/evidence contract.
+
+2. The fixture pack is not an automated validator.
+   - Impact: the expanded negative cases define expected failures, but future validator work still needs executable checks before release-ready validator claims are made.
+   - Severity: concern.
+   - Source: target fixture pack and source/evidence contract.
+
+3. Referenced negative validation evidence IDs remain expected-output references rather than standalone validation evidence records.
+   - Impact: acceptable for fixture coverage, but future validator packaging should either materialize validation evidence examples or document that these IDs are expected outputs.
+   - Severity: concern.
+   - Source: target fixture pack and source/evidence contract link rules.
+
+## Notes
+
+- Fixture count: 10.
+- Expanded required categories are present:
+  - `valid-source-packet`
+  - `valid-work-trace`
+  - `valid-validation-evidence`
+  - `valid-user-input-required`
+  - `missing-source-negative`
+  - `external-action-negative`
+  - `unsupported-inference-negative`
+  - `forbidden-destination-negative`
+  - `source-mutation-without-approval-negative`
+  - `source-inventory-outside-approved-storage-negative`
+- The valid source packet now includes `source_operation: read-planning`.
+- The source mutation negative fixture expects `FAIL` for unapproved mutation and read/planning-only source operations.
+- The source inventory storage-boundary negative fixture expects `FAIL` for materializing inventory outside the approved storage root.
+- All fixture entries include `synthetic_only_statement`.
+- All fixture entries include `expected_validation_result`.
+- All negative fixtures include `expected_failed_rules`.
+- All fixture entries set `forbidden_content_check` to `pass`.
+- Secret-pattern search found no key material or secret-like assignments in the fixture pack.
+
+## Evidence Coverage Required
+
+Before release-ready validator packaging:
+
+- Add validator logic that checks source mutation requests against the explicit approval requirement.
+- Add validator logic that checks materialized source inventory paths are under the approved storage root.
+- Decide whether negative fixture validation evidence IDs should become concrete validation evidence examples.
+- Rerun module validation after validator or setup-skill changes.
+- Rerun safety validation if fixture categories, storage location, execution behavior, or generated validator behavior changes.
+
+Before operational packs:
+
+- Keep source inventory evidence as a future optional source/evidence pack, not governance-core implementation.
+- Keep validators out of governance core unless a later module strategy decision explicitly approves packaging them.
+- Keep source mutation, GitHub/remotes, external providers, local model/GPU, customer/production access, credentials, account/security workflows, and runtime assistant behavior out of governance core.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The expanded fixture pack remains under `_bmad/memory/knx/fixtures/synthetic` and uses synthetic-only examples. The new source inventory negative fixture intentionally names an unapproved generated artifact path as an expected failure case and does not create that artifact.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The review used deterministic local parsing and text search only. The expanded fixture pack does not require custom operational code, local model runtime, GPU processing, GitHub/remotes, source mutation, or external providers.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass with concerns
+
+The expanded pack now covers the two new negative categories required by the source/evidence contract: source mutation requested without approval and source inventory stored outside approved storage. Concerns remain because fixture expectations are not executable validators and some validation evidence IDs are expected-output references.
+
+## Required User Decisions
+
+1. Should future validator work materialize standalone validation evidence examples for each negative fixture?
+2. Should validators remain in a future optional source/evidence pack rather than governance core?
+3. Who can approve risk score `9` waivers?
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: `bmad-module-builder` Validate Module if the expanded fixture pack is part of release-readiness evidence.
+
+For optional source/evidence pack work, create validator or source inventory evidence only after a separate module strategy and safety review keep that work outside governance core.
+
+## Residual Risks
+
+- Manual fixture records can drift from future validator behavior until automated checks exist.
+- Operational packs remain blocked until their own evidence, work traces, validation evidence, and safety reviews exist.
+- The expanded fixture coverage does not approve source mutation, inventory materialization, external sends, or writes outside approved storage.
+
+## Decision Sources
+
+- Review status: local safety review of the expanded synthetic fixture pack.
+- No blockers finding: target artifact review, data-boundary-derived, execution-policy-derived, source/evidence-contract-derived.
+- Concerns: profile-derived, data-boundary-derived, source/evidence-contract-derived, and fixture coverage review.
+- Fixture coverage evidence: `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`.
+- Deterministic checks: local JSON parse, fixture category coverage check, fixture field presence check, negative fixture expected-rule check, and secret-pattern text search.
+
+---
+
+# Safety Review - Optional Source Evidence Validator Plan
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: concerns
+
+Target reviewed: optional source/evidence pack validator plan, as defined by:
+
+- `_bmad/memory/knx/decisions/mature-tool-source-evidence-validator-2026-06-01.md`
+- `_bmad/memory/knx/decisions/custom-code-source-evidence-validator-2026-06-01.md`
+- `_bmad/memory/knx/decisions/module-strategy-2026-05-31.md`
+
+Review intent: determine whether the planned validator can proceed to a narrow implementation design without violating KNX governance-core boundaries or optional-pack safety constraints.
+
+## Governance Artifacts Read
+
+- `_bmad/memory/knx/profile.md`
+- `_bmad/memory/knx/execution-policy.md`
+- `_bmad/memory/knx/data-boundaries.md`
+- `_bmad/memory/knx/source-evidence-contract.md`
+- `_bmad/memory/knx/decisions/module-strategy-2026-05-31.md`
+- `_bmad/memory/knx/decisions/mature-tool-source-evidence-validator-2026-06-01.md`
+- `_bmad/memory/knx/decisions/custom-code-source-evidence-validator-2026-06-01.md`
+- `_bmad/memory/knx/decisions/safety-review-2026-06-01.md`
+- `_bmad/memory/knx/tool-evaluation.md`
+
+Missing governance artifacts: none for this review scope.
+
+## Target Artifacts Read
+
+- Validator mature-tool decision.
+- Validator custom-code decision.
+- Optional source/evidence pack strategy section.
+- Source/evidence contract.
+- Data-boundary plan.
+
+No validator code, scripts, package manifests, source inventory artifacts, or generated runtime artifacts were reviewed because they do not exist yet for this optional pack.
+
+## Blockers
+
+No safety blockers found for proceeding to a narrow validator implementation design.
+
+The plan does not approve external sends, source mutation, GitHub/remotes, local model/GPU processing, package installation, customer/production access, credential handling, account/security workflows, runtime assistant behavior, or writes outside approved KNX memory/storage.
+
+## Concerns
+
+1. Implementation target path is not yet named.
+   - Impact: code should not be written until the script location is explicitly scoped outside governance core or explicitly accepted as optional-pack tooling.
+   - Severity: concern.
+   - Source: custom-code validator decision.
+
+2. Validator output format is not yet selected.
+   - Impact: validation evidence and work trace linkage could drift if the first implementation emits ad hoc output.
+   - Severity: concern.
+   - Source: source/evidence contract and custom-code validator decision.
+
+3. Standalone negative validation evidence examples are not yet materialized.
+   - Impact: the fixture pack has expected-output IDs, but future validator tests need either concrete validation evidence examples or an explicit expected-output convention.
+   - Severity: concern.
+   - Source: expanded fixture safety review and source/evidence contract link rules.
+
+4. The source/evidence contract remains provisional.
+   - Impact: safe for optional-pack planning, but not a release-ready operational approval.
+   - Severity: concern.
+   - Source: source/evidence contract, profile, data-boundary plan, execution policy.
+
+5. Approved source root is broad.
+   - Impact: the validator must initially target KNX governance/evidence metadata and synthetic fixtures, not arbitrary source content, unless a later workflow records a narrower source-packet scope.
+   - Severity: concern.
+   - Source: data-boundary plan and validator mature-tool decision.
+
+## Notes
+
+- The accepted implementation path is Python 3.12 standard library only.
+- PowerShell `ConvertFrom-Json` and ripgrep scans are accepted as supporting local checks.
+- `jsonschema`, Pydantic, Zod, Ajv, GitHub Actions, remote CI, local model/GPU validation, and external-provider validation are deferred or blocked.
+- Narrow custom glue is accepted only for deterministic KNX-specific rules.
+- The validator is optional source/evidence pack work, not governance-core implementation.
+- The first target should be fixture/evidence validation, not source inventory generation.
+- Source inventory materialization remains deferred until work trace and validation evidence records are defined.
+
+## Evidence Coverage Required
+
+Before writing validator code:
+
+- Name the script location and confirm it is optional-pack tooling, not governance-core scope expansion.
+- Name allowed input paths.
+- Name allowed output paths.
+- Select the first output format: JSON, Markdown, or both.
+- Decide whether negative fixture validation evidence IDs become standalone validation evidence examples or expected-output IDs.
+- Define an initial work trace for validator implementation.
+
+Before release-ready optional-pack packaging:
+
+- Implement stdlib tests for positive and negative fixtures.
+- Validate generated reports stay under approved KNX memory or approved runtime storage.
+- Create validation evidence for the validator run.
+- Rerun safety validation against the concrete script and generated artifacts.
+- Rerun module validation only if optional-pack module scaffolding or setup metadata is created.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The plan fits the current data boundary because it is local-only, dependency-free, and limited to KNX governance records and synthetic fixtures. Concerns remain until script/output paths are pinned and concrete generated artifacts are reviewed.
+
+## Execution-Policy Fit
+
+Fit: pass with concerns
+
+The plan follows mature-tool-first and deterministic-first policy. Narrow Python stdlib glue is justified after local parse/check tools were considered. Concerns remain because custom code adds maintenance burden and must not expand into source indexing, source mutation, package dependencies, or runtime behavior.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass with concerns
+
+The planned validator directly supports source/evidence contract checks: required fields, controlled vocabularies, source mutation gating, storage boundary checks, risk score `9` blocking, and fixture expectations. Concerns remain because the output metadata, validation evidence, and work trace shape for the validator itself are not yet materialized.
+
+## Required User Decisions
+
+1. Where should optional-pack validator scripts live?
+2. Should the first validator emit JSON, Markdown, or both?
+3. Should negative fixture validation evidence IDs become standalone validation evidence examples before implementation?
+4. Who can approve risk score `9` waivers?
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: define the validator implementation target before coding.
+
+Minimum decision needed:
+
+- Script path.
+- Input paths.
+- Output paths and format.
+- Whether to materialize standalone negative validation evidence examples.
+
+After those are named, implementation can proceed as narrow optional-pack tooling, followed by safety validation against the concrete script and generated artifacts.
+
+## Residual Risks
+
+- A validator can drift from Markdown contracts unless the contract remains the source of record.
+- Generated validation reports could accidentally become operational claims if not clearly labeled as fixture/metadata validation.
+- The broad approved source root could tempt future source-content validation beyond the approved first target.
+- Custom glue can grow into a source-indexing or runtime subsystem unless kept optional and small.
+
+## Decision Sources
+
+- Review status: local safety review of optional source/evidence validator plan.
+- No blockers finding: target plan review, data-boundary-derived, execution-policy-derived, module-strategy-derived.
+- Concerns: custom-code decision, source/evidence-contract-derived, data-boundary-derived, expanded fixture safety review.
+- Mature-tool evidence: `_bmad/memory/knx/decisions/mature-tool-source-evidence-validator-2026-06-01.md`.
+- Custom-code evidence: `_bmad/memory/knx/decisions/custom-code-source-evidence-validator-2026-06-01.md`.
+
+---
+
+# Safety Review - Concrete Optional Source Evidence Validator
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: concerns
+
+Target reviewed: concrete optional source/evidence validator prototype under `_bmad/memory/knx/runtime/optional-source-evidence-pack`.
+
+Review intent: determine whether the implemented validator and generated reports stayed within the approved optional-pack implementation target and KNX data boundaries.
+
+## Governance Artifacts Read
+
+- `_bmad/memory/knx/profile.md`
+- `_bmad/memory/knx/execution-policy.md`
+- `_bmad/memory/knx/data-boundaries.md`
+- `_bmad/memory/knx/source-evidence-contract.md`
+- `_bmad/memory/knx/decisions/validator-implementation-target-2026-06-01.md`
+- `_bmad/memory/knx/decisions/mature-tool-source-evidence-validator-2026-06-01.md`
+- `_bmad/memory/knx/decisions/custom-code-source-evidence-validator-2026-06-01.md`
+- `_bmad/memory/knx/decisions/safety-review-2026-06-01.md`
+
+Missing governance artifacts: none for this review scope.
+
+## Target Artifacts Read
+
+- `_bmad/memory/knx/runtime/optional-source-evidence-pack/README.md`
+- `_bmad/memory/knx/runtime/optional-source-evidence-pack/scripts/validate_source_evidence.py`
+- `_bmad/memory/knx/runtime/optional-source-evidence-pack/tests/test_validate_source_evidence.py`
+- `_bmad/memory/knx/runtime/optional-source-evidence-pack/reports/source-evidence-validation.json`
+- `_bmad/memory/knx/runtime/optional-source-evidence-pack/reports/source-evidence-validation.md`
+
+Deterministic local checks performed:
+
+- Ran stdlib unit tests.
+- Ran validator against the synthetic fixture pack.
+- Checked imports and code text for network, subprocess, and shell-execution indicators.
+- Checked generated report locations.
+- Searched the optional-pack runtime folder for secret-like assignments and private key markers.
+- Removed generated `__pycache__` folders from the optional-pack runtime tree after tests.
+
+## Blockers
+
+No safety blockers found for the concrete optional source/evidence validator prototype.
+
+The implementation uses Python standard library only, reads the synthetic fixture pack, writes reports under the approved KNX runtime storage root, and does not mutate source files, materialize source inventory artifacts, install packages, call GitHub/remotes, send externally, use local model/GPU processing, access credentials/account-security/customer/production systems, or add runtime assistant behavior.
+
+## Concerns
+
+1. The validator hard-codes the approved local storage root.
+   - Impact: acceptable for this local prototype target, but not installable for other users until the root is read from config or passed explicitly.
+   - Severity: concern.
+   - Source: concrete script and install profile.
+
+2. Validator result is `CONCERNS` because negative validation evidence IDs remain expected-output references.
+   - Impact: matches the implementation target, but standalone validation evidence examples are still missing.
+   - Severity: concern.
+   - Source: generated validation report and validator implementation target.
+
+3. The validator is prototype optional-pack tooling, not release-ready module packaging.
+   - Impact: it should not be packaged into governance core or treated as a reusable installable pack until config, tests, and safety evidence are generalized.
+   - Severity: concern.
+   - Source: module strategy and implementation target.
+
+4. Secret-pattern scanning is heuristic only.
+   - Impact: no matches were found, but this does not prove absence of all sensitive data.
+   - Severity: concern.
+   - Source: mature-tool review and local check limitations.
+
+## Notes
+
+- Unit tests: 5 passed.
+- Validator result: `CONCERNS`.
+- Fixture count: 10.
+- Validator errors: 0.
+- Validator warnings: 4.
+- Warnings are limited to expected-output negative validation evidence IDs.
+- Code imports are Python standard library modules only.
+- No network, subprocess, shell, package-install, or remote-service code path was found in the reviewed script.
+- Generated reports are under `_bmad/memory/knx/runtime/optional-source-evidence-pack/reports`.
+
+## Evidence Coverage Required
+
+Before release-ready optional-pack packaging:
+
+- Replace hard-coded storage root with config-derived or explicit CLI path validation.
+- Decide whether to materialize standalone negative validation evidence examples.
+- Add tests for malformed fixture packs, forbidden output paths, risk score `9`, and valid materialized inventory paths under approved storage.
+- Record a work trace and validation evidence record for validator runs.
+- Rerun safety validation after any path/config/generalization changes.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The concrete validator writes only under the approved runtime storage root and reads the synthetic fixture pack. Concerns remain because the local storage root is hard-coded and must be generalized before installable optional-pack packaging.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The implementation uses deterministic local processing and Python standard library only. It does not require package installation, local model/GPU processing, external providers, GitHub/remotes, or custom runtime systems.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass with concerns
+
+The validator checks fixture categories, required fixture fields, expected results, negative failed rules, source mutation negative behavior, source inventory storage-boundary behavior, forbidden content check values, and risk score `9` behavior. Concerns remain because standalone validation evidence examples and work trace records are not yet materialized.
+
+## Required User Decisions
+
+1. Should the next iteration generalize the approved storage root from config or CLI only?
+2. Should standalone negative validation evidence examples be created now?
+3. Should the validator output be promoted into formal validation evidence records?
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: `knx-source-evidence-contract` to define standalone validator run evidence and negative validation evidence examples before broadening the validator.
+
+If implementation continues immediately, keep it narrow:
+
+- add malformed-pack and path-boundary tests,
+- keep output under approved runtime storage,
+- do not materialize source inventory evidence yet,
+- do not package into governance core.
+
+## Residual Risks
+
+- The validator can drift from the Markdown source/evidence contract unless contract-derived rules are kept explicit.
+- Hard-coded local paths limit installability.
+- Generated reports can be mistaken for operational source approval unless labeled as fixture/metadata validation only.
+
+## Decision Sources
+
+- Review status: local safety review of concrete validator artifacts.
+- No blockers finding: target artifact review, data-boundary-derived, execution-policy-derived, implementation-target-derived.
+- Concerns: install-profile-derived, source/evidence-contract-derived, generated report findings, and mature-tool-review limitations.
+- Verification evidence: stdlib tests, validator run, import scan, report path check, secret-pattern scan.
+
+---
+
+# Safety Review Note - Validator Evidence Hardening
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: concerns
+
+Target reviewed: updated fixture pack, validator reports, and validator run evidence bundle after standalone negative validation evidence examples were materialized.
+
+## Target Artifacts Read
+
+- `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`
+- `_bmad/memory/knx/runtime/optional-source-evidence-pack/reports/source-evidence-validation.json`
+- `_bmad/memory/knx/runtime/optional-source-evidence-pack/reports/source-evidence-validation.md`
+- `_bmad/memory/knx/runtime/optional-source-evidence-pack/evidence/validator-run-2026-06-01.json`
+- `_bmad/memory/knx/source-evidence-contract.md`
+- `_bmad/memory/knx/decisions/source-evidence-contract-2026-06-01.md`
+
+## Blockers
+
+No safety blockers found for the hardened validator evidence set.
+
+## Concerns
+
+1. The validator remains prototype optional-pack tooling.
+   - Impact: still not release-ready packaging.
+   - Severity: concern.
+   - Source: module strategy and concrete validator safety review.
+
+2. The validator still hard-codes the approved local storage root.
+   - Impact: acceptable for this local prototype, but not portable.
+   - Severity: concern.
+   - Source: concrete validator script.
+
+3. The source/evidence contract remains provisional.
+   - Impact: safe for local evidence hardening, not operational source approval.
+   - Severity: concern.
+   - Source: source/evidence contract.
+
+## Notes
+
+- Standalone synthetic validation evidence examples were materialized for the four referenced negative validation evidence IDs.
+- Validator result changed from `CONCERNS` to `PASS`.
+- Fixture count is now 14.
+- Validator errors: 0.
+- Validator warnings: 0.
+- Validator run evidence bundle links the reports to work trace, validation evidence, output metadata, and boundary flags.
+- Boundary flags record no source mutation, no external send, no source inventory materialization, no package install, and no runtime assistant behavior.
+
+## Evidence Coverage Required
+
+Before release-ready optional-pack packaging:
+
+- Generalize the approved storage root through config or explicit CLI validation.
+- Add malformed fixture, path-boundary, and risk score `9` tests.
+- Rerun safety validation after generalization.
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: continue narrow validator hardening with malformed-pack, path-boundary, and risk score `9` tests, or pause and package the current evidence as local prototype validation only.
+
+## Decision Sources
+
+- Validator report: `_bmad/memory/knx/runtime/optional-source-evidence-pack/reports/source-evidence-validation.json`.
+- Validator run evidence bundle: `_bmad/memory/knx/runtime/optional-source-evidence-pack/evidence/validator-run-2026-06-01.json`.
+- Source/evidence contract update: `_bmad/memory/knx/source-evidence-contract.md`.
+
+---
+
+# Safety Review Note - Validator Storage Root And Edge Tests
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: concerns
+
+Target reviewed: validator storage-root generalization and additional edge tests.
+
+## Blockers
+
+No safety blockers found for the hardened local prototype.
+
+## Changes Reviewed
+
+- Validator now reads `knx_storage_root` from `_bmad/config.user.yaml` by default.
+- Validator supports explicit `--storage-root` override for test/review scenarios.
+- Added tests for:
+  - malformed JSON,
+  - config-derived storage root,
+  - explicit storage-root override,
+  - forbidden output directory,
+  - risk score `9` blocking requirement,
+  - valid materialized inventory path under approved storage.
+
+## Verification
+
+- Unit tests: 10 passed.
+- Validator result: `PASS`.
+- Fixture count: 14.
+- Errors: 0.
+- Warnings: 0.
+
+## Remaining Concerns
+
+1. Prototype tooling remains under runtime storage and is not packaged as an installable optional module.
+2. YAML parsing is intentionally minimal and supports only the simple local config shape.
+3. Source inventory artifact generation remains out of scope.
+
+## Recommended Next Workflow
+
+Recommended next workflow: pause optional-pack implementation or run `knx-module-strategy` if this prototype should become an installable optional pack.
+
+---
+
+# Safety Review Note - Packaged Source Evidence Validator
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass for local standalone optional-pack scaffolding
+
+Target reviewed: `.agents/skills/knx-source-evidence-validator`
+
+## Blockers
+
+No safety blockers found for the packaged standalone optional validator pack.
+
+## Changes Reviewed
+
+- Created standalone optional module `ksev`.
+- Added self-registration assets through `bmad-module-builder`.
+- Packaged the stdlib validator and tests into `.agents/skills/knx-source-evidence-validator`.
+- Kept prototype evidence under `_bmad/memory/knx/runtime/optional-source-evidence-pack`.
+- Kept module validation view under `_bmad/memory/knx/runtime/module-validation/ksev`.
+
+## Verification
+
+- Packaged unit tests: 10 passed.
+- Packaged validator result: PASS.
+- Fixture count: 14.
+- Errors: 0.
+- Warnings: 0.
+- BMad module validation: pass, 0 findings.
+
+## Scope Boundaries Confirmed
+
+The packaged optional pack does not include source inventory generation, operational source intake, source mutation, GitHub/remotes, external providers, local model/GPU processing, customer/production access, credentials, account/security workflows, runtime assistant behavior, or changes to the KNX governance core module.
+
+## Remaining Concerns
+
+1. Marketplace metadata owner/license/homepage/repository fields remain blank placeholders from the scaffold template.
+2. The standalone setup template is generic BMad scaffolding and should be reviewed before distribution outside this local project.
+3. Source inventory evidence remains future optional source/evidence pack work, not part of this validator pack.
+
+## Recommended Next Workflow
+
+Recommended next workflow: decide whether to fill distribution metadata now or keep the module as local installable packaging evidence.
+
+---
+
+# Safety Review Note - Validator Distribution Metadata
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass for local-only distribution metadata cleanup
+
+Target reviewed: `.agents/skills/.claude-plugin/marketplace.json`
+
+## Decision
+
+The optional source/evidence validator pack remains local installable packaging evidence, not a public distribution artifact.
+
+## Metadata Recorded
+
+- owner: `KendallAI vNext local`
+- author: `KendallAI vNext local`
+- license: `UNLICENSED`
+- homepage: `local-only`
+- repository: `local-only`
+
+## Scope Boundaries Confirmed
+
+The metadata cleanup does not approve public release, GitHub/remotes, external publishing, source inventory generation, source mutation, external providers, local model/GPU processing, customer/production access, credentials, account/security workflows, runtime assistant behavior, or changes to the KNX governance core module.
+
+## Verification
+
+- Marketplace JSON parse: pass.
+- Packaged unit tests: 10 passed.
+- Packaged validator result: PASS, 14 fixtures, 0 errors, 0 warnings.
+- BMad module validation: pass, 0 findings.
+- `git diff --check`: pass.
+- Targeted secret-pattern scan: no key material found; matches were policy mentions and validator detection-pattern source.
+
+## Recommended Next Workflow
+
+Recommended next workflow: keep the validator pack local, or make an explicit later distribution decision that names public owner, repository, homepage, and license.

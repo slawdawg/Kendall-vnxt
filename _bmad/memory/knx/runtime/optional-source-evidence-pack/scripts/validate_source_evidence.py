@@ -1,0 +1,519 @@
+#!/usr/bin/env python3
+"""Validate KNX source/evidence synthetic fixtures with stdlib-only checks."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+REQUIRED_FIXTURE_TYPES = {
+    "valid-source-packet",
+    "valid-work-trace",
+    "valid-validation-evidence",
+    "valid-user-input-required",
+    "missing-source-negative",
+    "external-action-negative",
+    "unsupported-inference-negative",
+    "forbidden-destination-negative",
+    "source-mutation-without-approval-negative",
+    "source-inventory-outside-approved-storage-negative",
+}
+
+VALID_RESULTS = {"PASS", "CONCERNS", "FAIL", "WAIVED"}
+VALID_FORBIDDEN_CONTENT_CHECKS = {"pass", "concerns", "fail", "not-run"}
+DEFAULT_APPROVED_STORAGE_ROOT = Path("_bmad/memory/knx/runtime").resolve()
+
+SECRET_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"api[_-]?key\s*[:=]",
+        r"secret\s*[:=]",
+        r"token\s*[:=]",
+        r"password\s*[:=]",
+        r"BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY",
+        r"AKIA[0-9A-Z]{16}",
+    )
+]
+
+
+@dataclass
+class Finding:
+    severity: str
+    code: str
+    message: str
+    fixture_type: str | None = None
+    artifact_id: str | None = None
+
+
+def is_negative_fixture(fixture_type: str) -> bool:
+    return fixture_type.endswith("-negative")
+
+
+def simple_yaml_value(text: str, key: str) -> str | None:
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*:\s*(.*?)\s*$", re.MULTILINE)
+    match = pattern.search(text)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    if not value:
+        return None
+    if (value.startswith("'") and value.endswith("'")) or (value.startswith('"') and value.endswith('"')):
+        value = value[1:-1]
+    return value or None
+
+
+def load_approved_storage_root(
+    explicit_storage_root: str | None = None,
+    config_user_path: Path = Path("_bmad/config.user.yaml"),
+    config_path: Path = Path("_bmad/config.yaml"),
+) -> Path:
+    if explicit_storage_root:
+        return Path(explicit_storage_root).resolve()
+
+    for path in (config_user_path, config_path):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        value = simple_yaml_value(text, "knx_storage_root")
+        if value:
+            return Path(value).resolve()
+
+    return DEFAULT_APPROVED_STORAGE_ROOT
+
+
+def is_under_path(path_value: str, root: Path) -> bool:
+    try:
+        candidate = Path(path_value).resolve()
+    except OSError:
+        return False
+    return candidate == root or root in candidate.parents
+
+
+def add_finding(
+    findings: list[Finding],
+    severity: str,
+    code: str,
+    message: str,
+    fixture: dict[str, Any] | None = None,
+) -> None:
+    fixture_type = None
+    artifact_id = None
+    if fixture:
+        fixture_type = fixture.get("fixture_type")
+        artifact_ids = fixture.get("artifact_ids")
+        if isinstance(artifact_ids, list) and artifact_ids:
+            artifact_id = str(artifact_ids[0])
+    findings.append(Finding(severity, code, message, fixture_type, artifact_id))
+
+
+def load_fixture_pack(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]:
+    findings: list[Finding] = []
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        add_finding(findings, "error", "input-unreadable", f"Cannot read input: {exc}")
+        return None, findings
+
+    for pattern in SECRET_PATTERNS:
+        if pattern.search(raw):
+            add_finding(
+                findings,
+                "error",
+                "secret-pattern-match",
+                f"Input text matched forbidden content pattern: {pattern.pattern}",
+            )
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        add_finding(findings, "error", "json-parse-failed", f"Invalid JSON: {exc}")
+        return None, findings
+
+    if not isinstance(data, dict):
+        add_finding(findings, "error", "top-level-not-object", "Fixture pack must be a JSON object")
+        return None, findings
+
+    return data, findings
+
+
+def validate_pack_shape(pack: dict[str, Any], findings: list[Finding]) -> list[dict[str, Any]]:
+    for field in ("fixture_pack_id", "title", "synthetic_only_statement", "created_at", "fixtures"):
+        if field not in pack:
+            add_finding(findings, "error", "missing-pack-field", f"Missing top-level field: {field}")
+
+    fixtures = pack.get("fixtures")
+    if not isinstance(fixtures, list):
+        add_finding(findings, "error", "fixtures-not-list", "Top-level fixtures field must be a list")
+        return []
+
+    fixture_types = {
+        fixture.get("fixture_type")
+        for fixture in fixtures
+        if isinstance(fixture, dict) and isinstance(fixture.get("fixture_type"), str)
+    }
+    missing_types = sorted(REQUIRED_FIXTURE_TYPES - fixture_types)
+    for fixture_type in missing_types:
+        add_finding(
+            findings,
+            "error",
+            "missing-required-fixture-type",
+            f"Missing required fixture type: {fixture_type}",
+        )
+
+    extra_types = sorted(fixture_types - REQUIRED_FIXTURE_TYPES)
+    for fixture_type in extra_types:
+        add_finding(
+            findings,
+            "warning",
+            "unknown-fixture-type",
+            f"Fixture type is not in the current required set: {fixture_type}",
+        )
+
+    return [fixture for fixture in fixtures if isinstance(fixture, dict)]
+
+
+def validate_common_fixture_fields(fixture: dict[str, Any], findings: list[Finding]) -> None:
+    for field in (
+        "fixture_type",
+        "synthetic_only_statement",
+        "artifact_ids",
+        "expected_validation_result",
+        "expected_failed_rules",
+        "forbidden_content_check",
+        "created_at",
+        "artifact",
+    ):
+        if field not in fixture:
+            add_finding(findings, "error", "missing-fixture-field", f"Missing fixture field: {field}", fixture)
+
+    fixture_type = fixture.get("fixture_type")
+    if not isinstance(fixture_type, str):
+        add_finding(findings, "error", "fixture-type-invalid", "fixture_type must be a string", fixture)
+        return
+
+    if not fixture.get("synthetic_only_statement"):
+        add_finding(findings, "error", "synthetic-statement-missing", "Fixture must state it is synthetic", fixture)
+
+    artifact_ids = fixture.get("artifact_ids")
+    if not isinstance(artifact_ids, list) or not artifact_ids:
+        add_finding(findings, "error", "artifact-ids-invalid", "artifact_ids must be a non-empty list", fixture)
+
+    result = fixture.get("expected_validation_result")
+    if result not in VALID_RESULTS:
+        add_finding(findings, "error", "expected-result-invalid", "Invalid expected_validation_result", fixture)
+
+    failed_rules = fixture.get("expected_failed_rules")
+    if not isinstance(failed_rules, list):
+        add_finding(findings, "error", "expected-failed-rules-invalid", "expected_failed_rules must be a list", fixture)
+    elif is_negative_fixture(fixture_type) and not failed_rules:
+        add_finding(findings, "error", "negative-missing-failed-rules", "Negative fixtures need expected failed rules", fixture)
+
+    forbidden_check = fixture.get("forbidden_content_check")
+    if forbidden_check not in VALID_FORBIDDEN_CONTENT_CHECKS:
+        add_finding(findings, "error", "forbidden-content-check-invalid", "Invalid forbidden_content_check", fixture)
+    elif forbidden_check != "pass":
+        add_finding(findings, "warning", "forbidden-content-check-not-pass", "Fixture forbidden content check is not pass", fixture)
+
+    if not isinstance(fixture.get("artifact"), dict):
+        add_finding(findings, "error", "artifact-not-object", "artifact must be a JSON object", fixture)
+
+
+def validate_source_packet(fixture: dict[str, Any], findings: list[Finding]) -> None:
+    artifact = fixture.get("artifact", {})
+    if not isinstance(artifact, dict):
+        return
+
+    fixture_type = fixture.get("fixture_type")
+    if "source_packet_id" not in artifact and fixture_type not in {
+        "valid-source-packet",
+        "source-mutation-without-approval-negative",
+    }:
+        return
+
+    for field in (
+        "source_packet_id",
+        "source_class",
+        "approval_basis",
+        "source_support_level",
+        "permitted_processing_boundary",
+        "permitted_storage_boundary",
+        "downstream_allowed_use",
+        "source_operation",
+        "uncertainty",
+        "forbidden_content_check",
+    ):
+        if field not in artifact:
+            add_finding(findings, "error", "missing-source-packet-field", f"Missing source packet field: {field}", fixture)
+
+    source_operation = artifact.get("source_operation")
+    expected_result = fixture.get("expected_validation_result")
+
+    if fixture_type == "valid-source-packet" and source_operation != "read-planning":
+        add_finding(findings, "error", "valid-source-operation-not-read-planning", "Valid source packet must use read-planning", fixture)
+
+    if fixture_type == "source-mutation-without-approval-negative":
+        if source_operation != "mutation-requested":
+            add_finding(findings, "error", "mutation-negative-operation-invalid", "Mutation negative must request mutation", fixture)
+        if expected_result != "FAIL":
+            add_finding(findings, "error", "mutation-negative-result-invalid", "Mutation negative must expect FAIL", fixture)
+
+
+def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], approved_storage_root: Path) -> None:
+    artifact = fixture.get("artifact", {})
+    if not isinstance(artifact, dict):
+        return
+
+    fixture_type = fixture.get("fixture_type")
+    source_packet_ids = artifact.get("source_packet_ids")
+    if fixture_type == "missing-source-negative":
+        if source_packet_ids != []:
+            add_finding(findings, "error", "missing-source-negative-has-source", "Missing-source negative must have no source packets", fixture)
+        if fixture.get("expected_validation_result") != "FAIL":
+            add_finding(findings, "error", "missing-source-negative-result-invalid", "Missing-source negative must expect FAIL", fixture)
+
+    if fixture_type == "forbidden-destination-negative":
+        storage_location = artifact.get("storage_location")
+        if not isinstance(storage_location, str) or is_under_path(storage_location, approved_storage_root):
+            add_finding(findings, "error", "forbidden-destination-not-outside-root", "Forbidden destination negative must point outside approved storage", fixture)
+
+    if fixture_type == "unsupported-inference-negative":
+        if artifact.get("source_support_summary") not in {"inferred", "unsupported"}:
+            add_finding(findings, "error", "unsupported-inference-summary-invalid", "Unsupported inference negative must be inferred or unsupported", fixture)
+
+
+def validate_work_trace(fixture: dict[str, Any], findings: list[Finding]) -> None:
+    artifact = fixture.get("artifact", {})
+    if not isinstance(artifact, dict):
+        return
+
+    if fixture.get("fixture_type") != "external-action-negative":
+        return
+
+    if artifact.get("execution_layer") != 5:
+        add_finding(findings, "error", "external-action-layer-invalid", "External action negative must use execution layer 5", fixture)
+    if artifact.get("next_action") != "block":
+        add_finding(findings, "error", "external-action-next-action-invalid", "External action negative must block", fixture)
+    if fixture.get("expected_validation_result") != "FAIL":
+        add_finding(findings, "error", "external-action-result-invalid", "External action negative must expect FAIL", fixture)
+
+
+def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding]) -> None:
+    artifact = fixture.get("artifact", {})
+    if not isinstance(artifact, dict):
+        return
+
+    if "risk_score" in artifact:
+        risk_score = artifact.get("risk_score")
+        if not isinstance(risk_score, int) or not 0 <= risk_score <= 9:
+            add_finding(findings, "error", "risk-score-invalid", "risk_score must be an integer from 0 through 9", fixture)
+        elif risk_score == 9 and artifact.get("blocking_status") not in {"blocking", "waived-blocking"}:
+            add_finding(findings, "error", "risk-nine-not-blocking", "risk_score 9 must be blocking or waived-blocking", fixture)
+        elif risk_score == 9 and artifact.get("blocking_status") == "waived-blocking" and artifact.get("waiver_id") in {None, "", "none"}:
+            add_finding(findings, "error", "risk-nine-waiver-missing", "waived risk_score 9 needs a waiver_id", fixture)
+
+
+def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], approved_storage_root: Path) -> None:
+    artifact = fixture.get("artifact", {})
+    if not isinstance(artifact, dict):
+        return
+
+    if "source_inventory_id" not in artifact:
+        return
+
+    for field in (
+        "source_root",
+        "source_root_approval_basis",
+        "inventory_scope",
+        "allowed_operation",
+        "inventory_tool",
+        "generated_artifact_path",
+        "boundary_check_result",
+        "source_mutation_performed",
+        "external_send_performed",
+        "uncertainty",
+    ):
+        if field not in artifact:
+            add_finding(findings, "error", "missing-source-inventory-field", f"Missing source inventory field: {field}", fixture)
+
+    if artifact.get("source_mutation_performed") is not False:
+        add_finding(findings, "error", "source-inventory-mutated-source", "Source inventory must not mutate source", fixture)
+    if artifact.get("external_send_performed") is not False:
+        add_finding(findings, "error", "source-inventory-external-send", "Source inventory must not send externally", fixture)
+
+    generated_path = artifact.get("generated_artifact_path")
+    fixture_type = fixture.get("fixture_type")
+    if isinstance(generated_path, str):
+        under_root = is_under_path(generated_path, approved_storage_root)
+        if fixture_type == "source-inventory-outside-approved-storage-negative":
+            if under_root:
+                add_finding(findings, "error", "inventory-negative-inside-approved-root", "Storage-boundary negative must point outside approved root", fixture)
+            if artifact.get("boundary_check_result") != "FAIL":
+                add_finding(findings, "error", "inventory-negative-boundary-result-invalid", "Storage-boundary negative must have boundary_check_result FAIL", fixture)
+            if fixture.get("expected_validation_result") != "FAIL":
+                add_finding(findings, "error", "inventory-negative-result-invalid", "Storage-boundary negative must expect FAIL", fixture)
+        elif generated_path != "not-materialized" and not under_root:
+            add_finding(findings, "error", "inventory-output-outside-approved-root", "Materialized source inventory must write under approved storage root", fixture)
+
+
+def validate_expected_evidence_ids(fixtures: list[dict[str, Any]], findings: list[Finding]) -> None:
+    materialized_validation_ids = set()
+    referenced_negative_ids = set()
+
+    for fixture in fixtures:
+        artifact = fixture.get("artifact", {})
+        if not isinstance(artifact, dict):
+            continue
+        validation_id = artifact.get("validation_evidence_id")
+        if isinstance(validation_id, str):
+            materialized_validation_ids.add(validation_id)
+        for value in artifact.get("validation_evidence_ids", []) if isinstance(artifact.get("validation_evidence_ids"), list) else []:
+            if isinstance(value, str) and "neg" in value:
+                referenced_negative_ids.add(value)
+
+    for evidence_id in sorted(referenced_negative_ids - materialized_validation_ids):
+        add_finding(
+            findings,
+            "warning",
+            "negative-validation-evidence-expected-output",
+            f"Negative validation evidence ID is an expected-output reference, not a standalone record: {evidence_id}",
+        )
+
+
+def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None) -> dict[str, Any]:
+    if approved_storage_root is None:
+        approved_storage_root = load_approved_storage_root()
+
+    pack, findings = load_fixture_pack(path)
+    if pack is None:
+        return build_result(path, findings, 0, approved_storage_root)
+
+    fixtures = validate_pack_shape(pack, findings)
+    for fixture in fixtures:
+        validate_common_fixture_fields(fixture, findings)
+        validate_source_packet(fixture, findings)
+        validate_output_metadata(fixture, findings, approved_storage_root)
+        validate_work_trace(fixture, findings)
+        validate_validation_evidence(fixture, findings)
+        validate_source_inventory(fixture, findings, approved_storage_root)
+    validate_expected_evidence_ids(fixtures, findings)
+
+    return build_result(path, findings, len(fixtures), approved_storage_root)
+
+
+def build_result(path: Path, findings: list[Finding], fixture_count: int, approved_storage_root: Path) -> dict[str, Any]:
+    error_count = sum(1 for finding in findings if finding.severity == "error")
+    warning_count = sum(1 for finding in findings if finding.severity == "warning")
+    if error_count:
+        status = "FAIL"
+    elif warning_count:
+        status = "CONCERNS"
+    else:
+        status = "PASS"
+
+    return {
+        "validator": "knx-source-evidence-stdlib",
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "input_path": str(path),
+        "approved_storage_root": str(approved_storage_root),
+        "status": status,
+        "summary": {
+            "fixture_count": fixture_count,
+            "errors": error_count,
+            "warnings": warning_count,
+            "findings": len(findings),
+        },
+        "findings": [asdict(finding) for finding in findings],
+    }
+
+
+def write_reports(result: dict[str, Any], output_dir: Path, approved_storage_root: Path) -> tuple[Path, Path]:
+    output_dir = output_dir.resolve()
+    if not is_under_path(str(output_dir), approved_storage_root):
+        raise ValueError(f"Output directory is outside approved storage root: {output_dir}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stem = "source-evidence-validation"
+    json_path = output_dir / f"{stem}.json"
+    md_path = output_dir / f"{stem}.md"
+
+    json_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    md_path.write_text(render_markdown(result), encoding="utf-8")
+    return json_path, md_path
+
+
+def render_markdown(result: dict[str, Any]) -> str:
+    lines = [
+        "# KNX Source Evidence Validation",
+        "",
+        f"Created: {result['created_at']}",
+        f"Input: `{result['input_path']}`",
+        f"Status: {result['status']}",
+        "",
+        "## Summary",
+        "",
+        f"- Fixtures: {result['summary']['fixture_count']}",
+        f"- Errors: {result['summary']['errors']}",
+        f"- Warnings: {result['summary']['warnings']}",
+        f"- Findings: {result['summary']['findings']}",
+        "",
+        "## Findings",
+        "",
+    ]
+    findings = result.get("findings", [])
+    if not findings:
+        lines.append("No findings.")
+    else:
+        for finding in findings:
+            location = finding.get("fixture_type") or "pack"
+            artifact = finding.get("artifact_id")
+            suffix = f" / `{artifact}`" if artifact else ""
+            lines.append(
+                f"- **{finding['severity'].upper()}** `{finding['code']}` ({location}{suffix}): {finding['message']}"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Validate KNX source/evidence fixture packs.")
+    parser.add_argument(
+        "--fixture-pack",
+        default="_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+        help="Path to the fixture pack JSON.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="_bmad/memory/knx/runtime/optional-source-evidence-pack/reports",
+        help="Directory for JSON and Markdown reports. Must be under approved KNX runtime storage.",
+    )
+    parser.add_argument(
+        "--storage-root",
+        default=None,
+        help="Approved KNX runtime storage root. Defaults to knx_storage_root from _bmad/config.user.yaml.",
+    )
+    parser.add_argument("--no-write", action="store_true", help="Validate without writing reports.")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    approved_storage_root = load_approved_storage_root(args.storage_root)
+    fixture_path = Path(args.fixture_pack)
+    result = validate_fixture_pack(fixture_path, approved_storage_root)
+
+    if not args.no_write:
+        write_reports(result, Path(args.output_dir), approved_storage_root)
+
+    print(json.dumps(result, indent=2))
+    return 1 if result["status"] == "FAIL" else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

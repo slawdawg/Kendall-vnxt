@@ -415,3 +415,205 @@ Open questions:
 - Data-boundary plan and local Git source/review decision.
 - Existing KNX module validation report and fresh validator run.
 - Execution-policy mature-tool-first and deterministic-first rules.
+
+---
+
+# KNX Mature Tool Review - Local Source Inventory For Planning
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: accepted with deferred custom code
+
+Capability reviewed: local source inventory for read/planning workflows over the approved source root `C:/Users/slaw_dawg/Kendall_Nxt`.
+
+Decision: use existing mature local tools for source inventory before custom code.
+
+## Job To Be Done
+
+Support KNX planning by inventorying the approved local source root: tracked files, visible files, file-type mix, and candidate scope for later source/evidence contracts.
+
+## Options Considered
+
+| Option | Fit | Risks | Status |
+| --- | --- | --- | --- |
+| `git ls-files` | Mature local tracked-file inventory | Ignores untracked files | Accepted |
+| `rg --files --hidden` with exclusions | Fast local visible-file inventory | Needs disciplined exclusions | Accepted |
+| PowerShell `Get-ChildItem` and grouping | Built-in fallback | Noisier and slower | Accepted as fallback |
+| Custom source indexer/classifier | Could help later | Premature before source/evidence fields are defined | Deferred |
+| Local model classifier | Could help later | Local model/GPU unresolved | Deferred |
+| External provider classification | Could help later | Requires per-use approval and safety review | Blocked without approval |
+
+## Fit Against Execution Policy
+
+Fit: pass with concerns
+
+The accepted options use mature local tools and deterministic processing. No custom code, model runtime, GPU, GitHub/remote workflow, or external provider is required.
+
+## Fit Against Data-Boundary Plan
+
+Fit: pass with concerns
+
+The workflow stays inside the approved read/planning source root and writes generated artifacts only under the approved KNX runtime storage root if materialized. It does not approve source mutation or external destinations.
+
+## Local Evidence
+
+- Git version: `2.52.0.windows.1`
+- ripgrep version: `15.1.0`
+- Tracked files from `git ls-files`: 2067
+- Visible files from `rg --files --hidden -g '!.git' -g '!_bmad-output'`: 2067
+- Largest observed extensions: `.md`, `.toml`, `.py`, `.yaml`, `.csv`
+
+## Recommendation
+
+Use `git ls-files`, `rg --files`, and PowerShell summaries for the first local source inventory. Defer custom inventory or classifier code until `knx-source-evidence-contract` defines the required source packet and validation evidence fields.
+
+## Custom-Code Scope
+
+Status: deferred
+
+No custom code is accepted now.
+
+## Rollback Or Exit Path
+
+If inventory output is insufficient, route to `knx-source-evidence-contract` before custom tooling. If the approved source root is too broad, narrow it through `knx-data-boundary-plan`.
+
+## Evidence Links Or Local Source References
+
+- `_bmad/memory/knx/decisions/mature-tool-source-inventory-2026-06-01.md`
+- `_bmad/memory/knx/profile.md`
+- `_bmad/memory/knx/execution-policy.md`
+- `_bmad/memory/knx/data-boundaries.md`
+
+---
+
+# KNX Mature Tool Review - Optional Source Evidence Validator
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: accepted with narrow custom glue; external/package dependencies deferred
+
+Capability reviewed: deterministic local validator implementation options for the future KNX optional source/evidence pack.
+
+Decision: use Python 3.12 standard library as the primary implementation path, supported by PowerShell JSON parsing and ripgrep text scans. Defer `jsonschema`, Pydantic, Zod, Ajv, local model/GPU validation, external providers, GitHub Actions, and remote CI.
+
+## Job To Be Done
+
+Provide a local, repeatable way to validate KNX source/evidence fixtures and future optional pack artifacts without changing governance-core scope.
+
+Initial checks should cover:
+
+- fixture JSON parsing,
+- required fixture categories,
+- synthetic-only statements,
+- expected validation results,
+- expected failed rules for negative fixtures,
+- required fields by artifact type,
+- controlled vocabulary values,
+- source mutation approval gating,
+- approved-storage-root checks for source inventory evidence,
+- external-send flags,
+- risk score `9` waiver rules.
+
+## Options Considered
+
+| Option | Fit | Risks | Status |
+| --- | --- | --- | --- |
+| PowerShell `ConvertFrom-Json` and path checks | Already available and useful for quick deterministic checks | Less maintainable for richer reusable rule sets | Accepted as supporting check |
+| Python 3.12 standard library | Already available, deterministic, Windows-friendly, no new dependency | Requires small KNX-specific custom glue | Accepted as primary path |
+| Existing BMad Module Builder validator pattern | Proven local validator pattern | Checks module structure, not KNX evidence artifacts | Accepted as pattern only |
+| ripgrep text scans | Already available for heuristic forbidden-content scans | Not proof of no sensitive material | Accepted as supporting check |
+| `jsonschema` package | Mature formal schema validator | New dependency, no project manifest, insufficient for cross-artifact policy rules alone | Deferred |
+| Pydantic | Mature Python validation library | New dependency and heavier model layer than current need | Deferred |
+| Zod/Ajv | Mature JS/TS validation libraries | No JS project/package manifest for this optional pack | Deferred |
+| Local model or external LLM validation | Could classify semantics later | Local model/GPU unresolved; external sends require approval and safety review | Blocked for this capability |
+
+## Fit Against Execution Policy
+
+Fit: pass with concerns
+
+The accepted path uses mature local tools and deterministic local processing first. Narrow custom glue is justified only for KNX-specific validation rules that generic parsers do not provide.
+
+## Fit Against Data-Boundary Plan
+
+Fit: pass with concerns
+
+The validator may read KNX governance records and synthetic fixtures. It may write findings only under approved KNX memory or approved runtime storage. It must not mutate source roots, materialize inventory outside approved storage, send externally, access credentials, or process customer/production/account-security material.
+
+## Cost Posture
+
+No new paid service, account, package, or install is required for the accepted path.
+
+## Security And Privacy Posture
+
+The accepted approach stays local and starts with metadata and synthetic fixtures. Secret-pattern scans remain heuristics, not proof that sensitive data is absent.
+
+## Maintenance And Dependency Posture
+
+Keeping the first validator dependency-free improves installability and rollback. Package-based schema validation can be reviewed later if stdlib checks become too brittle.
+
+## Licensing Or Usage Constraints
+
+No new license, service terms, package install, or account agreement is introduced.
+
+## Recommendation
+
+Plan the optional source/evidence pack validator as a small Python stdlib script with stdlib tests. Do not write code until the target path, input/output contract, and safety-review target are named.
+
+## Custom-Code Scope
+
+Status: accepted for narrow deterministic local glue
+
+Allowed:
+
+- local Python stdlib validation script,
+- stdlib tests,
+- local structured findings,
+- local reports under approved KNX memory/storage.
+
+Blocked:
+
+- source mutation,
+- GitHub/remotes,
+- external sends,
+- local model/GPU processing,
+- credentials/account-security/customer/production access,
+- writes outside approved storage,
+- governance-core implementation changes,
+- package dependencies without later approval.
+
+## Rollback Or Exit Path
+
+If the first validator is insufficient, keep Markdown contracts and fixture packs as source of record and run another mature-tool review before adding schema packages or broader automation.
+
+## Evidence Links Or Local Source References
+
+- `_bmad/memory/knx/decisions/mature-tool-source-evidence-validator-2026-06-01.md`
+- `_bmad/memory/knx/decisions/custom-code-source-evidence-validator-2026-06-01.md`
+- `_bmad/memory/knx/source-evidence-contract.md`
+- `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`
+- `_bmad/memory/knx/decisions/module-strategy-2026-05-31.md`
+- Local evidence: Python 3.12.10, Git 2.52.0, ripgrep 15.1.0.
+
+## Assumptions And Open Questions
+
+Assumptions:
+
+- First validator target is KNX governance/evidence metadata and synthetic fixtures, not arbitrary source content.
+- Optional source/evidence pack remains separate from governance core.
+
+Open questions:
+
+1. Where should optional pack scripts live?
+2. Should negative validation evidence examples be materialized before code?
+3. Should the first validator output JSON, Markdown, or both?
+
+## Decision Sources
+
+- Capability reviewed: user-approved optional source/evidence pack next step.
+- Tool acceptance: local evidence and deterministic-first policy.
+- Custom glue acceptance: KNX-specific cross-artifact validation rules.
+- Dependency deferral: local-first, no dependency manifest, custom-code-last policy.

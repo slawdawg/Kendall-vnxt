@@ -26,6 +26,7 @@
         "permitted_processing_boundary": "deterministic-local",
         "permitted_storage_boundary": "synthetic-fixture-folder",
         "downstream_allowed_use": "fixture-test",
+        "source_operation": "read-planning",
         "uncertainty": "none",
         "forbidden_content_check": "pass",
         "created_at": "2026-05-31",
@@ -213,6 +214,195 @@
         "uncertainty": "blocking",
         "result_status": "blocked",
         "created_at": "2026-05-31"
+      }
+    },
+    {
+      "fixture_type": "source-mutation-without-approval-negative",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic source-mutation negative example only; it must not be executed and does not mutate any source.",
+      "artifact_ids": ["sp-synth-neg-source-mutation-001"],
+      "expected_validation_result": "FAIL",
+      "expected_failed_rules": [
+        "source mutation requires explicit approval",
+        "approved source operation is read/planning only"
+      ],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-06-01",
+      "artifact": {
+        "source_packet_id": "sp-synth-neg-source-mutation-001",
+        "title": "Synthetic unapproved source mutation request",
+        "source_class": "synthetic-fixture",
+        "source_location_or_description": "Synthetic local project file path used only to model a blocked mutation request.",
+        "source_owner_or_provider": "synthetic",
+        "approval_basis": "unresolved",
+        "source_support_level": "synthetic",
+        "permitted_processing_boundary": "deterministic-local",
+        "permitted_storage_boundary": "synthetic-fixture-folder",
+        "downstream_allowed_use": "blocked",
+        "source_operation": "mutation-requested",
+        "uncertainty": "blocking",
+        "forbidden_content_check": "pass",
+        "created_at": "2026-06-01",
+        "created_by": "KNX workflow",
+        "source_references": [
+          "_bmad/memory/knx/source-evidence-contract.md",
+          "_bmad/memory/knx/data-boundaries.md"
+        ],
+        "open_questions": ["Has a later source mutation approval decision been recorded?"]
+      }
+    },
+    {
+      "fixture_type": "source-inventory-outside-approved-storage-negative",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic source-inventory storage-boundary negative example only; it must not create files outside approved storage.",
+      "artifact_ids": ["si-synth-neg-outside-storage-001"],
+      "expected_validation_result": "FAIL",
+      "expected_failed_rules": [
+        "source inventory evidence may be materialized only under the approved storage root",
+        "generated artifacts must be written only to approved local storage"
+      ],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-06-01",
+      "artifact": {
+        "source_inventory_id": "si-synth-neg-outside-storage-001",
+        "source_root": "C:/Users/slaw_dawg/Kendall_Nxt",
+        "source_root_approval_basis": "user-specified",
+        "inventory_scope": "extension-summary",
+        "allowed_operation": "read-planning only",
+        "inventory_tool": "ripgrep",
+        "inventory_command_or_check": "rg --files --hidden -g '!.git' -g '!_bmad-output'",
+        "excluded_paths_or_patterns": [".git", "_bmad-output"],
+        "file_count": 12,
+        "top_file_groups": [
+          {"extension": ".md", "count": 8},
+          {"extension": ".yaml", "count": 4}
+        ],
+        "generated_artifact_path": "C:/Users/slaw_dawg/Kendall_Nxt/unapproved-inventory/source-inventory.json",
+        "forbidden_content_check": "pass",
+        "boundary_check_result": "FAIL",
+        "source_mutation_performed": false,
+        "external_send_performed": false,
+        "uncertainty": "blocking",
+        "created_at": "2026-06-01",
+        "created_by": "KNX workflow"
+      }
+    },
+    {
+      "fixture_type": "valid-validation-evidence",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic standalone validation evidence example for a missing-source negative fixture.",
+      "artifact_ids": ["ve-synth-neg-missing-source-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-06-01",
+      "artifact": {
+        "validation_evidence_id": "ve-synth-neg-missing-source-001",
+        "artifact_under_validation": "output",
+        "validation_type": "source-support-check",
+        "result": "FAIL",
+        "failed_rules": ["generated output must link to at least one source packet"],
+        "risk_score": 9,
+        "blocking_status": "blocking",
+        "evidence_references": [
+          "out-synth-neg-missing-source-001",
+          "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
+        ],
+        "command_or_check_run": "knx-source-evidence-stdlib",
+        "waiver_id": "none",
+        "waiver_reason": "",
+        "reviewer": "KNX workflow",
+        "created_at": "2026-06-01"
+      }
+    },
+    {
+      "fixture_type": "valid-validation-evidence",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic standalone validation evidence example for an external-action negative fixture.",
+      "artifact_ids": ["ve-synth-neg-external-action-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-06-01",
+      "artifact": {
+        "validation_evidence_id": "ve-synth-neg-external-action-001",
+        "artifact_under_validation": "work trace",
+        "validation_type": "policy-check",
+        "result": "FAIL",
+        "failed_rules": [
+          "external provider processing requires explicit approval or recorded policy",
+          "fixtures must not trigger external sends"
+        ],
+        "risk_score": 9,
+        "blocking_status": "blocking",
+        "evidence_references": [
+          "wt-synth-neg-external-action-001",
+          "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
+        ],
+        "command_or_check_run": "knx-source-evidence-stdlib",
+        "waiver_id": "none",
+        "waiver_reason": "",
+        "reviewer": "KNX workflow",
+        "created_at": "2026-06-01"
+      }
+    },
+    {
+      "fixture_type": "valid-validation-evidence",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic standalone validation evidence example for an unsupported-inference negative fixture.",
+      "artifact_ids": ["ve-synth-neg-unsupported-inference-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-06-01",
+      "artifact": {
+        "validation_evidence_id": "ve-synth-neg-unsupported-inference-001",
+        "artifact_under_validation": "output",
+        "validation_type": "source-support-check",
+        "result": "CONCERNS",
+        "failed_rules": ["unsupported or inferred claim must be labeled and reviewed before being treated as validated"],
+        "risk_score": 6,
+        "blocking_status": "nonblocking",
+        "evidence_references": [
+          "out-synth-neg-unsupported-inference-001",
+          "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
+        ],
+        "command_or_check_run": "knx-source-evidence-stdlib",
+        "waiver_id": "none",
+        "waiver_reason": "",
+        "reviewer": "KNX workflow",
+        "created_at": "2026-06-01"
+      }
+    },
+    {
+      "fixture_type": "valid-validation-evidence",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic standalone validation evidence example for a forbidden-destination negative fixture.",
+      "artifact_ids": ["ve-synth-neg-forbidden-destination-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-06-01",
+      "artifact": {
+        "validation_evidence_id": "ve-synth-neg-forbidden-destination-001",
+        "artifact_under_validation": "output",
+        "validation_type": "boundary-check",
+        "result": "FAIL",
+        "failed_rules": [
+          "fixtures must live under _bmad/memory/knx/fixtures/synthetic",
+          "generated artifacts must be written only to approved local storage"
+        ],
+        "risk_score": 9,
+        "blocking_status": "blocking",
+        "evidence_references": [
+          "out-synth-neg-forbidden-destination-001",
+          "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
+        ],
+        "command_or_check_run": "knx-source-evidence-stdlib",
+        "waiver_id": "none",
+        "waiver_reason": "",
+        "reviewer": "KNX workflow",
+        "created_at": "2026-06-01"
       }
     }
   ]

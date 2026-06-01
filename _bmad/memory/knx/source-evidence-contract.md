@@ -1,12 +1,12 @@
 # KNX Source Evidence Contract
 
-Last updated: 2026-05-31
+Last updated: 2026-06-01
 
 ## Contract Status
 
 Status: provisional
 
-Reason: the artifact contracts are defined, but storage root, allowed source roots, Git/GitHub boundary, local model runtime, and standing external-provider approvals remain unresolved.
+Reason: the artifact contracts are defined, the storage root is approved, and the approved source root may be used for read/planning workflows. The contract remains provisional because source mutation, GitHub/remote workflows, local model runtime, GPU/local accelerator processing, and external-provider sends remain unapproved unless separately approved.
 
 ## Artifact List And Purpose
 
@@ -17,8 +17,10 @@ Reason: the artifact contracts are defined, but storage root, allowed source roo
 | Validation evidence | Machine-readable or structured result record for checks, risk, blocking status, and waiver state | Provisional; allowed under `_bmad/memory/knx` |
 | User-input-required item | Explicit blocker or human decision request when automation cannot proceed safely | Provisional; allowed under `_bmad/memory/knx` |
 | Decision record | Governance decision with accepted, rejected, deferred, blocked, or waived outcome and rationale | Allowed under `_bmad/memory/knx/decisions` |
+| Source inventory evidence | Deterministic inventory summary for approved read/planning source roots | Allowed under approved storage root |
 | Fixture pack | Synthetic valid and negative examples for future validation | Allowed only under `_bmad/memory/knx/fixtures/synthetic` |
-| Output metadata | Links generated outputs to source packets, traces, validation evidence, and decisions | Provisional; allowed under `_bmad/memory/knx` until storage root is approved |
+| Output metadata | Links generated outputs to source packets, traces, validation evidence, and decisions | Provisional; allowed under `_bmad/memory/knx` or approved storage root |
+| Validator run evidence bundle | Links optional-pack validator reports to work trace, validation evidence, output metadata, and boundary flags | Provisional; allowed under approved storage root |
 
 ## Required Fields
 
@@ -34,6 +36,7 @@ Reason: the artifact contracts are defined, but storage root, allowed source roo
 - `permitted_processing_boundary`: deterministic-local, mature-local-tool, approved-local-model, approved-custom-glue, approved-external-provider, or unresolved.
 - `permitted_storage_boundary`: `_bmad/memory/knx`, approved-storage-root, synthetic-fixture-folder, or unresolved.
 - `downstream_allowed_use`: planning, draft-generation, validation, fixture-test, decision-support, or blocked.
+- `source_operation`: read-planning, mutation-requested, mutation-approved, external-send-requested, or blocked.
 - `uncertainty`: none, low, medium, high, or blocking.
 - `forbidden_content_check`: pass, concerns, fail, or not-run.
 - `created_at`: ISO date.
@@ -113,6 +116,27 @@ Reason: the artifact contracts are defined, but storage root, allowed source roo
 - `forbidden_content_check`: pass, concerns, fail, or not-run.
 - `created_at`: ISO date.
 
+### Source Inventory Evidence
+
+- `source_inventory_id`: stable local identifier.
+- `source_root`: approved source root path.
+- `source_root_approval_basis`: user-specified, data-boundary-derived, decision-record, or unresolved.
+- `inventory_scope`: tracked-files, visible-files, extension-summary, source-class-summary, or mixed.
+- `allowed_operation`: read-planning only unless a later decision approves more.
+- `inventory_tool`: git, ripgrep, PowerShell, or approved-custom-glue.
+- `inventory_command_or_check`: exact command/check name or not-run.
+- `excluded_paths_or_patterns`: list.
+- `file_count`: integer or unresolved.
+- `top_file_groups`: list when available.
+- `generated_artifact_path`: approved local path or not-materialized.
+- `forbidden_content_check`: pass, concerns, fail, or not-run.
+- `boundary_check_result`: PASS, CONCERNS, FAIL, or WAIVED.
+- `source_mutation_performed`: must be false unless separately approved.
+- `external_send_performed`: must be false unless separately approved.
+- `uncertainty`: none, low, medium, high, or blocking.
+- `created_at`: ISO date.
+- `created_by`: user, KNX workflow, or other local actor.
+
 ### Output Metadata
 
 - `output_artifact_id`: stable local identifier.
@@ -123,10 +147,23 @@ Reason: the artifact contracts are defined, but storage root, allowed source roo
 - `decision_record_ids`: list when applicable.
 - `generation_boundary`: deterministic-local, mature-local-tool, approved-local-model, approved-custom-glue, approved-external-provider, or unresolved.
 - `storage_location`: approved local path or unresolved.
+- `storage_boundary_basis`: `_bmad/memory/knx`, approved-storage-root, synthetic-fixture-folder, decision-record, or unresolved.
 - `source_support_summary`: direct, indirect, user-asserted, synthetic, inferred, unsupported, or mixed.
 - `uncertainty`: none, low, medium, high, or blocking.
 - `result_status`: draft, ready-for-review, validated, blocked, or superseded.
 - `created_at`: ISO date.
+
+### Validator Run Evidence Bundle
+
+- `evidence_bundle_id`: stable local identifier.
+- `title`: short human-readable label.
+- `created_at`: ISO date.
+- `created_by`: user, KNX workflow, or other local actor.
+- `synthetic_only_statement`: required when the run validates synthetic fixtures.
+- `work_trace`: embedded or linked work trace.
+- `validation_evidence`: embedded or linked validation evidence for the run.
+- `output_metadata`: list of output metadata records for generated reports.
+- `boundaries`: flags for source mutation, external send, source inventory materialization, package install, and runtime assistant behavior.
 
 ## Controlled Status Vocabulary
 
@@ -162,12 +199,16 @@ Generated outputs must not be treated as trusted unless they link to source pack
 ## Required Link Rules
 
 - Every generated output must link to at least one source packet, one work trace, and one validation evidence record.
+- Every materialized source inventory must link to a validation evidence record and the mature-tool decision that approved the inventory method.
 - Every work trace must list source packet IDs, generated artifact IDs, validation evidence IDs, and decision record IDs when decisions affect the work.
 - Every validation evidence record must identify the artifact under validation and evidence references.
 - Every waiver must link to a decision record with rationale and scope.
 - Every user-input-required item must identify blocked downstream work.
 - Every decision record must list source references or state why the decision is defaulted or unresolved.
 - Every fixture must state that it is synthetic only and must live under `_bmad/memory/knx/fixtures/synthetic`.
+- Every artifact written outside `_bmad/memory/knx` must cite the approved storage root or a later storage-boundary decision.
+- Every validator-generated report must link to a work trace, validation evidence, and output metadata record.
+- Every validator run evidence bundle must state whether source mutation, external sends, source inventory materialization, package installs, or runtime assistant behavior occurred.
 
 ## Validation Result Vocabulary
 
@@ -200,6 +241,8 @@ The first synthetic fixture pack should include:
 - External action request negative fixture.
 - Low-confidence or unsupported inference negative fixture.
 - Forbidden destination or data-boundary violation negative fixture.
+- Source mutation requested without approval negative fixture.
+- Source inventory stored outside approved storage negative fixture.
 
 ## Fixture Safety Rules
 
@@ -208,38 +251,44 @@ The first synthetic fixture pack should include:
 - Fixtures must live under `_bmad/memory/knx/fixtures/synthetic`.
 - Negative fixtures must clearly mark the expected failure or concern.
 - Fixtures must not trigger external sends, installs, account changes, source mutation, or live runtime state creation.
+- Fixtures that mention source inventory must use synthetic paths or clearly synthetic examples unless they are metadata-only references to approved local commands.
+- Referenced negative validation evidence IDs should be materialized as standalone synthetic validation evidence examples before a validator result is treated as clean `PASS`.
 
 ## Data-Boundary Dependencies
 
-- Source roots are unresolved, so real source packets are not approved by this contract.
-- Storage root is unresolved, so output metadata cannot approve live/runtime storage outside `_bmad/memory/knx`.
+- Approved source root: `C:/Users/slaw_dawg/Kendall_Nxt`.
+- Approved source operation: read/planning only.
+- Approved storage root: `C:/Users/slaw_dawg/Kendall_Nxt/_bmad/memory/knx/runtime`.
+- Source packets may describe approved local source material for planning, but must not copy customer, production, credential, token, MFA, or account/security content into KNX memory.
+- Source inventory evidence may be materialized only under the approved storage root.
 - Git/GitHub is not approved as live deployment/runtime state.
+- GitHub/remotes remain disabled for now.
 - Credentials, tokens, MFA, account/security material, customer systems, and production systems remain forbidden.
-- External provider processing remains blocked unless explicitly approved or covered by recorded policy.
+- External provider processing requires explicit per-use approval and safety review for the specific send.
 
 Source: data-boundary-derived from `data-boundaries.md`.
 
 ## Execution-Policy Dependencies
 
 - Prefer mature local workflows and deterministic local processing.
+- Accepted mature source-inventory tools: `git ls-files`, `rg --files`, and PowerShell grouping.
 - Local model runtime and GPU-backed processing are unresolved.
 - Custom glue code remains deferred until mature-tool and deterministic-local options are considered and a specific gap is recorded.
-- External providers remain layer 5, last-resort, and approval/policy-gated.
+- External providers remain layer 5, last-resort, and per-use approval-gated.
 
 Source: execution-policy-derived from `execution-policy.md`.
 
 ## Open Questions
 
-1. What storage root should be approved for live source packets, outputs, indexes, and generated artifacts?
-2. Which source roots are approved for source packet creation?
-3. What identifier convention should downstream operational workflows use for artifact IDs?
-4. Should fixtures be expanded into concrete example files after this contract is reviewed?
-5. Which workflow should consume this contract first?
-6. Who can approve risk score `9` waivers?
+1. What identifier convention should downstream operational workflows use for artifact IDs?
+2. Should inventory artifacts be materialized under the approved storage root now, or only when a consuming workflow needs them?
+3. Which source classes should the first real source packets cover?
+4. Should any workflow expand beyond read/planning into source mutation?
+5. Who can approve risk score `9` waivers?
 
 ## Decision Sources
 
-- Contract status: profile-derived, execution-policy-derived, and data-boundary-derived.
+- Contract status: profile-derived, execution-policy-derived, data-boundary-derived, and mature-tool-review-derived.
 - Artifact list: defaulted from KNX source-evidence workflow.
 - Required fields: defaulted from KNX minimum field guidance and adapted for current boundaries.
 - Status vocabulary: defaulted.
@@ -249,3 +298,4 @@ Source: execution-policy-derived from `execution-policy.md`.
 - Fixture safety rules: data-boundary-derived and defaulted.
 - Data-boundary dependencies: data-boundary-derived.
 - Execution-policy dependencies: execution-policy-derived.
+- Source inventory evidence fields: mature-tool-review-derived from `decisions/mature-tool-source-inventory-2026-06-01.md`.

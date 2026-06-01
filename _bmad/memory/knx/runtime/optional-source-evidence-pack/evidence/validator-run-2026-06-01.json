@@ -1,0 +1,117 @@
+{
+  "evidence_bundle_id": "evbundle-source-evidence-validator-2026-06-01",
+  "title": "Optional source/evidence validator run evidence",
+  "created_at": "2026-06-01",
+  "created_by": "KNX workflow",
+  "synthetic_only_statement": "This evidence bundle references synthetic fixture validation only and contains no real customer data, credentials, tokens, secrets, production data, source-system content, private user content, or account/security material.",
+  "work_trace": {
+    "work_trace_id": "wt-source-evidence-validator-2026-06-01-001",
+    "trigger": "user request",
+    "source_packet_ids": [],
+    "generated_artifact_ids": [
+      "out-source-evidence-validation-json-2026-06-01",
+      "out-source-evidence-validation-md-2026-06-01"
+    ],
+    "validation_evidence_ids": [
+      "ve-source-evidence-validator-run-2026-06-01"
+    ],
+    "decision_record_ids": [
+      "validator-implementation-target-2026-06-01",
+      "mature-tool-source-evidence-validator-2026-06-01",
+      "custom-code-source-evidence-validator-2026-06-01",
+      "safety-review-2026-06-01"
+    ],
+    "steps_taken": [
+      "Materialized standalone synthetic validation evidence examples for negative fixture references.",
+      "Generalized approved storage root resolution to use config-derived or explicit CLI storage root.",
+      "Added malformed JSON, storage-root override, output-boundary, valid inventory path, and risk score 9 tests.",
+      "Ran Python stdlib unit tests for the optional source/evidence validator.",
+      "Ran the optional source/evidence validator against the synthetic fixture pack.",
+      "Generated JSON and Markdown validation reports under the approved runtime storage root."
+    ],
+    "tools_used": [
+      "KNX source evidence contract workflow",
+      "Python 3.12 standard library",
+      "knx-source-evidence-stdlib validator"
+    ],
+    "execution_layer": 2,
+    "assumptions": [
+      "The fixture pack is synthetic and safe for local validation.",
+      "The validator remains optional-pack prototype tooling outside governance core."
+    ],
+    "uncertainty": "low",
+    "residual_risk": "low",
+    "next_action": "validate",
+    "created_at": "2026-06-01"
+  },
+  "validation_evidence": {
+    "validation_evidence_id": "ve-source-evidence-validator-run-2026-06-01",
+    "artifact_under_validation": "fixture",
+    "validation_type": "fixture-check",
+    "result": "PASS",
+    "failed_rules": [],
+    "risk_score": 2,
+    "blocking_status": "nonblocking",
+    "evidence_references": [
+      "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+      "_bmad/memory/knx/runtime/optional-source-evidence-pack/reports/source-evidence-validation.json",
+      "_bmad/memory/knx/runtime/optional-source-evidence-pack/reports/source-evidence-validation.md",
+      "_bmad/memory/knx/runtime/optional-source-evidence-pack/scripts/validate_source_evidence.py",
+      "_bmad/memory/knx/runtime/optional-source-evidence-pack/tests/test_validate_source_evidence.py"
+    ],
+    "command_or_check_run": "python -m unittest _bmad\\memory\\knx\\runtime\\optional-source-evidence-pack\\tests\\test_validate_source_evidence.py; python _bmad\\memory\\knx\\runtime\\optional-source-evidence-pack\\scripts\\validate_source_evidence.py",
+    "waiver_id": "none",
+    "waiver_reason": "",
+    "reviewer": "KNX workflow",
+    "created_at": "2026-06-01"
+  },
+  "output_metadata": [
+    {
+      "output_artifact_id": "out-source-evidence-validation-json-2026-06-01",
+      "output_type": "report",
+      "source_packet_ids": [],
+      "work_trace_id": "wt-source-evidence-validator-2026-06-01-001",
+      "validation_evidence_ids": [
+        "ve-source-evidence-validator-run-2026-06-01"
+      ],
+      "decision_record_ids": [
+        "validator-implementation-target-2026-06-01",
+        "safety-review-2026-06-01"
+      ],
+      "generation_boundary": "approved-custom-glue",
+      "storage_location": "_bmad/memory/knx/runtime/optional-source-evidence-pack/reports/source-evidence-validation.json",
+      "storage_boundary_basis": "approved-storage-root",
+      "source_support_summary": "synthetic",
+      "uncertainty": "low",
+      "result_status": "validated",
+      "created_at": "2026-06-01"
+    },
+    {
+      "output_artifact_id": "out-source-evidence-validation-md-2026-06-01",
+      "output_type": "report",
+      "source_packet_ids": [],
+      "work_trace_id": "wt-source-evidence-validator-2026-06-01-001",
+      "validation_evidence_ids": [
+        "ve-source-evidence-validator-run-2026-06-01"
+      ],
+      "decision_record_ids": [
+        "validator-implementation-target-2026-06-01",
+        "safety-review-2026-06-01"
+      ],
+      "generation_boundary": "approved-custom-glue",
+      "storage_location": "_bmad/memory/knx/runtime/optional-source-evidence-pack/reports/source-evidence-validation.md",
+      "storage_boundary_basis": "approved-storage-root",
+      "source_support_summary": "synthetic",
+      "uncertainty": "low",
+      "result_status": "validated",
+      "created_at": "2026-06-01"
+    }
+  ],
+  "boundaries": {
+    "source_mutation_performed": false,
+    "external_send_performed": false,
+    "source_inventory_materialized": false,
+    "package_install_performed": false,
+    "runtime_assistant_behavior_added": false
+  }
+}

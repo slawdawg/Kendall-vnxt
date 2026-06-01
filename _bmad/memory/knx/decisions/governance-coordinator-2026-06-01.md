@@ -10,9 +10,9 @@ Decision: include `knx-agent-governance-coordinator` in the KNX governance core 
 
 ## Current Phase
 
-Phase: governance core ready for module scaffolding, with operational packs deferred.
+Phase: governance core scaffolded and validated; optional source/evidence validator scaffolded, validated, and held local-only; operational packs deferred.
 
-The governance foundation has profile, execution policy, data-boundary, mature-tool, source/evidence, safety-review, and module-strategy records. The safety review found concerns but no blockers for governance-foundation planning.
+The governance foundation has profile, execution policy, data-boundary, mature-tool, source/evidence, safety-review, and module-strategy records. The KNX governance core is scaffolded and validated. The optional `ksev` source/evidence validator pack is scaffolded and validated as local installable packaging evidence, not public distribution.
 
 ## Coordinator Mission
 
@@ -49,42 +49,44 @@ Do not route to implementation or release-ready packaging when the requested wor
 
 ## Current Strongest Recommendation
 
-Recommended next workflow: `bmad-module-builder` Create Module for the KNX governance core.
+Recommended next workflow: route by concrete capability rather than continuing scaffolding.
 
 Why it is next:
 
-- `knx-module-strategy` selected a governance core plus optional packs.
-- `knx-agent-governance-coordinator` is now accepted as the front-door router for that core.
-- Safety review found no blockers for governance-foundation planning.
+- The KNX governance core has already been scaffolded and validated.
+- The optional `ksev` validator pack has already been scaffolded, validated, safety-reviewed, and marked local-only.
+- The remaining work depends on which capability is requested next.
 
 Scope limit:
 
-- Create Module should package only the governance core.
-- Do not package operational source intake, runtime assistant state, external providers, GitHub automation, local model/GPU workflows, Microsoft 365/OneDrive/sync integrations, credentials, account/security, customer systems, or production systems.
+- Do not continue packaging work without a concrete target capability.
+- Do not package source inventory generation, operational source intake, runtime assistant state, external providers, GitHub automation, local model/GPU workflows, Microsoft 365/OneDrive/sync integrations, credentials, account/security, customer systems, or production systems.
 
-## Required Inputs For Create Module
+## Current Routing
 
-- Core workflow list from `module-strategy-2026-05-31.md`.
-- Conservative config keys from the module strategy.
-- Memory template list from the module strategy.
-- Safety review concerns from `safety-review-2026-05-31.md`.
-- Source/evidence contract and synthetic fixture README.
+- Use `knx-source-evidence-contract` for fixture, source packet, evidence, traceability, or validation-evidence contract changes.
+- Use `knx-mature-tool-review` before any source inventory materialization workflow or new dependency/tool decision.
+- Use `knx-safety-validation-review` before any new optional pack, public release path, external send, source mutation, operational source intake, or expanded data access.
+- Use `knx-module-strategy` only when packaging boundaries change.
+- Use `bmad-module-builder` only when a specific module packaging or validation target is named.
 
 ## Expected Output Artifact
 
-Expected next artifact: an installable KNX governance-core module scaffold or module-builder output, plus a follow-up safety review of the packaged core.
+Expected next artifact: depends on the requested capability. For the current state, routing records and validation reports are the durable handoff artifacts.
 
 ## Readiness
 
-Recommendation readiness: ready for governance-core scaffolding; provisional for release readiness.
+Recommendation readiness: ready for local governance-core use and local `ksev` validator use; deferred for public distribution and operational packs.
 
 Blocked or deferred:
 
-- Optional packs remain deferred until their boundaries, mature-tool reviews, source/evidence fixtures, and safety reviews exist.
+- Public validator distribution remains deferred until owner, license, homepage, repository, release channel, safety target, and publication mechanism are explicitly decided.
+- Source inventory generation remains deferred.
+- Operational packs remain deferred until their boundaries, mature-tool reviews, source/evidence fixtures, and safety reviews exist.
 
 ## Decision Sources
 
 - Routing map: `knx-agent-governance-coordinator` workflow.
-- Current phase: module strategy and safety review.
+- Current phase: module strategy, safety review, validator implementation target, validator distribution decision, and module validation reports.
 - Stop conditions: profile, execution policy, data-boundary plan, and source/evidence contract.
-- Next recommendation: module strategy plus accepted coordinator decision.
+- Next recommendation: latest module strategy plus validator distribution decision.

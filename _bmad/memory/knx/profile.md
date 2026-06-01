@@ -6,7 +6,7 @@ Last updated: 2026-06-01
 
 Status: partial
 
-Reason: safety and execution defaults are available and the local Git source/review boundary is detected, but storage root, allowed source roots, Git remote/GitHub boundary, local model status, and external-provider standing approvals remain unresolved.
+Reason: storage root, allowed source root, local Git source/review boundary, GitHub/remote disablement, and per-use external-provider approval policy are recorded. Setup remains partial because local model status and GPU/local accelerator availability are unresolved, and source mutation remains approval-gated.
 
 ## User Label
 
@@ -17,9 +17,9 @@ Reason: safety and execution defaults are available and the local Git source/rev
 
 - Mode: local-folder
 - Source: detected from `_bmad/config.yaml` and `_bmad/config.user.yaml`.
-- Storage root: unresolved
-- Storage root source: config value is empty.
-- Live state policy: do not write live deployment/runtime state outside `_bmad/memory/knx` until a storage root is explicitly chosen.
+- Storage root: `C:/Users/slaw_dawg/Kendall_Nxt/_bmad/memory/knx/runtime`
+- Storage root source: user-specified on 2026-06-01 and recorded in `_bmad/config.user.yaml`.
+- Live state policy: write KNX live/generated artifacts only under the approved storage root unless a later decision expands storage.
 
 ## Source Control Boundary
 
@@ -27,9 +27,9 @@ Reason: safety and execution defaults are available and the local Git source/rev
 - Git repository: detected
 - Current branch: `main`
 - Local Git use: source control, local review, diff/status inspection, and commit history only.
-- Repo remote: unresolved; no remote is configured.
-- Repo remote source: config value is empty and local `git remote -v` returned no configured remote.
-- GitHub/source review use: unresolved until a remote/GitHub boundary is explicitly configured.
+- Repo remote: none approved for now; no remote is configured.
+- Repo remote source: user-specified no GitHub/remote for now on 2026-06-01; local `git remote -v` returned no configured remote.
+- GitHub/source review use: disabled for now unless a later boundary decision explicitly enables it.
 - Git/GitHub live-state policy: do not use Git or GitHub as live assistant runtime state, live deployment state, generated-artifact storage, operational source intake approval, source mutation approval, external-provider approval, or customer/production integration.
 
 ## Compute
@@ -37,20 +37,22 @@ Reason: safety and execution defaults are available and the local Git source/rev
 - Local compute policy: local-first
 - Local compute policy source: detected from `_bmad/config.yaml` and `_bmad/config.user.yaml`.
 - GPU/local accelerator availability: unknown
-- GPU/local accelerator source: detected from config as `unknown`; not probed during setup.
+- GPU/local accelerator source: detected from config as `unknown`; local `nvidia-smi` probe on 2026-06-01 returned not found, which does not confirm accelerator absence.
 - Local model status: unresolved
 
 ## External Provider Policy
 
-- Policy: last-resort-with-approval-or-policy
-- Source: detected from `_bmad/config.yaml` and `_bmad/config.user.yaml`.
-- Effective setup behavior while partial: no external provider sends unless a user-approved policy explicitly permits the specific send.
+- Policy: per-use approval only
+- Source: user-specified on 2026-06-01 and recorded in `_bmad/config.user.yaml`.
+- Effective setup behavior while partial: no external provider sends unless the user explicitly approves the specific send.
 
 ## Allowed Source Roots
 
-- Allowed roots: unresolved
-- Source: config value is empty.
-- Effective setup behavior while partial: treat no source roots as approved for mutation or live-system access.
+- Allowed roots: `C:/Users/slaw_dawg/Kendall_Nxt`
+- Source: user-specified on 2026-06-01 and recorded in `_bmad/config.user.yaml`.
+- Allowed operations: read and planning only.
+- Mutation policy: no source mutation without explicit approval.
+- Effective setup behavior while partial: use the approved source root for read/planning workflows only; no live-system access.
 
 ## Forbidden Destinations
 
@@ -85,22 +87,20 @@ Source: detected from `_bmad/config.yaml` and `_bmad/config.user.yaml`, expanded
 
 ## Open Setup Questions
 
-1. What local folder should be the KNX storage root for live state and generated artifacts?
-2. Which source roots are allowed for reading, planning, and possible mutation?
-3. Should this project use a Git remote or GitHub for source and review work? If yes, what remote and which workflows are approved?
-4. Is a GPU or other local accelerator available for local models?
-5. Are any external LLM providers approved by policy, or should all external provider use remain approval-only?
+1. Is a GPU or other local accelerator available for local models? Local `nvidia-smi` was not found on 2026-06-01, so this remains unresolved unless another accelerator path is confirmed.
+2. Is any local model runtime installed and approved?
+3. Should any future workflow expand beyond read/planning into source mutation? If yes, a separate approval is required.
 
 ## Decision Sources
 
 - User label: detected
 - Storage mode: detected
-- Storage root: unresolved
+- Storage root: user-specified
 - Local Git repository: detected
-- Repo remote: unresolved
+- Repo remote: user-specified none for now
 - Local compute policy: detected
-- External provider policy: detected
-- GPU/local accelerator availability: detected as unknown
-- Allowed source roots: unresolved
+- External provider policy: user-specified per-use approval only
+- GPU/local accelerator availability: detected as unknown; `nvidia-smi` not found locally on 2026-06-01
+- Allowed source roots: user-specified for read/planning only
 - Forbidden destinations: detected and defaulted
 - Approval policy: detected and defaulted
