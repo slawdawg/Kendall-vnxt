@@ -77,13 +77,19 @@ Before any company sharing, evaluation, or adoption:
 
 ## Next Gate
 
-Next gate: company evaluation access protocol.
+Resolved next gate: company evaluation access protocol.
 
-Summary: define whether and how KNX could be shown to the company for evaluation without granting production-use, redistribution, source ownership, or public-license rights.
+Decision record: `company-evaluation-access-protocol-2026-06-01.md`
 
-Why gated: even evaluation can create IP, confidentiality, employment, data-egress, and implied-license risk if artifacts are shared before scope and permissions are explicit.
+Decision: define a planning-only protocol for possible future company evaluation. No code, documentation bundle, archive, repository access, demo environment, or license rights are shared or granted by this decision.
 
-Recommendation: approve a planning-only evaluation protocol next. Do not share artifacts, configure remote access, or grant company use until the protocol is accepted and the exact artifact set is reviewed.
+Next gate: evaluation candidate packet scope.
+
+Summary: choose the first local-only candidate packet for possible future company evaluation, preferably documentation-only or controlled walkthrough materials, and define exactly what files or summaries would be eligible for review.
+
+Why gated: the candidate packet determines what could later leave the local repo, what rights language is needed, and what safety/security checks must run before any company-facing step.
+
+Recommendation: start with documentation-only scope. Exclude source archives, repository access, runtime inventories, credentials, customer/production data, source mutation workflows, GitHub/remotes, public distribution, and any operational deployment materials.
 
 ## Decision Sources
 
