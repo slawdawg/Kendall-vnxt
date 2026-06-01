@@ -26,7 +26,7 @@ Last updated: 2026-06-01
 - Latest validator validation report: [../../skills/reports/module-validation-ksev-2026-06-01.md](../../skills/reports/module-validation-ksev-2026-06-01.md)
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
-- Latest handoff: [runtime/handoffs/handoff-2026-06-01.md](runtime/handoffs/handoff-2026-06-01.md)
+- Latest handoff: [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md)
 - Latest substantive KNX governance commit: `c666f99 Harden KSEV source packet example validation`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
@@ -79,7 +79,7 @@ Last updated: 2026-06-01
 - Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only.
 - Local evaluation packet draft is materialized and hardened under approved runtime storage. It remains local-only and not approved for sharing.
 - External discussion-guide scope is accepted for planning, but the company-facing discussion path is parked at user request. The local guide draft remains local-only and unshared. IDE one-click action planning is closed. Current recommended next workflow is local KNX backlog consolidation under the fast-lane profile.
-- Local backlog consolidation is accepted. Metadata-only source packet examples for the three approved first classes are materialized and validated under approved runtime storage. Current recommended next workflow is final local status/handoff refresh; operational source packets remain hard-gated.
+- Local backlog consolidation is accepted. Metadata-only source packet examples for the three approved first classes are materialized and validated under approved runtime storage. Current recommendation is pause; route future work by concrete capability. Operational source packets remain hard-gated.
 
 ## Active Boundaries
 
