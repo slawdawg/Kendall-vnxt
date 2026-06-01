@@ -62,6 +62,7 @@ Last updated: 2026-06-01
 - Latest source packet example validator report: [runtime/source-packets/validator-report/source-evidence-validation.md](runtime/source-packets/validator-report/source-evidence-validation.md)
 - Latest pause decision: [decisions/pause-current-work-2026-06-01.md](decisions/pause-current-work-2026-06-01.md)
 - Latest greenfield implementation lane: [decisions/greenfield-implementation-lane-2026-06-01.md](decisions/greenfield-implementation-lane-2026-06-01.md)
+- Latest greenfield implementation runway: [runtime/greenfield-implementation/implementation-runway-2026-06-01.md](runtime/greenfield-implementation/implementation-runway-2026-06-01.md)
 
 ## Current Routing
 
@@ -83,6 +84,7 @@ Last updated: 2026-06-01
 - Local evaluation packet draft is materialized and hardened under approved runtime storage. It remains local-only and not approved for sharing.
 - External discussion-guide scope is accepted for planning, but the company-facing discussion path is parked at user request. The local guide draft remains local-only and unshared. IDE one-click action planning is closed. Current recommended next workflow is the approved local-only greenfield implementation lane.
 - Current KNX work is reopened only for the approved local-only greenfield implementation lane. Parked and hard-gated paths remain closed unless explicitly reopened. Operational source packets remain hard-gated.
+- Current local implementation runway is materialized under `runtime/greenfield-implementation/`.
 
 ## Active Boundaries
 
