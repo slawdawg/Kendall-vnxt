@@ -2,13 +2,15 @@
 
 Date: 2026-06-01
 
-Status: local draft only
+Status: local hardened draft only
 
 Storage location: `_bmad/memory/knx/runtime/evaluation-packet/`
 
 ## Use Restriction
 
 This draft is not approved for company sharing, repository access, export, publication, production use, redistribution, sublicensing, ownership transfer, or public license activation. It is local planning material only.
+
+This draft is not a license, offer, proposal, quote, warranty, support commitment, or legal advice.
 
 ## Executive Summary
 
@@ -41,11 +43,11 @@ The current KNX governance core is scaffolded and validated. The optional KNX So
 
 Approved storage root:
 
-- `C:/Users/slaw_dawg/Kendall_Nxt/_bmad/memory/knx/runtime`
+- approved local KNX runtime storage under this private workspace.
 
 Approved source root:
 
-- `C:/Users/slaw_dawg/Kendall_Nxt`
+- approved local project workspace for read/planning only.
 
 Approved source operation:
 
@@ -90,6 +92,8 @@ Current posture:
 
 Future company-facing paths may include evaluation-only permission, paid internal-use license, paid production-use license, support or warranty terms, source-available private license, or a later open-source release. Any such path requires separate legal review and explicit approval.
 
+No pricing, support, warranty, service-level, ownership, confidentiality, or production-use terms are proposed by this packet.
+
 ## Evaluation Position
 
 Preferred first company-facing shape, if later approved:
@@ -104,6 +108,8 @@ Preferred first company-facing shape, if later approved:
 - no public license activation.
 
 Before any sharing, a later gate must approve the exact audience, sharing mechanism, artifact list, restrictions, safety review, and legal review path.
+
+The preferred first external format, if later approved, is a short discussion guide or walkthrough summary rather than this full local packet.
 
 ## Source Summary
 

@@ -5,7 +5,7 @@
   "created_by": "KNX workflow",
   "storage_location": "_bmad/memory/knx/runtime/evaluation-packet",
   "storage_boundary_basis": "approved-storage-root",
-  "status": "local-draft-only",
+  "status": "local-hardened-draft-only",
   "external_send_performed": false,
   "source_mutation_performed": false,
   "company_sharing_approved": false,
@@ -34,6 +34,11 @@
     {
       "path": "_bmad/memory/knx/runtime/evaluation-packet/validation-evaluation-packet-2026-06-01.json",
       "classification": "validation-evidence",
+      "share_status": "not-approved"
+    },
+    {
+      "path": "_bmad/memory/knx/runtime/evaluation-packet/hardening-review-2026-06-01.md",
+      "classification": "hardening-review",
       "share_status": "not-approved"
     }
   ],

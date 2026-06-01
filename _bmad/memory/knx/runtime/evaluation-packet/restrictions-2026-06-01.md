@@ -2,11 +2,13 @@
 
 Date: 2026-06-01
 
-Status: local draft only
+Status: local hardened draft only
 
 ## Permission Status
 
 This packet grants no rights.
+
+This packet is not a license, offer, proposal, quote, warranty, support commitment, legal agreement, or legal advice.
 
 It does not approve:
 
@@ -23,7 +25,8 @@ It does not approve:
 - ownership transfer,
 - support commitment,
 - warranty commitment,
-- pricing or contract terms.
+- pricing or contract terms,
+- evaluation permission.
 
 ## Required Before Any Sharing
 
@@ -42,3 +45,5 @@ Before any company-facing step:
 KNX and `ksev` remain private/local and `UNLICENSED`.
 
 No Apache-2.0, MIT, GPL, public-source, source-available, commercial, or evaluation license is activated by this packet.
+
+Any future evaluation permission, commercial license, source-available license, support term, warranty term, pricing term, or production-use permission must be separately written, reviewed, and approved.

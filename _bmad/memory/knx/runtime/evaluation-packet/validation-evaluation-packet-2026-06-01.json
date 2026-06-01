@@ -1,6 +1,6 @@
 {
   "validation_evidence_id": "knx-validation-2026-06-01-001",
-  "artifact_under_validation": "local evaluation packet draft",
+  "artifact_under_validation": "local hardened evaluation packet draft",
   "validation_type": "boundary-check",
   "result": "CONCERNS",
   "failed_rules": [],
@@ -11,6 +11,7 @@
     "_bmad/memory/knx/runtime/evaluation-packet/restrictions-2026-06-01.md",
     "_bmad/memory/knx/runtime/evaluation-packet/artifact-inventory-2026-06-01.json",
     "_bmad/memory/knx/runtime/evaluation-packet/work-trace-evaluation-packet-2026-06-01.md",
+    "_bmad/memory/knx/runtime/evaluation-packet/hardening-review-2026-06-01.md",
     "_bmad/memory/knx/decisions/evaluation-candidate-packet-scope-2026-06-01.md"
   ],
   "command_or_check_run": "json parse, git diff --check, targeted secret-pattern scan, source-code-pattern scan, ksev module validation",
@@ -38,6 +39,7 @@
   },
   "concerns": [
     "Future sharing requires exact audience, mechanism, legal review, and explicit approval.",
-    "Draft should receive targeted scan and safety review before any sharing-readiness gate."
+    "Draft remains local-only and should not be treated as a shareable company packet.",
+    "A separate short external discussion guide may be safer than sharing the full local packet."
   ]
 }
