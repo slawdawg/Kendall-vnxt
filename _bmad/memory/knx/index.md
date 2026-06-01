@@ -42,6 +42,7 @@ Last updated: 2026-06-01
 - Latest runtime evidence inventory planning decision: [decisions/runtime-evidence-inventory-planning-2026-06-01.md](decisions/runtime-evidence-inventory-planning-2026-06-01.md)
 - Latest approval gate flow decision: [decisions/approval-gate-flow-2026-06-01.md](decisions/approval-gate-flow-2026-06-01.md)
 - Latest fast-lane local governance profile: [decisions/fast-lane-local-governance-2026-06-01.md](decisions/fast-lane-local-governance-2026-06-01.md)
+- Latest default-proceed local workflow: [decisions/default-proceed-local-workflow-2026-06-01.md](decisions/default-proceed-local-workflow-2026-06-01.md)
 - Latest runtime evidence inventory: [runtime/runtime-inventory/runtime-inventory-2026-06-01.md](runtime/runtime-inventory/runtime-inventory-2026-06-01.md)
 - Latest runtime evidence inventory validation: [runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json](runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json)
 - Latest `ksev` private-repo distribution plan: [decisions/ksev-private-repo-distribution-plan-2026-06-01.md](decisions/ksev-private-repo-distribution-plan-2026-06-01.md)
@@ -73,8 +74,8 @@ Last updated: 2026-06-01
 - Source/evidence contract open questions for the current governance/local-evidence scope are resolved.
 - Data-boundary and execution-policy open questions for the current governance/local-evidence scope are resolved.
 - Runtime evidence inventory is materialized. It is metadata-only and excludes `_bmad/memory/knx/runtime/runtime-inventory/**` to avoid self-inclusion.
-- Gate flow: present summary and why gated, execute after approval, then immediately present the next gate details.
-- Fast-lane local governance profile is accepted: low-risk local KNX governance/evidence/validation/runtime packet/local commit work may proceed without per-step user interaction. Hard gates still stop for explicit approval.
+- Gate flow: for hard gates, present summary and why gated, execute after approval, then immediately present the next gate details.
+- Default-proceed local workflow is accepted: eligible local KNX governance/evidence/validation/packaging/handoff/local commit work should proceed without per-step user interaction. Hard gates still stop for explicit approval.
 - `ksev` public-distribution readiness planning is active. Current manifest remains local-only; distribution metadata posture is accepted.
 - Company commercial licensing posture is accepted for planning: keep KNX and `ksev` private/local and `UNLICENSED` to preserve a future private commercial license path.
 - Company evaluation access protocol is accepted for planning: no sharing, access, demo, repository access, or rights grant is approved.

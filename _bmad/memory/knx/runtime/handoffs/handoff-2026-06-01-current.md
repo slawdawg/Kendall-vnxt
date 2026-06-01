@@ -15,6 +15,7 @@ Status: local-only greenfield implementation lane open
 - Metadata-only source packet examples are materialized and validated.
 - `ksev` now validates both synthetic fixture packs and metadata-only source packet examples.
 - User approval reopened the first greenfield implementation lane for the local-only installable KNX governance core plus standalone `ksev` validator.
+- User approval established default-proceed local workflow: eligible local KNX work proceeds automatically until a hard gate or user pause.
 
 ## Latest Validation
 
@@ -67,5 +68,7 @@ Route by concrete capability:
 - use `knx-safety-validation-review` before any new optional pack or boundary expansion,
 - use `knx-mature-tool-review` before new tooling or automation,
 - use `bmad-module-builder` validation after module packaging changes.
+
+For eligible local KNX governance, evidence, validation, packaging, handoff, and local commit work, proceed by default under `decisions/default-proceed-local-workflow-2026-06-01.md`.
 
 Parked and hard-gated paths remain closed unless explicitly reopened.

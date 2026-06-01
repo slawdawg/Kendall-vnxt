@@ -6,7 +6,7 @@ Last updated: 2026-06-01
 
 Status: accepted
 
-Decision: allow KNX workflows to proceed without per-step user interaction for low-risk local governance, evidence, validation, runtime packet, and local commit work when all fast-lane conditions are satisfied.
+Decision: allow KNX workflows to proceed without per-step user interaction for low-risk local governance, evidence, validation, runtime packet, and local commit work when all fast-lane conditions are satisfied. This profile is extended by `default-proceed-local-workflow-2026-06-01.md`, which makes proceed-unless-hard-gated the primary operating rule for eligible local KNX work.
 
 ## Short Summary
 
@@ -72,7 +72,7 @@ The assistant must stop and present a gate before:
 
 ## Interaction Rule
 
-For fast-lane-eligible work, the assistant may:
+For fast-lane-eligible work, the assistant should:
 
 1. State briefly that the work is proceeding under the fast-lane profile.
 2. Execute the recommended local steps.
@@ -80,6 +80,8 @@ For fast-lane-eligible work, the assistant may:
 4. Commit locally when appropriate.
 5. Continue to the next fast-lane-eligible recommendation.
 6. Stop only when a hard gate is reached or the user asks to pause.
+
+Default-proceed decision: `default-proceed-local-workflow-2026-06-01.md`.
 
 For hard gates, the assistant must present:
 
@@ -93,7 +95,7 @@ For hard gates, the assistant must present:
 
 ## Relationship To Existing Gate Flow
 
-This profile narrows the earlier approval gate flow for local-only KNX governance/evidence work. The older gate format still applies to hard gates. This profile does not approve any hard-gated class.
+This profile narrows the earlier approval gate flow for local-only KNX governance/evidence work. The default-proceed decision strengthens this profile for eligible local work. The older gate format still applies to hard gates. This profile does not approve any hard-gated class.
 
 ## Next Hard Gate
 

@@ -7,9 +7,10 @@ Status: active local-only backlog
 ## Active
 
 1. Continue the approved local-only greenfield implementation lane for the installable KNX governance core plus standalone `ksev` validator.
-2. Revalidate `knx` and `ksev` packaging only when scoped module assets change.
-3. Route any new fixture/evidence changes through `knx-source-evidence-contract`.
-4. Route any new tooling or source inventory materialization through `knx-mature-tool-review` first.
+2. Apply the default-proceed local workflow for eligible KNX governance, evidence, validation, packaging, handoff, and local commit work.
+3. Revalidate `knx` and `ksev` packaging only when scoped module assets change.
+4. Route any new fixture/evidence changes through `knx-source-evidence-contract`.
+5. Route any new tooling or source inventory materialization through `knx-mature-tool-review` first.
 
 ## Parked
 
@@ -32,4 +33,4 @@ Status: active local-only backlog
 
 ## Current Recommendation
 
-Proceed with the approved local-only greenfield implementation lane. Do not reopen parked or hard-gated paths without a separate explicit decision.
+Proceed with the approved local-only greenfield implementation lane by default. Stop only for hard gates, genuine user input requirements, or user pause. Do not reopen parked or hard-gated paths without a separate explicit decision.

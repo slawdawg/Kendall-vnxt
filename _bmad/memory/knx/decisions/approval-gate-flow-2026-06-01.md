@@ -8,6 +8,8 @@ Status: accepted
 
 Decision: when KNX reaches a gated action, present the current gate with a short proposal summary and why it is gated. After approval, execute the approved work and immediately present the next gate details without waiting for the user to ask "next."
 
+For non-gated eligible local KNX work, use `default-proceed-local-workflow-2026-06-01.md`: proceed automatically, validate, commit locally when appropriate, and stop only at hard gates or user pause.
+
 ## Required Gate Format
 
 Each gate presentation should include:
@@ -52,6 +54,10 @@ Those still require explicit gate approval.
 Decision record: `fast-lane-local-governance-2026-06-01.md`
 
 Decision: low-risk local KNX governance, evidence, validation, runtime packet, and local commit work may proceed without per-step user interaction when all fast-lane conditions are satisfied.
+
+Default-proceed decision record: `default-proceed-local-workflow-2026-06-01.md`
+
+Decision: eligible local KNX governance, evidence, validation, packaging, handoff, and local commit work should proceed by default unless a hard gate is reached.
 
 Hard gates still require approval, including IDE/workspace configuration writes, external sends, company sharing, GitHub/remotes, public distribution, license grants, customer/production access, credential/account-security workflows, local model/GPU processing, destructive actions, risk score `9` waivers, and writes outside approved KNX memory/runtime locations.
 
