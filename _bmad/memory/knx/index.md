@@ -28,6 +28,8 @@ Last updated: 2026-06-01
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01.md](runtime/handoffs/handoff-2026-06-01.md)
 - Latest local commit: `c8da043 Add KNX source evidence validator pack and governance records`
+- Latest local commit status sync: `88aa647 Record KNX local commit status`
+- Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 
 ## Current Routing
 
