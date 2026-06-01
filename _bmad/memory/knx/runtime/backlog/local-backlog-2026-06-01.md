@@ -6,9 +6,10 @@ Status: active local-only backlog
 
 ## Active
 
-1. Create metadata-only source packet templates/examples for the three approved first classes.
-2. Validate the templates against the source/evidence contract vocabulary.
-3. Update safety review and index routing after the templates exist.
+1. Continue the approved local-only greenfield implementation lane for the installable KNX governance core plus standalone `ksev` validator.
+2. Revalidate `knx` and `ksev` packaging only when scoped module assets change.
+3. Route any new fixture/evidence changes through `knx-source-evidence-contract`.
+4. Route any new tooling or source inventory materialization through `knx-mature-tool-review` first.
 
 ## Parked
 
@@ -31,4 +32,4 @@ Status: active local-only backlog
 
 ## Current Recommendation
 
-Proceed with the metadata-only source packet templates/examples under the fast-lane profile.
+Proceed with the approved local-only greenfield implementation lane. Do not reopen parked or hard-gated paths without a separate explicit decision.

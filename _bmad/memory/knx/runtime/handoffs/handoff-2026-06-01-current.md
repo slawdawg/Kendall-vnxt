@@ -2,7 +2,7 @@
 
 Date: 2026-06-01
 
-Status: local governance/evidence hardening current
+Status: local-only greenfield implementation lane open
 
 ## Current State
 
@@ -14,6 +14,7 @@ Status: local governance/evidence hardening current
 - Local evaluation packet and discussion guide remain local-only and unshared.
 - Metadata-only source packet examples are materialized and validated.
 - `ksev` now validates both synthetic fixture packs and metadata-only source packet examples.
+- User approval reopened the first greenfield implementation lane for the local-only installable KNX governance core plus standalone `ksev` validator.
 
 ## Latest Validation
 
@@ -57,11 +58,14 @@ Hard-gated:
 
 ## Recommended Next Work
 
-Pause. Internal evidence hardening is in a good local state.
+Proceed only inside the approved local-only greenfield implementation lane.
 
-If work resumes, route by concrete capability:
+Route by concrete capability:
 
+- use `bmad-module-builder` only for named packaging or validation changes,
 - use `knx-source-evidence-contract` for new evidence/source packet contracts,
 - use `knx-safety-validation-review` before any new optional pack or boundary expansion,
 - use `knx-mature-tool-review` before new tooling or automation,
 - use `bmad-module-builder` validation after module packaging changes.
+
+Parked and hard-gated paths remain closed unless explicitly reopened.

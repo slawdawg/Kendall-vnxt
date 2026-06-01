@@ -60,12 +60,13 @@ Last updated: 2026-06-01
 - Latest source packet examples: [runtime/source-packets/source-packet-examples-2026-06-01.md](runtime/source-packets/source-packet-examples-2026-06-01.md)
 - Latest source packet example validator report: [runtime/source-packets/validator-report/source-evidence-validation.md](runtime/source-packets/validator-report/source-evidence-validation.md)
 - Latest pause decision: [decisions/pause-current-work-2026-06-01.md](decisions/pause-current-work-2026-06-01.md)
+- Latest greenfield implementation lane: [decisions/greenfield-implementation-lane-2026-06-01.md](decisions/greenfield-implementation-lane-2026-06-01.md)
 
 ## Current Routing
 
 - Latest coordinator decision: [decisions/governance-coordinator-2026-06-01.md](decisions/governance-coordinator-2026-06-01.md)
 - Latest data-boundary decision: [decisions/data-boundary-2026-06-01.md](decisions/data-boundary-2026-06-01.md)
-- Current recommended next workflow: route by concrete capability. Use `knx-source-evidence-contract` for fixture/evidence changes, `knx-mature-tool-review` before any source inventory materialization workflow, and `knx-safety-validation-review` before any new optional pack, public release path, external send, source mutation, or operational source intake.
+- Current recommended next workflow: continue the approved local-only greenfield implementation lane for the installable KNX governance core plus standalone `ksev` validator. Use `bmad-module-builder` only for named packaging or validation changes, `knx-source-evidence-contract` for fixture/evidence changes, `knx-mature-tool-review` before any new tooling or source inventory materialization workflow, and `knx-safety-validation-review` before any new optional pack, public release path, external send, source mutation, or operational source intake.
 - First-pass source inventory evidence is materialized. It excludes runtime evidence paths and is limited to governance/validator source and report artifacts. Next routing should be by concrete capability.
 - First real source packet classes are selected: `user-authored-planning-document`, `public-or-synthetic-sample-data`, and `generated-report`.
 - Source mutation remains blocked by default; future mutation requires a named workflow, exact target paths, rollback/recovery plan, validation plan, safety review, and explicit approval.
@@ -79,8 +80,8 @@ Last updated: 2026-06-01
 - Company evaluation access protocol is accepted for planning: no sharing, access, demo, repository access, or rights grant is approved.
 - Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only.
 - Local evaluation packet draft is materialized and hardened under approved runtime storage. It remains local-only and not approved for sharing.
-- External discussion-guide scope is accepted for planning, but the company-facing discussion path is parked at user request. The local guide draft remains local-only and unshared. IDE one-click action planning is closed. Current recommended next workflow is local KNX backlog consolidation under the fast-lane profile.
-- Current KNX work is paused. Route future work only by concrete user-requested capability or explicit reopening of a parked/hard-gated path. Operational source packets remain hard-gated.
+- External discussion-guide scope is accepted for planning, but the company-facing discussion path is parked at user request. The local guide draft remains local-only and unshared. IDE one-click action planning is closed. Current recommended next workflow is the approved local-only greenfield implementation lane.
+- Current KNX work is reopened only for the approved local-only greenfield implementation lane. Parked and hard-gated paths remain closed unless explicitly reopened. Operational source packets remain hard-gated.
 
 ## Active Boundaries
 
