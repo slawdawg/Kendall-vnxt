@@ -6,7 +6,7 @@ Last updated: 2026-06-01
 
 Status: provisional
 
-Reason: storage root, allowed source root, local Git source/review boundary, GitHub/remote disablement, and per-use external-provider approval policy are recorded. The plan remains provisional because local model runtime and GPU/local accelerator availability are unresolved, and source mutation remains approval-gated.
+Reason: storage root, allowed source root, local Git source/review boundary, GitHub/remote disablement, per-use external-provider approval policy, and source mutation default block are recorded. The plan remains provisional because local model runtime and GPU/local accelerator availability are unresolved.
 
 ## Storage Mode And Root
 
@@ -121,6 +121,14 @@ Record a decision before expanding any of these boundaries:
 
 Accepted expansions must be written to `decisions/data-boundary-YYYY-MM-DD.md` or a more specific decision record before downstream workflows rely on them.
 
+## Source Mutation Posture
+
+KNX workflows remain read/planning-only by default.
+
+Source mutation is blocked unless a later explicit source-mutation decision approves a named workflow with exact target paths, allowed file operations, rollback or recovery plan, validation plan, safety review result, and user approval for that mutation scope.
+
+Local Git staging and local commits for scoped KNX governance and validator records are approved separately by `decisions/local-git-commit-2026-06-01.md`. That approval does not authorize operational source mutation, broad repository edits, customer/production changes, remote pushes, GitHub workflows, or runtime assistant behavior.
+
 ## Validation Checks And Fixture Requirements
 
 Before operational workflows run:
@@ -140,7 +148,7 @@ Before operational workflows run:
 
 1. Which source classes should KNX handle first: planning docs, generated drafts, exported files, fixtures, or something else?
 2. Is any local model runtime or GPU-backed processing approved? Local `nvidia-smi` was not found on 2026-06-01, so this remains unresolved unless another accelerator path is confirmed.
-3. Should any workflow expand beyond read/planning into source mutation?
+3. Which future named workflow, if any, should request a source-mutation exception?
 
 ## Decision Sources
 
@@ -155,3 +163,4 @@ Before operational workflows run:
 - External provider rules: execution-policy-derived.
 - Approval gates: defaulted.
 - Validation checks: defaulted.
+- Source mutation posture: `decisions/source-mutation-posture-2026-06-01.md`.

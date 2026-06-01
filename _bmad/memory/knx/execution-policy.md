@@ -6,7 +6,7 @@ Last updated: 2026-05-31
 
 Status: provisional
 
-Reason: the base execution ladder is defined, storage root and read/planning source root are approved, and GitHub/remote workflows are disabled for now. The policy remains provisional because GPU/local accelerator availability and local model status are unresolved, and source mutation remains approval-gated.
+Reason: the base execution ladder is defined, storage root and read/planning source root are approved, GitHub/remote workflows are disabled for now, and source mutation is blocked by default unless a later named workflow is explicitly approved. The policy remains provisional because GPU/local accelerator availability and local model status are unresolved.
 
 ## Effective Execution Ladder
 
@@ -27,6 +27,14 @@ Prefer mature, maintained tools and platform capabilities that already operate i
 Custom full workflow logic is not approved until mature-tool options and deterministic local processing have been considered for the capability.
 
 Source: defaulted from KNX workflow.
+
+## Source Mutation Posture
+
+KNX workflows remain read/planning-only by default.
+
+Source mutation requires a later explicit decision for a named workflow. That decision must record exact target paths, allowed file operations, rollback or recovery plan, validation plan, safety review result, and user approval for the mutation scope.
+
+Local Git staging and local commits for scoped KNX governance and validator records are approved separately and do not authorize operational source mutation.
 
 ## Deterministic-First Rule
 
@@ -106,7 +114,7 @@ Source: defaulted from KNX workflow.
 ## Open Questions
 
 1. Is a GPU, local accelerator, or local model runtime available and approved?
-2. Should any future workflow expand beyond read/planning into source mutation?
+2. Which future named workflow, if any, should request a source-mutation exception?
 3. Should any future workflow enable GitHub/remote source-review behavior?
 
 ## Decision Sources
@@ -122,3 +130,4 @@ Source: defaulted from KNX workflow.
 - External provider rule: user-specified per-use approval only.
 - Exception process: defaulted.
 - Handoffs: defaulted.
+- Source mutation posture: `decisions/source-mutation-posture-2026-06-01.md`.

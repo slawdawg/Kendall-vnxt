@@ -1338,3 +1338,53 @@ Future approval is required before creating packets for deferred classes or copy
 ## Recommended Next Workflow
 
 Recommended next workflow: decide whether to create source packet templates/examples for the three approved first classes, still metadata-only and local.
+
+---
+
+# Safety Review - Source Mutation Posture
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass
+
+Target reviewed: `decisions/source-mutation-posture-2026-06-01.md`
+
+## Decision Reviewed
+
+KNX workflows remain read/planning-only by default. Source mutation stays blocked unless a future explicit source-mutation decision approves a named workflow.
+
+## Blockers
+
+No blockers found.
+
+The decision preserves the current source boundary and does not approve operational source mutation.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+The posture matches the approved source operation: read/planning only. It clarifies that local Git staging and local commits for scoped KNX governance/validator records are not operational source mutation approval.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The posture keeps mutation behind an exception path requiring exact target paths, allowed file operations, rollback or recovery plan, validation plan, safety review result, and explicit user approval.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass
+
+The contract now records source mutation as blocked by default and defines what evidence a future exception must include.
+
+## Required User Decisions
+
+No additional decision is needed for default posture.
+
+Future approval is required before any named workflow mutates source files.
+
+## Residual Risks
+
+Future implementation work may be confused with source mutation unless each workflow names its target paths and operation class clearly.

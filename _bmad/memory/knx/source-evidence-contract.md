@@ -211,6 +211,14 @@ The first real source packets should use these classes:
 
 Deferred classes include runtime evidence inventory, exported files or attachments, customer/project data, production systems, credentials/tokens/MFA/account-security material, GitHub/remotes, external providers, local model/GPU-derived outputs, source mutation records, and operational source intake.
 
+## Source Mutation Posture
+
+KNX workflows remain read/planning-only by default.
+
+Source mutation is blocked unless a later explicit source-mutation decision approves a named workflow with exact target paths, allowed file operations, rollback or recovery plan, validation plan, safety review result, and user approval for that mutation scope.
+
+Local Git staging and commits for scoped KNX governance and validator records are separately approved and do not authorize operational source mutation.
+
 ## Required Link Rules
 
 - Every generated output must link to at least one source packet, one work trace, and one validation evidence record.
@@ -296,8 +304,7 @@ Source: execution-policy-derived from `execution-policy.md`.
 ## Open Questions
 
 1. What identifier convention should downstream operational workflows use for artifact IDs?
-2. Should any workflow expand beyond read/planning into source mutation?
-3. Who can approve risk score `9` waivers?
+2. Who can approve risk score `9` waivers?
 
 ## Decision Sources
 
@@ -318,3 +325,4 @@ Source: execution-policy-derived from `execution-policy.md`.
 - Generated-report grouping rule: user-approved on 2026-06-01 and recorded in `decisions/source-inventory-planning-2026-06-01.md`.
 - Checksum rule: deferred by default because checksums require file-content reads; user-approved on 2026-06-01 and recorded in `decisions/source-inventory-planning-2026-06-01.md`.
 - First source packet class decision: `decisions/source-packet-classes-2026-06-01.md`.
+- Source mutation posture: `decisions/source-mutation-posture-2026-06-01.md`.
