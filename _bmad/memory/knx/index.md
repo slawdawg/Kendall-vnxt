@@ -35,6 +35,7 @@ Last updated: 2026-06-01
 - Latest source inventory validation evidence: [runtime/source-inventory/validation-source-inventory-2026-06-01.json](runtime/source-inventory/validation-source-inventory-2026-06-01.json)
 - Latest source packet class decision: [decisions/source-packet-classes-2026-06-01.md](decisions/source-packet-classes-2026-06-01.md)
 - Latest source mutation posture decision: [decisions/source-mutation-posture-2026-06-01.md](decisions/source-mutation-posture-2026-06-01.md)
+- Latest scoped source mutation approval: [decisions/scoped-source-mutation-knx-2026-06-01.md](decisions/scoped-source-mutation-knx-2026-06-01.md)
 - Latest artifact ID convention decision: [decisions/artifact-id-convention-2026-06-01.md](decisions/artifact-id-convention-2026-06-01.md)
 - Latest risk waiver authority decision: [decisions/risk-waiver-authority-2026-06-01.md](decisions/risk-waiver-authority-2026-06-01.md)
 - Latest local model/GPU posture decision: [decisions/local-model-gpu-posture-2026-06-01.md](decisions/local-model-gpu-posture-2026-06-01.md)
@@ -73,7 +74,7 @@ Last updated: 2026-06-01
 - Current recommended next workflow: continue the approved local-only greenfield implementation lane for the installable KNX governance core plus standalone `ksev` validator. Use `bmad-module-builder` only for named packaging or validation changes, `knx-source-evidence-contract` for fixture/evidence changes, `knx-mature-tool-review` before any new tooling or source inventory materialization workflow, and `knx-safety-validation-review` before any new optional pack, public release path, external send, source mutation, or operational source intake.
 - First-pass source inventory evidence is materialized. It excludes runtime evidence paths and is limited to governance/validator source and report artifacts. Next routing should be by concrete capability.
 - First real source packet classes are selected: `user-authored-planning-document`, `public-or-synthetic-sample-data`, and `generated-report`.
-- Source mutation remains blocked by default; future mutation requires a named workflow, exact target paths, rollback/recovery plan, validation plan, safety review, and explicit approval.
+- Source mutation remains blocked by default outside the accepted scoped KNX module/governance exception. Future mutation beyond that exception requires a named workflow, exact target paths, rollback/recovery plan, validation plan, safety review, and explicit approval.
 - Source/evidence contract open questions for the current governance/local-evidence scope are resolved.
 - Data-boundary and execution-policy open questions for the current governance/local-evidence scope are resolved.
 - Runtime evidence inventory is materialized. It is metadata-only and excludes `_bmad/memory/knx/runtime/runtime-inventory/**` to avoid self-inclusion.

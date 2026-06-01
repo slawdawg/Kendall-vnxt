@@ -8,6 +8,10 @@ Status: accepted
 
 Decision: KNX workflows remain read/planning-only by default. Source mutation stays blocked unless a future explicit source-mutation decision approves a named workflow.
 
+Named exception accepted:
+
+- `scoped-source-mutation-knx-2026-06-01.md` approves scoped local source mutation for KNX module/governance records in the reopened greenfield implementation lane.
+
 ## Current Rule
 
 Allowed:
@@ -41,6 +45,8 @@ Any future source mutation workflow must record:
 Local Git commits for scoped KNX governance and validator records are approved by `local-git-commit-2026-06-01.md`.
 
 That approval does not authorize operational source mutation, broad repository edits, customer/production changes, remote pushes, GitHub workflows, or runtime assistant behavior.
+
+The scoped KNX source-mutation exception authorizes only the target paths and operations listed in `scoped-source-mutation-knx-2026-06-01.md`.
 
 ## Decision Sources
 

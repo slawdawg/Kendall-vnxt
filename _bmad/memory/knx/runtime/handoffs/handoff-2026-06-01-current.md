@@ -19,6 +19,7 @@ Status: local-only greenfield implementation lane open
 - Greenfield implementation runway is materialized under `_bmad/memory/knx/runtime/greenfield-implementation/`.
 - `ksev` is registered in shared local config/help registry.
 - Hard-gated paths are sequenced in `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
+- Scoped local source mutation is approved for KNX module/governance records by `decisions/scoped-source-mutation-knx-2026-06-01.md`.
 
 ## Latest Validation
 
@@ -55,6 +56,7 @@ Hard-gated:
 - license or rights grants,
 - source mutation outside scoped KNX governance/evidence records,
 - writes outside approved KNX memory/runtime storage,
+- source mutation outside the scoped KNX module/governance exception,
 - customer/production access,
 - credential/account-security workflows,
 - local model/GPU processing,

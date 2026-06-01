@@ -36,9 +36,15 @@ Stop and request explicit approval before executing any hard-gated action.
 - Company sharing depends on distribution, licensing, and artifact selection clarity.
 - IDE, runtime behavior, model/GPU, customer/production, credentials, destructive actions, and risk waivers remain higher-risk and should stay late unless the user explicitly prioritizes them.
 
-## Gate 1 Candidate
+## Gate 1 Result
 
 Gate: scoped source mutation for KNX module/governance records.
+
+Status: accepted.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/scoped-source-mutation-knx-2026-06-01.md`
 
 Summary:
 
@@ -87,4 +93,4 @@ Local commit:
 
 ## Next Action
 
-Present Gate 1 for explicit user approval before any broader source mutation policy is accepted.
+Proceed to Gate 2: writes outside approved KNX memory/runtime or already-approved local module/report paths.
