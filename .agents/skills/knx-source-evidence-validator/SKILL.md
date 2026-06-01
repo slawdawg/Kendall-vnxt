@@ -1,13 +1,13 @@
 ---
 name: knx-source-evidence-validator
-description: Validates KNX synthetic source/evidence fixture packs and writes local validation reports under approved KNX runtime storage.
+description: Validates KNX synthetic source/evidence fixture packs and metadata-only source packet examples, then writes local validation reports under approved KNX runtime storage.
 ---
 
 # knx-source-evidence-validator
 
 ## Overview
 
-This standalone optional pack validates KendallAI vNext synthetic source/evidence fixture packs against the accepted source/evidence contract.
+This standalone optional pack validates KendallAI vNext synthetic source/evidence fixture packs and metadata-only source packet examples against the accepted source/evidence contract.
 
 It is not part of the KNX governance core. It packages the dependency-free validator only.
 
@@ -31,12 +31,13 @@ Read the source/evidence contract before interpreting results:
 
 ## Inputs
 
-Use only local synthetic fixture packs and local governance records.
+Use only local synthetic fixture packs, metadata-only source packet examples, and local governance records.
 
 Supported arguments:
 
 - `validate` or no action: validate the configured fixture pack and write reports.
 - `--fixture-pack PATH`: validate a specific local fixture pack.
+- `--source-packet-examples PATH`: validate metadata-only source packet examples instead of the synthetic fixture pack.
 - `--output-dir PATH`: write reports to a specific local directory.
 - `--storage-root PATH`: override the approved KNX runtime storage root for an explicit review or test run.
 - `--no-write`: validate without writing reports.
@@ -44,7 +45,7 @@ Supported arguments:
 
 ## Workflow
 
-1. Confirm the target fixture pack is synthetic and local.
+1. Confirm the target fixture pack is synthetic and local, or the source packet examples are metadata-only and local.
 2. Confirm report output stays under the approved KNX runtime storage root.
 3. Run `python ./scripts/validate_source_evidence.py` with the selected arguments.
 4. Treat `PASS` as clean validation, `CONCERNS` as review-needed, and `FAIL` as blocking.
@@ -65,6 +66,7 @@ Default output location:
 ## Safety Rules
 
 - Do not mutate source files.
+- Do not copy source contents into source packet examples.
 - Do not generate or materialize source inventory artifacts.
 - Do not write reports outside the approved KNX runtime storage root.
 - Do not call GitHub, remotes, webhooks, external providers, or remote CI.

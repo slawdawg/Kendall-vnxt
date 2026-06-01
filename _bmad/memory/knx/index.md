@@ -58,6 +58,7 @@ Last updated: 2026-06-01
 - Latest local backlog consolidation: [decisions/local-backlog-consolidation-2026-06-01.md](decisions/local-backlog-consolidation-2026-06-01.md)
 - Latest local backlog: [runtime/backlog/local-backlog-2026-06-01.md](runtime/backlog/local-backlog-2026-06-01.md)
 - Latest source packet examples: [runtime/source-packets/source-packet-examples-2026-06-01.md](runtime/source-packets/source-packet-examples-2026-06-01.md)
+- Latest source packet example validator report: [runtime/source-packets/validator-report/source-evidence-validation.md](runtime/source-packets/validator-report/source-evidence-validation.md)
 
 ## Current Routing
 
@@ -78,7 +79,7 @@ Last updated: 2026-06-01
 - Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only.
 - Local evaluation packet draft is materialized and hardened under approved runtime storage. It remains local-only and not approved for sharing.
 - External discussion-guide scope is accepted for planning, but the company-facing discussion path is parked at user request. The local guide draft remains local-only and unshared. IDE one-click action planning is closed. Current recommended next workflow is local KNX backlog consolidation under the fast-lane profile.
-- Local backlog consolidation is accepted. Metadata-only source packet examples for the three approved first classes are materialized under approved runtime storage. Current recommended next workflow is source packet example validation hardening if more rigor is needed; operational source packets remain hard-gated.
+- Local backlog consolidation is accepted. Metadata-only source packet examples for the three approved first classes are materialized and validated under approved runtime storage. Current recommended next workflow is final local status/handoff refresh; operational source packets remain hard-gated.
 
 ## Active Boundaries
 

@@ -38,13 +38,16 @@ Commands:
 ```powershell
 python -m unittest discover -s .agents\skills\knx-source-evidence-validator\tests -p test_validate_source_evidence.py
 python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evidence.py
+python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evidence.py --source-packet-examples _bmad\memory\knx\runtime\source-packets\source-packet-examples-2026-06-01.json --output-dir _bmad\memory\knx\runtime\source-packets\validator-report
 ```
 
 Results:
 
-- Unit tests: 10 passed.
+- Unit tests: 14 passed.
 - Fixture validation: PASS.
 - Fixture count: 14.
+- Source packet example validation: PASS.
+- Source packet count: 3.
 - Errors: 0.
 - Warnings: 0.
 - Findings: 0.
@@ -54,6 +57,7 @@ Results:
 The standalone optional pack includes:
 
 - Dependency-free synthetic source/evidence fixture validator.
+- Metadata-only source packet example validator.
 - Validator tests.
 - Standalone module registration assets.
 - Local report writing under approved KNX runtime storage.
@@ -61,6 +65,7 @@ The standalone optional pack includes:
 The pack does not include:
 
 - Source inventory generation.
+- Source content copying.
 - Source mutation.
 - Operational source intake.
 - GitHub/remotes.
@@ -89,8 +94,9 @@ Decision: the optional validator pack remains local installable packaging eviden
 Post-cleanup verification:
 
 - Marketplace JSON parse: pass.
-- Packaged unit tests: 10 passed.
+- Packaged unit tests: 14 passed.
 - Packaged validator result: PASS, 14 fixtures, 0 errors, 0 warnings.
+- Source packet example validator result: PASS, 3 source packets, 0 errors, 0 warnings.
 - BMad module validation: pass, 0 findings.
 - `git diff --check`: pass.
 - Targeted secret-pattern scan: no key material found; matches were policy mentions and validator detection-pattern source.

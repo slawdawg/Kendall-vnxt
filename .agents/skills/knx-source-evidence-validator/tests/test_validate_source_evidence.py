@@ -13,6 +13,10 @@ SCRIPT_PATH = (
     / ".agents/skills/knx-source-evidence-validator/scripts/validate_source_evidence.py"
 )
 FIXTURE_PACK = PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
+SOURCE_PACKET_EXAMPLES = (
+    PROJECT_ROOT
+    / "_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json"
+)
 
 
 spec = importlib.util.spec_from_file_location("validate_source_evidence", SCRIPT_PATH)
@@ -120,6 +124,43 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(inventory_findings, [])
 
+    def test_current_source_packet_examples_pass(self):
+        result = validator.validate_source_packet_examples(SOURCE_PACKET_EXAMPLES)
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["summary"]["source_packet_count"], 3)
+        self.assertEqual(result["summary"]["errors"], 0)
+        self.assertEqual(result["findings"], [])
+
+    def test_source_packet_examples_reject_unapproved_class(self):
+        examples = self._load_source_packet_examples()
+        examples["packets"][0]["source_class"] = "customer-project-data"
+
+        result = self._validate_temp_source_packet_examples(examples)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-packet-class-not-approved", {finding["code"] for finding in result["findings"]})
+
+    def test_source_packet_examples_reject_copied_content(self):
+        examples = self._load_source_packet_examples()
+        examples["packets"][0]["source_content"] = "do not copy source contents into packet examples"
+
+        result = self._validate_temp_source_packet_examples(examples)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-packet-copies-content", {finding["code"] for finding in result["findings"]})
+
+    def test_source_packet_example_result_can_write_reports(self):
+        result = validator.validate_source_packet_examples(SOURCE_PACKET_EXAMPLES)
+        report_root = validator.load_approved_storage_root() / "source-packets"
+        report_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=report_root) as temp_dir:
+            output_dir = Path(temp_dir)
+            json_path, md_path = validator.write_reports(result, output_dir, validator.load_approved_storage_root())
+
+            self.assertEqual(json_path.name, "source-evidence-validation.json")
+            self.assertEqual(md_path.name, "source-evidence-validation.md")
+
     def _load_pack(self):
         return json.loads(FIXTURE_PACK.read_text(encoding="utf-8"))
 
@@ -134,6 +175,15 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
             path = Path(temp_dir) / "fixture-pack.json"
             path.write_text(json.dumps(pack), encoding="utf-8")
             return validator.validate_fixture_pack(path)
+
+    def _load_source_packet_examples(self):
+        return json.loads(SOURCE_PACKET_EXAMPLES.read_text(encoding="utf-8"))
+
+    def _validate_temp_source_packet_examples(self, examples):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "source-packet-examples.json"
+            path.write_text(json.dumps(examples), encoding="utf-8")
+            return validator.validate_source_packet_examples(path)
 
 
 if __name__ == "__main__":

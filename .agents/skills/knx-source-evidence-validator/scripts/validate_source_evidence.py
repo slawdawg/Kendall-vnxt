@@ -27,6 +27,44 @@ REQUIRED_FIXTURE_TYPES = {
 
 VALID_RESULTS = {"PASS", "CONCERNS", "FAIL", "WAIVED"}
 VALID_FORBIDDEN_CONTENT_CHECKS = {"pass", "concerns", "fail", "not-run"}
+VALID_SOURCE_PACKET_CLASSES = {
+    "user-authored-planning-document",
+    "public-or-synthetic-sample-data",
+    "generated-report",
+}
+REQUIRED_SOURCE_PACKET_FIELDS = {
+    "source_packet_id",
+    "title",
+    "source_class",
+    "source_location_or_description",
+    "source_owner_or_provider",
+    "approval_basis",
+    "source_support_level",
+    "permitted_processing_boundary",
+    "permitted_storage_boundary",
+    "downstream_allowed_use",
+    "source_operation",
+    "uncertainty",
+    "forbidden_content_check",
+    "created_at",
+    "created_by",
+}
+VALID_DOWNSTREAM_ALLOWED_USES = {
+    "planning",
+    "draft-generation",
+    "validation",
+    "fixture-test",
+    "decision-support",
+    "blocked",
+}
+BOUNDARY_FALSE_FLAGS = {
+    "source_contents_copied",
+    "source_mutation_performed",
+    "external_send_performed",
+    "github_or_remote_operation_performed",
+    "customer_or_production_data_included",
+    "credential_or_account_security_material_included",
+}
 DEFAULT_APPROVED_STORAGE_ROOT = Path("_bmad/memory/knx/runtime").resolve()
 
 SECRET_PATTERNS = [
@@ -138,6 +176,36 @@ def load_fixture_pack(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]
 
     if not isinstance(data, dict):
         add_finding(findings, "error", "top-level-not-object", "Fixture pack must be a JSON object")
+        return None, findings
+
+    return data, findings
+
+
+def load_json_object(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]:
+    findings: list[Finding] = []
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        add_finding(findings, "error", "input-unreadable", f"Cannot read input: {exc}")
+        return None, findings
+
+    for pattern in SECRET_PATTERNS:
+        if pattern.search(raw):
+            add_finding(
+                findings,
+                "error",
+                "secret-pattern-match",
+                f"Input text matched forbidden content pattern: {pattern.pattern}",
+            )
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        add_finding(findings, "error", "json-parse-failed", f"Invalid JSON: {exc}")
+        return None, findings
+
+    if not isinstance(data, dict):
+        add_finding(findings, "error", "top-level-not-object", "Input must be a JSON object")
         return None, findings
 
     return data, findings
@@ -407,6 +475,101 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
     return build_result(path, findings, len(fixtures), approved_storage_root)
 
 
+def validate_source_packet_examples(path: Path, approved_storage_root: Path | None = None) -> dict[str, Any]:
+    if approved_storage_root is None:
+        approved_storage_root = load_approved_storage_root()
+
+    examples, findings = load_json_object(path)
+    if examples is None:
+        return build_source_packet_examples_result(path, findings, 0, approved_storage_root)
+
+    for field in ("source_packet_example_set_id", "title", "created_at", "packets"):
+        if field not in examples:
+            add_finding(findings, "error", "missing-example-set-field", f"Missing top-level field: {field}")
+
+    for flag in BOUNDARY_FALSE_FLAGS:
+        if examples.get(flag) is not False:
+            add_finding(findings, "error", "boundary-flag-not-false", f"Boundary flag must be false: {flag}")
+
+    packets = examples.get("packets")
+    if not isinstance(packets, list):
+        add_finding(findings, "error", "packets-not-list", "Top-level packets field must be a list")
+        packets = []
+
+    for packet in packets:
+        if not isinstance(packet, dict):
+            add_finding(findings, "error", "source-packet-not-object", "Each source packet example must be an object")
+            continue
+        validate_source_packet_example(packet, findings)
+
+    return build_source_packet_examples_result(path, findings, len(packets), approved_storage_root)
+
+
+def validate_source_packet_example(packet: dict[str, Any], findings: list[Finding]) -> None:
+    packet_id = packet.get("source_packet_id")
+    for field in sorted(REQUIRED_SOURCE_PACKET_FIELDS):
+        if field not in packet:
+            findings.append(
+                Finding(
+                    "error",
+                    "missing-source-packet-field",
+                    f"Missing source packet field: {field}",
+                    artifact_id=str(packet_id) if packet_id else None,
+                )
+            )
+
+    if packet.get("source_class") not in VALID_SOURCE_PACKET_CLASSES:
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-class-not-approved",
+                "Source packet class is not one of the approved first classes",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    if packet.get("source_operation") != "read-planning":
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-operation-not-read-planning",
+                "Source packet examples must remain read-planning only",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    if packet.get("forbidden_content_check") != "pass":
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-forbidden-content-not-pass",
+                "Source packet examples must pass forbidden content checks",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    if packet.get("downstream_allowed_use") not in VALID_DOWNSTREAM_ALLOWED_USES:
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-downstream-use-invalid",
+                "Source packet downstream_allowed_use is invalid",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    for content_field in ("source_content", "source_contents", "content", "excerpt"):
+        if content_field in packet:
+            findings.append(
+                Finding(
+                    "error",
+                    "source-packet-copies-content",
+                    f"Metadata-only source packet examples must not include {content_field}",
+                    artifact_id=str(packet_id) if packet_id else None,
+                )
+            )
+
+
 def build_result(path: Path, findings: list[Finding], fixture_count: int, approved_storage_root: Path) -> dict[str, Any]:
     error_count = sum(1 for finding in findings if finding.severity == "error")
     warning_count = sum(1 for finding in findings if finding.severity == "warning")
@@ -433,6 +596,38 @@ def build_result(path: Path, findings: list[Finding], fixture_count: int, approv
     }
 
 
+def build_source_packet_examples_result(
+    path: Path,
+    findings: list[Finding],
+    packet_count: int,
+    approved_storage_root: Path,
+) -> dict[str, Any]:
+    error_count = sum(1 for finding in findings if finding.severity == "error")
+    warning_count = sum(1 for finding in findings if finding.severity == "warning")
+    if error_count:
+        status = "FAIL"
+    elif warning_count:
+        status = "CONCERNS"
+    else:
+        status = "PASS"
+
+    return {
+        "validator": "knx-source-evidence-stdlib",
+        "validation_target": "source-packet-examples",
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "input_path": str(path),
+        "approved_storage_root": str(approved_storage_root),
+        "status": status,
+        "summary": {
+            "source_packet_count": packet_count,
+            "errors": error_count,
+            "warnings": warning_count,
+            "findings": len(findings),
+        },
+        "findings": [asdict(finding) for finding in findings],
+    }
+
+
 def write_reports(result: dict[str, Any], output_dir: Path, approved_storage_root: Path) -> tuple[Path, Path]:
     output_dir = output_dir.resolve()
     if not is_under_path(str(output_dir), approved_storage_root):
@@ -449,6 +644,9 @@ def write_reports(result: dict[str, Any], output_dir: Path, approved_storage_roo
 
 
 def render_markdown(result: dict[str, Any]) -> str:
+    summary = result["summary"]
+    count_label = "Source packets" if "source_packet_count" in summary else "Fixtures"
+    count_value = summary.get("source_packet_count", summary.get("fixture_count", 0))
     lines = [
         "# KNX Source Evidence Validation",
         "",
@@ -458,10 +656,10 @@ def render_markdown(result: dict[str, Any]) -> str:
         "",
         "## Summary",
         "",
-        f"- Fixtures: {result['summary']['fixture_count']}",
-        f"- Errors: {result['summary']['errors']}",
-        f"- Warnings: {result['summary']['warnings']}",
-        f"- Findings: {result['summary']['findings']}",
+        f"- {count_label}: {count_value}",
+        f"- Errors: {summary['errors']}",
+        f"- Warnings: {summary['warnings']}",
+        f"- Findings: {summary['findings']}",
         "",
         "## Findings",
         "",
@@ -499,14 +697,21 @@ def parse_args() -> argparse.Namespace:
         help="Approved KNX runtime storage root. Defaults to knx_storage_root from _bmad/config.user.yaml.",
     )
     parser.add_argument("--no-write", action="store_true", help="Validate without writing reports.")
+    parser.add_argument(
+        "--source-packet-examples",
+        default=None,
+        help="Validate metadata-only source packet examples JSON instead of the synthetic fixture pack.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     approved_storage_root = load_approved_storage_root(args.storage_root)
-    fixture_path = Path(args.fixture_pack)
-    result = validate_fixture_pack(fixture_path, approved_storage_root)
+    if args.source_packet_examples:
+        result = validate_source_packet_examples(Path(args.source_packet_examples), approved_storage_root)
+    else:
+        result = validate_fixture_pack(Path(args.fixture_pack), approved_storage_root)
 
     if not args.no_write:
         write_reports(result, Path(args.output_dir), approved_storage_root)

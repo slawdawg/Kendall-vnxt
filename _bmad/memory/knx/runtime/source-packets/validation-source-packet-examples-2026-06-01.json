@@ -11,7 +11,7 @@
     "_bmad/memory/knx/decisions/source-packet-classes-2026-06-01.md",
     "_bmad/memory/knx/source-evidence-contract.md"
   ],
-  "command_or_check_run": "json parse, field coverage review, boundary review",
+  "command_or_check_run": "validate_source_evidence.py --source-packet-examples, unittest, json parse, field coverage review, boundary review",
   "waiver_id": "none",
   "waiver_reason": "none",
   "reviewer": "KNX workflow",

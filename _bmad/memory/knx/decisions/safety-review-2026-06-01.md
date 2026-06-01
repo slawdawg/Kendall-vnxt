@@ -893,6 +893,49 @@ Source packet example validation hardening, only if more rigor is needed. Otherw
 - `_bmad/memory/knx/decisions/source-packet-classes-2026-06-01.md`
 - `_bmad/memory/knx/source-evidence-contract.md`
 
+---
+
+# Safety Review - Source Packet Validator Hardening
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass
+
+Target reviewed: `.agents/skills/knx-source-evidence-validator`
+
+Review intent: determine whether adding metadata-only source packet example validation to `ksev` stays inside the approved optional validator scope.
+
+## Blockers
+
+No safety blockers found.
+
+The hardening adds stdlib-only local validation for source packet example shape, approved first classes, metadata-only behavior, read/planning-only operation, and boundary flags. It does not add package dependencies, source inventory generation, source content copying, source mutation, external sends, GitHub/remotes, public distribution, customer/production access, credential/account-security workflows, local model/GPU processing, or runtime assistant behavior.
+
+## Verification
+
+- Unit tests: 14 passed.
+- Fixture validation: PASS, 14 fixtures, 0 findings.
+- Source packet example validation: PASS, 3 source packets, 0 findings.
+- BMad module validation: pass, 0 findings.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+Reports are written under approved KNX runtime storage. The validator reads local fixture/example JSON only and does not copy source contents.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The validator remains deterministic local Python stdlib logic.
+
+## Recommended Next Workflow
+
+Pause internal hardening or run a final local status/handoff refresh. Hard-gated paths remain parked or blocked.
+
 ## Residual Risks
 
 - The assistant must continue to distinguish fast-lane local work from hard-gated boundary expansion.
