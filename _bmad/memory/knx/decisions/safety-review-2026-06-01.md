@@ -1434,3 +1434,49 @@ The decisions close the remaining open source/evidence contract questions for th
 ## Residual Risks
 
 Future workflows must consistently apply the ID format and must not treat a waiver recommendation as waiver approval.
+
+---
+
+# Safety Review - Local Model/GPU And GitHub/Remote Posture
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass
+
+Targets reviewed:
+
+- `decisions/local-model-gpu-posture-2026-06-01.md`
+- `decisions/github-remote-posture-2026-06-01.md`
+
+## Decisions Reviewed
+
+- Do not treat local model runtime, GPU, or local accelerator processing as available or approved by default.
+- Keep GitHub, Git remotes, pushes, pulls, PRs, issues, actions, releases, deployments, and remote review workflows disabled by default.
+
+## Blockers
+
+No blockers found.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+The decisions preserve local deterministic processing and do not expand source, storage, remote, credential, customer, production, or external-provider boundaries.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The decisions keep model/GPU and remote workflows behind named-workflow approval, evidence, and safety review.
+
+## Required User Decisions
+
+No additional decision is required for the current default posture.
+
+Future user approval is required before local model/GPU processing or any GitHub/remote workflow.
+
+## Residual Risks
+
+Future workflows may need these capabilities, but they must request them explicitly with concrete scope and evidence.

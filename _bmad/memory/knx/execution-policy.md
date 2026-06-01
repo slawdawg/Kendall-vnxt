@@ -6,7 +6,7 @@ Last updated: 2026-05-31
 
 Status: provisional
 
-Reason: the base execution ladder is defined, storage root and read/planning source root are approved, GitHub/remote workflows are disabled for now, and source mutation is blocked by default unless a later named workflow is explicitly approved. The policy remains provisional because GPU/local accelerator availability and local model status are unresolved.
+Reason: the base execution ladder is defined, storage root and read/planning source root are approved, GitHub/remote workflows are disabled by default, source mutation is blocked by default unless a later named workflow is explicitly approved, and local model/GPU processing is not assumed or approved by default.
 
 ## Effective Execution Ladder
 
@@ -36,6 +36,14 @@ Source mutation requires a later explicit decision for a named workflow. That de
 
 Local Git staging and local commits for scoped KNX governance and validator records are approved separately and do not authorize operational source mutation.
 
+## GitHub And Remote Posture
+
+GitHub, Git remotes, pushes, pulls, PRs, issues, actions, releases, deployments, and remote review workflows remain disabled by default.
+
+Local Git status, diff, log, staging, and commits are allowed only for scoped KNX governance and validator records under the local Git decision.
+
+Any future GitHub/remote workflow requires a named workflow, remote target, exact operation class, data-egress description, credential boundary, rollback or recovery plan, safety review, and explicit user approval.
+
 ## Deterministic-First Rule
 
 Use deterministic local processing before model calls for work that can be handled by parsing, validation, static analysis, structured transforms, fixtures, formatting, or repeatable checks.
@@ -50,6 +58,7 @@ Source: defaulted from KNX workflow.
 - Source: profile-derived; local `nvidia-smi` was not found on 2026-06-01, which does not confirm accelerator absence.
 - Local model runtime: unresolved.
 - Effective rule: do not recommend GPU-specific or local-model-specific execution as confirmed until availability is explicitly recorded.
+- Decision: do not treat local model runtime, GPU, or local accelerator processing as available or approved by default. A future local model/GPU workflow requires a named capability, local runtime or hardware evidence, model/tool identity, content-read boundary, safety review, and explicit user approval.
 
 ## Custom-Code Rule
 
@@ -113,9 +122,7 @@ Source: defaulted from KNX workflow.
 
 ## Open Questions
 
-1. Is a GPU, local accelerator, or local model runtime available and approved?
-2. Which future named workflow, if any, should request a source-mutation exception?
-3. Should any future workflow enable GitHub/remote source-review behavior?
+No open execution-policy questions remain for the current governance and local evidence scope.
 
 ## Decision Sources
 
@@ -131,3 +138,5 @@ Source: defaulted from KNX workflow.
 - Exception process: defaulted.
 - Handoffs: defaulted.
 - Source mutation posture: `decisions/source-mutation-posture-2026-06-01.md`.
+- Local model/GPU posture: `decisions/local-model-gpu-posture-2026-06-01.md`.
+- GitHub/remote posture: `decisions/github-remote-posture-2026-06-01.md`.

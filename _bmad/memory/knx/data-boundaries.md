@@ -6,7 +6,7 @@ Last updated: 2026-06-01
 
 Status: provisional
 
-Reason: storage root, allowed source root, local Git source/review boundary, GitHub/remote disablement, per-use external-provider approval policy, and source mutation default block are recorded. The plan remains provisional because local model runtime and GPU/local accelerator availability are unresolved.
+Reason: storage root, allowed source root, local Git source/review boundary, GitHub/remote disablement, per-use external-provider approval policy, source mutation default block, first source packet classes, and local model/GPU default block are recorded.
 
 ## Storage Mode And Root
 
@@ -44,6 +44,14 @@ Source: local Git detection and data-boundary decision `decisions/data-boundary-
 | Generated drafts and review packages | `_bmad/memory/knx` or approved storage root | Deterministic local processing; mature local tools; custom glue only after policy review | Approved local storage only | Provisional | Execution-policy-derived and user-specified storage root |
 | Logs, caches, fixtures, indexes, and temporary files | `_bmad/memory/knx` for setup notes; approved storage root for workflow artifacts | Deterministic local processing; mature local tools | Approved local storage only | Provisional | Defaulted and user-specified storage root |
 | Git repository metadata and history | Existing local `.git` metadata for source/review only | Git CLI and deterministic local inspection | Local source/review records only; no remote destination until approved | Provisional | Local detection and data-boundary decision |
+
+First KNX source packet classes:
+
+- `user-authored-planning-document`
+- `public-or-synthetic-sample-data`
+- `generated-report`
+
+Deferred classes include runtime evidence inventory, exported files/attachments, customer/project data, production systems, credentials/tokens/MFA/account-security material, GitHub/remotes, external providers, local model/GPU-derived outputs, source mutation records, and operational source intake.
 
 ## Allowed Storage Locations
 
@@ -146,9 +154,7 @@ Before operational workflows run:
 
 ## Open Questions
 
-1. Which source classes should KNX handle first: planning docs, generated drafts, exported files, fixtures, or something else?
-2. Is any local model runtime or GPU-backed processing approved? Local `nvidia-smi` was not found on 2026-06-01, so this remains unresolved unless another accelerator path is confirmed.
-3. Which future named workflow, if any, should request a source-mutation exception?
+No open data-boundary questions remain for the current governance and local evidence scope.
 
 ## Decision Sources
 
@@ -164,3 +170,6 @@ Before operational workflows run:
 - Approval gates: defaulted.
 - Validation checks: defaulted.
 - Source mutation posture: `decisions/source-mutation-posture-2026-06-01.md`.
+- First source packet classes: `decisions/source-packet-classes-2026-06-01.md`.
+- Local model/GPU posture: `decisions/local-model-gpu-posture-2026-06-01.md`.
+- GitHub/remote posture: `decisions/github-remote-posture-2026-06-01.md`.

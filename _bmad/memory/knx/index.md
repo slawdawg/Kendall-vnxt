@@ -37,6 +37,8 @@ Last updated: 2026-06-01
 - Latest source mutation posture decision: [decisions/source-mutation-posture-2026-06-01.md](decisions/source-mutation-posture-2026-06-01.md)
 - Latest artifact ID convention decision: [decisions/artifact-id-convention-2026-06-01.md](decisions/artifact-id-convention-2026-06-01.md)
 - Latest risk waiver authority decision: [decisions/risk-waiver-authority-2026-06-01.md](decisions/risk-waiver-authority-2026-06-01.md)
+- Latest local model/GPU posture decision: [decisions/local-model-gpu-posture-2026-06-01.md](decisions/local-model-gpu-posture-2026-06-01.md)
+- Latest GitHub/remote posture decision: [decisions/github-remote-posture-2026-06-01.md](decisions/github-remote-posture-2026-06-01.md)
 
 ## Current Routing
 
@@ -47,6 +49,7 @@ Last updated: 2026-06-01
 - First real source packet classes are selected: `user-authored-planning-document`, `public-or-synthetic-sample-data`, and `generated-report`.
 - Source mutation remains blocked by default; future mutation requires a named workflow, exact target paths, rollback/recovery plan, validation plan, safety review, and explicit approval.
 - Source/evidence contract open questions for the current governance/local-evidence scope are resolved.
+- Data-boundary and execution-policy open questions for the current governance/local-evidence scope are resolved.
 
 ## Active Boundaries
 
