@@ -50,10 +50,10 @@ Runtime evidence inventory is deferred to a separate later artifact if needed.
 | --- | ---: |
 | daily-log | 2 |
 | decision-record | 18 |
+| generated-report | 2 |
 | governance-core-record | 6 |
 | module-manifest | 1 |
 | synthetic-fixture | 2 |
-| validation-report | 2 |
 | validator-skill | 8 |
 
 ## Commands

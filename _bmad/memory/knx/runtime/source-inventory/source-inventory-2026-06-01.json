@@ -31,10 +31,10 @@
     "by_source_class": [
       {"source_class": "daily-log", "count": 2},
       {"source_class": "decision-record", "count": 18},
+      {"source_class": "generated-report", "count": 2},
       {"source_class": "governance-core-record", "count": 6},
       {"source_class": "module-manifest", "count": 1},
       {"source_class": "synthetic-fixture", "count": 2},
-      {"source_class": "validation-report", "count": 2},
       {"source_class": "validator-skill", "count": 8}
     ]
   },

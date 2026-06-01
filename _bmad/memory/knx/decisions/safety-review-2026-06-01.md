@@ -1217,3 +1217,35 @@ After that, route by concrete capability. A sensible next planning topic is whet
 - Metadata-only inventory can still reveal local project structure.
 - The inventory does not prove sensitive content is absent because it does not inspect file contents.
 - Future broader inventories must repeat the safety review before materialization.
+
+---
+
+# Safety Review Note - Generated Report Grouping
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass
+
+Target reviewed: generated-report grouping rule for source inventory evidence.
+
+## Decision Reviewed
+
+Generated reports must be grouped separately from source records in future source inventories using source class `generated-report`.
+
+## Findings
+
+No safety blockers found.
+
+The rule improves provenance clarity by separating validation/report outputs from governance source, validator source, fixtures, and decision records. It does not approve new data access, source mutation, runtime evidence inventory, external sends, GitHub/remotes, public distribution, local model/GPU processing, customer/production access, credentials, or account/security workflows.
+
+## Verification
+
+- Updated source/evidence contract.
+- Updated source inventory planning decision.
+- Updated first materialized inventory source-class label from `validation-report` to `generated-report`.
+
+## Residual Risk
+
+Generated reports remain local project metadata. They should stay under approved local storage or explicitly scoped report paths.
