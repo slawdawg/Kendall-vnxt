@@ -18,3 +18,11 @@ knx:
   knx_forbidden_destinations: external-providers-without-policy, customer-systems,
     production-systems
   knx_approval_policy: no-send/no-mutation/credentials/account-security/customer-production/destructive
+ksev:
+  name: KNX Source Evidence Validator
+  description: Optional KendallAI vNext pack for dependency-free validation of synthetic
+    source/evidence fixture packs.
+  version: 1.0.0
+  default_selected: false
+  ksev_fixture_pack: '{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json'
+  ksev_report_dir: '{project-root}/_bmad/memory/knx/runtime/optional-source-evidence-validator/reports'

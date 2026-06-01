@@ -17,6 +17,7 @@ Status: local-only greenfield implementation lane open
 - User approval reopened the first greenfield implementation lane for the local-only installable KNX governance core plus standalone `ksev` validator.
 - User approval established default-proceed local workflow: eligible local KNX work proceeds automatically until a hard gate or user pause.
 - Greenfield implementation runway is materialized under `_bmad/memory/knx/runtime/greenfield-implementation/`.
+- `ksev` is registered in shared local config/help registry.
 
 ## Latest Validation
 
@@ -24,6 +25,7 @@ Status: local-only greenfield implementation lane open
 - Synthetic fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation for `ksev`: pass, 0 findings.
+- `ksev` local registration validation: PASS.
 
 ## Active Fast-Lane Scope
 

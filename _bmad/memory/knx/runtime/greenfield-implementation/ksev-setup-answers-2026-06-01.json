@@ -1,0 +1,6 @@
+{
+  "module": {
+    "ksev_fixture_pack": "{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+    "ksev_report_dir": "{project-root}/_bmad/memory/knx/runtime/optional-source-evidence-validator/reports"
+  }
+}

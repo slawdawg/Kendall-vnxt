@@ -104,6 +104,7 @@ Ready:
 
 - Local `knx` governance core use.
 - Local `ksev` validator use.
+- Shared local `ksev` config/help registration.
 - Local validation and report refreshes.
 - Local scoped commits.
 - Continued default-proceed governance/evidence/module handoff work.
@@ -123,3 +124,4 @@ Not ready:
 - `skills/reports/module-validation-knx-2026-06-01.md`
 - `skills/reports/module-validation-ksev-2026-06-01.md`
 - `_bmad/memory/knx/runtime/handoffs/handoff-2026-06-01-current.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/work-trace-ksev-registration-2026-06-01.md`
