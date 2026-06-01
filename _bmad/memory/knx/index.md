@@ -47,6 +47,7 @@ Last updated: 2026-06-01
 - Latest `ksev` distribution metadata posture: [decisions/ksev-distribution-metadata-posture-2026-06-01.md](decisions/ksev-distribution-metadata-posture-2026-06-01.md)
 - Latest company commercial license posture: [decisions/company-commercial-license-posture-2026-06-01.md](decisions/company-commercial-license-posture-2026-06-01.md)
 - Latest company evaluation access protocol: [decisions/company-evaluation-access-protocol-2026-06-01.md](decisions/company-evaluation-access-protocol-2026-06-01.md)
+- Latest evaluation candidate packet scope: [decisions/evaluation-candidate-packet-scope-2026-06-01.md](decisions/evaluation-candidate-packet-scope-2026-06-01.md)
 
 ## Current Routing
 
@@ -62,7 +63,8 @@ Last updated: 2026-06-01
 - Gate flow: present summary and why gated, execute after approval, then immediately present the next gate details.
 - `ksev` public-distribution readiness planning is active. Current manifest remains local-only; distribution metadata posture is accepted.
 - Company commercial licensing posture is accepted for planning: keep KNX and `ksev` private/local and `UNLICENSED` to preserve a future private commercial license path.
-- Company evaluation access protocol is accepted for planning: no sharing, access, demo, repository access, or rights grant is approved. Next gate is evaluation candidate packet scope.
+- Company evaluation access protocol is accepted for planning: no sharing, access, demo, repository access, or rights grant is approved.
+- Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only. Next gate is local evaluation packet draft.
 
 ## Active Boundaries
 

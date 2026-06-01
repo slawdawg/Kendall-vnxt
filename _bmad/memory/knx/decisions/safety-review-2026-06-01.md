@@ -399,6 +399,77 @@ Recommended next workflow: define the evaluation candidate packet scope as local
 
 - Review status: local safety review of planning-only evaluation protocol.
 - No blockers finding: target artifact review and current boundary records.
+
+---
+
+# Safety Review - Evaluation Candidate Packet Scope
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass with concerns
+
+Target reviewed: `_bmad/memory/knx/decisions/evaluation-candidate-packet-scope-2026-06-01.md`
+
+Review intent: determine whether the first company evaluation candidate packet scope stays local-only, documentation-only, and inside current commercial and data-boundary posture.
+
+## Governance Artifacts Read
+
+- `_bmad/memory/knx/decisions/company-evaluation-access-protocol-2026-06-01.md`
+- `_bmad/memory/knx/decisions/company-commercial-license-posture-2026-06-01.md`
+- `_bmad/memory/knx/data-boundaries.md`
+- `_bmad/memory/knx/execution-policy.md`
+
+## Blockers
+
+No safety blockers found for the planning-only packet scope.
+
+The scope excludes source code, repository access, Git history, GitHub/remotes, source archives, runtime evidence exports, customer/production data, credentials/account-security material, source mutation workflows, public distribution, license activation, and operational deployment materials.
+
+## Concerns
+
+1. A concrete draft packet does not exist yet.
+   - Impact: no candidate material can be considered shareable until the exact draft is materialized, inventoried, scanned, and safety-reviewed.
+   - Severity: concern.
+   - Source: evaluation candidate packet scope.
+
+2. Documentation summaries can still reveal sensitive strategy or commercial details.
+   - Impact: future sharing requires review for confidentiality, employment/IP, pricing, support, warranty, and implied-license risk.
+   - Severity: concern.
+   - Source: company commercial license posture and evaluation protocol.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The scope is local planning only and does not send data externally. It recommends future draft storage under approved KNX runtime storage. Future draft material must be checked for excluded runtime, source, customer, production, credential, account-security, and operational deployment content.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The scope requires no external providers, local model/GPU processing, package installation, credentials, or runtime assistant behavior.
+
+## Required User Decisions
+
+1. Should a local evaluation packet draft be created under `_bmad/memory/knx/runtime/evaluation-packet/`?
+2. Which exact local summaries should be included in that draft?
+3. Should the draft remain internal planning-only until a legal-reviewed sharing mechanism is approved?
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: create the local evaluation packet draft under approved KNX runtime storage, then run targeted scan and safety validation.
+
+## Residual Risks
+
+- No sharing mechanism, audience, legal restrictions, or agreement terms are approved.
+- Future draft contents may need redaction or removal before any company-facing step.
+
+## Decision Sources
+
+- Review status: local safety review of planning-only candidate packet scope.
+- No blockers finding: target artifact review and current boundary records.
 - Concerns: profile-derived, data-boundary-derived, source/evidence-contract-derived, and local repository-state observation.
 - Fixture coverage evidence: `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`.
 - Deterministic checks: local JSON parse, fixture category coverage check, fixture field presence check, and secret-pattern text search.

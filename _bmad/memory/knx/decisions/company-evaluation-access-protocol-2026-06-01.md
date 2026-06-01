@@ -101,13 +101,19 @@ Before sharing any evaluation material:
 
 ## Next Gate
 
-Next gate: evaluation candidate packet scope.
+Resolved next gate: evaluation candidate packet scope.
 
-Summary: choose the first local-only candidate packet for possible future company evaluation, preferably documentation-only or controlled walkthrough materials, and define exactly what files or summaries would be eligible for review.
+Decision record: `evaluation-candidate-packet-scope-2026-06-01.md`
 
-Why gated: the candidate packet determines what could later leave the local repo, what rights language is needed, and what safety/security checks must run before any company-facing step.
+Decision: define the first possible company evaluation candidate packet as documentation-only and local-only. This decision does not approve sharing, exporting, sending, repository access, demos, license rights, or company use.
 
-Recommendation: start with documentation-only scope. Exclude source archives, repository access, runtime inventories, credentials, customer/production data, source mutation workflows, GitHub/remotes, public distribution, and any operational deployment materials.
+Next gate: local evaluation packet draft.
+
+Summary: create a local-only draft evaluation packet from allowed summaries and restrictions, stored under approved KNX runtime storage, with no source code, no runtime inventory export, no company sharing, and no license grant.
+
+Why gated: drafting creates a concrete artifact that could later be shared; it must stay local, be stored in an approved location, and be validated against the candidate scope before any company-facing gate.
+
+Recommendation: approve local draft creation under `_bmad/memory/knx/runtime/evaluation-packet/`, then run safety review and targeted secret scan. Keep all external sharing blocked.
 
 ## Decision Sources
 
