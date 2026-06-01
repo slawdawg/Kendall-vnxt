@@ -36,6 +36,7 @@ Last updated: 2026-06-01
 - Latest source packet class decision: [decisions/source-packet-classes-2026-06-01.md](decisions/source-packet-classes-2026-06-01.md)
 - Latest source mutation posture decision: [decisions/source-mutation-posture-2026-06-01.md](decisions/source-mutation-posture-2026-06-01.md)
 - Latest scoped source mutation approval: [decisions/scoped-source-mutation-knx-2026-06-01.md](decisions/scoped-source-mutation-knx-2026-06-01.md)
+- Latest local write-boundary approval: [decisions/write-boundary-knx-local-2026-06-01.md](decisions/write-boundary-knx-local-2026-06-01.md)
 - Latest artifact ID convention decision: [decisions/artifact-id-convention-2026-06-01.md](decisions/artifact-id-convention-2026-06-01.md)
 - Latest risk waiver authority decision: [decisions/risk-waiver-authority-2026-06-01.md](decisions/risk-waiver-authority-2026-06-01.md)
 - Latest local model/GPU posture decision: [decisions/local-model-gpu-posture-2026-06-01.md](decisions/local-model-gpu-posture-2026-06-01.md)
@@ -90,6 +91,7 @@ Last updated: 2026-06-01
 - Current local implementation runway is materialized under `runtime/greenfield-implementation/`.
 - `ksev` is registered in shared local config and help registry.
 - Remaining hard-gated paths are sequenced in `runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
+- Local writes are approved for scoped KNX module/config/help/report paths listed in `decisions/write-boundary-knx-local-2026-06-01.md`.
 
 ## Active Boundaries
 

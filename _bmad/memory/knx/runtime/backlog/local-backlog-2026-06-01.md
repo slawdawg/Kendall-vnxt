@@ -28,7 +28,7 @@ Status: active local-only backlog
 - External sends.
 - Company sharing.
 - IDE/workspace configuration.
-- Writes outside approved KNX memory/runtime storage, except already-approved local KNX module/report/config/help paths.
+- Writes outside approved KNX memory/runtime storage, except approved local KNX module/report/config/help paths in `decisions/write-boundary-knx-local-2026-06-01.md`.
 - Customer/production access.
 - Credentials or account/security workflows.
 - Local model/GPU processing.

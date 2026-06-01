@@ -91,6 +91,20 @@ Local commit:
 
 - included when validation passes and the change is scoped.
 
+## Gate 2 Result
+
+Gate: writes outside approved KNX memory/runtime or already-approved local module/report paths.
+
+Status: accepted.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/write-boundary-knx-local-2026-06-01.md`
+
+Summary:
+
+- Allow scoped local writes to KNX module, shared module registry, KNX memory/runtime, and module-validation report paths.
+
 ## Next Action
 
-Proceed to Gate 2: writes outside approved KNX memory/runtime or already-approved local module/report paths.
+Proceed to Gate 3: source inventory materialization or new tooling.
