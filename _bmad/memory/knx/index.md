@@ -27,7 +27,7 @@ Last updated: 2026-06-01
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01.md](runtime/handoffs/handoff-2026-06-01.md)
-- Latest local commit: `ebf4dae Group KNX generated reports separately`
+- Latest local commit: `107912a Record KNX local model and remote posture`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
@@ -57,4 +57,4 @@ Last updated: 2026-06-01
 - Approved source root: `C:/Users/slaw_dawg/Kendall_Nxt`
 - Approved source operation: read/planning only.
 - Local Git staging and local commits are approved for scoped KNX governance and validator work.
-- Source mutation, source inventory generation, GitHub/remotes, external providers, local model/GPU processing, customer/production access, credentials, account/security workflows, runtime assistant behavior, and public distribution remain blocked unless separately approved.
+- Source mutation, broader or operational source inventory generation, GitHub/remotes, external providers, local model/GPU processing, customer/production access, credentials, account/security workflows, runtime assistant behavior, and public distribution remain blocked unless separately approved.
