@@ -48,6 +48,8 @@ Last updated: 2026-06-01
 - Latest company commercial license posture: [decisions/company-commercial-license-posture-2026-06-01.md](decisions/company-commercial-license-posture-2026-06-01.md)
 - Latest company evaluation access protocol: [decisions/company-evaluation-access-protocol-2026-06-01.md](decisions/company-evaluation-access-protocol-2026-06-01.md)
 - Latest evaluation candidate packet scope: [decisions/evaluation-candidate-packet-scope-2026-06-01.md](decisions/evaluation-candidate-packet-scope-2026-06-01.md)
+- Latest local evaluation packet draft: [runtime/evaluation-packet/evaluation-packet-2026-06-01.md](runtime/evaluation-packet/evaluation-packet-2026-06-01.md)
+- Latest local evaluation packet inventory: [runtime/evaluation-packet/artifact-inventory-2026-06-01.json](runtime/evaluation-packet/artifact-inventory-2026-06-01.json)
 
 ## Current Routing
 
@@ -64,7 +66,8 @@ Last updated: 2026-06-01
 - `ksev` public-distribution readiness planning is active. Current manifest remains local-only; distribution metadata posture is accepted.
 - Company commercial licensing posture is accepted for planning: keep KNX and `ksev` private/local and `UNLICENSED` to preserve a future private commercial license path.
 - Company evaluation access protocol is accepted for planning: no sharing, access, demo, repository access, or rights grant is approved.
-- Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only. Next gate is local evaluation packet draft.
+- Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only.
+- Local evaluation packet draft is materialized under approved runtime storage. It remains local-only and not approved for sharing. Next gate is evaluation packet hardening review.
 
 ## Active Boundaries
 

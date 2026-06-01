@@ -126,13 +126,25 @@ This decision does not approve:
 
 ## Next Gate
 
-Next gate: local evaluation packet draft.
+Resolved next gate: local evaluation packet draft.
 
-Summary: create a local-only draft evaluation packet from allowed summaries and restrictions, stored under approved KNX runtime storage, with no source code, no runtime inventory export, no company sharing, and no license grant.
+Draft artifacts:
 
-Why gated: drafting creates a concrete artifact that could later be shared; it must stay local, be stored in an approved location, and be validated against the candidate scope before any company-facing gate.
+- `_bmad/memory/knx/runtime/evaluation-packet/evaluation-packet-2026-06-01.md`
+- `_bmad/memory/knx/runtime/evaluation-packet/restrictions-2026-06-01.md`
+- `_bmad/memory/knx/runtime/evaluation-packet/artifact-inventory-2026-06-01.json`
+- `_bmad/memory/knx/runtime/evaluation-packet/work-trace-evaluation-packet-2026-06-01.md`
+- `_bmad/memory/knx/runtime/evaluation-packet/validation-evaluation-packet-2026-06-01.json`
 
-Recommendation: approve local draft creation under `_bmad/memory/knx/runtime/evaluation-packet/`, then run safety review and targeted secret scan. Keep all external sharing blocked.
+Decision: local draft materialized under approved KNX runtime storage. It remains local-only and is not approved for sharing, exporting, repository access, company use, or license grant.
+
+Next gate: evaluation packet hardening review.
+
+Summary: review the local draft for clarity, redaction needs, rights language, safety boundaries, and whether it should remain internal planning-only or advance toward a later sharing-readiness gate.
+
+Why gated: the draft now exists as concrete material. Before any company-facing sharing can even be considered, it needs review for sensitive strategy, implied rights, confidentiality, employment/IP concerns, and excluded material.
+
+Recommendation: keep sharing blocked and run a hardening pass that improves the packet while staying local-only.
 
 ## Decision Sources
 

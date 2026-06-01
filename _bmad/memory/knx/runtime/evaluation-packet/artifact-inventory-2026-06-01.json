@@ -1,0 +1,62 @@
+{
+  "artifact_inventory_id": "knx-output-2026-06-01-001",
+  "title": "KNX local evaluation packet draft inventory",
+  "created_at": "2026-06-01",
+  "created_by": "KNX workflow",
+  "storage_location": "_bmad/memory/knx/runtime/evaluation-packet",
+  "storage_boundary_basis": "approved-storage-root",
+  "status": "local-draft-only",
+  "external_send_performed": false,
+  "source_mutation_performed": false,
+  "company_sharing_approved": false,
+  "license_rights_granted": false,
+  "artifacts": [
+    {
+      "path": "_bmad/memory/knx/runtime/evaluation-packet/evaluation-packet-2026-06-01.md",
+      "classification": "summary",
+      "share_status": "not-approved"
+    },
+    {
+      "path": "_bmad/memory/knx/runtime/evaluation-packet/restrictions-2026-06-01.md",
+      "classification": "restriction-notice",
+      "share_status": "not-approved"
+    },
+    {
+      "path": "_bmad/memory/knx/runtime/evaluation-packet/artifact-inventory-2026-06-01.json",
+      "classification": "artifact-inventory",
+      "share_status": "not-approved"
+    },
+    {
+      "path": "_bmad/memory/knx/runtime/evaluation-packet/work-trace-evaluation-packet-2026-06-01.md",
+      "classification": "work-trace",
+      "share_status": "not-approved"
+    },
+    {
+      "path": "_bmad/memory/knx/runtime/evaluation-packet/validation-evaluation-packet-2026-06-01.json",
+      "classification": "validation-evidence",
+      "share_status": "not-approved"
+    }
+  ],
+  "excluded_materials": [
+    "source-code",
+    "repository-access",
+    "git-history",
+    "source-archives",
+    "runtime-evidence-inventory-exports",
+    "source-inventory-evidence-exports",
+    "customer-data",
+    "production-data",
+    "credentials",
+    "tokens",
+    "mfa",
+    "account-security-material",
+    "github-remotes",
+    "external-provider-configuration",
+    "local-model-gpu-outputs",
+    "source-mutation-workflows",
+    "operational-deployment-materials",
+    "runtime-assistant-behavior",
+    "public-license-files",
+    "pricing-contract-terms"
+  ]
+}
