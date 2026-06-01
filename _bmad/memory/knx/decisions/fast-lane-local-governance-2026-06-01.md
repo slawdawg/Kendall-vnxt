@@ -54,7 +54,7 @@ Every fast-lane action must satisfy all of these:
 
 The assistant must stop and present a gate before:
 
-- IDE or workspace configuration writes such as `.vscode/**`, `.idea/**`, or editor-specific task/button files,
+- IDE or workspace configuration writes such as editor-specific task/button files,
 - any write outside `_bmad/memory/knx/**` or the approved KNX runtime storage,
 - source mutation beyond scoped KNX governance/evidence records,
 - external sends,
@@ -97,13 +97,13 @@ This profile narrows the earlier approval gate flow for local-only KNX governanc
 
 ## Next Hard Gate
 
-Next hard gate: IDE one-click action scope.
+Next hard gate: IDE target identification, if the user still wants a one-click action.
 
-Summary: decide whether to add a local IDE action for opening or reviewing the KNX evaluation packet/discussion guide from inside the IDE.
+Summary: identify the actual IDE and supported extension/task/button mechanism before planning any local one-click action.
 
 Why gated: IDE buttons or tasks require exact IDE target and usually mutate workspace configuration outside approved KNX runtime storage.
 
-Recommendation: approve only if the target is VS Code/Cursor-compatible `.vscode/tasks.json`, local-only, and limited to opening or revealing the local evaluation packet folder. Exclude external sends, GitHub/remotes, sharing, credentials, and source mutation beyond the IDE task file.
+Recommendation: do not create IDE configuration until the actual IDE is named. Any future action should remain local-only and limited to opening or revealing the local evaluation packet folder. Exclude external sends, GitHub/remotes, sharing, credentials, and source mutation beyond the approved IDE config file.
 
 ## Decision Sources
 

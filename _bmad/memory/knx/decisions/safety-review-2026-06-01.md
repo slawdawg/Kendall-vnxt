@@ -740,9 +740,9 @@ The guide draft used deterministic local writing and validation. It did not requ
 
 ## Recommended Fixes Or Next Workflow
 
-Recommended next workflow: IDE one-click action scope.
+Recommended next workflow: IDE target identification if the user still wants a one-click action.
 
-Define the IDE, target config path, action behavior, rollback plan, and validation before writing any IDE configuration.
+Define the actual IDE, target config path, action behavior, rollback plan, and validation before writing any IDE configuration.
 
 ## Residual Risks
 
@@ -781,8 +781,8 @@ The profile is limited to local KNX governance, evidence, validation, runtime pa
    - Severity: concern.
    - Source: fast-lane profile.
 
-2. IDE one-click action remains a hard gate.
-   - Impact: the user's requested IDE button still requires exact IDE target, target file path, action behavior, validation, and rollback plan.
+2. IDE one-click action remains a hard gate and the previously recommended IDE target is not applicable.
+   - Impact: the user's requested IDE button still requires the actual IDE target, target file path, action behavior, validation, and rollback plan.
    - Severity: concern.
    - Source: fast-lane profile and user request.
 
@@ -800,7 +800,7 @@ The profile relies on deterministic local processing and mature local checks. It
 
 ## Recommended Fixes Or Next Workflow
 
-Recommended next workflow: IDE one-click action scope as a hard gate.
+Recommended next workflow: IDE target identification as a hard gate, only if the user still wants a one-click action.
 
 ## Residual Risks
 

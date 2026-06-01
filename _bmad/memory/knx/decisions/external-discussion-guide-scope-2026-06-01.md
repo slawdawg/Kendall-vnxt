@@ -107,13 +107,13 @@ Draft artifact:
 
 Decision: a short local-only discussion guide draft is materialized. It is not approved for external sharing, repository access, company use, evaluation permission, license grant, or commercial terms.
 
-Next gate: IDE one-click action scope.
+Next gate: IDE target identification, if the user still wants a one-click action.
 
-Summary: decide whether to add a local IDE action for opening or reviewing the KNX evaluation packet/discussion guide from inside the IDE.
+Summary: identify the actual IDE and supported extension/task/button mechanism before planning any local one-click action.
 
-Why gated: IDE buttons or tasks usually require writing IDE/project configuration outside the approved KNX runtime storage and may vary by IDE. This is source/workspace mutation and needs exact target path, IDE type, action behavior, and rollback plan.
+Why gated: IDE buttons or tasks usually require writing IDE/project configuration outside the approved KNX runtime storage and vary by IDE. This is source/workspace mutation and needs exact IDE target, target path, action behavior, validation, and rollback plan.
 
-Recommendation: approve a VS Code/Cursor-compatible local task only if that is your IDE target. Keep the action local-only: open or reveal the evaluation packet folder; no external sends, no GitHub/remotes, no sharing, and no credential use.
+Recommendation: do not create IDE configuration until the actual IDE is named. Keep any future action local-only: open or reveal the evaluation packet folder; no external sends, no GitHub/remotes, no sharing, and no credential use.
 
 ## Decision Sources
 
