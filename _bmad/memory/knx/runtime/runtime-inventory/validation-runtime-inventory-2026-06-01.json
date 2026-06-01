@@ -1,0 +1,57 @@
+{
+  "validation_evidence_id": "knx-runtime-inventory-validation-2026-06-01-001",
+  "created_at": "2026-06-01",
+  "artifact_under_validation": "_bmad/memory/knx/runtime/runtime-inventory/runtime-inventory-2026-06-01.json",
+  "result": "PASS",
+  "failed_rules": [],
+  "risk_score": 3,
+  "blocking": false,
+  "checks": [
+    {
+      "check_id": "approved-storage-root",
+      "result": "PASS",
+      "evidence": "Runtime inventory artifacts are under _bmad/memory/knx/runtime/runtime-inventory/."
+    },
+    {
+      "check_id": "self-inclusion-excluded",
+      "result": "PASS",
+      "evidence": "Enumeration excludes _bmad/memory/knx/runtime/runtime-inventory/**."
+    },
+    {
+      "check_id": "metadata-only",
+      "result": "PASS",
+      "evidence": "Inventory records paths, counts, extensions, categories, commands, and provenance only."
+    },
+    {
+      "check_id": "checksums-deferred",
+      "result": "PASS",
+      "evidence": "Checksums are omitted because checksum generation requires file-content reads."
+    },
+    {
+      "check_id": "no-source-mutation",
+      "result": "PASS",
+      "evidence": "No source mutation command was run."
+    },
+    {
+      "check_id": "no-external-send",
+      "result": "PASS",
+      "evidence": "No network, provider, GitHub, or remote workflow was used."
+    },
+    {
+      "check_id": "runtime-file-count",
+      "result": "PASS",
+      "evidence": "Runtime evidence files enumerated: 24."
+    }
+  ],
+  "evidence_references": [
+    "_bmad/memory/knx/runtime/runtime-inventory/runtime-inventory-2026-06-01.json",
+    "_bmad/memory/knx/runtime/runtime-inventory/runtime-inventory-2026-06-01.md",
+    "_bmad/memory/knx/runtime/runtime-inventory/work-trace-runtime-inventory-2026-06-01.md",
+    "_bmad/memory/knx/decisions/runtime-evidence-inventory-planning-2026-06-01.md"
+  ],
+  "waiver": null,
+  "residual_risk": [
+    "Path metadata can reveal local runtime evidence structure.",
+    "No content inspection was performed, so sensitive-content absence is not proven."
+  ]
+}

@@ -40,6 +40,9 @@ Last updated: 2026-06-01
 - Latest local model/GPU posture decision: [decisions/local-model-gpu-posture-2026-06-01.md](decisions/local-model-gpu-posture-2026-06-01.md)
 - Latest GitHub/remote posture decision: [decisions/github-remote-posture-2026-06-01.md](decisions/github-remote-posture-2026-06-01.md)
 - Latest runtime evidence inventory planning decision: [decisions/runtime-evidence-inventory-planning-2026-06-01.md](decisions/runtime-evidence-inventory-planning-2026-06-01.md)
+- Latest approval gate flow decision: [decisions/approval-gate-flow-2026-06-01.md](decisions/approval-gate-flow-2026-06-01.md)
+- Latest runtime evidence inventory: [runtime/runtime-inventory/runtime-inventory-2026-06-01.md](runtime/runtime-inventory/runtime-inventory-2026-06-01.md)
+- Latest runtime evidence inventory validation: [runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json](runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json)
 
 ## Current Routing
 
@@ -51,7 +54,8 @@ Last updated: 2026-06-01
 - Source mutation remains blocked by default; future mutation requires a named workflow, exact target paths, rollback/recovery plan, validation plan, safety review, and explicit approval.
 - Source/evidence contract open questions for the current governance/local-evidence scope are resolved.
 - Data-boundary and execution-policy open questions for the current governance/local-evidence scope are resolved.
-- Runtime evidence inventory planning is active. Materialization requires explicit approval and should exclude `_bmad/memory/knx/runtime/runtime-inventory/**` to avoid self-inclusion.
+- Runtime evidence inventory is materialized. It is metadata-only and excludes `_bmad/memory/knx/runtime/runtime-inventory/**` to avoid self-inclusion.
+- Gate flow: present summary and why gated, execute after approval, then immediately present the next gate details.
 
 ## Active Boundaries
 

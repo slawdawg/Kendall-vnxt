@@ -1555,3 +1555,84 @@ Recommended next workflow: ask for materialization approval and self-inclusion h
 - Metadata-only runtime inventory can still reveal local evidence structure.
 - It does not prove sensitive content is absent because it does not inspect file contents.
 - Future broader runtime analysis must repeat safety review before materialization.
+
+---
+
+# Safety Review - Materialized Runtime Evidence Inventory
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass with concerns
+
+Target reviewed: `_bmad/memory/knx/runtime/runtime-inventory/`
+
+## Review Intent
+
+Validate materialized metadata-only runtime evidence inventory after excluding `_bmad/memory/knx/runtime/runtime-inventory/**` to avoid self-inclusion.
+
+## Blockers
+
+No safety blockers found.
+
+## Concerns
+
+1. Runtime evidence path metadata can reveal local evidence structure.
+   - Mitigation: artifact remains local under approved runtime storage.
+2. The inventory does not inspect file contents.
+   - Mitigation: evidence states this limitation and is used for provenance, not sensitive-content certification.
+
+## Verification
+
+- Runtime inventory JSON parse: pass.
+- Runtime validation JSON parse: pass.
+- Runtime evidence paths: 24.
+- Runtime file count: 24.
+- Runtime evidence group total: 24.
+- Self-included runtime inventory paths: 0.
+- `git diff --check`: pass.
+- KNX governance-core module validation: pass, 0 findings.
+- Targeted secret-pattern scan: no matches.
+
+## Data-Boundary Fit
+
+Fit: pass
+
+The inventory evidence was written under `_bmad/memory/knx/runtime/runtime-inventory/`, inside the approved storage root. The enumeration stayed under `_bmad/memory/knx/runtime/` and excluded the generated runtime inventory output folder.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The materialization used mature deterministic local tools: ripgrep and PowerShell grouping. It did not use custom source indexing code, package installation, GitHub/remotes, external providers, local model/GPU processing, credentials, account/security workflows, or source mutation.
+
+## Source/Evidence-Contract Fit
+
+Fit: pass with concerns
+
+The runtime evidence inventory includes required fields, links to planning and validation evidence, records boundary flags, and states uncertainty. Remaining concern is inherent to path-only metadata.
+
+## Required User Decisions
+
+No additional user decision is required for this runtime evidence inventory pass.
+
+Future approval is required before:
+
+- inspecting runtime file contents,
+- adding checksums,
+- broadening runtime analysis beyond path metadata,
+- using runtime evidence as operational assistant state,
+- public distribution,
+- GitHub/remotes,
+- external sends/providers,
+- source mutation,
+- local model/GPU processing,
+- customer/production access,
+- credentials or account/security workflows.
+
+## Recommended Next Workflow
+
+Recommended next gate: public distribution path for `ksev`.
+
+Why gated: public distribution requires decisions about owner, license, homepage, repository, release channel, publication mechanism, and whether any data leaves the local machine. It may also imply GitHub/remotes or marketplace publication, which remain blocked unless separately approved.
