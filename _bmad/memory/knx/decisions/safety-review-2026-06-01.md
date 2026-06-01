@@ -1707,3 +1707,43 @@ Summary: decide whether to keep manifest values local-only until a repo exists, 
 Why gated: manifest metadata can imply public ownership, license rights, repository authority, or publication readiness.
 
 Recommendation: keep manifest values local-only for now and only record future metadata requirements in decision records.
+
+---
+
+# Safety Review - KSEV Distribution Metadata Posture
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass
+
+Target reviewed: `decisions/ksev-distribution-metadata-posture-2026-06-01.md`
+
+## Short Summary
+
+Keep `ksev` manifest metadata local-only until repository target, owner, license, homepage, release channel, and publication mechanism are explicitly approved.
+
+## Why This Was Gated
+
+Manifest metadata can imply public ownership, license rights, repository authority, support expectations, and publication readiness. Leaving it local-only prevents accidental public-distribution signaling.
+
+## Blockers
+
+No blockers found.
+
+## Verification
+
+- Manifest remains local-only.
+- No GitHub/remote/publish workflow approved.
+- No license/public ownership change approved.
+
+## Recommended Next Gate
+
+Next gate: license posture for `ksev`.
+
+Summary: decide whether `ksev` should remain `UNLICENSED` while private-held, or select a future public license target such as MIT/Apache-2.0 for later activation.
+
+Why gated: license choice grants or withholds legal reuse rights and should not be inferred from code structure or publication intent.
+
+Recommendation: keep `UNLICENSED` in the manifest now, and record a future-license target only if needed. Do not activate a public license until repo/release path is approved.

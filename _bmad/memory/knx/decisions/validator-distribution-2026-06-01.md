@@ -89,6 +89,14 @@ The current manifest remains local-only:
 
 Public metadata values require a later explicit distribution metadata decision.
 
+## Distribution Metadata Posture
+
+Status: accepted.
+
+Decision record: `ksev-distribution-metadata-posture-2026-06-01.md`
+
+Decision: keep `.agents/skills/.claude-plugin/marketplace.json` values local-only until public/private repository target, owner, license, homepage, release channel, and publication mechanism are explicitly approved.
+
 ## Recommended Next Workflow
 
 Recommended next workflow: keep manifest values local-only until a repository, license, owner, homepage, release channel, and publication mechanism are explicitly approved.

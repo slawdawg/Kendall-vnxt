@@ -120,13 +120,19 @@ This decision does not approve:
 
 ## Next Gate
 
-Next gate: choose distribution metadata posture.
+Next gate: license posture for `ksev`.
 
-Summary: decide whether to keep manifest values local-only until a repo exists, or replace some fields now with provisional non-public placeholders.
+Summary: decide whether `ksev` should remain `UNLICENSED` while private-held, or select a future public license target such as MIT/Apache-2.0 for later activation.
 
-Why gated: manifest metadata can imply public ownership, license rights, repository authority, or publication readiness.
+Why gated: license choice grants or withholds legal reuse rights and should not be inferred from code structure or publication intent.
 
-Recommendation: keep manifest values local-only for now and only record future metadata requirements in decision records.
+Recommendation: keep `UNLICENSED` in the manifest now, and record a future-license target only if needed. Do not activate a public license until repo/release path is approved.
+
+## Distribution Metadata Posture
+
+Decision record: `ksev-distribution-metadata-posture-2026-06-01.md`
+
+Decision: keep manifest values local-only until repository target, owner, license, homepage, release channel, and publication mechanism are explicitly approved.
 
 ## Decision Sources
 
