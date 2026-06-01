@@ -52,6 +52,7 @@ Last updated: 2026-06-01
 - Latest local evaluation packet inventory: [runtime/evaluation-packet/artifact-inventory-2026-06-01.json](runtime/evaluation-packet/artifact-inventory-2026-06-01.json)
 - Latest evaluation packet hardening review: [runtime/evaluation-packet/hardening-review-2026-06-01.md](runtime/evaluation-packet/hardening-review-2026-06-01.md)
 - Latest external discussion-guide scope: [decisions/external-discussion-guide-scope-2026-06-01.md](decisions/external-discussion-guide-scope-2026-06-01.md)
+- Latest local discussion-guide draft: [runtime/evaluation-packet/discussion-guide-2026-06-01.md](runtime/evaluation-packet/discussion-guide-2026-06-01.md)
 
 ## Current Routing
 
@@ -70,7 +71,7 @@ Last updated: 2026-06-01
 - Company evaluation access protocol is accepted for planning: no sharing, access, demo, repository access, or rights grant is approved.
 - Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only.
 - Local evaluation packet draft is materialized and hardened under approved runtime storage. It remains local-only and not approved for sharing.
-- External discussion-guide scope is accepted for planning. No guide is drafted yet, and external sharing remains blocked. Next gate is local discussion-guide draft.
+- External discussion-guide scope is accepted for planning. The local guide draft is materialized under approved runtime storage and external sharing remains blocked. Next gate is IDE one-click action scope.
 
 ## Active Boundaries
 

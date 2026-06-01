@@ -693,6 +693,66 @@ Keep sharing blocked. Draft a short local-only guide under approved runtime stor
 
 - Review status: local safety review of planning-only discussion-guide scope.
 - No blockers finding: target artifact review and current boundary records.
+
+---
+
+# Safety Review - Local Discussion Guide Draft
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass with concerns
+
+Target reviewed: `_bmad/memory/knx/runtime/evaluation-packet/discussion-guide-2026-06-01.md`
+
+Review intent: determine whether the local discussion guide draft follows the approved scope and remains blocked from external sharing.
+
+## Blockers
+
+No safety blockers found for the local-only guide draft.
+
+The draft does not approve company sharing, external sends, repository access, source archives, GitHub/remotes, public distribution, public license activation, evaluation permission, production-use rights, redistribution rights, ownership transfer, pricing or contract terms, customer/production access, credentials/account-security workflows, source mutation, local model/GPU processing, or runtime assistant behavior.
+
+## Concerns
+
+1. The guide is closer to company-facing material than prior artifacts.
+   - Impact: it still requires final sharing-readiness review, legal review, exact audience, and explicit send approval.
+   - Severity: concern.
+   - Source: discussion guide draft.
+
+2. The user requested an IDE button in the same approval message.
+   - Impact: IDE actions may require writes outside approved runtime storage and should be handled by a separate exact-scope gate.
+   - Severity: concern.
+   - Source: user request on 2026-06-01.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The guide is stored under approved KNX runtime storage. It does not send data externally. Future IDE action work may write outside runtime storage and therefore requires a separate scoped approval.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The guide draft used deterministic local writing and validation. It did not require external providers, local model/GPU processing, package installation, credentials, company systems, customer systems, production systems, GitHub/remotes, or runtime assistant behavior.
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: IDE one-click action scope.
+
+Define the IDE, target config path, action behavior, rollback plan, and validation before writing any IDE configuration.
+
+## Residual Risks
+
+- No company-facing use is approved.
+- No IDE configuration is approved yet.
+
+## Decision Sources
+
+- Review status: local safety review of local discussion-guide draft.
+- No blockers finding: target artifact review and current boundary records.
 - Concerns: profile-derived, data-boundary-derived, source/evidence-contract-derived, and local repository-state observation.
 - Fixture coverage evidence: `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`.
 - Deterministic checks: local JSON parse, fixture category coverage check, fixture field presence check, and secret-pattern text search.

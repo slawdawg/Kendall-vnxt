@@ -99,13 +99,21 @@ This decision does not approve:
 
 ## Next Gate
 
-Next gate: local discussion-guide draft.
+Resolved next gate: local discussion-guide draft.
 
-Summary: create a short local-only discussion guide under `_bmad/memory/knx/runtime/evaluation-packet/` using the approved scope, with no sharing, no source code, no repository access, no rights grant, and no commercial terms.
+Draft artifact:
 
-Why gated: drafting creates a concrete artifact that is closer to external use. It must be validated for concise wording, excluded material, and no implied license or offer before any later sharing-readiness gate.
+- `_bmad/memory/knx/runtime/evaluation-packet/discussion-guide-2026-06-01.md`
 
-Recommendation: approve the local draft next, then run targeted scan and safety review. Keep all external sharing blocked.
+Decision: a short local-only discussion guide draft is materialized. It is not approved for external sharing, repository access, company use, evaluation permission, license grant, or commercial terms.
+
+Next gate: IDE one-click action scope.
+
+Summary: decide whether to add a local IDE action for opening or reviewing the KNX evaluation packet/discussion guide from inside the IDE.
+
+Why gated: IDE buttons or tasks usually require writing IDE/project configuration outside the approved KNX runtime storage and may vary by IDE. This is source/workspace mutation and needs exact target path, IDE type, action behavior, and rollback plan.
+
+Recommendation: approve a VS Code/Cursor-compatible local task only if that is your IDE target. Keep the action local-only: open or reveal the evaluation packet folder; no external sends, no GitHub/remotes, no sharing, and no credential use.
 
 ## Decision Sources
 

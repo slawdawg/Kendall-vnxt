@@ -30,8 +30,9 @@ Create a local-only documentation packet under approved KNX runtime storage. Do 
 4. Drafted summary packet and restriction notice.
 5. Created artifact inventory and validation evidence records.
 6. Hardened the packet by removing user-specific absolute path exposure from the summary and tightening no-rights/no-offer language.
-7. Parsed JSON evidence files successfully.
-8. Ran diff hygiene, targeted secret-pattern scan, source-code-pattern scan, and `ksev` module validation.
+7. Drafted a shorter local-only discussion guide from the hardened packet.
+8. Parsed JSON evidence files successfully.
+9. Ran diff hygiene, targeted secret-pattern scan, source-code-pattern scan, and `ksev` module validation.
 
 ## Tools Used
 
@@ -70,6 +71,8 @@ Reason: the packet is local-only and scoped, but any future sharing still requir
 - Targeted secret-pattern scan: policy-language mentions only; no key material found.
 - Source-code-pattern scan: no source code blocks or remote URLs found; hits were local path references and plain-language words.
 - Hardening review: pass with concerns. Full packet remains local-only and should not be shared without a separate sharing-readiness gate.
+- Discussion guide draft: local-only and not approved for sharing.
+- Discussion guide source-code/remote scan: pass, no matches.
 
 ## Next Action
 

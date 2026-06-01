@@ -40,6 +40,11 @@
       "path": "_bmad/memory/knx/runtime/evaluation-packet/hardening-review-2026-06-01.md",
       "classification": "hardening-review",
       "share_status": "not-approved"
+    },
+    {
+      "path": "_bmad/memory/knx/runtime/evaluation-packet/discussion-guide-2026-06-01.md",
+      "classification": "discussion-guide-draft",
+      "share_status": "not-approved"
     }
   ],
   "excluded_materials": [

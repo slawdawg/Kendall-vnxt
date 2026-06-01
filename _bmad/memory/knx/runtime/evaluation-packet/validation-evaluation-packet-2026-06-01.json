@@ -12,6 +12,7 @@
     "_bmad/memory/knx/runtime/evaluation-packet/artifact-inventory-2026-06-01.json",
     "_bmad/memory/knx/runtime/evaluation-packet/work-trace-evaluation-packet-2026-06-01.md",
     "_bmad/memory/knx/runtime/evaluation-packet/hardening-review-2026-06-01.md",
+    "_bmad/memory/knx/runtime/evaluation-packet/discussion-guide-2026-06-01.md",
     "_bmad/memory/knx/decisions/evaluation-candidate-packet-scope-2026-06-01.md"
   ],
   "command_or_check_run": "json parse, git diff --check, targeted secret-pattern scan, source-code-pattern scan, ksev module validation",
@@ -35,7 +36,11 @@
     "diff_check_result": "PASS",
     "secret_pattern_scan_result": "PASS_POLICY_MENTIONS_ONLY",
     "source_code_pattern_scan_result": "PASS_NO_SOURCE_CODE_BLOCKS_OR_REMOTE_URLS",
-    "ksev_module_validation_result": "PASS_0_FINDINGS"
+    "ksev_module_validation_result": "PASS_0_FINDINGS",
+    "discussion_guide_draft_created": true,
+    "discussion_guide_share_status": "not-approved",
+    "discussion_guide_secret_scan_result": "PASS_POLICY_MENTIONS_ONLY",
+    "discussion_guide_source_code_pattern_scan_result": "PASS_NO_MATCHES"
   },
   "concerns": [
     "Future sharing requires exact audience, mechanism, legal review, and explicit approval.",
