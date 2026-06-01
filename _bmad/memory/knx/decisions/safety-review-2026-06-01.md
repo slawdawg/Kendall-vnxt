@@ -721,8 +721,8 @@ The draft does not approve company sharing, external sends, repository access, s
    - Severity: concern.
    - Source: discussion guide draft.
 
-2. The user requested an IDE button in the same approval message.
-   - Impact: IDE actions may require writes outside approved runtime storage and should be handled by a separate exact-scope gate.
+2. The user later declined the IDE button.
+   - Impact: no IDE configuration should be planned or created unless the user reopens that path.
    - Severity: concern.
    - Source: user request on 2026-06-01.
 
@@ -740,14 +740,14 @@ The guide draft used deterministic local writing and validation. It did not requ
 
 ## Recommended Fixes Or Next Workflow
 
-Recommended next workflow: IDE target identification if the user still wants a one-click action.
+Recommended next workflow: discussion-guide sharing-readiness scope, only if company-facing discussion is still desired.
 
-Define the actual IDE, target config path, action behavior, rollback plan, and validation before writing any IDE configuration.
+Keep external sharing blocked unless a later exact-scope sharing gate is approved.
 
 ## Residual Risks
 
 - No company-facing use is approved.
-- No IDE configuration is approved yet.
+- No IDE configuration is approved or planned.
 
 ## Decision Sources
 
@@ -781,8 +781,8 @@ The profile is limited to local KNX governance, evidence, validation, runtime pa
    - Severity: concern.
    - Source: fast-lane profile.
 
-2. IDE one-click action remains a hard gate and the previously recommended IDE target is not applicable.
-   - Impact: the user's requested IDE button still requires the actual IDE target, target file path, action behavior, validation, and rollback plan.
+2. IDE one-click action is closed at user request.
+   - Impact: no IDE target identification or config planning is needed unless the user reopens that path.
    - Severity: concern.
    - Source: fast-lane profile and user request.
 
@@ -800,12 +800,12 @@ The profile relies on deterministic local processing and mature local checks. It
 
 ## Recommended Fixes Or Next Workflow
 
-Recommended next workflow: IDE target identification as a hard gate, only if the user still wants a one-click action.
+Recommended next workflow: discussion-guide sharing-readiness scope, only if company-facing discussion is still desired.
 
 ## Residual Risks
 
 - The assistant must continue to distinguish fast-lane local work from hard-gated boundary expansion.
-- No IDE configuration is approved yet.
+- No IDE configuration is approved or planned.
 
 ## Decision Sources
 

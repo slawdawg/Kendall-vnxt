@@ -107,13 +107,17 @@ Draft artifact:
 
 Decision: a short local-only discussion guide draft is materialized. It is not approved for external sharing, repository access, company use, evaluation permission, license grant, or commercial terms.
 
-Next gate: IDE target identification, if the user still wants a one-click action.
+Resolved follow-up: IDE one-click action declined.
 
-Summary: identify the actual IDE and supported extension/task/button mechanism before planning any local one-click action.
+Decision: do not create an IDE button or IDE/workspace configuration for this packet.
 
-Why gated: IDE buttons or tasks usually require writing IDE/project configuration outside the approved KNX runtime storage and vary by IDE. This is source/workspace mutation and needs exact IDE target, target path, action behavior, validation, and rollback plan.
+Next hard gate: discussion-guide sharing-readiness scope.
 
-Recommendation: do not create IDE configuration until the actual IDE is named. Keep any future action local-only: open or reveal the evaluation packet folder; no external sends, no GitHub/remotes, no sharing, and no credential use.
+Summary: decide whether the local-only discussion guide should be reviewed for possible future company-facing sharing readiness, without sending it or granting rights.
+
+Why gated: sharing-readiness moves closer to external use and must define exact audience, sharing mechanism, legal review path, restrictions, safety checks, and explicit send approval before anything leaves the local workspace.
+
+Recommendation: run sharing-readiness scope next only if company-facing discussion is still desired. Keep all external sharing blocked.
 
 ## Decision Sources
 

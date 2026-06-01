@@ -97,13 +97,17 @@ This profile narrows the earlier approval gate flow for local-only KNX governanc
 
 ## Next Hard Gate
 
-Next hard gate: IDE target identification, if the user still wants a one-click action.
+Resolved follow-up: IDE one-click action declined.
 
-Summary: identify the actual IDE and supported extension/task/button mechanism before planning any local one-click action.
+Decision: do not create an IDE button or IDE/workspace configuration for this packet.
 
-Why gated: IDE buttons or tasks require exact IDE target and usually mutate workspace configuration outside approved KNX runtime storage.
+Next hard gate: discussion-guide sharing-readiness scope.
 
-Recommendation: do not create IDE configuration until the actual IDE is named. Any future action should remain local-only and limited to opening or revealing the local evaluation packet folder. Exclude external sends, GitHub/remotes, sharing, credentials, and source mutation beyond the approved IDE config file.
+Summary: decide whether the local-only discussion guide should be reviewed for possible future company-facing sharing readiness, without sending it or granting rights.
+
+Why gated: sharing-readiness moves closer to external use and must define exact audience, sharing mechanism, legal review path, restrictions, safety checks, and explicit send approval before anything leaves the local workspace.
+
+Recommendation: run sharing-readiness scope next only if company-facing discussion is still desired. Keep all external sharing blocked.
 
 ## Decision Sources
 

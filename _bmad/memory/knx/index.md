@@ -73,7 +73,7 @@ Last updated: 2026-06-01
 - Company evaluation access protocol is accepted for planning: no sharing, access, demo, repository access, or rights grant is approved.
 - Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only.
 - Local evaluation packet draft is materialized and hardened under approved runtime storage. It remains local-only and not approved for sharing.
-- External discussion-guide scope is accepted for planning. The local guide draft is materialized under approved runtime storage and external sharing remains blocked. IDE one-click action planning is deferred until the actual IDE target is identified.
+- External discussion-guide scope is accepted for planning. The local guide draft is materialized under approved runtime storage and external sharing remains blocked. IDE one-click action planning is closed at user request. Next hard gate is discussion-guide sharing-readiness scope.
 
 ## Active Boundaries
 
