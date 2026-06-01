@@ -97,9 +97,19 @@ Decision record: `ksev-distribution-metadata-posture-2026-06-01.md`
 
 Decision: keep `.agents/skills/.claude-plugin/marketplace.json` values local-only until public/private repository target, owner, license, homepage, release channel, and publication mechanism are explicitly approved.
 
+## Company Commercial License Posture
+
+Status: accepted for planning.
+
+Decision record: `company-commercial-license-posture-2026-06-01.md`
+
+Decision: preserve the option to sell or negotiate a private commercial license for KNX or `ksev` to the user's company. Keep current artifacts private/local and `UNLICENSED`; do not activate Apache-2.0, MIT, or another public license yet.
+
+This decision does not approve company sharing, company use, GitHub/remotes, publication, legal agreement execution, or external sends.
+
 ## Recommended Next Workflow
 
-Recommended next workflow: keep manifest values local-only until a repository, license, owner, homepage, release channel, and publication mechanism are explicitly approved.
+Recommended next workflow: define a company evaluation access protocol before any company-facing artifact sharing, demo, archive, repository access, or license negotiation package.
 
 Safe next options:
 

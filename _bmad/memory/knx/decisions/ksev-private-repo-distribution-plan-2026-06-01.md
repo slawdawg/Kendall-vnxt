@@ -120,19 +120,31 @@ This decision does not approve:
 
 ## Next Gate
 
-Next gate: license posture for `ksev`.
+Resolved next gate: company commercial license posture.
 
-Summary: decide whether `ksev` should remain `UNLICENSED` while private-held, or select a future public license target such as MIT/Apache-2.0 for later activation.
+Decision record: `company-commercial-license-posture-2026-06-01.md`
 
-Why gated: license choice grants or withholds legal reuse rights and should not be inferred from code structure or publication intent.
+Decision: preserve the option to sell or negotiate a private commercial license for KNX or `ksev` to the user's company. Keep the current manifest `UNLICENSED`, do not activate a public license, and require a separate legal-reviewed permission path before company sharing or adoption.
 
-Recommendation: keep `UNLICENSED` in the manifest now, and record a future-license target only if needed. Do not activate a public license until repo/release path is approved.
+Next gate: company evaluation access protocol.
+
+Summary: define whether and how KNX could be shown to the company for evaluation without granting production-use, redistribution, source ownership, or public-license rights.
+
+Why gated: even evaluation can create IP, confidentiality, employment, data-egress, and implied-license risk if artifacts are shared before scope and permissions are explicit.
+
+Recommendation: approve a planning-only evaluation protocol next. Do not share artifacts, configure remote access, or grant company use until the protocol is accepted and the exact artifact set is reviewed.
 
 ## Distribution Metadata Posture
 
 Decision record: `ksev-distribution-metadata-posture-2026-06-01.md`
 
 Decision: keep manifest values local-only until repository target, owner, license, homepage, release channel, and publication mechanism are explicitly approved.
+
+## Company Commercial License Posture
+
+Decision record: `company-commercial-license-posture-2026-06-01.md`
+
+Decision: preserve private commercial licensing optionality for future company adoption. Current artifacts remain private/local and `UNLICENSED`; no public license, company sharing, or adoption rights are granted by this plan.
 
 ## Decision Sources
 

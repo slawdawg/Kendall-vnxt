@@ -60,13 +60,19 @@ This decision does not approve:
 
 ## Next Gate
 
-Next gate: license posture for `ksev`.
+Resolved next gate: company commercial license posture.
 
-Summary: decide whether `ksev` should remain `UNLICENSED` while private-held, or select a future public license target such as MIT/Apache-2.0 for later activation.
+Decision record: `company-commercial-license-posture-2026-06-01.md`
 
-Why gated: license choice grants or withholds legal reuse rights and should not be inferred from code structure or publication intent.
+Decision: preserve the option to sell or negotiate a private commercial license for KNX or `ksev` to the user's company. Keep the current manifest `UNLICENSED`, do not activate a public license, and require a separate legal-reviewed permission path before company sharing or adoption.
 
-Recommendation: keep `UNLICENSED` in the manifest now, and record a future-license target only if the user wants one. Do not activate a public license until repo/release path is approved.
+Next gate: company evaluation access protocol.
+
+Summary: define whether and how KNX could be shown to the company for evaluation without granting production-use, redistribution, source ownership, or public-license rights.
+
+Why gated: even evaluation can create IP, confidentiality, employment, data-egress, and implied-license risk if artifacts are shared before scope and permissions are explicit.
+
+Recommendation: approve a planning-only evaluation protocol next. Do not share artifacts, configure remote access, or grant company use until the protocol is accepted and the exact artifact set is reviewed.
 
 ## Decision Sources
 

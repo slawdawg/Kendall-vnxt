@@ -258,6 +258,77 @@ Recommended follow-up governance update: refresh `knx-profile-setup` or `knx-dat
 
 - Review status: local safety review of the synthetic fixture pack.
 - No blockers finding: target artifact review, data-boundary-derived, execution-policy-derived, source/evidence-contract-derived.
+
+---
+
+# Safety Review - Company Commercial License Posture
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass with concerns
+
+Target reviewed: `_bmad/memory/knx/decisions/company-commercial-license-posture-2026-06-01.md`
+
+Review intent: determine whether the company commercial license posture keeps KNX and `ksev` within current governance boundaries while preserving a future private commercial license path.
+
+## Governance Artifacts Read
+
+- `_bmad/memory/knx/decisions/ksev-private-repo-distribution-plan-2026-06-01.md`
+- `_bmad/memory/knx/decisions/ksev-distribution-metadata-posture-2026-06-01.md`
+- `_bmad/memory/knx/decisions/validator-distribution-2026-06-01.md`
+- `.agents/skills/.claude-plugin/marketplace.json`
+
+## Blockers
+
+No safety blockers found for the planning-only commercial license posture.
+
+The decision keeps artifacts private/local and `UNLICENSED`. It does not approve company sharing, company use, public release, GitHub/remotes, credential or account workflows, external sends, source mutation, customer/production access, or runtime assistant behavior.
+
+## Concerns
+
+1. Legal review remains required before any company-facing access, adoption, sale, or license execution.
+   - Impact: the posture preserves options, but it is not legal advice or a binding agreement.
+   - Severity: concern.
+   - Source: company commercial license posture decision.
+
+2. Employment/IP and confidentiality constraints are unknown.
+   - Impact: artifact sharing with the user's company could create ownership, conflict-of-interest, or implied-license risk if handled informally.
+   - Severity: concern.
+   - Source: company commercial license posture decision.
+
+## Data-Boundary Fit
+
+Fit: pass with concerns
+
+The posture is local documentation only. It does not send data externally, create a remote, or grant company access. Concerns remain for any future sharing workflow.
+
+## Execution-Policy Fit
+
+Fit: pass
+
+The posture uses local governance records only. It does not require external providers, local model/GPU processing, credentials, or runtime assistant behavior.
+
+## Required User Decisions
+
+1. Should KNX define a company evaluation access protocol before any company-facing demo or artifact sharing?
+2. What artifact set, if any, would be eligible for company evaluation?
+3. What legal review or written permission path is required before company adoption?
+
+## Recommended Fixes Or Next Workflow
+
+Recommended next workflow: define a planning-only company evaluation access protocol before any demo, archive, repository access, external send, or license negotiation package.
+
+## Residual Risks
+
+- Commercial license terms, ownership, employment/IP constraints, confidentiality, support, warranty, liability, and payment terms remain undecided.
+- Public license activation remains blocked until explicitly approved.
+
+## Decision Sources
+
+- Review status: local safety review of planning-only license posture.
+- No blockers finding: target artifact review and current boundary records.
 - Concerns: profile-derived, data-boundary-derived, source/evidence-contract-derived, and local repository-state observation.
 - Fixture coverage evidence: `_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`.
 - Deterministic checks: local JSON parse, fixture category coverage check, fixture field presence check, and secret-pattern text search.

@@ -27,7 +27,7 @@ Last updated: 2026-06-01
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01.md](runtime/handoffs/handoff-2026-06-01.md)
-- Latest local commit: `107912a Record KNX local model and remote posture`
+- Latest local commit: `a6f2bbf Record KNX commercial license posture`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
@@ -45,6 +45,7 @@ Last updated: 2026-06-01
 - Latest runtime evidence inventory validation: [runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json](runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json)
 - Latest `ksev` private-repo distribution plan: [decisions/ksev-private-repo-distribution-plan-2026-06-01.md](decisions/ksev-private-repo-distribution-plan-2026-06-01.md)
 - Latest `ksev` distribution metadata posture: [decisions/ksev-distribution-metadata-posture-2026-06-01.md](decisions/ksev-distribution-metadata-posture-2026-06-01.md)
+- Latest company commercial license posture: [decisions/company-commercial-license-posture-2026-06-01.md](decisions/company-commercial-license-posture-2026-06-01.md)
 
 ## Current Routing
 
@@ -58,8 +59,8 @@ Last updated: 2026-06-01
 - Data-boundary and execution-policy open questions for the current governance/local-evidence scope are resolved.
 - Runtime evidence inventory is materialized. It is metadata-only and excludes `_bmad/memory/knx/runtime/runtime-inventory/**` to avoid self-inclusion.
 - Gate flow: present summary and why gated, execute after approval, then immediately present the next gate details.
-- `ksev` public-distribution readiness planning is active. Current manifest remains local-only; next gate is distribution metadata posture.
-- `ksev` distribution metadata posture is accepted: manifest values remain local-only until repository target, owner, license, homepage, release channel, and publication mechanism are explicitly approved. Next gate is license posture.
+- `ksev` public-distribution readiness planning is active. Current manifest remains local-only; distribution metadata posture is accepted.
+- Company commercial licensing posture is accepted for planning: keep KNX and `ksev` private/local and `UNLICENSED` to preserve a future private commercial license path. Next gate is company evaluation access protocol.
 
 ## Active Boundaries
 
