@@ -281,7 +281,7 @@ Source: execution-policy-derived from `execution-policy.md`.
 ## Open Questions
 
 1. What identifier convention should downstream operational workflows use for artifact IDs?
-2. Should inventory artifacts be materialized under the approved storage root now, or only when a consuming workflow needs them?
+2. Should the first materialized inventory include runtime evidence paths, or only governance/validator source paths?
 3. Which source classes should the first real source packets cover?
 4. Should any workflow expand beyond read/planning into source mutation?
 5. Who can approve risk score `9` waivers?
@@ -299,3 +299,4 @@ Source: execution-policy-derived from `execution-policy.md`.
 - Data-boundary dependencies: data-boundary-derived.
 - Execution-policy dependencies: execution-policy-derived.
 - Source inventory evidence fields: mature-tool-review-derived from `decisions/mature-tool-source-inventory-2026-06-01.md`.
+- First source inventory materialization plan: `decisions/source-inventory-planning-2026-06-01.md`.
