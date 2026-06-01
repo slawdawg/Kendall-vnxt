@@ -45,6 +45,7 @@
     "_bmad/memory/knx/runtime/source-inventory/validation-source-inventory-2026-06-01.json"
   ],
   "forbidden_content_check": "path-metadata-only; no file contents copied",
+  "checksums": "omitted; checksum generation deferred because it requires file-content reads",
   "boundary_check_result": "PASS",
   "source_mutation_performed": false,
   "external_send_performed": false,

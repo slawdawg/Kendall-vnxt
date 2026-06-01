@@ -28,6 +28,11 @@
       "evidence": "Inventory records paths, counts, extensions, source classes, commands, and provenance only."
     },
     {
+      "check_id": "checksums-deferred",
+      "result": "PASS",
+      "evidence": "Checksums are omitted because checksum generation requires file-content reads."
+    },
+    {
       "check_id": "no-source-mutation",
       "result": "PASS",
       "evidence": "No source mutation command was run."

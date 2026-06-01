@@ -129,6 +129,7 @@ Reason: the artifact contracts are defined, the storage root is approved, and th
 - `file_count`: integer or unresolved.
 - `top_file_groups`: list when available.
 - `source_class_groups`: list when available. Generated reports must be grouped separately from source records as `generated-report`.
+- `checksums`: omitted by default unless a later safety-reviewed decision approves content reads for drift detection.
 - `generated_artifact_path`: approved local path or not-materialized.
 - `forbidden_content_check`: pass, concerns, fail, or not-run.
 - `boundary_check_result`: PASS, CONCERNS, FAIL, or WAIVED.
@@ -282,10 +283,9 @@ Source: execution-policy-derived from `execution-policy.md`.
 ## Open Questions
 
 1. What identifier convention should downstream operational workflows use for artifact IDs?
-2. Should future inventories include checksums, or would that add unnecessary detail for planning?
-3. Which source classes should the first real source packets cover?
-4. Should any workflow expand beyond read/planning into source mutation?
-5. Who can approve risk score `9` waivers?
+2. Which source classes should the first real source packets cover?
+3. Should any workflow expand beyond read/planning into source mutation?
+4. Who can approve risk score `9` waivers?
 
 ## Decision Sources
 
@@ -304,3 +304,4 @@ Source: execution-policy-derived from `execution-policy.md`.
 - First materialized source inventory evidence: `_bmad/memory/knx/runtime/source-inventory/source-inventory-2026-06-01.json`.
 - First materialized source inventory validation evidence: `_bmad/memory/knx/runtime/source-inventory/validation-source-inventory-2026-06-01.json`.
 - Generated-report grouping rule: user-approved on 2026-06-01 and recorded in `decisions/source-inventory-planning-2026-06-01.md`.
+- Checksum rule: deferred by default because checksums require file-content reads; user-approved on 2026-06-01 and recorded in `decisions/source-inventory-planning-2026-06-01.md`.

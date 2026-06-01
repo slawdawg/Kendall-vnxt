@@ -83,6 +83,7 @@ PowerShell extension and source-class grouping over git ls-files scoped output
 - Package install performed: false.
 - Runtime assistant behavior added: false.
 - File contents copied: false.
+- Checksums included: false. Checksum generation is deferred because it requires file-content reads.
 
 ## Links
 

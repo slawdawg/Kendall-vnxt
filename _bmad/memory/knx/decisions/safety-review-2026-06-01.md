@@ -1249,3 +1249,33 @@ The rule improves provenance clarity by separating validation/report outputs fro
 ## Residual Risk
 
 Generated reports remain local project metadata. They should stay under approved local storage or explicitly scoped report paths.
+
+---
+
+# Safety Review Note - Checksum Deferral
+
+Last updated: 2026-06-01
+
+## Review Status
+
+Status: pass
+
+Target reviewed: checksum deferral rule for source inventory evidence.
+
+## Decision Reviewed
+
+Checksums are deferred by default for current and near-term source inventories.
+
+## Findings
+
+No safety blockers found.
+
+Deferring checksums preserves the current metadata-only inventory boundary. Computing checksums would require reading file contents, even if only hashes are stored. A future checksum pass should be safety-reviewed against a concrete drift-detection need and exact scope.
+
+## Scope Boundaries Confirmed
+
+This decision does not approve file-content inspection, content copying, source mutation, runtime evidence inventory, GitHub/remotes, external sends/providers, public distribution, local model/GPU processing, customer/production access, credentials, account/security workflows, or runtime assistant behavior.
+
+## Recommended Next Workflow
+
+Route by concrete capability. A sensible next governance decision is selecting which source classes should be covered by the first real source packets.
