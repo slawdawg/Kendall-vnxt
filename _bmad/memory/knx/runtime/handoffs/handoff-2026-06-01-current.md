@@ -8,7 +8,7 @@ Status: local-only greenfield implementation lane open
 
 - KNX governance core is scaffolded and validated.
 - Optional `ksev` source/evidence validator is scaffolded, validated, and local-only.
-- Latest scoped local implementation commit: `06eadda Validate ksev source packet lists`.
+- Latest scoped local implementation commit: `f608a0e Validate ksev materialized references`.
 - Fast-lane local governance profile is accepted.
 - Company-facing discussion path is parked.
 - IDE one-click action path is closed.
