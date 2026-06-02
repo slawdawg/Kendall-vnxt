@@ -71,6 +71,7 @@ Last updated: 2026-06-02
 - Latest local backlog: [runtime/backlog/local-backlog-2026-06-01.md](runtime/backlog/local-backlog-2026-06-01.md)
 - Latest source packet examples: [runtime/source-packets/source-packet-examples-2026-06-01.md](runtime/source-packets/source-packet-examples-2026-06-01.md)
 - Latest source packet example validator report: [runtime/source-packets/validator-report/source-evidence-validation.md](runtime/source-packets/validator-report/source-evidence-validation.md)
+- Latest `ksev` report pointer audit: [runtime/report-audits/ksev-report-pointer-audit-2026-06-02.md](runtime/report-audits/ksev-report-pointer-audit-2026-06-02.md)
 - Latest pause decision: [decisions/pause-current-work-2026-06-01.md](decisions/pause-current-work-2026-06-01.md)
 - Latest greenfield implementation lane: [decisions/greenfield-implementation-lane-2026-06-01.md](decisions/greenfield-implementation-lane-2026-06-01.md)
 - Latest greenfield implementation runway: [runtime/greenfield-implementation/implementation-runway-2026-06-01.md](runtime/greenfield-implementation/implementation-runway-2026-06-01.md)
