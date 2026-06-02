@@ -872,11 +872,15 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         examples["runtime_assistant_behavior_added"] = True
         del examples["github_or_remote_operation_performed"]
         del examples["package_install_performed"]
+        examples["packets"][0]["package_install_performed"] = True
+        examples["packets"][0]["runtime_assistant_behavior_added"] = True
 
         result = self._validate_temp_source_packet_examples(examples)
+        codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
-        self.assertIn("boundary-flag-not-false", {finding["code"] for finding in result["findings"]})
+        self.assertIn("boundary-flag-not-false", codes)
+        self.assertIn("source-packet-boundary-flag-not-false", codes)
 
     def test_source_packet_examples_reject_malformed_packet_container(self):
         examples = self._load_source_packet_examples()

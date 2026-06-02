@@ -1338,6 +1338,17 @@ def validate_source_packet_example(packet: dict[str, Any], findings: list[Findin
             )
         )
 
+    for flag in BOUNDARY_FALSE_FLAGS:
+        if flag in packet and packet.get(flag) is not False:
+            findings.append(
+                Finding(
+                    "error",
+                    "source-packet-boundary-flag-not-false",
+                    f"Source packet boundary flag must be false when present: {flag}",
+                    artifact_id=str(packet_id) if packet_id else None,
+                )
+            )
+
     if packet.get("source_class") not in VALID_SOURCE_PACKET_CLASSES:
         findings.append(
             Finding(
