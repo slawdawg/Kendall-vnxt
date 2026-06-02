@@ -123,6 +123,17 @@ VALID_SOURCE_SUPPORT_SUMMARIES = {
     "mixed",
 }
 VALID_OUTPUT_STATUSES = {"draft", "ready-for-review", "validated", "blocked", "superseded"}
+VALID_SOURCE_ROOT_APPROVAL_BASES = {"user-specified", "data-boundary-derived", "decision-record", "unresolved"}
+VALID_SOURCE_INVENTORY_SCOPES = {
+    "tracked-files",
+    "visible-files",
+    "extension-summary",
+    "source-class-summary",
+    "mixed",
+}
+VALID_SOURCE_INVENTORY_OPERATIONS = {"read-planning only", "metadata-only read-planning"}
+VALID_SOURCE_INVENTORY_TOOLS = {"git", "ripgrep", "PowerShell", "approved-custom-glue"}
+VALID_BOUNDARY_RESULTS = {"PASS", "CONCERNS", "FAIL", "WAIVED"}
 REQUIRED_SOURCE_PACKET_FIELDS = {
     "source_packet_id",
     "title",
@@ -681,6 +692,22 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
         add_finding(findings, "error", "source-inventory-mutated-source", "Source inventory must not mutate source", fixture)
     if artifact.get("external_send_performed") is not False:
         add_finding(findings, "error", "source-inventory-external-send", "Source inventory must not send externally", fixture)
+    if artifact.get("source_root_approval_basis") not in VALID_SOURCE_ROOT_APPROVAL_BASES:
+        add_finding(findings, "error", "source-inventory-approval-basis-invalid", "Invalid source_root_approval_basis", fixture)
+    if artifact.get("inventory_scope") not in VALID_SOURCE_INVENTORY_SCOPES:
+        add_finding(findings, "error", "source-inventory-scope-invalid", "Invalid inventory_scope", fixture)
+    if artifact.get("allowed_operation") not in VALID_SOURCE_INVENTORY_OPERATIONS:
+        add_finding(findings, "error", "source-inventory-operation-invalid", "Invalid allowed_operation", fixture)
+    if artifact.get("inventory_tool") not in VALID_SOURCE_INVENTORY_TOOLS:
+        add_finding(findings, "error", "source-inventory-tool-invalid", "Invalid inventory_tool", fixture)
+    if artifact.get("boundary_check_result") not in VALID_BOUNDARY_RESULTS:
+        add_finding(findings, "error", "source-inventory-boundary-result-invalid", "Invalid boundary_check_result", fixture)
+    if artifact.get("forbidden_content_check") not in VALID_FORBIDDEN_CONTENT_CHECKS:
+        add_finding(findings, "error", "source-inventory-forbidden-content-invalid", "Invalid forbidden_content_check", fixture)
+    if artifact.get("uncertainty") not in VALID_UNCERTAINTY:
+        add_finding(findings, "error", "source-inventory-uncertainty-invalid", "Invalid source inventory uncertainty", fixture)
+    if "file_count" in artifact and (not isinstance(artifact.get("file_count"), int) or artifact.get("file_count") < 0):
+        add_finding(findings, "error", "source-inventory-file-count-invalid", "file_count must be a nonnegative integer", fixture)
 
     generated_path = artifact.get("generated_artifact_path")
     fixture_type = fixture.get("fixture_type")

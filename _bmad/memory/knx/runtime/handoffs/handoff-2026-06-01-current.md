@@ -34,7 +34,7 @@ Status: local-only greenfield implementation lane open
 
 ## Latest Validation
 
-- `ksev` unit tests: 20 passed.
+- `ksev` unit tests: 21 passed.
 - Synthetic fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation for `ksev`: pass, 0 findings.
@@ -99,7 +99,7 @@ Use `_bmad/memory/knx/runtime/greenfield-implementation/implementation-runway-20
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as the completed local planning record for Gates 1-11.
 
-Latest concrete local task: refreshed the scoped implementation evidence baseline and hardened `ksev` source packet, work trace, validation evidence, user-input-required, and output metadata validation.
+Latest concrete local task: refreshed the scoped implementation evidence baseline and hardened `ksev` source packet, source inventory, work trace, validation evidence, user-input-required, and output metadata validation.
 
 Next concrete task is to continue scoped `ksev`/KNX module hardening or evidence validation work inside the approved local-only lane.
 

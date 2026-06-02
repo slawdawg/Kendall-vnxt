@@ -92,6 +92,32 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(inventory_findings, [])
 
+    def test_source_inventory_rejects_invalid_controlled_vocab(self):
+        pack = self._load_pack()
+        inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
+        inventory["artifact"]["source_root_approval_basis"] = "because"
+        inventory["artifact"]["inventory_scope"] = "everything"
+        inventory["artifact"]["allowed_operation"] = "scan-and-copy"
+        inventory["artifact"]["inventory_tool"] = "cloud-indexer"
+        inventory["artifact"]["boundary_check_result"] = "OK"
+        inventory["artifact"]["forbidden_content_check"] = "unknown"
+        inventory["artifact"]["uncertainty"] = "shrug"
+        inventory["artifact"]["file_count"] = -1
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-inventory-approval-basis-invalid", codes)
+        self.assertIn("source-inventory-scope-invalid", codes)
+        self.assertIn("source-inventory-operation-invalid", codes)
+        self.assertIn("source-inventory-tool-invalid", codes)
+        self.assertIn("source-inventory-boundary-result-invalid", codes)
+        self.assertIn("source-inventory-forbidden-content-invalid", codes)
+        self.assertIn("source-inventory-uncertainty-invalid", codes)
+        self.assertIn("source-inventory-file-count-invalid", codes)
+
     def test_report_output_must_stay_under_approved_storage_root(self):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
         with tempfile.TemporaryDirectory() as temp_dir:
