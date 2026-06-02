@@ -1061,6 +1061,24 @@ def validate_source_packet_example(packet: dict[str, Any], findings: list[Findin
                 artifact_id=str(packet_id) if packet_id else None,
             )
         )
+    if "source_references" in packet and not is_non_empty_string_list(packet.get("source_references")):
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-source-references-invalid",
+                "source_references must be a string list",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+    if "open_questions" in packet and not is_non_empty_string_list(packet.get("open_questions")):
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-open-questions-invalid",
+                "open_questions must be a string list",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
 
     if packet.get("source_class") not in VALID_SOURCE_PACKET_CLASSES:
         findings.append(

@@ -637,6 +637,18 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("missing-source-packet-field", {finding["code"] for finding in result["findings"]})
 
+    def test_source_packet_examples_reject_blank_optional_list_entries(self):
+        examples = self._load_source_packet_examples()
+        examples["packets"][0]["source_references"] = [" "]
+        examples["packets"][0]["open_questions"] = [""]
+
+        result = self._validate_temp_source_packet_examples(examples)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-packet-source-references-invalid", codes)
+        self.assertIn("source-packet-open-questions-invalid", codes)
+
     def test_source_packet_examples_reject_invalid_controlled_vocab(self):
         examples = self._load_source_packet_examples()
         examples["packets"][0]["source_owner_or_provider"] = "customer"
