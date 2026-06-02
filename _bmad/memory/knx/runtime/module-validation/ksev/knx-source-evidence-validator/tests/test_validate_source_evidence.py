@@ -682,6 +682,28 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("unknown-waiver-decision-id", {finding["code"] for finding in result["findings"]})
 
+    def test_valid_waived_validation_evidence_passes_contract(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["validation_evidence_id"] = "ve-synth-waived-valid-001"
+        evidence["artifact"]["result"] = "WAIVED"
+        evidence["artifact"]["failed_rules"] = ["Synthetic waived rule for regression coverage."]
+        evidence["artifact"]["blocking_status"] = "waived-blocking"
+        evidence["artifact"]["risk_score"] = 9
+        evidence["artifact"]["waiver_id"] = "dec-synth-valid-001"
+        evidence["artifact"]["waiver_reason"] = "Synthetic waiver reason for regression coverage."
+        evidence["artifact"]["evidence_references"] = ["local synthetic waiver evidence"]
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+        waived_findings = [
+            finding
+            for finding in result["findings"]
+            if finding.get("artifact_id") == "ve-synth-waived-valid-001"
+        ]
+
+        self.assertEqual(waived_findings, [])
+
     def test_validation_waiver_requires_waived_blocking_status(self):
         pack = self._load_pack()
         evidence = self._find_fixture(pack, "valid-validation-evidence")
