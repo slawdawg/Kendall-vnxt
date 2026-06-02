@@ -8,6 +8,7 @@ Status: local-only greenfield implementation lane open
 
 - KNX governance core is scaffolded and validated.
 - Optional `ksev` source/evidence validator is scaffolded, validated, and local-only.
+- Latest scoped local implementation commit: `3525fb8 Harden ksev source packet validation`.
 - Fast-lane local governance profile is accepted.
 - Company-facing discussion path is parked.
 - IDE one-click action path is closed.
@@ -33,11 +34,12 @@ Status: local-only greenfield implementation lane open
 
 ## Latest Validation
 
-- `ksev` unit tests: 14 passed.
+- `ksev` unit tests: 15 passed.
 - Synthetic fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation for `ksev`: pass, 0 findings.
 - `ksev` local registration validation: PASS.
+- Approved KNX path metadata inventory refreshed on 2026-06-02: 176 tracked files in approved scoped paths.
 
 ## Active Fast-Lane Scope
 
@@ -97,6 +99,8 @@ Use `_bmad/memory/knx/runtime/greenfield-implementation/implementation-runway-20
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as the completed local planning record for Gates 1-11.
 
-Next concrete task is to refresh the scoped implementation evidence baseline under `_bmad/memory/knx/runtime/greenfield-implementation/post-gate-continuation-2026-06-01.md`.
+Latest concrete local task: refreshed the scoped implementation evidence baseline and hardened `ksev` source packet example validation.
+
+Next concrete task is to continue scoped `ksev`/KNX module hardening or evidence validation work inside the approved local-only lane.
 
 Parked and hard-gated paths remain closed unless explicitly reopened.

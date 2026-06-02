@@ -20,14 +20,14 @@ Last updated: 2026-06-01
 ## Current Module State
 
 - KNX governance core: scaffolded and validated.
-- Optional source/evidence validator: scaffolded, structurally validated, safety-reviewed, and held as local installable packaging evidence.
+- Optional source/evidence validator: scaffolded, structurally validated, safety-reviewed, hardened for source packet controlled-vocabulary checks, and held as local installable packaging evidence.
 - Latest validator distribution decision: [decisions/validator-distribution-2026-06-01.md](decisions/validator-distribution-2026-06-01.md)
 - Latest local Git commit decision: [decisions/local-git-commit-2026-06-01.md](decisions/local-git-commit-2026-06-01.md)
 - Latest validator validation report: [../../skills/reports/module-validation-ksev-2026-06-01.md](../../skills/reports/module-validation-ksev-2026-06-01.md)
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md)
-- Latest substantive KNX governance commit: `11ac9d3 Clean up KNX post-gate routing`
+- Latest substantive KNX governance commit: `3525fb8 Harden ksev source packet validation`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
@@ -110,7 +110,7 @@ Last updated: 2026-06-01
 - Local model/GPU processing planning is materialized locally under `runtime/greenfield-implementation/local-model-gpu/`; model/GPU processing remains disabled.
 - Access/security workflow planning is materialized locally under `runtime/greenfield-implementation/access-security/`; customer/production/credential/account-security workflows remain blocked.
 - Destructive/risk-waiver planning is materialized locally under `runtime/greenfield-implementation/destructive-risk/`; destructive/data-loss actions and risk score `9` waivers remain blocked.
-- Post-gate continuation plan is materialized locally under `runtime/greenfield-implementation/post-gate-continuation-2026-06-01.md`; next concrete task is scoped implementation evidence baseline refresh.
+- Post-gate continuation plan is materialized locally under `runtime/greenfield-implementation/post-gate-continuation-2026-06-01.md`; the scoped implementation evidence baseline was refreshed on 2026-06-02. Next routing should continue concrete local KNX/ksev implementation and validation work.
 
 ## Active Boundaries
 

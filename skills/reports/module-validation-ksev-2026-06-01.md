@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 14 passed.
+- Unit tests: 15 passed.
 - Fixture validation: PASS.
 - Fixture count: 14.
 - Source packet example validation: PASS.
@@ -58,6 +58,7 @@ The standalone optional pack includes:
 
 - Dependency-free synthetic source/evidence fixture validator.
 - Metadata-only source packet example validator.
+- Controlled-vocabulary enforcement for source packet example owner, approval basis, support level, processing boundary, storage boundary, operation, and uncertainty fields.
 - Validator tests.
 - Standalone module registration assets.
 - Local report writing under approved KNX runtime storage.
@@ -100,3 +101,19 @@ Post-cleanup verification:
 - BMad module validation: pass, 0 findings.
 - `git diff --check`: pass.
 - Targeted secret-pattern scan: no key material found; matches were policy mentions and validator detection-pattern source.
+
+## Post-Gate Validator Hardening
+
+Date: 2026-06-02
+
+Change:
+
+- Added controlled-vocabulary checks for metadata-only source packet examples.
+- Added regression coverage for invalid source packet owner/provider, approval basis, source support level, processing boundary, storage boundary, source operation, and uncertainty values.
+
+Verification:
+
+- Unit tests: 15 passed.
+- Fixture validation: PASS, 14 fixtures, 0 findings.
+- Source packet example validation: PASS, 3 source packets, 0 findings.
+- BMad module validation: pass, 0 findings.

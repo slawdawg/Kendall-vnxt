@@ -137,9 +137,13 @@ Not ready:
 - Operational source intake.
 - Runtime assistant behavior.
 
+Latest completed local task:
+
+- Refreshed the scoped implementation evidence baseline described in `post-gate-continuation-2026-06-01.md` and hardened `ksev` source packet example validation on 2026-06-02.
+
 Next concrete local task:
 
-- Refresh the scoped implementation evidence baseline described in `post-gate-continuation-2026-06-01.md`.
+- Continue scoped `ksev`/KNX module hardening or evidence validation work inside the approved local-only lane.
 
 ## Source References
 

@@ -32,6 +32,47 @@ VALID_SOURCE_PACKET_CLASSES = {
     "public-or-synthetic-sample-data",
     "generated-report",
 }
+VALID_SOURCE_OWNERS = {"user", "project", "public", "synthetic", "unresolved"}
+VALID_APPROVAL_BASES = {
+    "user-specified",
+    "profile-derived",
+    "data-boundary-derived",
+    "decision-record",
+    "public",
+    "synthetic",
+    "unresolved",
+}
+VALID_SOURCE_SUPPORT_LEVELS = {
+    "direct",
+    "indirect",
+    "user-asserted",
+    "synthetic",
+    "inferred",
+    "unsupported",
+    "unresolved",
+}
+VALID_PROCESSING_BOUNDARIES = {
+    "deterministic-local",
+    "mature-local-tool",
+    "approved-local-model",
+    "approved-custom-glue",
+    "approved-external-provider",
+    "unresolved",
+}
+VALID_STORAGE_BOUNDARIES = {
+    "_bmad/memory/knx",
+    "approved-storage-root",
+    "synthetic-fixture-folder",
+    "unresolved",
+}
+VALID_SOURCE_OPERATIONS = {
+    "read-planning",
+    "mutation-requested",
+    "mutation-approved",
+    "external-send-requested",
+    "blocked",
+}
+VALID_UNCERTAINTY = {"none", "low", "medium", "high", "blocking"}
 REQUIRED_SOURCE_PACKET_FIELDS = {
     "source_packet_id",
     "title",
@@ -528,12 +569,81 @@ def validate_source_packet_example(packet: dict[str, Any], findings: list[Findin
             )
         )
 
-    if packet.get("source_operation") != "read-planning":
+    if packet.get("source_owner_or_provider") not in VALID_SOURCE_OWNERS:
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-owner-invalid",
+                "Source packet owner/provider is invalid",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    if packet.get("approval_basis") not in VALID_APPROVAL_BASES:
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-approval-basis-invalid",
+                "Source packet approval_basis is invalid",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    if packet.get("source_support_level") not in VALID_SOURCE_SUPPORT_LEVELS:
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-support-level-invalid",
+                "Source packet source_support_level is invalid",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    if packet.get("permitted_processing_boundary") not in VALID_PROCESSING_BOUNDARIES:
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-processing-boundary-invalid",
+                "Source packet permitted_processing_boundary is invalid",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    if packet.get("permitted_storage_boundary") not in VALID_STORAGE_BOUNDARIES:
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-storage-boundary-invalid",
+                "Source packet permitted_storage_boundary is invalid",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    if packet.get("source_operation") not in VALID_SOURCE_OPERATIONS:
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-operation-invalid",
+                "Source packet source_operation is invalid",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+    elif packet.get("source_operation") != "read-planning":
         findings.append(
             Finding(
                 "error",
                 "source-packet-operation-not-read-planning",
                 "Source packet examples must remain read-planning only",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
+
+    if packet.get("uncertainty") not in VALID_UNCERTAINTY:
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-uncertainty-invalid",
+                "Source packet uncertainty is invalid",
                 artifact_id=str(packet_id) if packet_id else None,
             )
         )

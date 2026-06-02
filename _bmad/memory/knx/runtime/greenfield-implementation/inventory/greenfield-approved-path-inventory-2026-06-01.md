@@ -2,6 +2,8 @@
 
 Date: 2026-06-01
 
+Last refreshed: 2026-06-02
+
 Status: PASS
 
 Scope: metadata-only inventory for approved KNX greenfield implementation paths.
@@ -12,19 +14,19 @@ Command:
 git ls-files -- '.agents/skills/knx-*' '_bmad/config.yaml' '_bmad/module-help.csv' '_bmad/memory/knx/**' 'skills/reports/module-validation-*.md'
 ```
 
-File count: 139
+File count: 176
 
 Path groups:
-- knx-decision-record: 40
+- knx-decision-record: 49
 - knx-governance-memory: 10
-- knx-runtime-evidence: 50
+- knx-runtime-evidence: 78
 - knx-skill-source: 35
 - module-validation-report: 2
 - shared-module-registry: 2
 
 Extension groups:
-- .md: 101
-- .json: 16
+- .md: 129
+- .json: 25
 - .py: 13
 - .csv: 4
 - .yaml: 4
@@ -43,3 +45,4 @@ Notes:
 - This inventory is path metadata only.
 - It does not approve non-KNX product/app source inventory.
 - It does not prove sensitive content is absent.
+- Refresh reflects tracked Gate 1-11 planning artifacts and the post-gate continuation records inside approved KNX runtime paths.

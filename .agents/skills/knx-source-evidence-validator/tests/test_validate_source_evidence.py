@@ -150,6 +150,28 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("source-packet-copies-content", {finding["code"] for finding in result["findings"]})
 
+    def test_source_packet_examples_reject_invalid_controlled_vocab(self):
+        examples = self._load_source_packet_examples()
+        examples["packets"][0]["source_owner_or_provider"] = "customer"
+        examples["packets"][0]["approval_basis"] = "hand-wave"
+        examples["packets"][0]["source_support_level"] = "maybe"
+        examples["packets"][0]["permitted_processing_boundary"] = "external-by-default"
+        examples["packets"][0]["permitted_storage_boundary"] = "anywhere"
+        examples["packets"][0]["source_operation"] = "ship-it"
+        examples["packets"][0]["uncertainty"] = "shrug"
+
+        result = self._validate_temp_source_packet_examples(examples)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-packet-owner-invalid", codes)
+        self.assertIn("source-packet-approval-basis-invalid", codes)
+        self.assertIn("source-packet-support-level-invalid", codes)
+        self.assertIn("source-packet-processing-boundary-invalid", codes)
+        self.assertIn("source-packet-storage-boundary-invalid", codes)
+        self.assertIn("source-packet-operation-invalid", codes)
+        self.assertIn("source-packet-uncertainty-invalid", codes)
+
     def test_source_packet_example_result_can_write_reports(self):
         result = validator.validate_source_packet_examples(SOURCE_PACKET_EXAMPLES)
         report_root = validator.load_approved_storage_root() / "source-packets"

@@ -2,7 +2,7 @@
 
 Date: 2026-06-01
 
-Status: active local-only continuation plan
+Status: active local-only continuation plan; baseline refreshed 2026-06-02
 
 ## Context
 
@@ -20,14 +20,22 @@ Proceed by concrete capability inside the approved local-only greenfield lane:
 - Scoped KNX module/config/help/report work already approved by the write-boundary decision.
 - Local commits for scoped KNX governance/evidence/validation/handoff work.
 
+## Baseline Refresh Result
+
+Refreshed on 2026-06-02.
+
+- Approved KNX implementation path inventory: PASS, 176 tracked files in approved scoped paths.
+- `ksev` source packet example validator: hardened with additional controlled-vocabulary checks.
+- `ksev` validation: PASS, 15 unit tests, fixture validation PASS, source packet example validation PASS, module validation PASS.
+
 ## Next Concrete Task
 
-Refresh the scoped implementation evidence baseline:
+Continue scoped local `ksev`/KNX implementation and validation work:
 
-1. Confirm the approved KNX implementation path inventory is current.
-2. Re-run relevant local validation for `knx` and `ksev` only if source/module/report assets changed or the inventory indicates drift.
-3. Update handoff/backlog/index records with the refreshed baseline.
-4. Commit local governance/evidence updates.
+1. Prefer concrete validator, module packaging, or evidence-contract hardening changes.
+2. Re-run relevant local validation after scoped module/validator/report changes.
+3. Update only current handoff/backlog/index records when routing or validation state changes.
+4. Commit scoped local implementation and validation changes.
 
 ## Stop Conditions
 
@@ -44,4 +52,3 @@ Stop before:
 - local model/GPU processing,
 - destructive/data-loss action,
 - risk score `9` waiver.
-

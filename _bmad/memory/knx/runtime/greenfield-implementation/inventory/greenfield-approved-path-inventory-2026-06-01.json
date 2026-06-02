@@ -1,16 +1,16 @@
 {
-    "inventory_id":  "knx-source-inventory-2026-06-01-002",
+    "inventory_id":  "knx-source-inventory-2026-06-02-003",
     "title":  "Greenfield approved path metadata inventory",
-    "created_at":  "2026-06-01",
+    "created_at":  "2026-06-02",
     "source_root":  "C:/Users/slaw_dawg/Kendall_Nxt",
     "allowed_operation":  "metadata-only read-planning",
     "inventory_tool":  "git ls-files",
     "inventory_command_or_check":  "git ls-files -- \u0027.agents/skills/knx-*\u0027 \u0027_bmad/config.yaml\u0027 \u0027_bmad/module-help.csv\u0027 \u0027_bmad/memory/knx/**\u0027 \u0027skills/reports/module-validation-*.md\u0027",
-    "file_count":  139,
+    "file_count":  176,
     "path_groups":  [
                         {
                             "group":  "knx-decision-record",
-                            "count":  40
+                            "count":  49
                         },
                         {
                             "group":  "knx-governance-memory",
@@ -18,7 +18,7 @@
                         },
                         {
                             "group":  "knx-runtime-evidence",
-                            "count":  50
+                            "count":  78
                         },
                         {
                             "group":  "knx-skill-source",
@@ -36,11 +36,11 @@
     "extension_groups":  [
                              {
                                  "extension":  ".md",
-                                 "count":  101
+                                 "count":  129
                              },
                              {
                                  "extension":  ".json",
-                                 "count":  16
+                                 "count":  25
                              },
                              {
                                  "extension":  ".py",
@@ -74,6 +74,7 @@
     "boundary_check_result":  "PASS",
     "uncertainty":  "low",
     "open_questions":  [
-                           "Whether future source inventory should include non-KNX product/app source remains hard-gated."
+                           "Whether future source inventory should include non-KNX product/app source remains hard-gated.",
+                           "Refresh reflects tracked Gate 1-11 planning artifacts and the post-gate continuation records inside approved KNX runtime paths."
                        ]
 }
