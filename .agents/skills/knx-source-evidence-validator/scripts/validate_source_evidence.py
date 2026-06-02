@@ -205,6 +205,18 @@ BOUNDARY_FALSE_FLAGS = {
     "customer_or_production_data_included",
     "credential_or_account_security_material_included",
 }
+REQUIRED_EXCLUDED_SOURCE_CLASSES = {
+    "runtime-evidence-inventory-as-source-packet",
+    "exported-files-or-attachments",
+    "customer-project-data",
+    "production-systems",
+    "credentials-tokens-mfa-account-security-material",
+    "github-remotes",
+    "external-providers",
+    "local-model-gpu-derived-outputs",
+    "source-mutation-records",
+    "operational-source-intake",
+}
 DEFAULT_APPROVED_STORAGE_ROOT = Path("_bmad/memory/knx/runtime").resolve()
 
 SECRET_PATTERNS = [
@@ -893,7 +905,7 @@ def validate_source_packet_examples(path: Path, approved_storage_root: Path | No
     if examples is None:
         return build_source_packet_examples_result(path, findings, 0, approved_storage_root)
 
-    for field in ("source_packet_example_set_id", "title", "created_at", "packets"):
+    for field in ("source_packet_example_set_id", "title", "created_at", "packets", "excluded_classes"):
         if field not in examples:
             add_finding(findings, "error", "missing-example-set-field", f"Missing top-level field: {field}")
 
@@ -906,6 +918,14 @@ def validate_source_packet_examples(path: Path, approved_storage_root: Path | No
     for flag in BOUNDARY_FALSE_FLAGS:
         if examples.get(flag) is not False:
             add_finding(findings, "error", "boundary-flag-not-false", f"Boundary flag must be false: {flag}")
+
+    excluded_classes = examples.get("excluded_classes")
+    if not is_non_empty_string_list(excluded_classes, require_non_empty=True):
+        add_finding(findings, "error", "example-excluded-classes-invalid", "excluded_classes must be a non-empty string list")
+        excluded_classes = []
+    missing_excluded_classes = REQUIRED_EXCLUDED_SOURCE_CLASSES - set(excluded_classes)
+    for source_class in sorted(missing_excluded_classes):
+        add_finding(findings, "error", "example-excluded-class-missing", f"Missing excluded source class: {source_class}")
 
     packets = examples.get("packets")
     if not isinstance(packets, list):

@@ -418,6 +418,17 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("source-packet-text-field-empty", codes)
         self.assertIn("source-packet-created-at-invalid", codes)
 
+    def test_source_packet_examples_require_excluded_source_classes(self):
+        examples = self._load_source_packet_examples()
+        examples["excluded_classes"] = ["customer-project-data", " "]
+
+        result = self._validate_temp_source_packet_examples(examples)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("example-excluded-classes-invalid", codes)
+        self.assertIn("example-excluded-class-missing", codes)
+
     def test_source_packet_examples_reject_invalid_controlled_vocab(self):
         examples = self._load_source_packet_examples()
         examples["packets"][0]["source_owner_or_provider"] = "customer"
