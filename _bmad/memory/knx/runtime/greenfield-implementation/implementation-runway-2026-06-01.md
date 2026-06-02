@@ -21,6 +21,24 @@ Operating rule:
 - Proceed by default under `decisions/default-proceed-local-workflow-2026-06-01.md`.
 - Stop only for hard gates, genuine user-input requirements, or user pause.
 
+## Hard-Gate Planning Status
+
+The current hard-gate workthrough sequence is complete for local planning:
+
+- Gate 1: scoped KNX source mutation.
+- Gate 2: local write boundary.
+- Gate 3: source inventory/tooling.
+- Gate 4: `ksev` public distribution readiness.
+- Gate 5: GitHub/remotes.
+- Gate 6: company-facing sharing or evaluation access.
+- Gate 7: IDE/workspace configuration.
+- Gate 8: runtime assistant behavior.
+- Gate 9: local model/GPU processing.
+- Gate 10: customer/production/credential/account-security workflows.
+- Gate 11: destructive/data-loss actions or risk score `9` waivers.
+
+These gates are complete for planning only. Execution gates remain blocked unless separately approved.
+
 ## Current Module Assets
 
 `knx` governance core:
@@ -62,11 +80,12 @@ git diff --check
 
 Proceed automatically with these local steps when useful:
 
-1. Refresh module validation after scoped module asset changes.
-2. Refresh `ksev` validator reports after fixture or source-packet-example changes.
-3. Update KNX routing records after any lane status change.
-4. Create local work traces and validation evidence for new local runtime artifacts.
-5. Commit scoped local KNX governance, evidence, validation, packaging, and handoff changes.
+1. Refresh the scoped implementation evidence baseline after the completed hard-gate planning sequence.
+2. Refresh module validation after scoped module asset changes.
+3. Refresh `ksev` validator reports after fixture or source-packet-example changes.
+4. Update KNX routing records after any lane status change.
+5. Create local work traces and validation evidence for new local runtime artifacts.
+6. Commit scoped local KNX governance, evidence, validation, packaging, and handoff changes.
 
 ## Hard Gates
 
@@ -105,6 +124,7 @@ Ready:
 - Local `knx` governance core use.
 - Local `ksev` validator use.
 - Shared local `ksev` config/help registration.
+- Completed Gates 1-11 local planning evidence.
 - Local validation and report refreshes.
 - Local scoped commits.
 - Continued default-proceed governance/evidence/module handoff work.
@@ -117,6 +137,10 @@ Not ready:
 - Operational source intake.
 - Runtime assistant behavior.
 
+Next concrete local task:
+
+- Refresh the scoped implementation evidence baseline described in `post-gate-continuation-2026-06-01.md`.
+
 ## Source References
 
 - `_bmad/memory/knx/decisions/greenfield-implementation-lane-2026-06-01.md`
@@ -125,3 +149,5 @@ Not ready:
 - `skills/reports/module-validation-ksev-2026-06-01.md`
 - `_bmad/memory/knx/runtime/handoffs/handoff-2026-06-01-current.md`
 - `_bmad/memory/knx/runtime/greenfield-implementation/work-trace-ksev-registration-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/post-gate-continuation-2026-06-01.md`

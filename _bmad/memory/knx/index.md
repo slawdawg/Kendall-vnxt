@@ -99,7 +99,7 @@ Last updated: 2026-06-01
 - Current KNX work is reopened only for the approved local-only greenfield implementation lane. Parked and hard-gated paths remain closed unless explicitly reopened. Operational source packets remain hard-gated.
 - Current local implementation runway is materialized under `runtime/greenfield-implementation/`.
 - `ksev` is registered in shared local config and help registry.
-- Remaining hard-gated paths are sequenced in `runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
+- Current hard-gate planning sequence is complete for Gates 1-11 in `runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
 - Local writes are approved for scoped KNX module/config/help/report paths listed in `decisions/write-boundary-knx-local-2026-06-01.md`.
 - Metadata-only inventory for approved KNX implementation paths is materialized under `runtime/greenfield-implementation/inventory/`.
 - `ksev` public distribution readiness planning is materialized locally under `runtime/greenfield-implementation/distribution-readiness/`; publication remains blocked.
@@ -110,6 +110,7 @@ Last updated: 2026-06-01
 - Local model/GPU processing planning is materialized locally under `runtime/greenfield-implementation/local-model-gpu/`; model/GPU processing remains disabled.
 - Access/security workflow planning is materialized locally under `runtime/greenfield-implementation/access-security/`; customer/production/credential/account-security workflows remain blocked.
 - Destructive/risk-waiver planning is materialized locally under `runtime/greenfield-implementation/destructive-risk/`; destructive/data-loss actions and risk score `9` waivers remain blocked.
+- Post-gate continuation plan is materialized locally under `runtime/greenfield-implementation/post-gate-continuation-2026-06-01.md`; next concrete task is scoped implementation evidence baseline refresh.
 
 ## Active Boundaries
 

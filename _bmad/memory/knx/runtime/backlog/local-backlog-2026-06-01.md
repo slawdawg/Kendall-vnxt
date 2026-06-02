@@ -14,7 +14,7 @@ Status: active local-only backlog
 6. Route any new fixture/evidence changes through `knx-source-evidence-contract`.
 7. Keep approved KNX path metadata inventory current under `_bmad/memory/knx/runtime/greenfield-implementation/inventory/`.
 8. Route any new tooling or source inventory materialization beyond the accepted Gate 3 scope through `knx-mature-tool-review` first.
-9. Work through hard-gated paths in the order recorded in `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
+9. Treat `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as complete for Gates 1-11 planning.
 10. Keep `ksev` distribution readiness local-only until a later remote/publication gate is approved.
 11. Keep GitHub/remotes disabled until a later target URL and operation class are explicitly approved.
 12. Keep company evaluation planning local-only until exact audience, sharing mechanism, final artifact list, legal review path, and send/access action are explicitly approved.
@@ -23,6 +23,7 @@ Status: active local-only backlog
 15. Keep local model/GPU processing planning local-only until exact hardware target, model/runtime, source classes, storage, execution context, resource limits, rollback, validation, and safety contract are explicitly approved.
 16. Keep customer/production/credential/account-security workflow planning local-only until exact system/account, data class, access method, authority, audit/logging, rollback, validation, and safety contract are explicitly approved.
 17. Keep destructive/data-loss and risk score `9` waiver planning local-only until exact target, action type, blast radius, backup/recovery, authority, validation, stop condition, rollback, and safety contract are explicitly approved.
+18. Refresh the scoped implementation evidence baseline under `_bmad/memory/knx/runtime/greenfield-implementation/post-gate-continuation-2026-06-01.md`.
 
 ## Parked
 

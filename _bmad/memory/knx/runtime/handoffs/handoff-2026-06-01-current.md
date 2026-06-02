@@ -95,8 +95,8 @@ For eligible local KNX governance, evidence, validation, packaging, handoff, and
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/implementation-runway-2026-06-01.md` as the current local implementation runway.
 
-Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` to work through gated paths.
+Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as the completed local planning record for Gates 1-11.
 
-Next gate is IDE/workspace configuration.
+Next concrete task is to refresh the scoped implementation evidence baseline under `_bmad/memory/knx/runtime/greenfield-implementation/post-gate-continuation-2026-06-01.md`.
 
 Parked and hard-gated paths remain closed unless explicitly reopened.
