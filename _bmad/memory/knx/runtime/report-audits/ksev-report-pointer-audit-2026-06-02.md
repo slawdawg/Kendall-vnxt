@@ -13,7 +13,7 @@ Test-Path _bmad\memory\knx\runtime\optional-source-evidence-validator\reports\so
 Test-Path _bmad\memory\knx\runtime\handoffs\handoff-2026-06-01-current.md
 Select-String -Path _bmad\memory\knx\index.md -Pattern 'Latest substantive KNX governance commit|Latest validator validation report|Latest source packet example validator report'
 Select-String -Path _bmad\memory\knx\runtime\handoffs\handoff-2026-06-01-current.md -Pattern 'Latest scoped local implementation commit|ksev unit tests|Synthetic fixture validation|Source packet example validation|BMad module validation'
-Select-String -Path skills\reports\module-validation-ksev-2026-06-01.md -Pattern 'Unit tests: 72 passed|Fixture validation: PASS|Source packet example validation: PASS|BMad module validation: pass'
+Select-String -Path skills\reports\module-validation-ksev-2026-06-01.md -Pattern 'Unit tests: 73 passed|Fixture validation: PASS|Source packet example validation: PASS|BMad module validation: pass'
 ```
 
 ## Result
@@ -22,9 +22,9 @@ Select-String -Path skills\reports\module-validation-ksev-2026-06-01.md -Pattern
 - Active source packet example validator report exists: PASS.
 - Active synthetic fixture validator report exists: PASS.
 - Current handoff exists: PASS.
-- Index latest substantive implementation pointer: `32fd3be Cover ksev validator run references`.
-- Current handoff latest scoped implementation pointer: `32fd3be Cover ksev validator run references`.
-- Module validation report unit baseline: 72 passed.
+- Index latest substantive implementation pointer: `b914a8f Cover ksev source inventory links`.
+- Current handoff latest scoped implementation pointer: `b914a8f Cover ksev source inventory links`.
+- Module validation report unit baseline: 73 passed.
 - Handoff validation baseline: fixture PASS with 18 fixtures, source packet example PASS, module validation pass.
 
 ## Finding

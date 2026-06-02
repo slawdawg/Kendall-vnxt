@@ -20,14 +20,14 @@ Last updated: 2026-06-02
 ## Current Module State
 
 - KNX governance core: scaffolded and validated.
-- Optional source/evidence validator: scaffolded, structurally validated, safety-reviewed, hardened for synthetic fixtures, source packet examples, validator run evidence bundles, runtime evidence inventory artifacts, packet-level boundary flags, fixture/source-packet, source-reference ID, evidence-reference ID, validator-run reference ID, source inventory, work trace, work-trace blocking action, validation evidence, source-support/boundary target consistency, missing artifact-field, fixture source-packet/output required-field, validation-result consistency, unsupported-output status, high-risk decision approval, decision-record, user-input-required, user-input review-condition, output metadata/storage-boundary, fixture artifact-ID, decision artifact-ID, generated-artifact, decision-record, and superseded-decision reference contract checks, and held as local installable packaging evidence.
+- Optional source/evidence validator: scaffolded, structurally validated, safety-reviewed, hardened for synthetic fixtures, source packet examples, validator run evidence bundles, runtime evidence inventory artifacts, packet-level boundary flags, fixture/source-packet, source-reference ID, evidence-reference ID, validator-run reference ID, source inventory link, source inventory, work trace, work-trace blocking action, validation evidence, source-support/boundary target consistency, missing artifact-field, fixture source-packet/output required-field, validation-result consistency, unsupported-output status, high-risk decision approval, decision-record, user-input-required, user-input review-condition, output metadata/storage-boundary, fixture artifact-ID, decision artifact-ID, generated-artifact, decision-record, and superseded-decision reference contract checks, and held as local installable packaging evidence.
 - Latest validator distribution decision: [decisions/validator-distribution-2026-06-01.md](decisions/validator-distribution-2026-06-01.md)
 - Latest local Git commit decision: [decisions/local-git-commit-2026-06-01.md](decisions/local-git-commit-2026-06-01.md)
 - Latest validator validation report: [../../skills/reports/module-validation-ksev-2026-06-01.md](../../skills/reports/module-validation-ksev-2026-06-01.md)
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md)
-- Latest substantive KNX governance commit: `32fd3be Cover ksev validator run references`
+- Latest substantive KNX governance commit: `b914a8f Cover ksev source inventory links`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
