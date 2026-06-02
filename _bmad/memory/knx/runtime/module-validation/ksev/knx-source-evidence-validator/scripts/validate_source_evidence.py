@@ -1000,6 +1000,14 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
                 "CONCERNS, FAIL, and WAIVED validation evidence must list failed_rules",
                 fixture,
             )
+        if artifact.get("result") == "FAIL" and artifact.get("blocking_status") != "blocking":
+            add_finding(
+                findings,
+                "error",
+                "validation-fail-blocking-status-invalid",
+                "FAIL validation evidence must use blocking status",
+                fixture,
+            )
         if not is_non_empty_string_list(artifact.get("evidence_references"), require_non_empty=True):
             add_finding(
                 findings,

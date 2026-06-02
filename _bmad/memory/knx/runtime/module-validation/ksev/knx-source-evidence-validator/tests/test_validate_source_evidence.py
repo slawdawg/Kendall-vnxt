@@ -710,6 +710,20 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("validation-result-missing-failed-rules", {finding["code"] for finding in result["findings"]})
 
+    def test_fail_validation_result_requires_blocking_status(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["result"] = "FAIL"
+        evidence["artifact"]["failed_rules"] = ["Synthetic failed rule for regression coverage."]
+        evidence["artifact"]["blocking_status"] = "nonblocking"
+        evidence["artifact"]["risk_score"] = 5
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("validation-fail-blocking-status-invalid", {finding["code"] for finding in result["findings"]})
+
     def test_work_trace_rejects_invalid_controlled_vocab(self):
         pack = self._load_pack()
         trace = self._find_fixture(pack, "valid-work-trace")
