@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 55 passed.
+- Unit tests: 57 passed.
 - Fixture validation: PASS.
 - Fixture count: 14.
 - Source packet example validation: PASS.
@@ -134,7 +134,7 @@ Change:
 
 Verification:
 
-- Unit tests: 55 passed.
+- Unit tests: 57 passed.
 - Fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -190,3 +190,4 @@ Additional local hardening:
 - Added object-shape checks for entries inside fixture packs.
 - Added approved KNX storage boundary checks for output metadata storage locations.
 - Added non-empty string checks for validation waiver evidence fields.
+- Added source-inventory `file_count` checks for nonnegative integers or the `unresolved` sentinel.
