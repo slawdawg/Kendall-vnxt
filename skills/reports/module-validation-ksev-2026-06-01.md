@@ -206,3 +206,4 @@ Additional local hardening:
 - Added PASS validation-evidence consistency checks.
 - Added evidence-reference ID resolution checks.
 - Added unsupported-output result status checks.
+- Added high-risk decision approval-basis checks.
