@@ -360,6 +360,27 @@ def is_source_packet_id_reference(value: str) -> bool:
     return value.startswith(("sp-", "knx-source-packet-"))
 
 
+def evidence_reference_resolves(
+    value: str,
+    source_packet_ids: set[str],
+    validation_evidence_ids: set[str],
+    work_trace_ids: set[str],
+    output_artifact_ids: set[str],
+    decision_record_ids: set[str],
+) -> bool:
+    if is_source_packet_id_reference(value):
+        return value in source_packet_ids
+    if value.startswith("ve-"):
+        return value in validation_evidence_ids
+    if value.startswith("wt-"):
+        return value in work_trace_ids
+    if value.startswith("out-"):
+        return value in output_artifact_ids
+    if value.startswith("dec-"):
+        return value in decision_record_ids
+    return True
+
+
 def is_int_not_bool(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -1184,6 +1205,16 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
         for evidence_id in artifact.get("validation_evidence_ids", []) if isinstance(artifact.get("validation_evidence_ids"), list) else []:
             if isinstance(evidence_id, str) and evidence_id.strip() and evidence_id.strip() not in validation_evidence_ids:
                 add_finding(findings, "error", "unknown-validation-evidence-id", f"Unknown validation_evidence_id reference: {evidence_id}", fixture)
+        for evidence_reference in artifact.get("evidence_references", []) if isinstance(artifact.get("evidence_references"), list) else []:
+            if isinstance(evidence_reference, str) and evidence_reference.strip() and not evidence_reference_resolves(
+                evidence_reference.strip(),
+                source_packet_ids,
+                validation_evidence_ids,
+                work_trace_ids,
+                output_artifact_ids,
+                decision_record_ids,
+            ):
+                add_finding(findings, "error", "unknown-evidence-reference-id", f"Unknown evidence_references ID: {evidence_reference}", fixture)
         for decision_record_id in artifact.get("decision_record_ids", []) if isinstance(artifact.get("decision_record_ids"), list) else []:
             if isinstance(decision_record_id, str) and decision_record_id.strip() and decision_record_id.strip() not in decision_record_ids:
                 add_finding(findings, "error", "unknown-decision-record-id", f"Unknown decision_record_id reference: {decision_record_id}", fixture)
