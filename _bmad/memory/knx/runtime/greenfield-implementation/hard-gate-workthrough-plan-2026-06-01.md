@@ -273,6 +273,28 @@ Materialized evidence:
 - `_bmad/memory/knx/runtime/greenfield-implementation/access-security/access-security-workflows-planning-2026-06-01.md`
 - `_bmad/memory/knx/runtime/greenfield-implementation/access-security/access-security-workflows-planning-2026-06-01.json`
 
+## Gate 11 Result
+
+Gate: destructive/data-loss actions or risk score `9` waivers.
+
+Status: accepted for local planning only.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/destructive-risk-waiver-planning-gate-2026-06-01.md`
+
+Summary:
+
+- Reopened destructive/data-loss and risk score `9` waiver path for local planning only.
+- Defined destructive/data-loss actions as blocked by default.
+- Defined risk score `9` waiver requirements.
+- Did not approve delete/move/overwrite/reset/cleanup/purge actions, destructive repository/runtime storage operations, risk score `9` waivers, customer/production/credential access, external sends/providers, or source mutation outside approved paths.
+
+Materialized evidence:
+
+- `_bmad/memory/knx/runtime/greenfield-implementation/destructive-risk/destructive-risk-waiver-planning-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/destructive-risk/destructive-risk-waiver-planning-2026-06-01.json`
+
 ## Next Action
 
-Proceed to Gate 11: destructive/data-loss actions or risk score `9` waivers.
+Current hard-gate workthrough sequence is complete for local planning. Continue the local-only greenfield implementation lane by concrete capability, with all execution gates still blocked unless separately approved.

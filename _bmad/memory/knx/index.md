@@ -27,7 +27,7 @@ Last updated: 2026-06-01
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md)
-- Latest substantive KNX governance commit: `8c143ab Plan KNX access security gate`
+- Latest substantive KNX governance commit: pending Gate 11 local commit
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
@@ -45,6 +45,7 @@ Last updated: 2026-06-01
 - Latest runtime assistant behavior planning gate: [decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md](decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md)
 - Latest local model/GPU processing planning gate: [decisions/local-model-gpu-processing-planning-gate-2026-06-01.md](decisions/local-model-gpu-processing-planning-gate-2026-06-01.md)
 - Latest access/security workflow planning gate: [decisions/access-security-workflows-planning-gate-2026-06-01.md](decisions/access-security-workflows-planning-gate-2026-06-01.md)
+- Latest destructive/risk-waiver planning gate: [decisions/destructive-risk-waiver-planning-gate-2026-06-01.md](decisions/destructive-risk-waiver-planning-gate-2026-06-01.md)
 - Latest artifact ID convention decision: [decisions/artifact-id-convention-2026-06-01.md](decisions/artifact-id-convention-2026-06-01.md)
 - Latest risk waiver authority decision: [decisions/risk-waiver-authority-2026-06-01.md](decisions/risk-waiver-authority-2026-06-01.md)
 - Latest local model/GPU posture decision: [decisions/local-model-gpu-posture-2026-06-01.md](decisions/local-model-gpu-posture-2026-06-01.md)
@@ -108,6 +109,7 @@ Last updated: 2026-06-01
 - Runtime assistant behavior planning is materialized locally under `runtime/greenfield-implementation/runtime-behavior/`; runtime behavior remains disabled.
 - Local model/GPU processing planning is materialized locally under `runtime/greenfield-implementation/local-model-gpu/`; model/GPU processing remains disabled.
 - Access/security workflow planning is materialized locally under `runtime/greenfield-implementation/access-security/`; customer/production/credential/account-security workflows remain blocked.
+- Destructive/risk-waiver planning is materialized locally under `runtime/greenfield-implementation/destructive-risk/`; destructive/data-loss actions and risk score `9` waivers remain blocked.
 
 ## Active Boundaries
 

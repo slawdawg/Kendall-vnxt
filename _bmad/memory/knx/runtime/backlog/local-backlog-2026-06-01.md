@@ -22,6 +22,7 @@ Status: active local-only backlog
 14. Keep runtime assistant behavior planning local-only until exact storage, triggers, execution context, user-visible behavior, rollback, validation, and safety contract are explicitly approved.
 15. Keep local model/GPU processing planning local-only until exact hardware target, model/runtime, source classes, storage, execution context, resource limits, rollback, validation, and safety contract are explicitly approved.
 16. Keep customer/production/credential/account-security workflow planning local-only until exact system/account, data class, access method, authority, audit/logging, rollback, validation, and safety contract are explicitly approved.
+17. Keep destructive/data-loss and risk score `9` waiver planning local-only until exact target, action type, blast radius, backup/recovery, authority, validation, stop condition, rollback, and safety contract are explicitly approved.
 
 ## Parked
 
@@ -33,6 +34,7 @@ Status: active local-only backlog
 - Runtime assistant behavior implementation.
 - Local model/GPU processing implementation.
 - Customer/production/credential/account-security workflow execution.
+- Destructive/data-loss execution and risk score `9` waiver grants.
 
 ## Hard-Gated
 
@@ -47,4 +49,4 @@ Status: active local-only backlog
 
 ## Current Recommendation
 
-Proceed with the approved local-only greenfield implementation lane by default. Stop only for hard gates, genuine user input requirements, or user pause. Do not reopen parked or hard-gated paths without a separate explicit decision.
+The current hard-gate planning sequence is complete. Proceed with the approved local-only greenfield implementation lane by concrete capability. Stop only for execution gates, genuine user input requirements, or user pause. Do not execute parked or hard-gated actions without a separate explicit decision.
