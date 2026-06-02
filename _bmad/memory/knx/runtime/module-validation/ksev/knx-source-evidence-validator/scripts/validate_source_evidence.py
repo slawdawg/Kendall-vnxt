@@ -838,6 +838,8 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
         "boundary_check_result",
         "source_mutation_performed",
         "external_send_performed",
+        "package_install_performed",
+        "runtime_assistant_behavior_added",
         "uncertainty",
     ):
         if field not in artifact:
@@ -847,6 +849,10 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
         add_finding(findings, "error", "source-inventory-mutated-source", "Source inventory must not mutate source", fixture)
     if artifact.get("external_send_performed") is not False:
         add_finding(findings, "error", "source-inventory-external-send", "Source inventory must not send externally", fixture)
+    if artifact.get("package_install_performed") is not False:
+        add_finding(findings, "error", "source-inventory-package-install", "Source inventory must not perform package installs", fixture)
+    if artifact.get("runtime_assistant_behavior_added") is not False:
+        add_finding(findings, "error", "source-inventory-runtime-behavior", "Source inventory must not add runtime assistant behavior", fixture)
     for field in sorted(REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS):
         if field in artifact and not str(artifact.get(field, "")).strip():
             add_finding(findings, "error", "source-inventory-text-field-empty", f"Source inventory text field must be non-empty: {field}", fixture)

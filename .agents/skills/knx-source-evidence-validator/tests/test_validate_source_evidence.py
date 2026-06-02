@@ -183,6 +183,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         inventory["artifact"]["allowed_operation"] = "scan-and-copy"
         inventory["artifact"]["inventory_tool"] = "cloud-indexer"
         inventory["artifact"]["boundary_check_result"] = "OK"
+        inventory["artifact"]["package_install_performed"] = True
+        inventory["artifact"]["runtime_assistant_behavior_added"] = True
         inventory["artifact"]["forbidden_content_check"] = "unknown"
         inventory["artifact"]["uncertainty"] = "shrug"
         inventory["artifact"]["file_count"] = -1
@@ -198,6 +200,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("source-inventory-operation-invalid", codes)
         self.assertIn("source-inventory-tool-invalid", codes)
         self.assertIn("source-inventory-boundary-result-invalid", codes)
+        self.assertIn("source-inventory-package-install", codes)
+        self.assertIn("source-inventory-runtime-behavior", codes)
         self.assertIn("source-inventory-forbidden-content-invalid", codes)
         self.assertIn("source-inventory-uncertainty-invalid", codes)
         self.assertIn("source-inventory-file-count-invalid", codes)
