@@ -641,6 +641,11 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         decision["artifact"]["supersedes"] = [""]
         pack["fixtures"].append(decision)
 
+        high_risk_decision = self._find_fixture(pack, "valid-decision-record")
+        high_risk_decision["artifact"]["risk_score"] = 8
+        high_risk_decision["artifact"]["approval_basis"] = "defaulted"
+        pack["fixtures"].append(high_risk_decision)
+
         result = self._validate_temp_pack(pack)
         codes = {finding["code"] for finding in result["findings"]}
 
@@ -652,6 +657,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("decision-source-references-invalid", codes)
         self.assertIn("decision-risk-score-invalid", codes)
         self.assertIn("decision-supersedes-invalid", codes)
+        self.assertIn("decision-high-risk-approval-basis-invalid", codes)
 
     def test_output_metadata_rejects_missing_required_links(self):
         pack = self._load_pack()

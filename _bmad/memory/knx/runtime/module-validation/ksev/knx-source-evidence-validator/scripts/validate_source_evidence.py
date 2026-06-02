@@ -1034,6 +1034,8 @@ def validate_decision_record(fixture: dict[str, Any], findings: list[Finding]) -
     risk_score = artifact.get("risk_score")
     if not is_int_not_bool(risk_score) or not 0 <= risk_score <= 9:
         add_finding(findings, "error", "decision-risk-score-invalid", "risk_score must be an integer from 0 through 9", fixture)
+    elif artifact.get("status") == "accepted" and risk_score >= 7 and artifact.get("approval_basis") in {"defaulted", "unresolved"}:
+        add_finding(findings, "error", "decision-high-risk-approval-basis-invalid", "High-risk accepted decisions need an explicit approval basis", fixture)
 
 
 def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], approved_storage_root: Path) -> None:
