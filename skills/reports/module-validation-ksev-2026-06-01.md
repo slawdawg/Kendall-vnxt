@@ -45,7 +45,7 @@ Results:
 
 - Unit tests: 61 passed.
 - Fixture validation: PASS.
-- Fixture count: 14.
+- Fixture count: 15.
 - Source packet example validation: PASS.
 - Source packet count: 3.
 - Errors: 0.
@@ -135,7 +135,7 @@ Change:
 Verification:
 
 - Unit tests: 61 passed.
-- Fixture validation: PASS, 14 fixtures, 0 findings.
+- Fixture validation: PASS, 15 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
 
@@ -196,3 +196,4 @@ Additional local hardening:
 - Added boolean rejection for numeric contract fields.
 - Added output source-packet link checks outside the missing-source negative fixture.
 - Added fixture artifact ID alignment checks against primary artifact IDs.
+- Added valid output metadata fixture coverage and generated artifact reference checks.
