@@ -1438,6 +1438,16 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
         work_trace_id = artifact.get("work_trace_id")
         if "output_artifact_id" in artifact and isinstance(work_trace_id, str) and work_trace_id.strip() and work_trace_id.strip() not in work_trace_ids:
             add_finding(findings, "error", "unknown-work-trace-id", f"Unknown work_trace_id reference: {work_trace_id}", fixture)
+        validator_run_work_trace = artifact.get("work_trace")
+        if "evidence_bundle_id" in artifact and isinstance(validator_run_work_trace, str) and validator_run_work_trace.strip() and validator_run_work_trace.strip() not in work_trace_ids:
+            add_finding(findings, "error", "unknown-validator-run-work-trace-id", f"Unknown validator run work_trace reference: {validator_run_work_trace}", fixture)
+        validator_run_evidence = artifact.get("validation_evidence")
+        if "evidence_bundle_id" in artifact and isinstance(validator_run_evidence, str) and validator_run_evidence.strip() and validator_run_evidence.strip() not in validation_evidence_ids:
+            add_finding(findings, "error", "unknown-validator-run-validation-evidence-id", f"Unknown validator run validation_evidence reference: {validator_run_evidence}", fixture)
+        if "evidence_bundle_id" in artifact and isinstance(artifact.get("output_metadata"), list):
+            for output_metadata_id in artifact.get("output_metadata", []):
+                if isinstance(output_metadata_id, str) and output_metadata_id.strip() and output_metadata_id.strip() not in output_artifact_ids:
+                    add_finding(findings, "error", "unknown-validator-run-output-metadata-id", f"Unknown validator run output_metadata reference: {output_metadata_id}", fixture)
 
 
 def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None) -> dict[str, Any]:
