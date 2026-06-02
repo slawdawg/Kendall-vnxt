@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 85 passed.
+- Unit tests: 86 passed.
 - Fixture validation: PASS.
 - Fixture count: 18.
 - Source packet example validation: PASS.
@@ -147,7 +147,7 @@ Change:
 
 Verification:
 
-- Unit tests: 85 passed.
+- Unit tests: 86 passed.
 - Fixture validation: PASS, 18 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -240,4 +240,5 @@ Additional local hardening:
 - Added blocking-status checks for FAIL validation evidence.
 - Added targeted source-support and boundary validation target regression coverage.
 - Added non-waived validation evidence checks for meaningful waiver metadata.
+- Added positive-path coverage for valid WAIVED validation evidence with a decision-record waiver.
 - Added WAIVED result checks for waived-blocking validation evidence.
