@@ -15,6 +15,7 @@ Status: active local-only backlog
 7. Keep approved KNX path metadata inventory current under `_bmad/memory/knx/runtime/greenfield-implementation/inventory/`.
 8. Route any new tooling or source inventory materialization beyond the accepted Gate 3 scope through `knx-mature-tool-review` first.
 9. Work through hard-gated paths in the order recorded in `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
+10. Keep `ksev` distribution readiness local-only until a later remote/publication gate is approved.
 
 ## Parked
 

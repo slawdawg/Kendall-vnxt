@@ -38,6 +38,7 @@ Last updated: 2026-06-01
 - Latest scoped source mutation approval: [decisions/scoped-source-mutation-knx-2026-06-01.md](decisions/scoped-source-mutation-knx-2026-06-01.md)
 - Latest local write-boundary approval: [decisions/write-boundary-knx-local-2026-06-01.md](decisions/write-boundary-knx-local-2026-06-01.md)
 - Latest source inventory/tooling gate: [decisions/source-inventory-tooling-gate-2026-06-01.md](decisions/source-inventory-tooling-gate-2026-06-01.md)
+- Latest `ksev` public distribution readiness gate: [decisions/ksev-public-distribution-readiness-gate-2026-06-01.md](decisions/ksev-public-distribution-readiness-gate-2026-06-01.md)
 - Latest artifact ID convention decision: [decisions/artifact-id-convention-2026-06-01.md](decisions/artifact-id-convention-2026-06-01.md)
 - Latest risk waiver authority decision: [decisions/risk-waiver-authority-2026-06-01.md](decisions/risk-waiver-authority-2026-06-01.md)
 - Latest local model/GPU posture decision: [decisions/local-model-gpu-posture-2026-06-01.md](decisions/local-model-gpu-posture-2026-06-01.md)
@@ -94,6 +95,7 @@ Last updated: 2026-06-01
 - Remaining hard-gated paths are sequenced in `runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
 - Local writes are approved for scoped KNX module/config/help/report paths listed in `decisions/write-boundary-knx-local-2026-06-01.md`.
 - Metadata-only inventory for approved KNX implementation paths is materialized under `runtime/greenfield-implementation/inventory/`.
+- `ksev` public distribution readiness planning is materialized locally under `runtime/greenfield-implementation/distribution-readiness/`; publication remains blocked.
 
 ## Active Boundaries
 

@@ -125,6 +125,27 @@ Materialized evidence:
 - `_bmad/memory/knx/runtime/greenfield-implementation/inventory/greenfield-approved-path-inventory-2026-06-01.json`
 - `_bmad/memory/knx/runtime/greenfield-implementation/inventory/greenfield-approved-path-inventory-2026-06-01.md`
 
+## Gate 4 Result
+
+Gate: public distribution readiness for `ksev`.
+
+Status: accepted for local planning only.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/ksev-public-distribution-readiness-gate-2026-06-01.md`
+
+Summary:
+
+- Approved local-only readiness checklist and evidence packet.
+- Kept repository local/private, manifest local-only, and license `UNLICENSED`.
+- Did not approve GitHub/remotes, publication, external sends, company sharing, public metadata activation, or license grants.
+
+Materialized evidence:
+
+- `_bmad/memory/knx/runtime/greenfield-implementation/distribution-readiness/ksev-public-distribution-readiness-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/distribution-readiness/ksev-public-distribution-readiness-2026-06-01.json`
+
 ## Next Action
 
-Proceed to Gate 4: public distribution readiness for `ksev`.
+Proceed to Gate 5: GitHub/remotes.
