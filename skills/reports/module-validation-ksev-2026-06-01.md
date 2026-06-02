@@ -174,3 +174,4 @@ Additional local hardening:
 - Added non-empty text checks for output metadata identity, trace, storage, and date fields.
 - Added non-empty string-list checks for metadata-only source packet example references and open questions.
 - Added copied-content exclusions for fixture source packet artifacts and source packet example sets.
+- Added package-install and runtime-assistant-behavior false-flag enforcement for metadata-only source packet examples.
