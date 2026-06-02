@@ -185,6 +185,9 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         pack = self._load_pack()
         trace = self._find_fixture(pack, "valid-work-trace")
         trace["artifact"]["trigger"] = "whenever"
+        trace["artifact"]["work_trace_id"] = ""
+        trace["artifact"]["steps_taken"] = []
+        trace["artifact"]["tools_used"] = []
         trace["artifact"]["execution_layer"] = 9
         trace["artifact"]["uncertainty"] = "maybe"
         trace["artifact"]["residual_risk"] = "unknown"
@@ -196,6 +199,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("work-trace-trigger-invalid", codes)
+        self.assertIn("work-trace-text-field-empty", codes)
+        self.assertIn("work-trace-required-list-empty", codes)
         self.assertIn("work-trace-layer-invalid", codes)
         self.assertIn("work-trace-uncertainty-invalid", codes)
         self.assertIn("work-trace-residual-risk-invalid", codes)

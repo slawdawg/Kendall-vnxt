@@ -83,6 +83,7 @@ VALID_WORK_TRACE_NEXT_ACTIONS = {
     "defer",
     "block",
 }
+REQUIRED_WORK_TRACE_TEXT_FIELDS = {"work_trace_id", "created_at"}
 VALID_RESIDUAL_RISK = {"none", "low", "medium", "high", "blocking"}
 VALID_ARTIFACT_UNDER_VALIDATION = {
     "source packet",
@@ -595,12 +596,17 @@ def validate_work_trace(fixture: dict[str, Any], findings: list[Finding]) -> Non
 
         if artifact.get("trigger") not in VALID_WORK_TRACE_TRIGGERS:
             add_finding(findings, "error", "work-trace-trigger-invalid", "Invalid work trace trigger", fixture)
+        for field in sorted(REQUIRED_WORK_TRACE_TEXT_FIELDS):
+            if field in artifact and not str(artifact.get(field, "")).strip():
+                add_finding(findings, "error", "work-trace-text-field-empty", f"Work trace text field must be non-empty: {field}", fixture)
         for field in ("source_packet_ids", "generated_artifact_ids", "validation_evidence_ids", "decision_record_ids"):
             if not isinstance(artifact.get(field), list):
                 add_finding(findings, "error", "work-trace-list-field-invalid", f"{field} must be a list", fixture)
         for field in ("steps_taken", "tools_used", "assumptions"):
             if not isinstance(artifact.get(field), list):
                 add_finding(findings, "error", "work-trace-list-field-invalid", f"{field} must be a list", fixture)
+            elif field in {"steps_taken", "tools_used"} and not artifact.get(field):
+                add_finding(findings, "error", "work-trace-required-list-empty", f"{field} must be non-empty", fixture)
         execution_layer = artifact.get("execution_layer")
         if not isinstance(execution_layer, int) or not 1 <= execution_layer <= 5:
             add_finding(findings, "error", "work-trace-layer-invalid", "execution_layer must be an integer from 1 through 5", fixture)
