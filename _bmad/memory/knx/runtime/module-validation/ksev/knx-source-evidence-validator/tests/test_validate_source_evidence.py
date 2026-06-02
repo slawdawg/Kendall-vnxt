@@ -162,6 +162,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
     def test_synthetic_statements_must_explicitly_say_synthetic(self):
         pack = self._load_pack()
+        pack["fixture_pack_id"] = ""
         pack["synthetic_only_statement"] = "All examples are safe examples."
         pack["fixtures"][0]["synthetic_only_statement"] = "Example only."
 
@@ -169,6 +170,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
+        self.assertIn("pack-text-field-empty", codes)
         self.assertIn("pack-synthetic-statement-invalid", codes)
         self.assertIn("synthetic-statement-invalid", codes)
 
@@ -330,12 +332,14 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
     def test_source_packet_examples_reject_empty_required_text_fields(self):
         examples = self._load_source_packet_examples()
+        examples["title"] = ""
         examples["packets"][0]["title"] = " "
         examples["packets"][0]["source_location_or_description"] = ""
 
         result = self._validate_temp_source_packet_examples(examples)
 
         self.assertEqual(result["status"], "FAIL")
+        self.assertIn("example-set-text-field-empty", {finding["code"] for finding in result["findings"]})
         self.assertIn("source-packet-text-field-empty", {finding["code"] for finding in result["findings"]})
 
     def test_source_packet_examples_reject_invalid_controlled_vocab(self):

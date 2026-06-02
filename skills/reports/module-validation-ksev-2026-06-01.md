@@ -61,6 +61,7 @@ The standalone optional pack includes:
 - Controlled-vocabulary enforcement for source packet example owner, approval basis, support level, processing boundary, storage boundary, operation, and uncertainty fields.
 - Non-empty text enforcement for source packet example identity and description fields.
 - Explicit synthetic-statement enforcement for fixture packs and fixture entries.
+- Non-empty text enforcement for fixture pack and source packet example set identity/date fields.
 - Full identity-field and non-empty text enforcement for fixture source packet artifacts.
 - Controlled-vocabulary enforcement for fixture source packet artifacts.
 - Controlled-field enforcement for source inventory fixture artifacts.
@@ -133,6 +134,7 @@ Verification:
 Additional local hardening:
 
 - Added non-empty text checks for source packet example identity and description fields.
+- Added non-empty text checks for fixture pack and source packet example set identity/date fields.
 - Added explicit synthetic-statement checks for fixture packs and fixture entries.
 - Added full identity-field and non-empty text checks for fixture source packet artifacts.
 - Added controlled-vocabulary checks for synthetic source packet fixture artifacts.

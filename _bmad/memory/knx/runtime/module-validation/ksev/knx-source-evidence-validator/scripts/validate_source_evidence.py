@@ -163,6 +163,8 @@ REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS = {
     "created_at",
     "created_by",
 }
+REQUIRED_PACK_TEXT_FIELDS = {"fixture_pack_id", "title", "synthetic_only_statement", "created_at"}
+REQUIRED_EXAMPLE_SET_TEXT_FIELDS = {"source_packet_example_set_id", "title", "created_at"}
 REQUIRED_SOURCE_PACKET_FIELDS = {
     "source_packet_id",
     "title",
@@ -353,6 +355,10 @@ def validate_pack_shape(pack: dict[str, Any], findings: list[Finding]) -> list[d
     for field in ("fixture_pack_id", "title", "synthetic_only_statement", "created_at", "fixtures"):
         if field not in pack:
             add_finding(findings, "error", "missing-pack-field", f"Missing top-level field: {field}")
+
+    for field in sorted(REQUIRED_PACK_TEXT_FIELDS):
+        if field in pack and not str(pack.get(field, "")).strip():
+            add_finding(findings, "error", "pack-text-field-empty", f"Fixture pack text field must be non-empty: {field}")
 
     synthetic_statement = pack.get("synthetic_only_statement")
     if isinstance(synthetic_statement, str) and "synthetic" not in synthetic_statement.lower():
@@ -855,6 +861,10 @@ def validate_source_packet_examples(path: Path, approved_storage_root: Path | No
     for field in ("source_packet_example_set_id", "title", "created_at", "packets"):
         if field not in examples:
             add_finding(findings, "error", "missing-example-set-field", f"Missing top-level field: {field}")
+
+    for field in sorted(REQUIRED_EXAMPLE_SET_TEXT_FIELDS):
+        if field in examples and not str(examples.get(field, "")).strip():
+            add_finding(findings, "error", "example-set-text-field-empty", f"Source packet example set text field must be non-empty: {field}")
 
     for flag in BOUNDARY_FALSE_FLAGS:
         if examples.get(flag) is not False:
