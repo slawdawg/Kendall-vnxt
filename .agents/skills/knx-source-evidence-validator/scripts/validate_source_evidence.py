@@ -130,6 +130,12 @@ VALID_STORAGE_BOUNDARY_BASES = {
     "decision-record",
     "unresolved",
 }
+REQUIRED_OUTPUT_TEXT_FIELDS = {
+    "output_artifact_id",
+    "work_trace_id",
+    "storage_location",
+    "created_at",
+}
 VALID_SOURCE_ROOT_APPROVAL_BASES = {"user-specified", "data-boundary-derived", "decision-record", "unresolved"}
 VALID_SOURCE_INVENTORY_SCOPES = {
     "tracked-files",
@@ -511,6 +517,9 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
 
         if artifact.get("output_type") not in VALID_OUTPUT_TYPES:
             add_finding(findings, "error", "output-type-invalid", "Invalid output_type", fixture)
+        for field in sorted(REQUIRED_OUTPUT_TEXT_FIELDS):
+            if field in artifact and not str(artifact.get(field, "")).strip():
+                add_finding(findings, "error", "output-text-field-empty", f"Output metadata text field must be non-empty: {field}", fixture)
         if not isinstance(artifact.get("source_packet_ids"), list):
             add_finding(findings, "error", "output-source-packet-ids-invalid", "source_packet_ids must be a list", fixture)
         if not artifact.get("work_trace_id"):

@@ -66,6 +66,7 @@ The standalone optional pack includes:
 - Controlled-field enforcement for source inventory fixture artifacts.
 - Required field and controlled-vocabulary enforcement for synthetic work traces, validation evidence, user-input-required records, and output metadata fixtures.
 - Storage-boundary-basis enforcement for output metadata fixtures.
+- Non-empty text enforcement for output metadata identity, trace, storage, and date fields.
 - Validator tests.
 - Standalone module registration assets.
 - Local report writing under approved KNX runtime storage.
@@ -137,3 +138,4 @@ Additional local hardening:
 - Added required field and controlled-vocabulary checks for user-input-required artifacts.
 - Added required link and controlled-vocabulary checks for output metadata artifacts.
 - Added storage-boundary-basis checks for output metadata artifacts.
+- Added non-empty text checks for output metadata identity, trace, storage, and date fields.

@@ -223,6 +223,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         pack = self._load_pack()
         output = self._find_fixture(pack, "unsupported-inference-negative")
         output["artifact"]["work_trace_id"] = ""
+        output["artifact"]["storage_location"] = " "
         output["artifact"]["validation_evidence_ids"] = []
         output["artifact"]["storage_boundary_basis"] = "anywhere"
         output["artifact"]["source_support_summary"] = "guess"
@@ -233,6 +234,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
+        self.assertIn("output-text-field-empty", codes)
         self.assertIn("output-work-trace-missing", codes)
         self.assertIn("output-validation-evidence-ids-invalid", codes)
         self.assertIn("output-storage-boundary-basis-invalid", codes)
