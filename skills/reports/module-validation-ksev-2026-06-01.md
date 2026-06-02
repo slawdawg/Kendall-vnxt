@@ -199,3 +199,4 @@ Additional local hardening:
 - Added valid output metadata fixture coverage and generated artifact reference checks.
 - Added decision-record fixture coverage and contract validation checks.
 - Added materialized decision-record reference checks.
+- Added materialized superseded-decision reference checks.
