@@ -884,6 +884,11 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
             add_finding(findings, "error", "validation-failed-rules-invalid", "failed_rules must be a string list", fixture)
         if artifact.get("blocking_status") not in VALID_BLOCKING_STATUS:
             add_finding(findings, "error", "blocking-status-invalid", "Invalid blocking_status", fixture)
+        if artifact.get("result") == "PASS":
+            if isinstance(artifact.get("failed_rules"), list) and artifact.get("failed_rules"):
+                add_finding(findings, "error", "validation-pass-has-failed-rules", "PASS validation evidence must not list failed_rules", fixture)
+            if artifact.get("blocking_status") not in {"nonblocking", "not-applicable"}:
+                add_finding(findings, "error", "validation-pass-blocking-status-invalid", "PASS validation evidence must be nonblocking or not-applicable", fixture)
         if not is_non_empty_string_list(artifact.get("evidence_references"), require_non_empty=True):
             add_finding(
                 findings,
