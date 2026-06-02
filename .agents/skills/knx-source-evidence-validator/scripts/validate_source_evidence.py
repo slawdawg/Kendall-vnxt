@@ -849,6 +849,8 @@ def validate_work_trace(fixture: dict[str, Any], findings: list[Finding]) -> Non
             add_finding(findings, "error", "work-trace-residual-risk-invalid", "Invalid work trace residual_risk", fixture)
         if artifact.get("next_action") not in VALID_WORK_TRACE_NEXT_ACTIONS:
             add_finding(findings, "error", "work-trace-next-action-invalid", "Invalid work trace next_action", fixture)
+        if artifact.get("residual_risk") == "blocking" and artifact.get("next_action") not in {"block", "request-user-input"}:
+            add_finding(findings, "error", "work-trace-blocking-risk-next-action-invalid", "Blocking residual_risk must block or request user input", fixture)
 
     if fixture.get("fixture_type") != "external-action-negative":
         return

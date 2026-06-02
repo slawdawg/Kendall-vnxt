@@ -571,6 +571,11 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         trace["artifact"]["next_action"] = "continue-anyway"
         pack["fixtures"].append(trace)
 
+        blocking_trace = self._find_fixture(pack, "valid-work-trace")
+        blocking_trace["artifact"]["residual_risk"] = "blocking"
+        blocking_trace["artifact"]["next_action"] = "validate"
+        pack["fixtures"].append(blocking_trace)
+
         result = self._validate_temp_pack(pack)
         codes = {finding["code"] for finding in result["findings"]}
 
@@ -582,6 +587,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("work-trace-uncertainty-invalid", codes)
         self.assertIn("work-trace-residual-risk-invalid", codes)
         self.assertIn("work-trace-next-action-invalid", codes)
+        self.assertIn("work-trace-blocking-risk-next-action-invalid", codes)
 
     def test_work_trace_text_fields_must_be_strings(self):
         pack = self._load_pack()
