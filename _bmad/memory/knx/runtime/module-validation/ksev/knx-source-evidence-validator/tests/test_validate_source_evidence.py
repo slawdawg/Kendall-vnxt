@@ -194,7 +194,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
-        self.assertIn("source-inventory-text-field-empty", codes)
+        self.assertIn("source-inventory-text-field-invalid", codes)
         self.assertIn("source-inventory-approval-basis-invalid", codes)
         self.assertIn("source-inventory-scope-invalid", codes)
         self.assertIn("source-inventory-operation-invalid", codes)
@@ -219,6 +219,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("missing-source-inventory-field", {finding["code"] for finding in result["findings"]})
+
+    def test_source_inventory_text_fields_must_be_strings(self):
+        pack = self._load_pack()
+        inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
+        inventory["artifact"]["source_inventory_id"] = 42
+        inventory["artifact"]["source_root"] = ["not", "a", "string"]
+        inventory["artifact"]["generated_artifact_path"] = {"path": "not-a-string"}
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-inventory-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
     def test_report_output_must_stay_under_approved_storage_root(self):
         result = validator.validate_fixture_pack(FIXTURE_PACK)

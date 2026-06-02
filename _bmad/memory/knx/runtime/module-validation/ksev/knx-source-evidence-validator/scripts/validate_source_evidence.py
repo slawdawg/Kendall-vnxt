@@ -858,8 +858,16 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
     if artifact.get("runtime_assistant_behavior_added") is not False:
         add_finding(findings, "error", "source-inventory-runtime-behavior", "Source inventory must not add runtime assistant behavior", fixture)
     for field in sorted(REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS):
-        if field in artifact and not str(artifact.get(field, "")).strip():
-            add_finding(findings, "error", "source-inventory-text-field-empty", f"Source inventory text field must be non-empty: {field}", fixture)
+        if field in artifact and (
+            not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
+        ):
+            add_finding(
+                findings,
+                "error",
+                "source-inventory-text-field-invalid",
+                f"Source inventory text field must be a non-empty string: {field}",
+                fixture,
+            )
     if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
         add_finding(findings, "error", "source-inventory-created-at-invalid", "Source inventory created_at must be an ISO date or datetime", fixture)
     if artifact.get("source_root_approval_basis") not in VALID_SOURCE_ROOT_APPROVAL_BASES:
