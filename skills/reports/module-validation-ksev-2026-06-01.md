@@ -202,3 +202,4 @@ Additional local hardening:
 - Added materialized superseded-decision reference checks.
 - Added packet-level boundary flag checks for source packet examples.
 - Added decision-record primary artifact ID alignment checks.
+- Added source-reference ID resolution checks.
