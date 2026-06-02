@@ -108,6 +108,27 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("fixture-source-packet-source-references-invalid", codes)
         self.assertIn("fixture-source-packet-open-questions-invalid", codes)
 
+    def test_source_packets_must_remain_read_planning_only(self):
+        pack = self._load_pack()
+        source_packet = self._find_fixture(pack, "valid-source-packet")
+        source_packet["artifact"]["source_operation"] = "mutation-approved"
+        pack["fixtures"].append(source_packet)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("valid-source-operation-not-read-planning", codes)
+
+        examples = self._load_source_packet_examples()
+        examples["packets"][0]["source_operation"] = "mutation-approved"
+
+        result = self._validate_temp_source_packet_examples(examples)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-packet-operation-not-read-planning", codes)
+
     def test_source_inventory_storage_negative_is_valid_expected_failure(self):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
         inventory_findings = [
