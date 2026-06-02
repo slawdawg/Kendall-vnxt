@@ -206,6 +206,20 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("source-inventory-uncertainty-invalid", codes)
         self.assertIn("source-inventory-file-count-invalid", codes)
 
+    def test_source_inventory_requires_contract_fields(self):
+        pack = self._load_pack()
+        inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
+        del inventory["artifact"]["inventory_command_or_check"]
+        del inventory["artifact"]["forbidden_content_check"]
+        del inventory["artifact"]["created_at"]
+        del inventory["artifact"]["created_by"]
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-source-inventory-field", {finding["code"] for finding in result["findings"]})
+
     def test_report_output_must_stay_under_approved_storage_root(self):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
         with tempfile.TemporaryDirectory() as temp_dir:

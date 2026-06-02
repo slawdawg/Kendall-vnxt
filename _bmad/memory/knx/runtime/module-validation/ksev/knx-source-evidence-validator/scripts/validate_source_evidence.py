@@ -834,13 +834,17 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
         "inventory_scope",
         "allowed_operation",
         "inventory_tool",
+        "inventory_command_or_check",
         "generated_artifact_path",
+        "forbidden_content_check",
         "boundary_check_result",
         "source_mutation_performed",
         "external_send_performed",
         "package_install_performed",
         "runtime_assistant_behavior_added",
         "uncertainty",
+        "created_at",
+        "created_by",
     ):
         if field not in artifact:
             add_finding(findings, "error", "missing-source-inventory-field", f"Missing source inventory field: {field}", fixture)
