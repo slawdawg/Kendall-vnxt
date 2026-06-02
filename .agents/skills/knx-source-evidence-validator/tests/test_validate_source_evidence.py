@@ -447,6 +447,16 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("source-packet-copies-content", {finding["code"] for finding in result["findings"]})
 
+    def test_source_packet_examples_require_false_boundary_flags(self):
+        examples = self._load_source_packet_examples()
+        examples["external_send_performed"] = True
+        del examples["github_or_remote_operation_performed"]
+
+        result = self._validate_temp_source_packet_examples(examples)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("boundary-flag-not-false", {finding["code"] for finding in result["findings"]})
+
     def test_source_packet_examples_reject_empty_required_text_fields(self):
         examples = self._load_source_packet_examples()
         examples["title"] = ""
