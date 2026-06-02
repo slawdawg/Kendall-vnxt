@@ -207,3 +207,4 @@ Additional local hardening:
 - Added evidence-reference ID resolution checks.
 - Added unsupported-output result status checks.
 - Added high-risk decision approval-basis checks.
+- Added user-input review-condition checks.
