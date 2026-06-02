@@ -17,10 +17,11 @@ Status: active local-only backlog
 9. Work through hard-gated paths in the order recorded in `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
 10. Keep `ksev` distribution readiness local-only until a later remote/publication gate is approved.
 11. Keep GitHub/remotes disabled until a later target URL and operation class are explicitly approved.
+12. Keep company evaluation planning local-only until exact audience, sharing mechanism, final artifact list, legal review path, and send/access action are explicitly approved.
 
 ## Parked
 
-- Company-facing discussion and sharing readiness.
+- Company-facing sharing and external send. Company evaluation planning is local-only.
 - IDE one-click action.
 - Public distribution and license activation.
 - GitHub/remotes.

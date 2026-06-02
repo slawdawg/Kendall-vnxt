@@ -40,6 +40,7 @@ Last updated: 2026-06-01
 - Latest source inventory/tooling gate: [decisions/source-inventory-tooling-gate-2026-06-01.md](decisions/source-inventory-tooling-gate-2026-06-01.md)
 - Latest `ksev` public distribution readiness gate: [decisions/ksev-public-distribution-readiness-gate-2026-06-01.md](decisions/ksev-public-distribution-readiness-gate-2026-06-01.md)
 - Latest GitHub/remote readiness gate: [decisions/github-remote-readiness-gate-2026-06-01.md](decisions/github-remote-readiness-gate-2026-06-01.md)
+- Latest company evaluation planning gate: [decisions/company-evaluation-planning-gate-2026-06-01.md](decisions/company-evaluation-planning-gate-2026-06-01.md)
 - Latest artifact ID convention decision: [decisions/artifact-id-convention-2026-06-01.md](decisions/artifact-id-convention-2026-06-01.md)
 - Latest risk waiver authority decision: [decisions/risk-waiver-authority-2026-06-01.md](decisions/risk-waiver-authority-2026-06-01.md)
 - Latest local model/GPU posture decision: [decisions/local-model-gpu-posture-2026-06-01.md](decisions/local-model-gpu-posture-2026-06-01.md)
@@ -98,6 +99,7 @@ Last updated: 2026-06-01
 - Metadata-only inventory for approved KNX implementation paths is materialized under `runtime/greenfield-implementation/inventory/`.
 - `ksev` public distribution readiness planning is materialized locally under `runtime/greenfield-implementation/distribution-readiness/`; publication remains blocked.
 - GitHub/remote readiness planning is materialized locally under `runtime/greenfield-implementation/remote-readiness/`; remotes remain disabled.
+- Company evaluation planning is materialized locally under `runtime/greenfield-implementation/company-evaluation/`; sharing remains blocked.
 
 ## Active Boundaries
 

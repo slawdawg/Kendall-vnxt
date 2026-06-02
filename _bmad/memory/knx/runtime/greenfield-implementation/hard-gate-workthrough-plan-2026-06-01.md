@@ -167,6 +167,26 @@ Materialized evidence:
 - `_bmad/memory/knx/runtime/greenfield-implementation/remote-readiness/github-remote-readiness-2026-06-01.md`
 - `_bmad/memory/knx/runtime/greenfield-implementation/remote-readiness/github-remote-readiness-2026-06-01.json`
 
+## Gate 6 Result
+
+Gate: company-facing sharing or evaluation access.
+
+Status: accepted for local planning only.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/company-evaluation-planning-gate-2026-06-01.md`
+
+Summary:
+
+- Reopened company-facing path for local planning only.
+- Did not approve company sharing, external send, repository access, source archive, license grant, production-use permission, redistribution rights, or evaluation permission.
+
+Materialized evidence:
+
+- `_bmad/memory/knx/runtime/greenfield-implementation/company-evaluation/company-evaluation-planning-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/company-evaluation/company-evaluation-planning-2026-06-01.json`
+
 ## Next Action
 
-Proceed to Gate 6: company-facing sharing or evaluation access.
+Proceed to Gate 7: IDE/workspace configuration.
