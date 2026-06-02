@@ -600,6 +600,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("work-trace-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
+    def test_work_trace_requires_contract_fields(self):
+        pack = self._load_pack()
+        trace = self._find_fixture(pack, "valid-work-trace")
+        del trace["artifact"]["trigger"]
+        del trace["artifact"]["steps_taken"]
+        del trace["artifact"]["created_at"]
+        pack["fixtures"].append(trace)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-work-trace-field", {finding["code"] for finding in result["findings"]})
+
     def test_user_input_required_rejects_invalid_controlled_vocab(self):
         pack = self._load_pack()
         user_input = self._find_fixture(pack, "valid-user-input-required")
@@ -637,6 +650,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("user-input-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
+    def test_user_input_required_requires_contract_fields(self):
+        pack = self._load_pack()
+        user_input = self._find_fixture(pack, "valid-user-input-required")
+        del user_input["artifact"]["why_automation_cannot_proceed"]
+        del user_input["artifact"]["blocked_downstream_work"]
+        del user_input["artifact"]["created_at"]
+        pack["fixtures"].append(user_input)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-user-input-field", {finding["code"] for finding in result["findings"]})
+
     def test_decision_record_rejects_invalid_shape(self):
         pack = self._load_pack()
         decision = self._find_fixture(pack, "valid-decision-record")
@@ -666,6 +692,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("decision-risk-score-invalid", codes)
         self.assertIn("decision-supersedes-invalid", codes)
         self.assertIn("decision-high-risk-approval-basis-invalid", codes)
+
+    def test_decision_record_requires_contract_fields(self):
+        pack = self._load_pack()
+        decision = self._find_fixture(pack, "valid-decision-record")
+        del decision["artifact"]["decision_type"]
+        del decision["artifact"]["rationale"]
+        del decision["artifact"]["created_at"]
+        pack["fixtures"].append(decision)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-decision-field", {finding["code"] for finding in result["findings"]})
 
     def test_output_metadata_rejects_missing_required_links(self):
         pack = self._load_pack()
@@ -865,6 +904,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("validation-text-field-invalid", {finding["code"] for finding in result["findings"]})
+
+    def test_validation_evidence_requires_contract_fields(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        del evidence["artifact"]["artifact_under_validation"]
+        del evidence["artifact"]["evidence_references"]
+        del evidence["artifact"]["created_at"]
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-validation-evidence-field", {finding["code"] for finding in result["findings"]})
 
     def test_valid_materialized_inventory_path_under_approved_root_passes_path_check(self):
         pack = self._load_pack()
