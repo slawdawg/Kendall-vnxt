@@ -204,3 +204,4 @@ Additional local hardening:
 - Added decision-record primary artifact ID alignment checks.
 - Added source-reference ID resolution checks.
 - Added PASS validation-evidence consistency checks.
+- Added evidence-reference ID resolution checks.
