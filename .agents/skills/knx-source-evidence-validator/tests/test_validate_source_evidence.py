@@ -708,6 +708,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         output = self._find_fixture(pack, "unsupported-inference-negative")
         output["artifact"]["work_trace_id"] = "wt-missing-001"
+        output["artifact"]["decision_record_ids"] = ["dec-missing-001"]
         pack["fixtures"].append(output)
 
         result = self._validate_temp_pack(pack)
@@ -718,6 +719,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("unknown-generated-artifact-id", codes)
         self.assertIn("unknown-validation-evidence-id", codes)
         self.assertIn("unknown-work-trace-id", codes)
+        self.assertIn("unknown-decision-record-id", codes)
 
     def test_reference_lists_reject_blank_elements(self):
         pack = self._load_pack()

@@ -1134,6 +1134,7 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
     validation_evidence_ids = set()
     work_trace_ids = set()
     output_artifact_ids = set()
+    decision_record_ids = set()
 
     for fixture in fixtures:
         artifact = fixture.get("artifact", {})
@@ -1151,6 +1152,9 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
         output_artifact_id = artifact.get("output_artifact_id")
         if isinstance(output_artifact_id, str) and output_artifact_id.strip():
             output_artifact_ids.add(output_artifact_id.strip())
+        decision_record_id = artifact.get("decision_record_id")
+        if isinstance(decision_record_id, str) and decision_record_id.strip():
+            decision_record_ids.add(decision_record_id.strip())
 
     for fixture in fixtures:
         artifact = fixture.get("artifact", {})
@@ -1162,6 +1166,9 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
         for evidence_id in artifact.get("validation_evidence_ids", []) if isinstance(artifact.get("validation_evidence_ids"), list) else []:
             if isinstance(evidence_id, str) and evidence_id.strip() and evidence_id.strip() not in validation_evidence_ids:
                 add_finding(findings, "error", "unknown-validation-evidence-id", f"Unknown validation_evidence_id reference: {evidence_id}", fixture)
+        for decision_record_id in artifact.get("decision_record_ids", []) if isinstance(artifact.get("decision_record_ids"), list) else []:
+            if isinstance(decision_record_id, str) and decision_record_id.strip() and decision_record_id.strip() not in decision_record_ids:
+                add_finding(findings, "error", "unknown-decision-record-id", f"Unknown decision_record_id reference: {decision_record_id}", fixture)
         if fixture.get("expected_validation_result") == "PASS":
             for generated_artifact_id in artifact.get("generated_artifact_ids", []) if isinstance(artifact.get("generated_artifact_ids"), list) else []:
                 if isinstance(generated_artifact_id, str) and generated_artifact_id.strip() and generated_artifact_id.strip() not in output_artifact_ids:
