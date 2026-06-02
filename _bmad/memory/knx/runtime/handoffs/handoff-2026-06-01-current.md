@@ -21,6 +21,7 @@ Status: local-only greenfield implementation lane open
 - Hard-gated paths are sequenced in `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
 - Scoped local source mutation is approved for KNX module/governance records by `decisions/scoped-source-mutation-knx-2026-06-01.md`.
 - Local writes are approved for scoped KNX module/config/help/report paths by `decisions/write-boundary-knx-local-2026-06-01.md`.
+- Metadata-only source inventory for approved KNX implementation paths is materialized under `_bmad/memory/knx/runtime/greenfield-implementation/inventory/`.
 
 ## Latest Validation
 
@@ -81,5 +82,7 @@ For eligible local KNX governance, evidence, validation, packaging, handoff, and
 Use `_bmad/memory/knx/runtime/greenfield-implementation/implementation-runway-2026-06-01.md` as the current local implementation runway.
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` to work through gated paths.
+
+Next gate is public distribution readiness for `ksev`.
 
 Parked and hard-gated paths remain closed unless explicitly reopened.

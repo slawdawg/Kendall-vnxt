@@ -12,8 +12,9 @@ Status: active local-only backlog
 4. Keep `ksev` shared local config/help registration current.
 5. Revalidate `knx` and `ksev` packaging only when scoped module assets change.
 6. Route any new fixture/evidence changes through `knx-source-evidence-contract`.
-7. Route any new tooling or source inventory materialization through `knx-mature-tool-review` first.
-8. Work through hard-gated paths in the order recorded in `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
+7. Keep approved KNX path metadata inventory current under `_bmad/memory/knx/runtime/greenfield-implementation/inventory/`.
+8. Route any new tooling or source inventory materialization beyond the accepted Gate 3 scope through `knx-mature-tool-review` first.
+9. Work through hard-gated paths in the order recorded in `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md`.
 
 ## Parked
 

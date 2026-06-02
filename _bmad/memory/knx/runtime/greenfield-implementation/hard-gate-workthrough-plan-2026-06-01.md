@@ -105,6 +105,26 @@ Summary:
 
 - Allow scoped local writes to KNX module, shared module registry, KNX memory/runtime, and module-validation report paths.
 
+## Gate 3 Result
+
+Gate: source inventory materialization or new tooling.
+
+Status: accepted.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/source-inventory-tooling-gate-2026-06-01.md`
+
+Summary:
+
+- Approved metadata-only source inventory materialization for approved KNX paths using mature local deterministic tools.
+- Did not approve new custom tooling, packages, indexers, models, remotes, or external services.
+
+Materialized evidence:
+
+- `_bmad/memory/knx/runtime/greenfield-implementation/inventory/greenfield-approved-path-inventory-2026-06-01.json`
+- `_bmad/memory/knx/runtime/greenfield-implementation/inventory/greenfield-approved-path-inventory-2026-06-01.md`
+
 ## Next Action
 
-Proceed to Gate 3: source inventory materialization or new tooling.
+Proceed to Gate 4: public distribution readiness for `ksev`.
