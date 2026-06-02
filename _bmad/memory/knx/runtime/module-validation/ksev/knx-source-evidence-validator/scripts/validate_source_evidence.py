@@ -479,7 +479,7 @@ def validate_common_fixture_fields(fixture: dict[str, Any], findings: list[Findi
     synthetic_statement = fixture.get("synthetic_only_statement")
     if not synthetic_statement:
         add_finding(findings, "error", "synthetic-statement-missing", "Fixture must state it is synthetic", fixture)
-    elif "synthetic" not in str(synthetic_statement).lower():
+    elif not isinstance(synthetic_statement, str) or "synthetic" not in synthetic_statement.lower():
         add_finding(findings, "error", "synthetic-statement-invalid", "Fixture synthetic statement must mention synthetic", fixture)
 
     artifact_ids = fixture.get("artifact_ids")

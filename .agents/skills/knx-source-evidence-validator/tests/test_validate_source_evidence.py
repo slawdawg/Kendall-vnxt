@@ -368,6 +368,15 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("pack-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
+    def test_fixture_synthetic_statement_must_be_string(self):
+        pack = self._load_pack()
+        pack["fixtures"][0]["synthetic_only_statement"] = ["synthetic", "but", "not", "text"]
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("synthetic-statement-invalid", {finding["code"] for finding in result["findings"]})
+
     def test_created_at_rejects_impossible_calendar_dates(self):
         pack = self._load_pack()
         pack["created_at"] = "2026-99-99"
