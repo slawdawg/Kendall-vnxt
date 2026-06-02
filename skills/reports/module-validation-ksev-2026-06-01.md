@@ -175,3 +175,4 @@ Additional local hardening:
 - Added non-empty string-list checks for metadata-only source packet example references and open questions.
 - Added copied-content exclusions for fixture source packet artifacts and source packet example sets.
 - Added package-install and runtime-assistant-behavior false-flag enforcement for metadata-only source packet examples.
+- Added package-install and runtime-assistant-behavior false-flag enforcement for synthetic source inventory fixtures.
