@@ -19,6 +19,7 @@ Status: active local-only backlog
 11. Keep GitHub/remotes disabled until a later target URL and operation class are explicitly approved.
 12. Keep company evaluation planning local-only until exact audience, sharing mechanism, final artifact list, legal review path, and send/access action are explicitly approved.
 13. Keep IDE/workspace planning local-only until exact IDE target, file paths, action behavior, rollback plan, validation plan, user-visible behavior, and safety contract are explicitly approved.
+14. Keep runtime assistant behavior planning local-only until exact storage, triggers, execution context, user-visible behavior, rollback, validation, and safety contract are explicitly approved.
 
 ## Parked
 
@@ -27,6 +28,7 @@ Status: active local-only backlog
 - Public distribution and license activation.
 - GitHub/remotes.
 - Operational source intake and source mutation.
+- Runtime assistant behavior implementation.
 
 ## Hard-Gated
 

@@ -26,6 +26,7 @@ Status: local-only greenfield implementation lane open
 - GitHub/remote readiness planning is materialized locally; remotes remain disabled.
 - Company evaluation planning is materialized locally; sharing remains blocked.
 - IDE/workspace planning is materialized locally; IDE and workspace writes remain disabled.
+- Runtime assistant behavior planning is materialized locally; runtime behavior remains disabled.
 
 ## Latest Validation
 
@@ -60,6 +61,7 @@ Hard-gated:
 - GitHub/remotes,
 - public distribution,
 - IDE/workspace configuration writes,
+- runtime assistant behavior implementation,
 - license or rights grants,
 - source mutation outside scoped KNX governance/evidence records,
 - writes outside approved KNX memory/runtime storage and approved local KNX module/config/help/report paths,

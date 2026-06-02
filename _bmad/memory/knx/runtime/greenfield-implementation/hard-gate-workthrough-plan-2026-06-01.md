@@ -208,6 +208,28 @@ Materialized evidence:
 - `_bmad/memory/knx/runtime/greenfield-implementation/ide-workspace/ide-workspace-planning-2026-06-01.md`
 - `_bmad/memory/knx/runtime/greenfield-implementation/ide-workspace/ide-workspace-planning-2026-06-01.json`
 
+## Gate 8 Result
+
+Gate: runtime assistant behavior.
+
+Status: accepted for local planning only.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md`
+
+Summary:
+
+- Reopened runtime assistant behavior path for local planning only.
+- Defined runtime assistant behavior for KNX governance.
+- Kept runtime behavior disabled.
+- Did not approve runtime code, service, daemon, scheduled task, startup automation, live assistant state beyond approved records, external sends/providers, customer/production/credential access, or source mutation outside approved paths.
+
+Materialized evidence:
+
+- `_bmad/memory/knx/runtime/greenfield-implementation/runtime-behavior/runtime-assistant-behavior-planning-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/runtime-behavior/runtime-assistant-behavior-planning-2026-06-01.json`
+
 ## Next Action
 
-Proceed to Gate 8: runtime assistant behavior.
+Proceed to Gate 9: local model/GPU processing.
