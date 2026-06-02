@@ -131,6 +131,17 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("fixture-source-packet-source-references-invalid", codes)
         self.assertIn("fixture-source-packet-open-questions-invalid", codes)
 
+    def test_fixture_source_packet_rejects_copied_content(self):
+        pack = self._load_pack()
+        source_packet = self._find_fixture(pack, "valid-source-packet")
+        source_packet["artifact"]["content"] = "synthetic content should not be copied into metadata packets"
+        pack["fixtures"].append(source_packet)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("fixture-source-packet-copies-content", {finding["code"] for finding in result["findings"]})
+
     def test_source_packets_must_remain_read_planning_only(self):
         pack = self._load_pack()
         source_packet = self._find_fixture(pack, "valid-source-packet")
@@ -555,6 +566,15 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("source-packet-copies-content", {finding["code"] for finding in result["findings"]})
+
+    def test_source_packet_example_set_rejects_copied_content(self):
+        examples = self._load_source_packet_examples()
+        examples["excerpt"] = "do not copy source contents into packet example sets"
+
+        result = self._validate_temp_source_packet_examples(examples)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("example-set-copies-content", {finding["code"] for finding in result["findings"]})
 
     def test_source_packet_examples_require_false_boundary_flags(self):
         examples = self._load_source_packet_examples()

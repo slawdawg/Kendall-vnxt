@@ -541,6 +541,15 @@ def validate_source_packet(fixture: dict[str, Any], findings: list[Finding]) -> 
         add_finding(findings, "error", "fixture-source-packet-source-references-invalid", "source_references must be a string list", fixture)
     if "open_questions" in artifact and not is_non_empty_string_list(artifact.get("open_questions")):
         add_finding(findings, "error", "fixture-source-packet-open-questions-invalid", "open_questions must be a string list", fixture)
+    for content_field in ("source_content", "source_contents", "content", "excerpt"):
+        if content_field in artifact:
+            add_finding(
+                findings,
+                "error",
+                "fixture-source-packet-copies-content",
+                f"Metadata-only fixture source packets must not include {content_field}",
+                fixture,
+            )
 
     if artifact.get("source_class") not in VALID_FIXTURE_SOURCE_PACKET_CLASSES:
         add_finding(findings, "error", "fixture-source-packet-class-invalid", "Invalid source packet source_class", fixture)
@@ -985,6 +994,15 @@ def validate_source_packet_examples(path: Path, approved_storage_root: Path | No
         add_finding(findings, "error", "example-set-created-at-invalid", "Source packet example set created_at must be an ISO date or datetime")
     if examples.get("status") not in VALID_EXAMPLE_SET_STATUSES:
         add_finding(findings, "error", "example-set-status-invalid", "Source packet example set status is invalid")
+
+    for content_field in ("source_content", "source_contents", "content", "excerpt"):
+        if content_field in examples:
+            add_finding(
+                findings,
+                "error",
+                "example-set-copies-content",
+                f"Metadata-only source packet example set must not include {content_field}",
+            )
 
     for flag in BOUNDARY_FALSE_FLAGS:
         if examples.get(flag) is not False:
