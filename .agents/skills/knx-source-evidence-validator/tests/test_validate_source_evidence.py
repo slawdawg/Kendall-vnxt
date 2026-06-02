@@ -696,6 +696,21 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("waiver-blocking-status-invalid", {finding["code"] for finding in result["findings"]})
 
+    def test_waived_blocking_status_requires_waived_result(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["result"] = "CONCERNS"
+        evidence["artifact"]["failed_rules"] = ["Synthetic review-needed rule for regression coverage."]
+        evidence["artifact"]["blocking_status"] = "waived-blocking"
+        evidence["artifact"]["waiver_id"] = "dec-synth-valid-001"
+        evidence["artifact"]["waiver_reason"] = "Synthetic waiver reason for regression coverage."
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("waived-blocking-result-invalid", {finding["code"] for finding in result["findings"]})
+
     def test_non_pass_validation_results_require_failed_rules(self):
         pack = self._load_pack()
         evidence = self._find_fixture(pack, "valid-validation-evidence")

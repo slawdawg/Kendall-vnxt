@@ -1038,6 +1038,14 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
                 "WAIVED validation evidence must use waived-blocking status",
                 fixture,
             )
+        if artifact.get("blocking_status") == "waived-blocking" and artifact.get("result") != "WAIVED":
+            add_finding(
+                findings,
+                "error",
+                "waived-blocking-result-invalid",
+                "waived-blocking status requires WAIVED validation result",
+                fixture,
+            )
 
     if "risk_score" in artifact:
         risk_score = artifact.get("risk_score")
