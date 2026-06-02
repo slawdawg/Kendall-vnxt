@@ -343,6 +343,19 @@ def duplicate_strings(values: list[str]) -> list[str]:
     return sorted(duplicates)
 
 
+def is_count_group_list(value: Any, name_field: str) -> bool:
+    if not isinstance(value, list):
+        return False
+    for item in value:
+        if not isinstance(item, dict):
+            return False
+        if not isinstance(item.get(name_field), str) or not item.get(name_field, "").strip():
+            return False
+        if not isinstance(item.get("count"), int) or item.get("count") < 0:
+            return False
+    return True
+
+
 def load_fixture_pack(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]:
     findings: list[Finding] = []
     try:
@@ -962,6 +975,12 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
         not (isinstance(file_count, int) and file_count >= 0) and file_count != "unresolved"
     ):
         add_finding(findings, "error", "source-inventory-file-count-invalid", "file_count must be a nonnegative integer or unresolved", fixture)
+    if "excluded_paths_or_patterns" in artifact and not is_non_empty_string_list(artifact.get("excluded_paths_or_patterns")):
+        add_finding(findings, "error", "source-inventory-excluded-paths-invalid", "excluded_paths_or_patterns must be a string list", fixture)
+    if "top_file_groups" in artifact and not is_count_group_list(artifact.get("top_file_groups"), "extension"):
+        add_finding(findings, "error", "source-inventory-top-file-groups-invalid", "top_file_groups must be extension/count objects", fixture)
+    if "source_class_groups" in artifact and not is_count_group_list(artifact.get("source_class_groups"), "source_class"):
+        add_finding(findings, "error", "source-inventory-source-class-groups-invalid", "source_class_groups must be source_class/count objects", fixture)
 
     generated_path = artifact.get("generated_artifact_path")
     fixture_type = fixture.get("fixture_type")

@@ -259,6 +259,22 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("source-inventory-file-count-invalid", {finding["code"] for finding in result["findings"]})
 
+    def test_source_inventory_optional_groups_must_match_shape(self):
+        pack = self._load_pack()
+        inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
+        inventory["artifact"]["excluded_paths_or_patterns"] = [" "]
+        inventory["artifact"]["top_file_groups"] = [{"extension": "", "count": -1}]
+        inventory["artifact"]["source_class_groups"] = [{"source_class": "generated-report", "count": "many"}]
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-inventory-excluded-paths-invalid", codes)
+        self.assertIn("source-inventory-top-file-groups-invalid", codes)
+        self.assertIn("source-inventory-source-class-groups-invalid", codes)
+
     def test_source_inventory_requires_contract_fields(self):
         pack = self._load_pack()
         inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
