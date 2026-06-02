@@ -94,6 +94,20 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("fixture-source-packet-text-field-empty", {finding["code"] for finding in result["findings"]})
 
+    def test_fixture_source_packet_rejects_blank_optional_list_entries(self):
+        pack = self._load_pack()
+        source_packet = self._find_fixture(pack, "valid-source-packet")
+        source_packet["artifact"]["source_references"] = [" "]
+        source_packet["artifact"]["open_questions"] = [""]
+        pack["fixtures"].append(source_packet)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("fixture-source-packet-source-references-invalid", codes)
+        self.assertIn("fixture-source-packet-open-questions-invalid", codes)
+
     def test_source_inventory_storage_negative_is_valid_expected_failure(self):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
         inventory_findings = [
