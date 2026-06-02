@@ -1048,8 +1048,15 @@ def validate_source_packet_examples(path: Path, approved_storage_root: Path | No
             add_finding(findings, "error", "missing-example-set-field", f"Missing top-level field: {field}")
 
     for field in sorted(REQUIRED_EXAMPLE_SET_TEXT_FIELDS):
-        if field in examples and not str(examples.get(field, "")).strip():
-            add_finding(findings, "error", "example-set-text-field-empty", f"Source packet example set text field must be non-empty: {field}")
+        if field in examples and (
+            not isinstance(examples.get(field), str) or not examples.get(field, "").strip()
+        ):
+            add_finding(
+                findings,
+                "error",
+                "example-set-text-field-invalid",
+                f"Source packet example set text field must be a non-empty string: {field}",
+            )
     if "created_at" in examples and not is_iso_created_at(examples.get("created_at")):
         add_finding(findings, "error", "example-set-created-at-invalid", "Source packet example set created_at must be an ISO date or datetime")
     if examples.get("status") not in VALID_EXAMPLE_SET_STATUSES:

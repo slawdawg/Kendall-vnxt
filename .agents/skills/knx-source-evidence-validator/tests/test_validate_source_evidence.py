@@ -715,11 +715,22 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
-        self.assertIn("example-set-text-field-empty", codes)
+        self.assertIn("example-set-text-field-invalid", codes)
         self.assertIn("example-set-created-at-invalid", codes)
         self.assertIn("example-set-status-invalid", codes)
         self.assertIn("source-packet-text-field-invalid", codes)
         self.assertIn("source-packet-created-at-invalid", codes)
+
+    def test_source_packet_example_set_text_fields_must_be_strings(self):
+        examples = self._load_source_packet_examples()
+        examples["source_packet_example_set_id"] = 42
+        examples["title"] = ["not", "a", "string"]
+        examples["created_by"] = {"name": "not-a-string"}
+
+        result = self._validate_temp_source_packet_examples(examples)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("example-set-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
     def test_source_packet_example_text_fields_must_be_strings(self):
         examples = self._load_source_packet_examples()
