@@ -101,6 +101,84 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("risk-nine-not-blocking", {finding["code"] for finding in result["findings"]})
 
+    def test_work_trace_rejects_invalid_controlled_vocab(self):
+        pack = self._load_pack()
+        trace = self._find_fixture(pack, "valid-work-trace")
+        trace["artifact"]["trigger"] = "whenever"
+        trace["artifact"]["execution_layer"] = 9
+        trace["artifact"]["uncertainty"] = "maybe"
+        trace["artifact"]["residual_risk"] = "unknown"
+        trace["artifact"]["next_action"] = "continue-anyway"
+        pack["fixtures"].append(trace)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("work-trace-trigger-invalid", codes)
+        self.assertIn("work-trace-layer-invalid", codes)
+        self.assertIn("work-trace-uncertainty-invalid", codes)
+        self.assertIn("work-trace-residual-risk-invalid", codes)
+        self.assertIn("work-trace-next-action-invalid", codes)
+
+    def test_user_input_required_rejects_invalid_controlled_vocab(self):
+        pack = self._load_pack()
+        user_input = self._find_fixture(pack, "valid-user-input-required")
+        user_input["artifact"]["why_automation_cannot_proceed"] = "because"
+        user_input["artifact"]["blocked_downstream_work"] = []
+        user_input["artifact"]["risk_if_guessed"] = "tiny"
+        user_input["artifact"]["status"] = "waiting"
+        pack["fixtures"].append(user_input)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("user-input-reason-invalid", codes)
+        self.assertIn("user-input-blocked-work-invalid", codes)
+        self.assertIn("user-input-risk-invalid", codes)
+        self.assertIn("user-input-status-invalid", codes)
+
+    def test_output_metadata_rejects_missing_required_links(self):
+        pack = self._load_pack()
+        output = self._find_fixture(pack, "unsupported-inference-negative")
+        output["artifact"]["work_trace_id"] = ""
+        output["artifact"]["validation_evidence_ids"] = []
+        output["artifact"]["source_support_summary"] = "guess"
+        output["artifact"]["result_status"] = "done"
+        pack["fixtures"].append(output)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("output-work-trace-missing", codes)
+        self.assertIn("output-validation-evidence-ids-invalid", codes)
+        self.assertIn("output-source-support-summary-invalid", codes)
+        self.assertIn("output-result-status-invalid", codes)
+
+    def test_validation_evidence_rejects_invalid_controlled_vocab(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["artifact_under_validation"] = "anything"
+        evidence["artifact"]["validation_type"] = "vibes"
+        evidence["artifact"]["result"] = "OK"
+        evidence["artifact"]["failed_rules"] = "none"
+        evidence["artifact"]["blocking_status"] = "maybe-blocking"
+        evidence["artifact"]["evidence_references"] = []
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("artifact-under-validation-invalid", codes)
+        self.assertIn("validation-type-invalid", codes)
+        self.assertIn("validation-result-invalid", codes)
+        self.assertIn("validation-failed-rules-invalid", codes)
+        self.assertIn("blocking-status-invalid", codes)
+        self.assertIn("validation-evidence-references-invalid", codes)
+
     def test_valid_materialized_inventory_path_under_approved_root_passes_path_check(self):
         pack = self._load_pack()
         inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")

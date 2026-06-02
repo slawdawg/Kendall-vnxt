@@ -73,6 +73,55 @@ VALID_SOURCE_OPERATIONS = {
     "blocked",
 }
 VALID_UNCERTAINTY = {"none", "low", "medium", "high", "blocking"}
+VALID_WORK_TRACE_TRIGGERS = {"user request", "workflow", "scheduled review", "manual update"}
+VALID_WORK_TRACE_NEXT_ACTIONS = {
+    "proceed",
+    "validate",
+    "request-user-input",
+    "create-decision",
+    "defer",
+    "block",
+}
+VALID_RESIDUAL_RISK = {"none", "low", "medium", "high", "blocking"}
+VALID_ARTIFACT_UNDER_VALIDATION = {
+    "source packet",
+    "output",
+    "work trace",
+    "decision",
+    "fixture",
+    "policy file",
+}
+VALID_VALIDATION_TYPES = {
+    "boundary-check",
+    "source-support-check",
+    "contract-check",
+    "fixture-check",
+    "policy-check",
+    "manual-review",
+    "other",
+}
+VALID_BLOCKING_STATUS = {"nonblocking", "blocking", "waived-blocking", "not-applicable"}
+VALID_USER_INPUT_REASONS = {"safety", "boundary", "missing approval", "ambiguity", "missing source", "risk"}
+VALID_USER_INPUT_STATUS = {"open", "answered", "deferred", "closed"}
+VALID_OUTPUT_TYPES = {"draft", "review-package", "report", "plan", "decision-support", "fixture-output", "other"}
+VALID_GENERATION_BOUNDARIES = {
+    "deterministic-local",
+    "mature-local-tool",
+    "approved-local-model",
+    "approved-custom-glue",
+    "approved-external-provider",
+    "unresolved",
+}
+VALID_SOURCE_SUPPORT_SUMMARIES = {
+    "direct",
+    "indirect",
+    "user-asserted",
+    "synthetic",
+    "inferred",
+    "unsupported",
+    "mixed",
+}
+VALID_OUTPUT_STATUSES = {"draft", "ready-for-review", "validated", "blocked", "superseded"}
 REQUIRED_SOURCE_PACKET_FIELDS = {
     "source_packet_id",
     "title",
@@ -379,6 +428,48 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
     if not isinstance(artifact, dict):
         return
 
+    if "output_artifact_id" in artifact:
+        for field in (
+            "output_type",
+            "source_packet_ids",
+            "work_trace_id",
+            "validation_evidence_ids",
+            "decision_record_ids",
+            "generation_boundary",
+            "storage_location",
+            "source_support_summary",
+            "uncertainty",
+            "result_status",
+            "created_at",
+        ):
+            if field not in artifact:
+                add_finding(findings, "error", "missing-output-field", f"Missing output metadata field: {field}", fixture)
+
+        if artifact.get("output_type") not in VALID_OUTPUT_TYPES:
+            add_finding(findings, "error", "output-type-invalid", "Invalid output_type", fixture)
+        if not isinstance(artifact.get("source_packet_ids"), list):
+            add_finding(findings, "error", "output-source-packet-ids-invalid", "source_packet_ids must be a list", fixture)
+        if not artifact.get("work_trace_id"):
+            add_finding(findings, "error", "output-work-trace-missing", "Output metadata must link to a work trace", fixture)
+        if not isinstance(artifact.get("validation_evidence_ids"), list) or not artifact.get("validation_evidence_ids"):
+            add_finding(
+                findings,
+                "error",
+                "output-validation-evidence-ids-invalid",
+                "validation_evidence_ids must be a non-empty list",
+                fixture,
+            )
+        if not isinstance(artifact.get("decision_record_ids"), list):
+            add_finding(findings, "error", "output-decision-record-ids-invalid", "decision_record_ids must be a list", fixture)
+        if artifact.get("generation_boundary") not in VALID_GENERATION_BOUNDARIES:
+            add_finding(findings, "error", "output-generation-boundary-invalid", "Invalid generation_boundary", fixture)
+        if artifact.get("source_support_summary") not in VALID_SOURCE_SUPPORT_SUMMARIES:
+            add_finding(findings, "error", "output-source-support-summary-invalid", "Invalid source_support_summary", fixture)
+        if artifact.get("uncertainty") not in VALID_UNCERTAINTY:
+            add_finding(findings, "error", "output-uncertainty-invalid", "Invalid output uncertainty", fixture)
+        if artifact.get("result_status") not in VALID_OUTPUT_STATUSES:
+            add_finding(findings, "error", "output-result-status-invalid", "Invalid result_status", fixture)
+
     fixture_type = fixture.get("fixture_type")
     source_packet_ids = artifact.get("source_packet_ids")
     if fixture_type == "missing-source-negative":
@@ -402,6 +493,43 @@ def validate_work_trace(fixture: dict[str, Any], findings: list[Finding]) -> Non
     if not isinstance(artifact, dict):
         return
 
+    if "work_trace_id" in artifact and "output_artifact_id" not in artifact:
+        for field in (
+            "trigger",
+            "source_packet_ids",
+            "generated_artifact_ids",
+            "validation_evidence_ids",
+            "decision_record_ids",
+            "steps_taken",
+            "tools_used",
+            "execution_layer",
+            "assumptions",
+            "uncertainty",
+            "residual_risk",
+            "next_action",
+            "created_at",
+        ):
+            if field not in artifact:
+                add_finding(findings, "error", "missing-work-trace-field", f"Missing work trace field: {field}", fixture)
+
+        if artifact.get("trigger") not in VALID_WORK_TRACE_TRIGGERS:
+            add_finding(findings, "error", "work-trace-trigger-invalid", "Invalid work trace trigger", fixture)
+        for field in ("source_packet_ids", "generated_artifact_ids", "validation_evidence_ids", "decision_record_ids"):
+            if not isinstance(artifact.get(field), list):
+                add_finding(findings, "error", "work-trace-list-field-invalid", f"{field} must be a list", fixture)
+        for field in ("steps_taken", "tools_used", "assumptions"):
+            if not isinstance(artifact.get(field), list):
+                add_finding(findings, "error", "work-trace-list-field-invalid", f"{field} must be a list", fixture)
+        execution_layer = artifact.get("execution_layer")
+        if not isinstance(execution_layer, int) or not 1 <= execution_layer <= 5:
+            add_finding(findings, "error", "work-trace-layer-invalid", "execution_layer must be an integer from 1 through 5", fixture)
+        if artifact.get("uncertainty") not in VALID_UNCERTAINTY:
+            add_finding(findings, "error", "work-trace-uncertainty-invalid", "Invalid work trace uncertainty", fixture)
+        if artifact.get("residual_risk") not in VALID_RESIDUAL_RISK:
+            add_finding(findings, "error", "work-trace-residual-risk-invalid", "Invalid work trace residual_risk", fixture)
+        if artifact.get("next_action") not in VALID_WORK_TRACE_NEXT_ACTIONS:
+            add_finding(findings, "error", "work-trace-next-action-invalid", "Invalid work trace next_action", fixture)
+
     if fixture.get("fixture_type") != "external-action-negative":
         return
 
@@ -418,6 +546,45 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
     if not isinstance(artifact, dict):
         return
 
+    if "validation_evidence_id" in artifact:
+        for field in (
+            "artifact_under_validation",
+            "validation_type",
+            "result",
+            "failed_rules",
+            "risk_score",
+            "blocking_status",
+            "evidence_references",
+            "command_or_check_run",
+            "waiver_id",
+            "waiver_reason",
+            "reviewer",
+            "created_at",
+        ):
+            if field not in artifact:
+                add_finding(findings, "error", "missing-validation-evidence-field", f"Missing validation evidence field: {field}", fixture)
+
+        if artifact.get("artifact_under_validation") not in VALID_ARTIFACT_UNDER_VALIDATION:
+            add_finding(findings, "error", "artifact-under-validation-invalid", "Invalid artifact_under_validation", fixture)
+        if artifact.get("validation_type") not in VALID_VALIDATION_TYPES:
+            add_finding(findings, "error", "validation-type-invalid", "Invalid validation_type", fixture)
+        if artifact.get("result") not in VALID_RESULTS:
+            add_finding(findings, "error", "validation-result-invalid", "Invalid validation result", fixture)
+        if not isinstance(artifact.get("failed_rules"), list):
+            add_finding(findings, "error", "validation-failed-rules-invalid", "failed_rules must be a list", fixture)
+        if artifact.get("blocking_status") not in VALID_BLOCKING_STATUS:
+            add_finding(findings, "error", "blocking-status-invalid", "Invalid blocking_status", fixture)
+        if not isinstance(artifact.get("evidence_references"), list) or not artifact.get("evidence_references"):
+            add_finding(
+                findings,
+                "error",
+                "validation-evidence-references-invalid",
+                "evidence_references must be a non-empty list",
+                fixture,
+            )
+        if artifact.get("result") == "WAIVED" and not artifact.get("waiver_reason"):
+            add_finding(findings, "error", "waiver-reason-missing", "WAIVED validation needs waiver_reason", fixture)
+
     if "risk_score" in artifact:
         risk_score = artifact.get("risk_score")
         if not isinstance(risk_score, int) or not 0 <= risk_score <= 9:
@@ -426,6 +593,43 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
             add_finding(findings, "error", "risk-nine-not-blocking", "risk_score 9 must be blocking or waived-blocking", fixture)
         elif risk_score == 9 and artifact.get("blocking_status") == "waived-blocking" and artifact.get("waiver_id") in {None, "", "none"}:
             add_finding(findings, "error", "risk-nine-waiver-missing", "waived risk_score 9 needs a waiver_id", fixture)
+
+
+def validate_user_input_required(fixture: dict[str, Any], findings: list[Finding]) -> None:
+    artifact = fixture.get("artifact", {})
+    if not isinstance(artifact, dict) or "user_input_required_id" not in artifact:
+        return
+
+    for field in (
+        "decision_needed",
+        "why_automation_cannot_proceed",
+        "source_references",
+        "blocked_downstream_work",
+        "risk_if_guessed",
+        "status",
+        "created_at",
+    ):
+        if field not in artifact:
+            add_finding(findings, "error", "missing-user-input-field", f"Missing user-input-required field: {field}", fixture)
+
+    if not artifact.get("decision_needed"):
+        add_finding(findings, "error", "user-input-decision-missing", "decision_needed is required", fixture)
+    if artifact.get("why_automation_cannot_proceed") not in VALID_USER_INPUT_REASONS:
+        add_finding(findings, "error", "user-input-reason-invalid", "Invalid why_automation_cannot_proceed", fixture)
+    if not isinstance(artifact.get("source_references"), list):
+        add_finding(findings, "error", "user-input-source-references-invalid", "source_references must be a list", fixture)
+    if not isinstance(artifact.get("blocked_downstream_work"), list) or not artifact.get("blocked_downstream_work"):
+        add_finding(
+            findings,
+            "error",
+            "user-input-blocked-work-invalid",
+            "blocked_downstream_work must be a non-empty list",
+            fixture,
+        )
+    if artifact.get("risk_if_guessed") not in {"low", "medium", "high", "blocking"}:
+        add_finding(findings, "error", "user-input-risk-invalid", "Invalid risk_if_guessed", fixture)
+    if artifact.get("status") not in VALID_USER_INPUT_STATUS:
+        add_finding(findings, "error", "user-input-status-invalid", "Invalid user-input status", fixture)
 
 
 def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], approved_storage_root: Path) -> None:
@@ -510,6 +714,7 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
         validate_output_metadata(fixture, findings, approved_storage_root)
         validate_work_trace(fixture, findings)
         validate_validation_evidence(fixture, findings)
+        validate_user_input_required(fixture, findings)
         validate_source_inventory(fixture, findings, approved_storage_root)
     validate_expected_evidence_ids(fixtures, findings)
 
