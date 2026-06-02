@@ -178,6 +178,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         pack = self._load_pack()
         pack["fixture_pack_id"] = ""
         pack["created_at"] = "yesterday"
+        pack["created_by"] = " "
+        pack["contract_reference"] = ""
         pack["synthetic_only_statement"] = "All examples are safe examples."
         pack["fixtures"][0]["created_at"] = "soon"
         pack["fixtures"][0]["synthetic_only_statement"] = "Example only."

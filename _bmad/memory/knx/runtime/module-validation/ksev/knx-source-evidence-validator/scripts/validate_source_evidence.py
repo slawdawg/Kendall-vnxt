@@ -163,7 +163,14 @@ REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS = {
     "created_at",
     "created_by",
 }
-REQUIRED_PACK_TEXT_FIELDS = {"fixture_pack_id", "title", "synthetic_only_statement", "created_at"}
+REQUIRED_PACK_TEXT_FIELDS = {
+    "fixture_pack_id",
+    "title",
+    "synthetic_only_statement",
+    "created_at",
+    "created_by",
+    "contract_reference",
+}
 REQUIRED_EXAMPLE_SET_TEXT_FIELDS = {"source_packet_example_set_id", "title", "created_at", "created_by", "status"}
 REQUIRED_SOURCE_PACKET_FIELDS = {
     "source_packet_id",
@@ -394,7 +401,7 @@ def load_json_object(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]:
 
 
 def validate_pack_shape(pack: dict[str, Any], findings: list[Finding]) -> list[dict[str, Any]]:
-    for field in ("fixture_pack_id", "title", "synthetic_only_statement", "created_at", "fixtures"):
+    for field in ("fixture_pack_id", "title", "synthetic_only_statement", "created_at", "created_by", "contract_reference", "fixtures"):
         if field not in pack:
             add_finding(findings, "error", "missing-pack-field", f"Missing top-level field: {field}")
 

@@ -1,6 +1,6 @@
 # KNX Source Evidence Validation
 
-Created: 2026-06-02T01:34:25+00:00
+Created: 2026-06-02T01:37:10+00:00
 Input: `_bmad\memory\knx\fixtures\synthetic\first-fixture-pack.json`
 Status: PASS
 

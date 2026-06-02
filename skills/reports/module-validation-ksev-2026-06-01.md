@@ -64,6 +64,7 @@ The standalone optional pack includes:
 - Required excluded-source-class enforcement for source packet example sets.
 - Duplicate-ID enforcement for fixture artifact IDs and source packet example IDs.
 - Explicit synthetic-statement enforcement for fixture packs and fixture entries.
+- Required `created_by` and contract-reference enforcement for fixture packs.
 - Non-empty text enforcement for fixture pack and source packet example set identity/date fields.
 - ISO date/datetime shape and calendar-value enforcement for fixture pack, fixture, artifact, and source packet example `created_at` fields.
 - Full identity-field and non-empty text enforcement for fixture source packet artifacts.
@@ -145,6 +146,7 @@ Additional local hardening:
 - Added required excluded-source-class checks for source packet example sets.
 - Added duplicate-ID checks for fixture artifact IDs and source packet example IDs.
 - Added non-empty text checks for fixture pack and source packet example set identity/date fields.
+- Added required `created_by` and contract-reference checks for fixture packs.
 - Added ISO date/datetime shape and calendar-value checks for fixture pack, fixture, artifact, and source packet example `created_at` fields.
 - Added explicit synthetic-statement checks for fixture packs and fixture entries.
 - Added full identity-field and non-empty text checks for fixture source packet artifacts.
