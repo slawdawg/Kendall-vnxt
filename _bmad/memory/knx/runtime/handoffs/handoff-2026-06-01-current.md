@@ -8,7 +8,7 @@ Status: local-only greenfield implementation lane open
 
 - KNX governance core is scaffolded and validated.
 - Optional `ksev` source/evidence validator is scaffolded, validated, and local-only.
-- Latest scoped local implementation commit: `140167b Cover ksev metadata content exclusions`.
+- Latest scoped local implementation commit: `a6ec1af Cover ksev source packet example vocab tests`.
 - Fast-lane local governance profile is accepted.
 - Company-facing discussion path is parked.
 - IDE one-click action path is closed.
@@ -99,7 +99,7 @@ Use `_bmad/memory/knx/runtime/greenfield-implementation/implementation-runway-20
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as the completed local planning record for Gates 1-11.
 
-Latest concrete local task: refreshed the scoped implementation evidence baseline and hardened `ksev` synthetic fixture, source packet, source inventory, work trace, validation evidence, user-input-required, and output metadata validation, including missing-input and non-object JSON checks, fixture-pack provenance and malformed-shape checks, source packet example set identity/status, false-boundary-flag, malformed-container, missing-packet-field, and read-planning-only operation checks, source packet example excluded-class checks, source packet example reference/open-question list checks, fixture source-packet and example-set copied-content exclusions, negative fixture contract checks, duplicate artifact/source-packet ID checks, materialized source/validation/work-trace reference checks, source-packet reference/open-question list checks, container/source-inventory/work-trace/user-input list and text checks, non-empty string-list reference checks, ISO shape and calendar-value `created_at` checks, validation/output text-field checks, and output storage-boundary basis.
+Latest concrete local task: refreshed the scoped implementation evidence baseline and hardened `ksev` synthetic fixture, source packet, source inventory, work trace, validation evidence, user-input-required, and output metadata validation, including missing-input and non-object JSON checks, fixture-pack provenance and malformed-shape checks, source packet example set identity/status, false-boundary-flag, malformed-container, missing-packet-field, and read-planning-only operation checks, source packet example excluded-class checks, source packet example reference/open-question list checks, source packet example downstream-use and forbidden-content vocab regression coverage, fixture source-packet and example-set copied-content exclusions, negative fixture contract checks, duplicate artifact/source-packet ID checks, materialized source/validation/work-trace reference checks, source-packet reference/open-question list checks, container/source-inventory/work-trace/user-input list and text checks, non-empty string-list reference checks, ISO shape and calendar-value `created_at` checks, validation/output text-field checks, and output storage-boundary basis.
 
 Next concrete task is to continue scoped `ksev`/KNX module hardening or evidence validation work inside the approved local-only lane.
 
