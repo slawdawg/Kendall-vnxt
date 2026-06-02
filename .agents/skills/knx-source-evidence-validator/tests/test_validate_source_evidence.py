@@ -408,12 +408,23 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("work-trace-trigger-invalid", codes)
-        self.assertIn("work-trace-text-field-empty", codes)
+        self.assertIn("work-trace-text-field-invalid", codes)
         self.assertIn("work-trace-required-list-empty", codes)
         self.assertIn("work-trace-layer-invalid", codes)
         self.assertIn("work-trace-uncertainty-invalid", codes)
         self.assertIn("work-trace-residual-risk-invalid", codes)
         self.assertIn("work-trace-next-action-invalid", codes)
+
+    def test_work_trace_text_fields_must_be_strings(self):
+        pack = self._load_pack()
+        trace = self._find_fixture(pack, "valid-work-trace")
+        trace["artifact"]["work_trace_id"] = 42
+        pack["fixtures"].append(trace)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("work-trace-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
     def test_user_input_required_rejects_invalid_controlled_vocab(self):
         pack = self._load_pack()

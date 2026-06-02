@@ -684,8 +684,16 @@ def validate_work_trace(fixture: dict[str, Any], findings: list[Finding]) -> Non
         if artifact.get("trigger") not in VALID_WORK_TRACE_TRIGGERS:
             add_finding(findings, "error", "work-trace-trigger-invalid", "Invalid work trace trigger", fixture)
         for field in sorted(REQUIRED_WORK_TRACE_TEXT_FIELDS):
-            if field in artifact and not str(artifact.get(field, "")).strip():
-                add_finding(findings, "error", "work-trace-text-field-empty", f"Work trace text field must be non-empty: {field}", fixture)
+            if field in artifact and (
+                not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
+            ):
+                add_finding(
+                    findings,
+                    "error",
+                    "work-trace-text-field-invalid",
+                    f"Work trace text field must be a non-empty string: {field}",
+                    fixture,
+                )
         if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
             add_finding(findings, "error", "work-trace-created-at-invalid", "Work trace created_at must be an ISO date or datetime", fixture)
         for field in ("source_packet_ids", "generated_artifact_ids", "validation_evidence_ids", "decision_record_ids"):
