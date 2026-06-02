@@ -194,3 +194,4 @@ Additional local hardening:
 - Added optional source-inventory group/list shape checks.
 - Added validation waiver metadata type checks.
 - Added boolean rejection for numeric contract fields.
+- Added output source-packet link checks outside the missing-source negative fixture.
