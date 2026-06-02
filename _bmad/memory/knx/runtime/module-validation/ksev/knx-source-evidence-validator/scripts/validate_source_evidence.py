@@ -819,6 +819,26 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
                 "Output storage_location must stay under approved KNX storage",
                 fixture,
             )
+        if (
+            fixture_type != "forbidden-destination-negative"
+            and isinstance(storage_location, str)
+            and storage_location.strip()
+            and storage_location != "unresolved"
+        ):
+            storage_boundary_basis = artifact.get("storage_boundary_basis")
+            expected_storage_root = {
+                "_bmad/memory/knx": KNX_MEMORY_ROOT,
+                "approved-storage-root": approved_storage_root,
+                "synthetic-fixture-folder": SYNTHETIC_FIXTURE_ROOT,
+            }.get(storage_boundary_basis)
+            if expected_storage_root and not is_under_path(storage_location, expected_storage_root):
+                add_finding(
+                    findings,
+                    "error",
+                    "output-storage-boundary-basis-mismatch",
+                    "Output storage_location must match storage_boundary_basis",
+                    fixture,
+                )
         if artifact.get("source_support_summary") not in VALID_SOURCE_SUPPORT_SUMMARIES:
             add_finding(findings, "error", "output-source-support-summary-invalid", "Invalid source_support_summary", fixture)
         if artifact.get("uncertainty") not in VALID_UNCERTAINTY:

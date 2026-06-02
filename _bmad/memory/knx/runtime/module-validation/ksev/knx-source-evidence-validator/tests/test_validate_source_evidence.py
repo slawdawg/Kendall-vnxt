@@ -920,6 +920,18 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("output-decision-boundary-links-invalid", {finding["code"] for finding in result["findings"]})
 
+    def test_output_metadata_storage_basis_must_match_location(self):
+        pack = self._load_pack()
+        output = self._find_fixture(pack, "valid-output-metadata")
+        output["artifact"]["storage_location"] = "_bmad/memory/knx/runtime/not-a-fixture-output.json"
+        output["artifact"]["storage_boundary_basis"] = "synthetic-fixture-folder"
+        pack["fixtures"].append(output)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("output-storage-boundary-basis-mismatch", {finding["code"] for finding in result["findings"]})
+
     def test_fixture_references_must_resolve_to_materialized_ids(self):
         pack = self._load_pack()
 
