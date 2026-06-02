@@ -210,3 +210,4 @@ Additional local hardening:
 - Added user-input review-condition checks.
 - Added work-trace blocking next-action checks.
 - Added validation evidence target consistency checks.
+- Added boundary validation target consistency checks.
