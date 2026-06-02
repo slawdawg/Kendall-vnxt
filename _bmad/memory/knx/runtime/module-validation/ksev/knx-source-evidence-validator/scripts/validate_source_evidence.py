@@ -19,6 +19,7 @@ REQUIRED_FIXTURE_TYPES = {
     "valid-output-metadata",
     "valid-user-input-required",
     "valid-decision-record",
+    "valid-validator-run-evidence",
     "missing-source-negative",
     "external-action-negative",
     "unsupported-inference-negative",
@@ -185,6 +186,19 @@ REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS = {
     "generated_artifact_path",
     "created_at",
     "created_by",
+}
+REQUIRED_VALIDATOR_RUN_TEXT_FIELDS = {
+    "evidence_bundle_id",
+    "title",
+    "created_at",
+    "created_by",
+}
+VALIDATOR_RUN_BOUNDARY_FLAGS = {
+    "source_mutation_performed",
+    "external_send_performed",
+    "source_inventory_materialization_performed",
+    "package_install_performed",
+    "runtime_assistant_behavior_added",
 }
 REQUIRED_PACK_TEXT_FIELDS = {
     "fixture_pack_id",
@@ -566,6 +580,7 @@ def validate_common_fixture_fields(fixture: dict[str, Any], findings: list[Findi
                 "user_input_required_id",
                 "source_inventory_id",
                 "decision_record_id",
+                "evidence_bundle_id",
             ):
                 primary_id = artifact.get(field)
                 if isinstance(primary_id, str) and primary_id.strip():
@@ -1139,6 +1154,71 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
             add_finding(findings, "error", "inventory-output-outside-approved-root", "Materialized source inventory must write under approved storage root", fixture)
 
 
+def validate_validator_run_evidence(fixture: dict[str, Any], findings: list[Finding]) -> None:
+    artifact = fixture.get("artifact", {})
+    if not isinstance(artifact, dict) or "evidence_bundle_id" not in artifact:
+        return
+
+    for field in (
+        "title",
+        "created_at",
+        "created_by",
+        "synthetic_only_statement",
+        "work_trace",
+        "validation_evidence",
+        "output_metadata",
+        "boundaries",
+    ):
+        if field not in artifact:
+            add_finding(findings, "error", "missing-validator-run-field", f"Missing validator run evidence field: {field}", fixture)
+
+    for field in sorted(REQUIRED_VALIDATOR_RUN_TEXT_FIELDS):
+        if field in artifact and (
+            not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
+        ):
+            add_finding(
+                findings,
+                "error",
+                "validator-run-text-field-invalid",
+                f"Validator run evidence text field must be a non-empty string: {field}",
+                fixture,
+            )
+    if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
+        add_finding(findings, "error", "validator-run-created-at-invalid", "Validator run evidence created_at must be an ISO date or datetime", fixture)
+
+    synthetic_statement = artifact.get("synthetic_only_statement")
+    if (
+        not isinstance(synthetic_statement, str)
+        or not synthetic_statement.strip()
+        or "synthetic" not in synthetic_statement.lower()
+    ):
+        add_finding(findings, "error", "validator-run-synthetic-statement-invalid", "Validator run evidence must state synthetic fixture scope", fixture)
+
+    for link_field in ("work_trace", "validation_evidence"):
+        value = artifact.get(link_field)
+        if not (
+            isinstance(value, dict)
+            or (isinstance(value, str) and bool(value.strip()))
+        ):
+            add_finding(findings, "error", "validator-run-link-invalid", f"{link_field} must be an embedded object or non-empty local reference", fixture)
+
+    output_metadata = artifact.get("output_metadata")
+    if not isinstance(output_metadata, list) or not output_metadata:
+        add_finding(findings, "error", "validator-run-output-metadata-invalid", "output_metadata must be a non-empty list", fixture)
+    elif not all(isinstance(item, dict) or (isinstance(item, str) and item.strip()) for item in output_metadata):
+        add_finding(findings, "error", "validator-run-output-metadata-invalid", "output_metadata entries must be objects or non-empty local references", fixture)
+
+    boundaries = artifact.get("boundaries")
+    if not isinstance(boundaries, dict):
+        add_finding(findings, "error", "validator-run-boundaries-invalid", "boundaries must be an object", fixture)
+        return
+    for flag in sorted(VALIDATOR_RUN_BOUNDARY_FLAGS):
+        if flag not in boundaries:
+            add_finding(findings, "error", "validator-run-boundary-flag-missing", f"Missing validator run boundary flag: {flag}", fixture)
+        elif boundaries.get(flag) is not False:
+            add_finding(findings, "error", "validator-run-boundary-flag-not-false", f"Validator run boundary flag must be false: {flag}", fixture)
+
+
 def validate_expected_evidence_ids(fixtures: list[dict[str, Any]], findings: list[Finding]) -> None:
     materialized_validation_ids = set()
     referenced_negative_ids = set()
@@ -1262,6 +1342,7 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
         validate_user_input_required(fixture, findings)
         validate_decision_record(fixture, findings)
         validate_source_inventory(fixture, findings, approved_storage_root)
+        validate_validator_run_evidence(fixture, findings)
     validate_expected_evidence_ids(fixtures, findings)
     validate_unique_fixture_artifact_ids(fixtures, findings)
     validate_fixture_references(fixtures, findings)

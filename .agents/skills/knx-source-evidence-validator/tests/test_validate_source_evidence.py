@@ -31,7 +31,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
 
         self.assertEqual(result["status"], "PASS")
-        self.assertEqual(result["summary"]["fixture_count"], 16)
+        self.assertEqual(result["summary"]["fixture_count"], 17)
         self.assertEqual(result["summary"]["errors"], 0)
         self.assertEqual(result["summary"]["warnings"], 0)
         self.assertEqual(result["findings"], [])
@@ -943,6 +943,45 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("missing-validation-evidence-field", {finding["code"] for finding in result["findings"]})
+
+    def test_validator_run_evidence_rejects_invalid_shape(self):
+        pack = self._load_pack()
+        bundle = self._find_fixture(pack, "valid-validator-run-evidence")
+        bundle["artifact"]["evidence_bundle_id"] = ""
+        bundle["artifact"]["title"] = " "
+        bundle["artifact"]["created_at"] = "not-a-date"
+        bundle["artifact"]["synthetic_only_statement"] = "real run"
+        bundle["artifact"]["work_trace"] = ""
+        bundle["artifact"]["validation_evidence"] = []
+        bundle["artifact"]["output_metadata"] = [" "]
+        bundle["artifact"]["boundaries"]["external_send_performed"] = True
+        pack["fixtures"].append(bundle)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("validator-run-text-field-invalid", codes)
+        self.assertIn("validator-run-created-at-invalid", codes)
+        self.assertIn("validator-run-synthetic-statement-invalid", codes)
+        self.assertIn("validator-run-link-invalid", codes)
+        self.assertIn("validator-run-output-metadata-invalid", codes)
+        self.assertIn("validator-run-boundary-flag-not-false", codes)
+
+    def test_validator_run_evidence_requires_contract_fields(self):
+        pack = self._load_pack()
+        bundle = self._find_fixture(pack, "valid-validator-run-evidence")
+        del bundle["artifact"]["work_trace"]
+        del bundle["artifact"]["output_metadata"]
+        del bundle["artifact"]["boundaries"]["package_install_performed"]
+        pack["fixtures"].append(bundle)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-validator-run-field", codes)
+        self.assertIn("validator-run-boundary-flag-missing", codes)
 
     def test_valid_materialized_inventory_path_under_approved_root_passes_path_check(self):
         pack = self._load_pack()
