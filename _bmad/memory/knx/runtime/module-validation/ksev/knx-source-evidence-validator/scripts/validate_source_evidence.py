@@ -18,6 +18,7 @@ REQUIRED_FIXTURE_TYPES = {
     "valid-validation-evidence",
     "valid-output-metadata",
     "valid-user-input-required",
+    "valid-decision-record",
     "missing-source-negative",
     "external-action-negative",
     "unsupported-inference-negative",
@@ -113,6 +114,27 @@ VALID_BLOCKING_STATUS = {"nonblocking", "blocking", "waived-blocking", "not-appl
 VALID_USER_INPUT_REASONS = {"safety", "boundary", "missing approval", "ambiguity", "missing source", "risk"}
 VALID_USER_INPUT_STATUS = {"open", "answered", "deferred", "closed"}
 REQUIRED_USER_INPUT_TEXT_FIELDS = {"user_input_required_id", "decision_needed", "created_at"}
+VALID_DECISION_TYPES = {
+    "profile",
+    "execution-policy",
+    "data-boundary",
+    "mature-tool",
+    "custom-code",
+    "source-evidence-contract",
+    "safety-validation",
+    "exception",
+}
+VALID_DECISION_STATUSES = {"accepted", "rejected", "deferred", "blocked", "waived", "superseded"}
+VALID_DECISION_APPROVAL_BASES = {
+    "user-specified",
+    "profile-derived",
+    "execution-policy-derived",
+    "data-boundary-derived",
+    "tool-review-derived",
+    "defaulted",
+    "unresolved",
+}
+REQUIRED_DECISION_TEXT_FIELDS = {"decision_record_id", "decision", "rationale", "scope", "created_at"}
 VALID_OUTPUT_TYPES = {"draft", "review-package", "report", "plan", "decision-support", "fixture-output", "other"}
 VALID_GENERATION_BOUNDARIES = {
     "deterministic-local",
@@ -940,6 +962,47 @@ def validate_user_input_required(fixture: dict[str, Any], findings: list[Finding
         add_finding(findings, "error", "user-input-status-invalid", "Invalid user-input status", fixture)
 
 
+def validate_decision_record(fixture: dict[str, Any], findings: list[Finding]) -> None:
+    artifact = fixture.get("artifact", {})
+    if not isinstance(artifact, dict) or "decision_record_id" not in artifact:
+        return
+
+    for field in (
+        "decision_type",
+        "status",
+        "decision",
+        "rationale",
+        "scope",
+        "approval_basis",
+        "source_references",
+        "risk_score",
+        "created_at",
+    ):
+        if field not in artifact:
+            add_finding(findings, "error", "missing-decision-field", f"Missing decision record field: {field}", fixture)
+
+    for field in sorted(REQUIRED_DECISION_TEXT_FIELDS):
+        if field in artifact and (
+            not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
+        ):
+            add_finding(findings, "error", "decision-text-field-invalid", f"Decision text field must be a non-empty string: {field}", fixture)
+    if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
+        add_finding(findings, "error", "decision-created-at-invalid", "Decision created_at must be an ISO date or datetime", fixture)
+    if artifact.get("decision_type") not in VALID_DECISION_TYPES:
+        add_finding(findings, "error", "decision-type-invalid", "Invalid decision_type", fixture)
+    if artifact.get("status") not in VALID_DECISION_STATUSES:
+        add_finding(findings, "error", "decision-status-invalid", "Invalid decision status", fixture)
+    if artifact.get("approval_basis") not in VALID_DECISION_APPROVAL_BASES:
+        add_finding(findings, "error", "decision-approval-basis-invalid", "Invalid decision approval_basis", fixture)
+    if not is_non_empty_string_list(artifact.get("source_references")):
+        add_finding(findings, "error", "decision-source-references-invalid", "source_references must be a string list", fixture)
+    if "supersedes" in artifact and not is_non_empty_string_list(artifact.get("supersedes")):
+        add_finding(findings, "error", "decision-supersedes-invalid", "supersedes must be a string list when present", fixture)
+    risk_score = artifact.get("risk_score")
+    if not is_int_not_bool(risk_score) or not 0 <= risk_score <= 9:
+        add_finding(findings, "error", "decision-risk-score-invalid", "risk_score must be an integer from 0 through 9", fixture)
+
+
 def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], approved_storage_root: Path) -> None:
     artifact = fixture.get("artifact", {})
     if not isinstance(artifact, dict):
@@ -1124,6 +1187,7 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
         validate_work_trace(fixture, findings)
         validate_validation_evidence(fixture, findings)
         validate_user_input_required(fixture, findings)
+        validate_decision_record(fixture, findings)
         validate_source_inventory(fixture, findings, approved_storage_root)
     validate_expected_evidence_ids(fixtures, findings)
     validate_unique_fixture_artifact_ids(fixtures, findings)

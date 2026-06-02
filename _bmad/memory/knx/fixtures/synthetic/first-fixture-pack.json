@@ -142,6 +142,30 @@
       }
     },
     {
+      "fixture_type": "valid-decision-record",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic decision record example only.",
+      "artifact_ids": ["dec-synth-valid-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "decision_record_id": "dec-synth-valid-001",
+        "decision_type": "source-evidence-contract",
+        "status": "accepted",
+        "decision": "Keep the synthetic output metadata fixture in the validator pack.",
+        "rationale": "The fixture provides a materialized generated-artifact target for cross-reference validation.",
+        "scope": "Synthetic first fixture pack only.",
+        "approval_basis": "defaulted",
+        "source_references": ["_bmad/memory/knx/source-evidence-contract.md"],
+        "risk_score": 1,
+        "expiration_or_review_condition": "Review if the output metadata contract changes.",
+        "supersedes": [],
+        "created_at": "2026-05-31"
+      }
+    },
+    {
       "fixture_type": "missing-source-negative",
       "fixture_pack_id": "synthetic-first-pack-2026-05-31",
       "synthetic_only_statement": "Synthetic missing-source negative example only.",

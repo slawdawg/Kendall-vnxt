@@ -31,7 +31,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
 
         self.assertEqual(result["status"], "PASS")
-        self.assertEqual(result["summary"]["fixture_count"], 15)
+        self.assertEqual(result["summary"]["fixture_count"], 16)
         self.assertEqual(result["summary"]["errors"], 0)
         self.assertEqual(result["summary"]["warnings"], 0)
         self.assertEqual(result["findings"], [])
@@ -624,6 +624,30 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("user-input-text-field-invalid", {finding["code"] for finding in result["findings"]})
+
+    def test_decision_record_rejects_invalid_shape(self):
+        pack = self._load_pack()
+        decision = self._find_fixture(pack, "valid-decision-record")
+        decision["artifact"]["decision_record_id"] = 42
+        decision["artifact"]["decision_type"] = "anything"
+        decision["artifact"]["status"] = "done"
+        decision["artifact"]["approval_basis"] = "because"
+        decision["artifact"]["source_references"] = [" "]
+        decision["artifact"]["risk_score"] = True
+        decision["artifact"]["supersedes"] = [""]
+        pack["fixtures"].append(decision)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("decision-text-field-invalid", codes)
+        self.assertIn("decision-type-invalid", codes)
+        self.assertIn("decision-status-invalid", codes)
+        self.assertIn("decision-approval-basis-invalid", codes)
+        self.assertIn("decision-source-references-invalid", codes)
+        self.assertIn("decision-risk-score-invalid", codes)
+        self.assertIn("decision-supersedes-invalid", codes)
 
     def test_output_metadata_rejects_missing_required_links(self):
         pack = self._load_pack()
