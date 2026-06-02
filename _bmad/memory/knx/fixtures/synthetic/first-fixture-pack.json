@@ -95,6 +95,31 @@
       }
     },
     {
+      "fixture_type": "valid-output-metadata",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic output metadata example only.",
+      "artifact_ids": ["out-synth-valid-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-05-31",
+      "artifact": {
+        "output_artifact_id": "out-synth-valid-001",
+        "output_type": "fixture-output",
+        "source_packet_ids": ["sp-synth-valid-001"],
+        "work_trace_id": "wt-synth-valid-001",
+        "validation_evidence_ids": ["ve-synth-valid-001"],
+        "decision_record_ids": [],
+        "generation_boundary": "deterministic-local",
+        "storage_location": "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+        "storage_boundary_basis": "synthetic-fixture-folder",
+        "source_support_summary": "synthetic",
+        "uncertainty": "none",
+        "result_status": "validated",
+        "created_at": "2026-05-31"
+      }
+    },
+    {
       "fixture_type": "valid-user-input-required",
       "fixture_pack_id": "synthetic-first-pack-2026-05-31",
       "synthetic_only_statement": "Synthetic user-input-required example only.",

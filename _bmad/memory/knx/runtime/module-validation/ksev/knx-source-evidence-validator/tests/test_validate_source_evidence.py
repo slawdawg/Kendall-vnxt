@@ -31,7 +31,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
 
         self.assertEqual(result["status"], "PASS")
-        self.assertEqual(result["summary"]["fixture_count"], 14)
+        self.assertEqual(result["summary"]["fixture_count"], 15)
         self.assertEqual(result["summary"]["errors"], 0)
         self.assertEqual(result["summary"]["warnings"], 0)
         self.assertEqual(result["findings"], [])
@@ -678,6 +678,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         trace = self._find_fixture(pack, "valid-work-trace")
         trace["artifact"]["source_packet_ids"] = ["sp-missing-001"]
+        trace["artifact"]["generated_artifact_ids"] = ["out-missing-001"]
         trace["artifact"]["validation_evidence_ids"] = ["ve-missing-001"]
         pack["fixtures"].append(trace)
 
@@ -690,6 +691,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("unknown-source-packet-id", codes)
+        self.assertIn("unknown-generated-artifact-id", codes)
         self.assertIn("unknown-validation-evidence-id", codes)
         self.assertIn("unknown-work-trace-id", codes)
 

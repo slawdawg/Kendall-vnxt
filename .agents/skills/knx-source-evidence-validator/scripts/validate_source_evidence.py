@@ -16,6 +16,7 @@ REQUIRED_FIXTURE_TYPES = {
     "valid-source-packet",
     "valid-work-trace",
     "valid-validation-evidence",
+    "valid-output-metadata",
     "valid-user-input-required",
     "missing-source-negative",
     "external-action-negative",
@@ -1069,6 +1070,7 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
     source_packet_ids = set()
     validation_evidence_ids = set()
     work_trace_ids = set()
+    output_artifact_ids = set()
 
     for fixture in fixtures:
         artifact = fixture.get("artifact", {})
@@ -1083,6 +1085,9 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
         work_trace_id = artifact.get("work_trace_id")
         if "output_artifact_id" not in artifact and isinstance(work_trace_id, str) and work_trace_id.strip():
             work_trace_ids.add(work_trace_id.strip())
+        output_artifact_id = artifact.get("output_artifact_id")
+        if isinstance(output_artifact_id, str) and output_artifact_id.strip():
+            output_artifact_ids.add(output_artifact_id.strip())
 
     for fixture in fixtures:
         artifact = fixture.get("artifact", {})
@@ -1094,6 +1099,10 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
         for evidence_id in artifact.get("validation_evidence_ids", []) if isinstance(artifact.get("validation_evidence_ids"), list) else []:
             if isinstance(evidence_id, str) and evidence_id.strip() and evidence_id.strip() not in validation_evidence_ids:
                 add_finding(findings, "error", "unknown-validation-evidence-id", f"Unknown validation_evidence_id reference: {evidence_id}", fixture)
+        if fixture.get("expected_validation_result") == "PASS":
+            for generated_artifact_id in artifact.get("generated_artifact_ids", []) if isinstance(artifact.get("generated_artifact_ids"), list) else []:
+                if isinstance(generated_artifact_id, str) and generated_artifact_id.strip() and generated_artifact_id.strip() not in output_artifact_ids:
+                    add_finding(findings, "error", "unknown-generated-artifact-id", f"Unknown generated_artifact_id reference: {generated_artifact_id}", fixture)
         work_trace_id = artifact.get("work_trace_id")
         if "output_artifact_id" in artifact and isinstance(work_trace_id, str) and work_trace_id.strip() and work_trace_id.strip() not in work_trace_ids:
             add_finding(findings, "error", "unknown-work-trace-id", f"Unknown work_trace_id reference: {work_trace_id}", fixture)
