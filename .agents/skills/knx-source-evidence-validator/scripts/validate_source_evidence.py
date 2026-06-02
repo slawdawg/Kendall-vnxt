@@ -981,6 +981,10 @@ def validate_user_input_required(fixture: dict[str, Any], findings: list[Finding
         add_finding(findings, "error", "user-input-source-references-invalid", "source_references must be a string list", fixture)
     if "allowed_choices" in artifact and not is_non_empty_string_list(artifact.get("allowed_choices")):
         add_finding(findings, "error", "user-input-allowed-choices-invalid", "allowed_choices must be a string list when present", fixture)
+    if "due_or_review_condition" in artifact and (
+        not isinstance(artifact.get("due_or_review_condition"), str) or not artifact.get("due_or_review_condition", "").strip()
+    ):
+        add_finding(findings, "error", "user-input-due-condition-invalid", "due_or_review_condition must be a non-empty string when present", fixture)
     if not is_non_empty_string_list(artifact.get("blocked_downstream_work"), require_non_empty=True):
         add_finding(
             findings,

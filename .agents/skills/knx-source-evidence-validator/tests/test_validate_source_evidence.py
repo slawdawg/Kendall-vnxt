@@ -601,6 +601,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         user_input["artifact"]["decision_needed"] = " "
         user_input["artifact"]["why_automation_cannot_proceed"] = "because"
         user_input["artifact"]["allowed_choices"] = "choose anything"
+        user_input["artifact"]["due_or_review_condition"] = " "
         user_input["artifact"]["blocked_downstream_work"] = []
         user_input["artifact"]["risk_if_guessed"] = "tiny"
         user_input["artifact"]["status"] = "waiting"
@@ -613,6 +614,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("user-input-text-field-invalid", codes)
         self.assertIn("user-input-reason-invalid", codes)
         self.assertIn("user-input-allowed-choices-invalid", codes)
+        self.assertIn("user-input-due-condition-invalid", codes)
         self.assertIn("user-input-blocked-work-invalid", codes)
         self.assertIn("user-input-risk-invalid", codes)
         self.assertIn("user-input-status-invalid", codes)
