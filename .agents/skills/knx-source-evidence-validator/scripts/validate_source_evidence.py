@@ -293,7 +293,13 @@ def add_finding(
 
 
 def is_iso_created_at(value: Any) -> bool:
-    return isinstance(value, str) and bool(ISO_CREATED_AT_PATTERN.match(value))
+    if not isinstance(value, str) or not ISO_CREATED_AT_PATTERN.match(value):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def load_fixture_pack(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]:

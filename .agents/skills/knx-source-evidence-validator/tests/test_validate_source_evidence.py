@@ -178,6 +178,29 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("pack-synthetic-statement-invalid", codes)
         self.assertIn("synthetic-statement-invalid", codes)
 
+    def test_created_at_rejects_impossible_calendar_dates(self):
+        pack = self._load_pack()
+        pack["created_at"] = "2026-99-99"
+        pack["fixtures"][0]["created_at"] = "2026-02-31"
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("pack-created-at-invalid", codes)
+        self.assertIn("fixture-created-at-invalid", codes)
+
+        examples = self._load_source_packet_examples()
+        examples["created_at"] = "2026-13-01"
+        examples["packets"][0]["created_at"] = "2026-04-31"
+
+        result = self._validate_temp_source_packet_examples(examples)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("example-set-created-at-invalid", codes)
+        self.assertIn("source-packet-created-at-invalid", codes)
+
     def test_risk_score_nine_requires_blocking_status(self):
         pack = self._load_pack()
         evidence = self._find_fixture(pack, "valid-validation-evidence")
