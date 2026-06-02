@@ -449,6 +449,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         examples = self._load_source_packet_examples()
         examples["title"] = ""
         examples["created_at"] = "today"
+        examples["created_by"] = " "
+        examples["status"] = "shared"
         examples["packets"][0]["title"] = " "
         examples["packets"][0]["source_location_or_description"] = ""
         examples["packets"][0]["created_at"] = "later"
@@ -459,6 +461,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("example-set-text-field-empty", codes)
         self.assertIn("example-set-created-at-invalid", codes)
+        self.assertIn("example-set-status-invalid", codes)
         self.assertIn("source-packet-text-field-empty", codes)
         self.assertIn("source-packet-created-at-invalid", codes)
 

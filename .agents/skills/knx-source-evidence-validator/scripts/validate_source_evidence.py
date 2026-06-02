@@ -164,7 +164,7 @@ REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS = {
     "created_by",
 }
 REQUIRED_PACK_TEXT_FIELDS = {"fixture_pack_id", "title", "synthetic_only_statement", "created_at"}
-REQUIRED_EXAMPLE_SET_TEXT_FIELDS = {"source_packet_example_set_id", "title", "created_at"}
+REQUIRED_EXAMPLE_SET_TEXT_FIELDS = {"source_packet_example_set_id", "title", "created_at", "created_by", "status"}
 REQUIRED_SOURCE_PACKET_FIELDS = {
     "source_packet_id",
     "title",
@@ -197,6 +197,7 @@ VALID_DOWNSTREAM_ALLOWED_USES = {
     "decision-support",
     "blocked",
 }
+VALID_EXAMPLE_SET_STATUSES = {"local-metadata-only-examples"}
 BOUNDARY_FALSE_FLAGS = {
     "source_contents_copied",
     "source_mutation_performed",
@@ -966,7 +967,7 @@ def validate_source_packet_examples(path: Path, approved_storage_root: Path | No
     if examples is None:
         return build_source_packet_examples_result(path, findings, 0, approved_storage_root)
 
-    for field in ("source_packet_example_set_id", "title", "created_at", "packets", "excluded_classes"):
+    for field in ("source_packet_example_set_id", "title", "created_at", "created_by", "status", "packets", "excluded_classes"):
         if field not in examples:
             add_finding(findings, "error", "missing-example-set-field", f"Missing top-level field: {field}")
 
@@ -975,6 +976,8 @@ def validate_source_packet_examples(path: Path, approved_storage_root: Path | No
             add_finding(findings, "error", "example-set-text-field-empty", f"Source packet example set text field must be non-empty: {field}")
     if "created_at" in examples and not is_iso_created_at(examples.get("created_at")):
         add_finding(findings, "error", "example-set-created-at-invalid", "Source packet example set created_at must be an ISO date or datetime")
+    if examples.get("status") not in VALID_EXAMPLE_SET_STATUSES:
+        add_finding(findings, "error", "example-set-status-invalid", "Source packet example set status is invalid")
 
     for flag in BOUNDARY_FALSE_FLAGS:
         if examples.get(flag) is not False:
