@@ -146,6 +146,27 @@ Materialized evidence:
 - `_bmad/memory/knx/runtime/greenfield-implementation/distribution-readiness/ksev-public-distribution-readiness-2026-06-01.md`
 - `_bmad/memory/knx/runtime/greenfield-implementation/distribution-readiness/ksev-public-distribution-readiness-2026-06-01.json`
 
+## Gate 5 Result
+
+Gate: GitHub/remotes.
+
+Status: accepted for local planning only.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/github-remote-readiness-gate-2026-06-01.md`
+
+Summary:
+
+- Approved local-only remote readiness planning.
+- Confirmed no remote is configured.
+- Did not approve or perform remote creation, push, pull, fetch, GitHub API calls, credentials, repository creation, PRs, issues, actions, releases, packages, or publication.
+
+Materialized evidence:
+
+- `_bmad/memory/knx/runtime/greenfield-implementation/remote-readiness/github-remote-readiness-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/remote-readiness/github-remote-readiness-2026-06-01.json`
+
 ## Next Action
 
-Proceed to Gate 5: GitHub/remotes.
+Proceed to Gate 6: company-facing sharing or evaluation access.

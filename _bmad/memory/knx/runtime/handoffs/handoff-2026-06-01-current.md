@@ -23,6 +23,7 @@ Status: local-only greenfield implementation lane open
 - Local writes are approved for scoped KNX module/config/help/report paths by `decisions/write-boundary-knx-local-2026-06-01.md`.
 - Metadata-only source inventory for approved KNX implementation paths is materialized under `_bmad/memory/knx/runtime/greenfield-implementation/inventory/`.
 - `ksev` public distribution readiness planning is materialized locally; publication remains blocked.
+- GitHub/remote readiness planning is materialized locally; remotes remain disabled.
 
 ## Latest Validation
 
@@ -84,6 +85,6 @@ Use `_bmad/memory/knx/runtime/greenfield-implementation/implementation-runway-20
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` to work through gated paths.
 
-Next gate is GitHub/remotes.
+Next gate is company-facing sharing or evaluation access.
 
 Parked and hard-gated paths remain closed unless explicitly reopened.
