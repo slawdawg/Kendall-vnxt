@@ -506,6 +506,10 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         source_packet["artifact_ids"] = ["sp-synth-different-001"]
         pack["fixtures"].append(source_packet)
 
+        decision = self._find_fixture(pack, "valid-decision-record")
+        decision["artifact_ids"] = ["dec-synth-different-001"]
+        pack["fixtures"].append(decision)
+
         result = self._validate_temp_pack(pack)
 
         self.assertEqual(result["status"], "FAIL")

@@ -540,6 +540,7 @@ def validate_common_fixture_fields(fixture: dict[str, Any], findings: list[Findi
                 "validation_evidence_id",
                 "user_input_required_id",
                 "source_inventory_id",
+                "decision_record_id",
             ):
                 primary_id = artifact.get(field)
                 if isinstance(primary_id, str) and primary_id.strip():
