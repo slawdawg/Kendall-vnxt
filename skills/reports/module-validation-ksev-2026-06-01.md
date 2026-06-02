@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 73 passed.
+- Unit tests: 74 passed.
 - Fixture validation: PASS.
 - Fixture count: 18.
 - Source packet example validation: PASS.
@@ -76,6 +76,7 @@ The standalone optional pack includes:
 - Controlled-field, boundary flag, path, checksum-deferral, and group-shape enforcement for runtime evidence inventory fixture artifacts.
 - Required field and controlled-vocabulary enforcement for synthetic work traces, validation evidence, user-input-required records, and output metadata fixtures.
 - Required field, boundary flag, and shape enforcement for validator run evidence bundles.
+- Source-reference enforcement for explicit decision records.
 - Non-empty text and required-list enforcement for work trace artifacts.
 - Non-empty string-list enforcement for fixture IDs, expected failed rules, work trace links/steps, validation references, user-input references/choices, and output metadata links.
 - Materialized-reference enforcement for source packet IDs, validation evidence IDs, and output work trace IDs.
@@ -138,7 +139,7 @@ Change:
 
 Verification:
 
-- Unit tests: 73 passed.
+- Unit tests: 74 passed.
 - Fixture validation: PASS, 18 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -221,3 +222,4 @@ Additional local hardening:
 - Added runtime evidence inventory fixture coverage with required-field, controlled-vocabulary, boundary-flag, checksum-deferral, path-boundary, group-shape, and list-shape checks.
 - Added validator run evidence bundle materialized-reference checks for work trace, validation evidence, and output metadata links.
 - Added materialized source inventory validation-evidence and mature-tool decision link checks.
+- Added explicit decision source-reference checks.
