@@ -579,7 +579,9 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
     def test_source_packet_examples_require_false_boundary_flags(self):
         examples = self._load_source_packet_examples()
         examples["external_send_performed"] = True
+        examples["runtime_assistant_behavior_added"] = True
         del examples["github_or_remote_operation_performed"]
+        del examples["package_install_performed"]
 
         result = self._validate_temp_source_packet_examples(examples)
 

@@ -210,6 +210,8 @@ BOUNDARY_FALSE_FLAGS = {
     "source_mutation_performed",
     "external_send_performed",
     "github_or_remote_operation_performed",
+    "package_install_performed",
+    "runtime_assistant_behavior_added",
     "customer_or_production_data_included",
     "credential_or_account_security_material_included",
 }

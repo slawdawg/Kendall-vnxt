@@ -29,6 +29,8 @@
     "source_mutation_performed": false,
     "external_send_performed": false,
     "github_or_remote_operation_performed": false,
+    "package_install_performed": false,
+    "runtime_assistant_behavior_added": false,
     "customer_or_production_data_included": false,
     "credential_or_account_security_material_included": false
   }

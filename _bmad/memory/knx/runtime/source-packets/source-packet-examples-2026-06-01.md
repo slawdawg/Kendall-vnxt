@@ -12,7 +12,7 @@ These examples cover the three approved first source packet classes:
 - `public-or-synthetic-sample-data`
 - `generated-report`
 
-The examples are metadata-only. They do not copy source contents, do not mutate source, and do not approve external sends or operational source intake.
+The examples are metadata-only. They do not copy source contents, do not mutate source, and do not approve external sends, package installs, runtime assistant behavior, or operational source intake.
 
 ## Example Packet Set
 
