@@ -356,6 +356,10 @@ def is_non_empty_string_list(value: Any, require_non_empty: bool = False) -> boo
     return all(isinstance(item, str) and bool(item.strip()) for item in value)
 
 
+def is_source_packet_id_reference(value: str) -> bool:
+    return value.startswith(("sp-", "knx-source-packet-"))
+
+
 def is_int_not_bool(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -1164,6 +1168,14 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
         for source_packet_id in artifact.get("source_packet_ids", []) if isinstance(artifact.get("source_packet_ids"), list) else []:
             if isinstance(source_packet_id, str) and source_packet_id.strip() and source_packet_id.strip() not in source_packet_ids:
                 add_finding(findings, "error", "unknown-source-packet-id", f"Unknown source_packet_id reference: {source_packet_id}", fixture)
+        for source_reference in artifact.get("source_references", []) if isinstance(artifact.get("source_references"), list) else []:
+            if (
+                isinstance(source_reference, str)
+                and source_reference.strip()
+                and is_source_packet_id_reference(source_reference.strip())
+                and source_reference.strip() not in source_packet_ids
+            ):
+                add_finding(findings, "error", "unknown-source-reference-id", f"Unknown source_references source packet ID: {source_reference}", fixture)
         for evidence_id in artifact.get("validation_evidence_ids", []) if isinstance(artifact.get("validation_evidence_ids"), list) else []:
             if isinstance(evidence_id, str) and evidence_id.strip() and evidence_id.strip() not in validation_evidence_ids:
                 add_finding(findings, "error", "unknown-validation-evidence-id", f"Unknown validation_evidence_id reference: {evidence_id}", fixture)

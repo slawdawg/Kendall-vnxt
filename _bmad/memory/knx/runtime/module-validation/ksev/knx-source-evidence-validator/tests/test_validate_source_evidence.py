@@ -715,6 +715,10 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         output["artifact"]["decision_record_ids"] = ["dec-missing-001"]
         pack["fixtures"].append(output)
 
+        user_input = self._find_fixture(pack, "valid-user-input-required")
+        user_input["artifact"]["source_references"] = ["sp-missing-ref-001"]
+        pack["fixtures"].append(user_input)
+
         decision = self._find_fixture(pack, "valid-decision-record")
         decision["artifact"]["supersedes"] = ["dec-missing-super-001"]
         pack["fixtures"].append(decision)
@@ -728,6 +732,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("unknown-validation-evidence-id", codes)
         self.assertIn("unknown-work-trace-id", codes)
         self.assertIn("unknown-decision-record-id", codes)
+        self.assertIn("unknown-source-reference-id", codes)
         self.assertIn("unknown-superseded-decision-record-id", codes)
 
     def test_reference_lists_reject_blank_elements(self):
