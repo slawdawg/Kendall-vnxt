@@ -507,6 +507,28 @@ def validate_common_fixture_fields(fixture: dict[str, Any], findings: list[Findi
     artifact_ids = fixture.get("artifact_ids")
     if not is_non_empty_string_list(artifact_ids, require_non_empty=True):
         add_finding(findings, "error", "artifact-ids-invalid", "artifact_ids must be a non-empty string list", fixture)
+    else:
+        artifact = fixture.get("artifact", {})
+        if isinstance(artifact, dict):
+            for field in (
+                "source_packet_id",
+                "output_artifact_id",
+                "work_trace_id",
+                "validation_evidence_id",
+                "user_input_required_id",
+                "source_inventory_id",
+            ):
+                primary_id = artifact.get(field)
+                if isinstance(primary_id, str) and primary_id.strip():
+                    if primary_id.strip() not in artifact_ids:
+                        add_finding(
+                            findings,
+                            "error",
+                            "artifact-id-mismatch",
+                            f"artifact_ids must include primary artifact field {field}",
+                            fixture,
+                        )
+                    break
 
     result = fixture.get("expected_validation_result")
     if result not in VALID_RESULTS:

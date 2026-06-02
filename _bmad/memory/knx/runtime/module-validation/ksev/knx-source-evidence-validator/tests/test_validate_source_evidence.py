@@ -500,6 +500,17 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("duplicate-artifact-id", {finding["code"] for finding in result["findings"]})
 
+    def test_fixture_artifact_ids_must_include_primary_artifact_id(self):
+        pack = self._load_pack()
+        source_packet = self._find_fixture(pack, "valid-source-packet")
+        source_packet["artifact_ids"] = ["sp-synth-different-001"]
+        pack["fixtures"].append(source_packet)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("artifact-id-mismatch", {finding["code"] for finding in result["findings"]})
+
     def test_risk_score_nine_requires_blocking_status(self):
         pack = self._load_pack()
         evidence = self._find_fixture(pack, "valid-validation-evidence")
