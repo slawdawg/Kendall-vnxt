@@ -228,6 +228,7 @@ REQUIRED_EXCLUDED_SOURCE_CLASSES = {
     "operational-source-intake",
 }
 DEFAULT_APPROVED_STORAGE_ROOT = Path("_bmad/memory/knx/runtime").resolve()
+KNX_MEMORY_ROOT = Path("_bmad/memory/knx").resolve()
 
 SECRET_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
@@ -659,6 +660,23 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
             add_finding(findings, "error", "output-generation-boundary-invalid", "Invalid generation_boundary", fixture)
         if artifact.get("storage_boundary_basis") not in VALID_STORAGE_BOUNDARY_BASES:
             add_finding(findings, "error", "output-storage-boundary-basis-invalid", "Invalid storage_boundary_basis", fixture)
+        storage_location = artifact.get("storage_location")
+        fixture_type = fixture.get("fixture_type")
+        if (
+            fixture_type != "forbidden-destination-negative"
+            and isinstance(storage_location, str)
+            and storage_location.strip()
+            and storage_location != "unresolved"
+            and not is_under_path(storage_location, approved_storage_root)
+            and not is_under_path(storage_location, KNX_MEMORY_ROOT)
+        ):
+            add_finding(
+                findings,
+                "error",
+                "output-storage-location-outside-approved-root",
+                "Output storage_location must stay under approved KNX storage",
+                fixture,
+            )
         if artifact.get("source_support_summary") not in VALID_SOURCE_SUPPORT_SUMMARIES:
             add_finding(findings, "error", "output-source-support-summary-invalid", "Invalid source_support_summary", fixture)
         if artifact.get("uncertainty") not in VALID_UNCERTAINTY:

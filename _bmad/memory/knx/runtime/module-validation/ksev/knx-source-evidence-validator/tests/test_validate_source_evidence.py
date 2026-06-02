@@ -537,6 +537,17 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("output-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
+    def test_output_metadata_storage_must_stay_under_knx_storage(self):
+        pack = self._load_pack()
+        output = self._find_fixture(pack, "unsupported-inference-negative")
+        output["artifact"]["storage_location"] = "C:/unapproved-runtime-state/synthetic-output.json"
+        pack["fixtures"].append(output)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("output-storage-location-outside-approved-root", {finding["code"] for finding in result["findings"]})
+
     def test_fixture_references_must_resolve_to_materialized_ids(self):
         pack = self._load_pack()
 
