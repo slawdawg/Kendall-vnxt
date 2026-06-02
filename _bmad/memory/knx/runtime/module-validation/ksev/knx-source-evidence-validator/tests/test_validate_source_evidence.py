@@ -676,8 +676,10 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         examples["packets"][0]["source_support_level"] = "maybe"
         examples["packets"][0]["permitted_processing_boundary"] = "external-by-default"
         examples["packets"][0]["permitted_storage_boundary"] = "anywhere"
+        examples["packets"][0]["downstream_allowed_use"] = "ship"
         examples["packets"][0]["source_operation"] = "ship-it"
         examples["packets"][0]["uncertainty"] = "shrug"
+        examples["packets"][0]["forbidden_content_check"] = "concerns"
 
         result = self._validate_temp_source_packet_examples(examples)
         codes = {finding["code"] for finding in result["findings"]}
@@ -688,8 +690,10 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("source-packet-support-level-invalid", codes)
         self.assertIn("source-packet-processing-boundary-invalid", codes)
         self.assertIn("source-packet-storage-boundary-invalid", codes)
+        self.assertIn("source-packet-downstream-use-invalid", codes)
         self.assertIn("source-packet-operation-invalid", codes)
         self.assertIn("source-packet-uncertainty-invalid", codes)
+        self.assertIn("source-packet-forbidden-content-not-pass", codes)
 
     def test_source_packet_example_result_can_write_reports(self):
         result = validator.validate_source_packet_examples(SOURCE_PACKET_EXAMPLES)
