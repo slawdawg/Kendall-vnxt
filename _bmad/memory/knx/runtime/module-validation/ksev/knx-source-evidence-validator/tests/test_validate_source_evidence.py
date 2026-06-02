@@ -711,6 +711,10 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         output["artifact"]["decision_record_ids"] = ["dec-missing-001"]
         pack["fixtures"].append(output)
 
+        decision = self._find_fixture(pack, "valid-decision-record")
+        decision["artifact"]["supersedes"] = ["dec-missing-super-001"]
+        pack["fixtures"].append(decision)
+
         result = self._validate_temp_pack(pack)
         codes = {finding["code"] for finding in result["findings"]}
 
@@ -720,6 +724,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("unknown-validation-evidence-id", codes)
         self.assertIn("unknown-work-trace-id", codes)
         self.assertIn("unknown-decision-record-id", codes)
+        self.assertIn("unknown-superseded-decision-record-id", codes)
 
     def test_reference_lists_reject_blank_elements(self):
         pack = self._load_pack()

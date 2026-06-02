@@ -1169,6 +1169,9 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
         for decision_record_id in artifact.get("decision_record_ids", []) if isinstance(artifact.get("decision_record_ids"), list) else []:
             if isinstance(decision_record_id, str) and decision_record_id.strip() and decision_record_id.strip() not in decision_record_ids:
                 add_finding(findings, "error", "unknown-decision-record-id", f"Unknown decision_record_id reference: {decision_record_id}", fixture)
+        for superseded_id in artifact.get("supersedes", []) if isinstance(artifact.get("supersedes"), list) else []:
+            if isinstance(superseded_id, str) and superseded_id.strip() and superseded_id.strip() not in decision_record_ids:
+                add_finding(findings, "error", "unknown-superseded-decision-record-id", f"Unknown superseded decision_record_id reference: {superseded_id}", fixture)
         if fixture.get("expected_validation_result") == "PASS":
             for generated_artifact_id in artifact.get("generated_artifact_ids", []) if isinstance(artifact.get("generated_artifact_ids"), list) else []:
                 if isinstance(generated_artifact_id, str) and generated_artifact_id.strip() and generated_artifact_id.strip() not in output_artifact_ids:
