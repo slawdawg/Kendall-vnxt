@@ -101,6 +101,12 @@ VALID_VALIDATION_TYPES = {
     "manual-review",
     "other",
 }
+REQUIRED_VALIDATION_TEXT_FIELDS = {
+    "validation_evidence_id",
+    "command_or_check_run",
+    "reviewer",
+    "created_at",
+}
 VALID_BLOCKING_STATUS = {"nonblocking", "blocking", "waived-blocking", "not-applicable"}
 VALID_USER_INPUT_REASONS = {"safety", "boundary", "missing approval", "ambiguity", "missing source", "risk"}
 VALID_USER_INPUT_STATUS = {"open", "answered", "deferred", "closed"}
@@ -643,6 +649,9 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
             add_finding(findings, "error", "artifact-under-validation-invalid", "Invalid artifact_under_validation", fixture)
         if artifact.get("validation_type") not in VALID_VALIDATION_TYPES:
             add_finding(findings, "error", "validation-type-invalid", "Invalid validation_type", fixture)
+        for field in sorted(REQUIRED_VALIDATION_TEXT_FIELDS):
+            if field in artifact and not str(artifact.get(field, "")).strip():
+                add_finding(findings, "error", "validation-text-field-empty", f"Validation evidence text field must be non-empty: {field}", fixture)
         if artifact.get("result") not in VALID_RESULTS:
             add_finding(findings, "error", "validation-result-invalid", "Invalid validation result", fixture)
         if not isinstance(artifact.get("failed_rules"), list):

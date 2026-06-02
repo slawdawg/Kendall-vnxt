@@ -246,6 +246,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         evidence = self._find_fixture(pack, "valid-validation-evidence")
         evidence["artifact"]["artifact_under_validation"] = "anything"
         evidence["artifact"]["validation_type"] = "vibes"
+        evidence["artifact"]["command_or_check_run"] = ""
+        evidence["artifact"]["reviewer"] = " "
         evidence["artifact"]["result"] = "OK"
         evidence["artifact"]["failed_rules"] = "none"
         evidence["artifact"]["blocking_status"] = "maybe-blocking"
@@ -258,6 +260,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("artifact-under-validation-invalid", codes)
         self.assertIn("validation-type-invalid", codes)
+        self.assertIn("validation-text-field-empty", codes)
         self.assertIn("validation-result-invalid", codes)
         self.assertIn("validation-failed-rules-invalid", codes)
         self.assertIn("blocking-status-invalid", codes)

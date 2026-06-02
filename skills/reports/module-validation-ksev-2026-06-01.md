@@ -65,6 +65,7 @@ The standalone optional pack includes:
 - Controlled-vocabulary enforcement for fixture source packet artifacts.
 - Controlled-field enforcement for source inventory fixture artifacts.
 - Required field and controlled-vocabulary enforcement for synthetic work traces, validation evidence, user-input-required records, and output metadata fixtures.
+- Non-empty text enforcement for validation evidence identity, command/check, reviewer, and date fields.
 - Storage-boundary-basis enforcement for output metadata fixtures.
 - Non-empty text enforcement for output metadata identity, trace, storage, and date fields.
 - Validator tests.
@@ -135,6 +136,7 @@ Additional local hardening:
 - Added controlled-field checks for source inventory fixture artifacts.
 - Added required field and controlled-vocabulary checks for synthetic work trace artifacts.
 - Added required field and controlled-vocabulary checks for validation evidence artifacts.
+- Added non-empty text checks for validation evidence identity, command/check, reviewer, and date fields.
 - Added required field and controlled-vocabulary checks for user-input-required artifacts.
 - Added required link and controlled-vocabulary checks for output metadata artifacts.
 - Added storage-boundary-basis checks for output metadata artifacts.
