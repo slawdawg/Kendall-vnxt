@@ -174,6 +174,31 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("json-parse-failed", {finding["code"] for finding in result["findings"]})
 
+    def test_missing_inputs_fail_cleanly(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing = Path(temp_dir) / "missing.json"
+
+            fixture_result = validator.validate_fixture_pack(missing)
+            source_packet_result = validator.validate_source_packet_examples(missing)
+
+        self.assertEqual(fixture_result["status"], "FAIL")
+        self.assertEqual(source_packet_result["status"], "FAIL")
+        self.assertIn("input-unreadable", {finding["code"] for finding in fixture_result["findings"]})
+        self.assertIn("input-unreadable", {finding["code"] for finding in source_packet_result["findings"]})
+
+    def test_top_level_json_must_be_object(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            array_input = Path(temp_dir) / "array.json"
+            array_input.write_text("[]", encoding="utf-8")
+
+            fixture_result = validator.validate_fixture_pack(array_input)
+            source_packet_result = validator.validate_source_packet_examples(array_input)
+
+        self.assertEqual(fixture_result["status"], "FAIL")
+        self.assertEqual(source_packet_result["status"], "FAIL")
+        self.assertIn("top-level-not-object", {finding["code"] for finding in fixture_result["findings"]})
+        self.assertIn("top-level-not-object", {finding["code"] for finding in source_packet_result["findings"]})
+
     def test_fixture_pack_rejects_malformed_shape(self):
         pack = self._load_pack()
         del pack["title"]
