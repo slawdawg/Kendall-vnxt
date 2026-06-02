@@ -99,7 +99,7 @@ Use `_bmad/memory/knx/runtime/greenfield-implementation/implementation-runway-20
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as the completed local planning record for Gates 1-11.
 
-Latest concrete local task: refreshed the scoped implementation evidence baseline and hardened `ksev` synthetic fixture, source packet, source inventory, work trace, validation evidence, user-input-required, and output metadata validation, including work-trace list checks, validation/output text-field checks, and output storage-boundary basis.
+Latest concrete local task: refreshed the scoped implementation evidence baseline and hardened `ksev` synthetic fixture, source packet, source inventory, work trace, validation evidence, user-input-required, and output metadata validation, including work-trace/user-input list checks, validation/output text-field checks, and output storage-boundary basis.
 
 Next concrete task is to continue scoped `ksev`/KNX module hardening or evidence validation work inside the approved local-only lane.
 

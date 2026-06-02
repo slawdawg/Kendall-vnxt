@@ -111,6 +111,7 @@ REQUIRED_VALIDATION_TEXT_FIELDS = {
 VALID_BLOCKING_STATUS = {"nonblocking", "blocking", "waived-blocking", "not-applicable"}
 VALID_USER_INPUT_REASONS = {"safety", "boundary", "missing approval", "ambiguity", "missing source", "risk"}
 VALID_USER_INPUT_STATUS = {"open", "answered", "deferred", "closed"}
+REQUIRED_USER_INPUT_TEXT_FIELDS = {"user_input_required_id", "decision_needed", "created_at"}
 VALID_OUTPUT_TYPES = {"draft", "review-package", "report", "plan", "decision-support", "fixture-output", "other"}
 VALID_GENERATION_BOUNDARIES = {
     "deterministic-local",
@@ -704,10 +705,15 @@ def validate_user_input_required(fixture: dict[str, Any], findings: list[Finding
 
     if not artifact.get("decision_needed"):
         add_finding(findings, "error", "user-input-decision-missing", "decision_needed is required", fixture)
+    for field in sorted(REQUIRED_USER_INPUT_TEXT_FIELDS):
+        if field in artifact and not str(artifact.get(field, "")).strip():
+            add_finding(findings, "error", "user-input-text-field-empty", f"User-input text field must be non-empty: {field}", fixture)
     if artifact.get("why_automation_cannot_proceed") not in VALID_USER_INPUT_REASONS:
         add_finding(findings, "error", "user-input-reason-invalid", "Invalid why_automation_cannot_proceed", fixture)
     if not isinstance(artifact.get("source_references"), list):
         add_finding(findings, "error", "user-input-source-references-invalid", "source_references must be a list", fixture)
+    if "allowed_choices" in artifact and not isinstance(artifact.get("allowed_choices"), list):
+        add_finding(findings, "error", "user-input-allowed-choices-invalid", "allowed_choices must be a list when present", fixture)
     if not isinstance(artifact.get("blocked_downstream_work"), list) or not artifact.get("blocked_downstream_work"):
         add_finding(
             findings,

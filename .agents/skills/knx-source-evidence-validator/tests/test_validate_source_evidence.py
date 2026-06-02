@@ -209,7 +209,10 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
     def test_user_input_required_rejects_invalid_controlled_vocab(self):
         pack = self._load_pack()
         user_input = self._find_fixture(pack, "valid-user-input-required")
+        user_input["artifact"]["user_input_required_id"] = ""
+        user_input["artifact"]["decision_needed"] = " "
         user_input["artifact"]["why_automation_cannot_proceed"] = "because"
+        user_input["artifact"]["allowed_choices"] = "choose anything"
         user_input["artifact"]["blocked_downstream_work"] = []
         user_input["artifact"]["risk_if_guessed"] = "tiny"
         user_input["artifact"]["status"] = "waiting"
@@ -219,7 +222,9 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
+        self.assertIn("user-input-text-field-empty", codes)
         self.assertIn("user-input-reason-invalid", codes)
+        self.assertIn("user-input-allowed-choices-invalid", codes)
         self.assertIn("user-input-blocked-work-invalid", codes)
         self.assertIn("user-input-risk-invalid", codes)
         self.assertIn("user-input-status-invalid", codes)
