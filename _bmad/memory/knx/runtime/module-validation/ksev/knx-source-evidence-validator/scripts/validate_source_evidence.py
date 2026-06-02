@@ -1038,6 +1038,25 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
                 "WAIVED validation evidence must use waived-blocking status",
                 fixture,
             )
+        if artifact.get("result") != "WAIVED":
+            waiver_id = artifact.get("waiver_id")
+            waiver_reason = artifact.get("waiver_reason")
+            if isinstance(waiver_id, str) and waiver_id.strip() not in {"", "none"}:
+                add_finding(
+                    findings,
+                    "error",
+                    "non-waived-waiver-id-present",
+                    "Only WAIVED validation evidence may link waiver_id",
+                    fixture,
+                )
+            if isinstance(waiver_reason, str) and waiver_reason.strip():
+                add_finding(
+                    findings,
+                    "error",
+                    "non-waived-waiver-reason-present",
+                    "Only WAIVED validation evidence may include waiver_reason",
+                    fixture,
+                )
         if artifact.get("blocking_status") == "waived-blocking" and artifact.get("result") != "WAIVED":
             add_finding(
                 findings,
