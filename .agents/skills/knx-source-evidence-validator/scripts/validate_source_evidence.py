@@ -837,6 +837,12 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
                 "evidence_references must be a non-empty string list",
                 fixture,
             )
+        if "waiver_id" in artifact and (
+            not isinstance(artifact.get("waiver_id"), str) or not artifact.get("waiver_id", "").strip()
+        ):
+            add_finding(findings, "error", "waiver-id-invalid", "waiver_id must be a non-empty string", fixture)
+        if "waiver_reason" in artifact and not isinstance(artifact.get("waiver_reason"), str):
+            add_finding(findings, "error", "waiver-reason-invalid", "waiver_reason must be a string", fixture)
         if artifact.get("result") == "WAIVED" and (
             not isinstance(artifact.get("waiver_reason"), str) or not artifact.get("waiver_reason", "").strip()
         ):
