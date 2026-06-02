@@ -832,6 +832,11 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         source_support_evidence["artifact"]["artifact_under_validation"] = "work trace"
         pack["fixtures"].append(source_support_evidence)
 
+        boundary_evidence = self._find_fixture(pack, "valid-validation-evidence")
+        boundary_evidence["artifact"]["validation_type"] = "boundary-check"
+        boundary_evidence["artifact"]["artifact_under_validation"] = "work trace"
+        pack["fixtures"].append(boundary_evidence)
+
         result = self._validate_temp_pack(pack)
         codes = {finding["code"] for finding in result["findings"]}
 
@@ -845,6 +850,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("validation-pass-has-failed-rules", codes)
         self.assertIn("validation-pass-blocking-status-invalid", codes)
         self.assertIn("source-support-validation-target-invalid", codes)
+        self.assertIn("boundary-validation-target-invalid", codes)
         self.assertIn("validation-evidence-references-invalid", codes)
 
     def test_validation_evidence_text_fields_must_be_strings(self):

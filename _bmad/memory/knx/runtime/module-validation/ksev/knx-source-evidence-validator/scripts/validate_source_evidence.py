@@ -892,6 +892,8 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
             add_finding(findings, "error", "validation-type-invalid", "Invalid validation_type", fixture)
         if artifact.get("validation_type") == "source-support-check" and artifact.get("artifact_under_validation") not in {"output", "source packet"}:
             add_finding(findings, "error", "source-support-validation-target-invalid", "source-support-check must validate output or source packet artifacts", fixture)
+        if artifact.get("validation_type") == "boundary-check" and artifact.get("artifact_under_validation") not in {"output", "source packet", "policy file"}:
+            add_finding(findings, "error", "boundary-validation-target-invalid", "boundary-check must validate output, source packet, or policy file artifacts", fixture)
         for field in sorted(REQUIRED_VALIDATION_TEXT_FIELDS):
             if field in artifact and (
                 not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
