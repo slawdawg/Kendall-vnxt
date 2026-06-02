@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 75 passed.
+- Unit tests: 76 passed.
 - Fixture validation: PASS.
 - Fixture count: 18.
 - Source packet example validation: PASS.
@@ -65,6 +65,7 @@ The standalone optional pack includes:
 - Duplicate-ID enforcement for fixture artifact IDs and source packet example IDs.
 - Explicit synthetic-statement enforcement for fixture packs and fixture entries.
 - Required `created_by` and contract-reference enforcement for fixture packs.
+- Required synthetic fixture-pack location enforcement.
 - Non-empty text enforcement for fixture pack and source packet example set identity/date fields.
 - ISO date/datetime shape and calendar-value enforcement for fixture pack, fixture, artifact, and source packet example `created_at` fields.
 - Full identity-field and non-empty text enforcement for fixture source packet artifacts.
@@ -140,7 +141,7 @@ Change:
 
 Verification:
 
-- Unit tests: 75 passed.
+- Unit tests: 76 passed.
 - Fixture validation: PASS, 18 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -225,3 +226,4 @@ Additional local hardening:
 - Added materialized source inventory validation-evidence and mature-tool decision link checks.
 - Added explicit decision source-reference checks.
 - Added WAIVED validation evidence waiver ID and waiver decision reference checks.
+- Added synthetic fixture-pack root location checks.
