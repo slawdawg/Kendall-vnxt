@@ -123,6 +123,13 @@ VALID_SOURCE_SUPPORT_SUMMARIES = {
     "mixed",
 }
 VALID_OUTPUT_STATUSES = {"draft", "ready-for-review", "validated", "blocked", "superseded"}
+VALID_STORAGE_BOUNDARY_BASES = {
+    "_bmad/memory/knx",
+    "approved-storage-root",
+    "synthetic-fixture-folder",
+    "decision-record",
+    "unresolved",
+}
 VALID_SOURCE_ROOT_APPROVAL_BASES = {"user-specified", "data-boundary-derived", "decision-record", "unresolved"}
 VALID_SOURCE_INVENTORY_SCOPES = {
     "tracked-files",
@@ -493,6 +500,7 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
             "decision_record_ids",
             "generation_boundary",
             "storage_location",
+            "storage_boundary_basis",
             "source_support_summary",
             "uncertainty",
             "result_status",
@@ -519,6 +527,8 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
             add_finding(findings, "error", "output-decision-record-ids-invalid", "decision_record_ids must be a list", fixture)
         if artifact.get("generation_boundary") not in VALID_GENERATION_BOUNDARIES:
             add_finding(findings, "error", "output-generation-boundary-invalid", "Invalid generation_boundary", fixture)
+        if artifact.get("storage_boundary_basis") not in VALID_STORAGE_BOUNDARY_BASES:
+            add_finding(findings, "error", "output-storage-boundary-basis-invalid", "Invalid storage_boundary_basis", fixture)
         if artifact.get("source_support_summary") not in VALID_SOURCE_SUPPORT_SUMMARIES:
             add_finding(findings, "error", "output-source-support-summary-invalid", "Invalid source_support_summary", fixture)
         if artifact.get("uncertainty") not in VALID_UNCERTAINTY:
