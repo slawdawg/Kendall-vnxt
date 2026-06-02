@@ -322,6 +322,16 @@ def is_non_empty_string_list(value: Any, require_non_empty: bool = False) -> boo
     return all(isinstance(item, str) and bool(item.strip()) for item in value)
 
 
+def duplicate_strings(values: list[str]) -> list[str]:
+    seen = set()
+    duplicates = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    return sorted(duplicates)
+
+
 def load_fixture_pack(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]:
     findings: list[Finding] = []
     try:
@@ -875,6 +885,17 @@ def validate_expected_evidence_ids(fixtures: list[dict[str, Any]], findings: lis
         )
 
 
+def validate_unique_fixture_artifact_ids(fixtures: list[dict[str, Any]], findings: list[Finding]) -> None:
+    artifact_ids = []
+    for fixture in fixtures:
+        fixture_artifact_ids = fixture.get("artifact_ids")
+        if isinstance(fixture_artifact_ids, list):
+            artifact_ids.extend(item.strip() for item in fixture_artifact_ids if isinstance(item, str) and item.strip())
+
+    for artifact_id in duplicate_strings(artifact_ids):
+        add_finding(findings, "error", "duplicate-artifact-id", f"Fixture artifact_id is duplicated: {artifact_id}")
+
+
 def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None) -> dict[str, Any]:
     if approved_storage_root is None:
         approved_storage_root = load_approved_storage_root()
@@ -893,6 +914,7 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
         validate_user_input_required(fixture, findings)
         validate_source_inventory(fixture, findings, approved_storage_root)
     validate_expected_evidence_ids(fixtures, findings)
+    validate_unique_fixture_artifact_ids(fixtures, findings)
 
     return build_result(path, findings, len(fixtures), approved_storage_root)
 
@@ -937,6 +959,23 @@ def validate_source_packet_examples(path: Path, approved_storage_root: Path | No
             add_finding(findings, "error", "source-packet-not-object", "Each source packet example must be an object")
             continue
         validate_source_packet_example(packet, findings)
+
+    packet_ids = [
+        packet.get("source_packet_id").strip()
+        for packet in packets
+        if isinstance(packet, dict)
+        and isinstance(packet.get("source_packet_id"), str)
+        and packet.get("source_packet_id").strip()
+    ]
+    for packet_id in duplicate_strings(packet_ids):
+        findings.append(
+            Finding(
+                "error",
+                "duplicate-source-packet-id",
+                f"Source packet example ID is duplicated: {packet_id}",
+                artifact_id=packet_id,
+            )
+        )
 
     return build_source_packet_examples_result(path, findings, len(packets), approved_storage_root)
 

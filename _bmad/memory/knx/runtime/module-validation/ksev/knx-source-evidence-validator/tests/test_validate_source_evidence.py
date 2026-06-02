@@ -201,6 +201,16 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("example-set-created-at-invalid", codes)
         self.assertIn("source-packet-created-at-invalid", codes)
 
+    def test_fixture_artifact_ids_must_be_unique(self):
+        pack = self._load_pack()
+        duplicate_source_packet = self._find_fixture(pack, "valid-source-packet")
+        pack["fixtures"].append(duplicate_source_packet)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("duplicate-artifact-id", {finding["code"] for finding in result["findings"]})
+
     def test_risk_score_nine_requires_blocking_status(self):
         pack = self._load_pack()
         evidence = self._find_fixture(pack, "valid-validation-evidence")
@@ -428,6 +438,15 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("example-excluded-classes-invalid", codes)
         self.assertIn("example-excluded-class-missing", codes)
+
+    def test_source_packet_example_ids_must_be_unique(self):
+        examples = self._load_source_packet_examples()
+        examples["packets"][1]["source_packet_id"] = examples["packets"][0]["source_packet_id"]
+
+        result = self._validate_temp_source_packet_examples(examples)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("duplicate-source-packet-id", {finding["code"] for finding in result["findings"]})
 
     def test_source_packet_examples_reject_invalid_controlled_vocab(self):
         examples = self._load_source_packet_examples()

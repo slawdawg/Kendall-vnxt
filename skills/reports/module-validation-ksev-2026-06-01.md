@@ -61,6 +61,7 @@ The standalone optional pack includes:
 - Controlled-vocabulary enforcement for source packet example owner, approval basis, support level, processing boundary, storage boundary, operation, and uncertainty fields.
 - Non-empty text enforcement for source packet example identity and description fields.
 - Required excluded-source-class enforcement for source packet example sets.
+- Duplicate-ID enforcement for fixture artifact IDs and source packet example IDs.
 - Explicit synthetic-statement enforcement for fixture packs and fixture entries.
 - Non-empty text enforcement for fixture pack and source packet example set identity/date fields.
 - ISO date/datetime shape and calendar-value enforcement for fixture pack, fixture, artifact, and source packet example `created_at` fields.
@@ -129,7 +130,7 @@ Change:
 
 Verification:
 
-- Unit tests: 27 passed.
+- Unit tests: 29 passed.
 - Fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -138,6 +139,7 @@ Additional local hardening:
 
 - Added non-empty text checks for source packet example identity and description fields.
 - Added required excluded-source-class checks for source packet example sets.
+- Added duplicate-ID checks for fixture artifact IDs and source packet example IDs.
 - Added non-empty text checks for fixture pack and source packet example set identity/date fields.
 - Added ISO date/datetime shape and calendar-value checks for fixture pack, fixture, artifact, and source packet example `created_at` fields.
 - Added explicit synthetic-statement checks for fixture packs and fixture entries.
