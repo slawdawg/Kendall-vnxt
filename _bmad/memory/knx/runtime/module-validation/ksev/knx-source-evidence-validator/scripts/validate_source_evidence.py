@@ -535,8 +535,16 @@ def validate_source_packet(fixture: dict[str, Any], findings: list[Finding]) -> 
     expected_result = fixture.get("expected_validation_result")
 
     for field in sorted(REQUIRED_SOURCE_PACKET_TEXT_FIELDS):
-        if field in artifact and not str(artifact.get(field, "")).strip():
-            add_finding(findings, "error", "fixture-source-packet-text-field-empty", f"Source packet text field must be non-empty: {field}", fixture)
+        if field in artifact and (
+            not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
+        ):
+            add_finding(
+                findings,
+                "error",
+                "fixture-source-packet-text-field-invalid",
+                f"Source packet text field must be a non-empty string: {field}",
+                fixture,
+            )
     if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
         add_finding(findings, "error", "fixture-source-packet-created-at-invalid", "Source packet created_at must be an ISO date or datetime", fixture)
     if "source_references" in artifact and not is_non_empty_string_list(artifact.get("source_references")):

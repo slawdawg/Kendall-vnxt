@@ -115,7 +115,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         result = self._validate_temp_pack(pack)
 
         self.assertEqual(result["status"], "FAIL")
-        self.assertIn("fixture-source-packet-text-field-empty", {finding["code"] for finding in result["findings"]})
+        self.assertIn("fixture-source-packet-text-field-invalid", {finding["code"] for finding in result["findings"]})
+
+    def test_fixture_source_packet_text_fields_must_be_strings(self):
+        pack = self._load_pack()
+        source_packet = self._find_fixture(pack, "valid-source-packet")
+        source_packet["artifact"]["source_packet_id"] = 42
+        source_packet["artifact"]["source_location_or_description"] = ["not", "a", "string"]
+        pack["fixtures"].append(source_packet)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("fixture-source-packet-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
     def test_fixture_source_packet_rejects_blank_optional_list_entries(self):
         pack = self._load_pack()
