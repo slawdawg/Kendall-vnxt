@@ -174,6 +174,46 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("json-parse-failed", {finding["code"] for finding in result["findings"]})
 
+    def test_fixture_pack_rejects_malformed_shape(self):
+        pack = self._load_pack()
+        del pack["title"]
+        pack["fixtures"] = "not-a-list"
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-pack-field", codes)
+        self.assertIn("fixtures-not-list", codes)
+
+        pack = self._load_pack()
+        fixture = self._find_fixture(pack, "valid-source-packet")
+        fixture["fixture_type"] = 42
+        pack["fixtures"].append(fixture)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("fixture-type-invalid", codes)
+
+        pack = self._load_pack()
+        fixture = self._find_fixture(pack, "valid-source-packet")
+        fixture["expected_validation_result"] = "DONE"
+        fixture["expected_failed_rules"] = "none"
+        fixture["forbidden_content_check"] = "unknown"
+        fixture["artifact"] = "not-an-object"
+        pack["fixtures"].append(fixture)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("expected-result-invalid", codes)
+        self.assertIn("expected-failed-rules-invalid", codes)
+        self.assertIn("forbidden-content-check-invalid", codes)
+        self.assertIn("artifact-not-object", codes)
+
     def test_synthetic_statements_must_explicitly_say_synthetic(self):
         pack = self._load_pack()
         pack["fixture_pack_id"] = ""
