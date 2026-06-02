@@ -792,6 +792,17 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
             add_finding(findings, "error", "output-generation-boundary-invalid", "Invalid generation_boundary", fixture)
         if artifact.get("storage_boundary_basis") not in VALID_STORAGE_BOUNDARY_BASES:
             add_finding(findings, "error", "output-storage-boundary-basis-invalid", "Invalid storage_boundary_basis", fixture)
+        elif artifact.get("storage_boundary_basis") == "decision-record" and not is_non_empty_string_list(
+            artifact.get("decision_record_ids"),
+            require_non_empty=True,
+        ):
+            add_finding(
+                findings,
+                "error",
+                "output-decision-boundary-links-invalid",
+                "decision-record storage boundary outputs must link decision_record_ids",
+                fixture,
+            )
         storage_location = artifact.get("storage_location")
         if (
             fixture_type != "forbidden-destination-negative"

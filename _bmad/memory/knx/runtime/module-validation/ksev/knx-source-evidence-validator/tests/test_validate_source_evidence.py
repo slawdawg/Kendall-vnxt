@@ -908,6 +908,18 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("output-storage-location-outside-approved-root", {finding["code"] for finding in result["findings"]})
 
+    def test_output_metadata_decision_boundary_requires_decision_link(self):
+        pack = self._load_pack()
+        output = self._find_fixture(pack, "valid-output-metadata")
+        output["artifact"]["storage_boundary_basis"] = "decision-record"
+        output["artifact"]["decision_record_ids"] = []
+        pack["fixtures"].append(output)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("output-decision-boundary-links-invalid", {finding["code"] for finding in result["findings"]})
+
     def test_fixture_references_must_resolve_to_materialized_ids(self):
         pack = self._load_pack()
 
