@@ -442,12 +442,24 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
-        self.assertIn("user-input-text-field-empty", codes)
+        self.assertIn("user-input-text-field-invalid", codes)
         self.assertIn("user-input-reason-invalid", codes)
         self.assertIn("user-input-allowed-choices-invalid", codes)
         self.assertIn("user-input-blocked-work-invalid", codes)
         self.assertIn("user-input-risk-invalid", codes)
         self.assertIn("user-input-status-invalid", codes)
+
+    def test_user_input_required_text_fields_must_be_strings(self):
+        pack = self._load_pack()
+        user_input = self._find_fixture(pack, "valid-user-input-required")
+        user_input["artifact"]["user_input_required_id"] = 42
+        user_input["artifact"]["decision_needed"] = ["not", "a", "string"]
+        pack["fixtures"].append(user_input)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("user-input-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
     def test_output_metadata_rejects_missing_required_links(self):
         pack = self._load_pack()

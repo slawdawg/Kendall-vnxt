@@ -812,8 +812,16 @@ def validate_user_input_required(fixture: dict[str, Any], findings: list[Finding
     if not artifact.get("decision_needed"):
         add_finding(findings, "error", "user-input-decision-missing", "decision_needed is required", fixture)
     for field in sorted(REQUIRED_USER_INPUT_TEXT_FIELDS):
-        if field in artifact and not str(artifact.get(field, "")).strip():
-            add_finding(findings, "error", "user-input-text-field-empty", f"User-input text field must be non-empty: {field}", fixture)
+        if field in artifact and (
+            not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
+        ):
+            add_finding(
+                findings,
+                "error",
+                "user-input-text-field-invalid",
+                f"User-input text field must be a non-empty string: {field}",
+                fixture,
+            )
     if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
         add_finding(findings, "error", "user-input-created-at-invalid", "User-input created_at must be an ISO date or datetime", fixture)
     if artifact.get("why_automation_cannot_proceed") not in VALID_USER_INPUT_REASONS:
