@@ -302,6 +302,14 @@ def is_iso_created_at(value: Any) -> bool:
     return True
 
 
+def is_non_empty_string_list(value: Any, require_non_empty: bool = False) -> bool:
+    if not isinstance(value, list):
+        return False
+    if require_non_empty and not value:
+        return False
+    return all(isinstance(item, str) and bool(item.strip()) for item in value)
+
+
 def load_fixture_pack(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]:
     findings: list[Finding] = []
     try:
@@ -436,16 +444,16 @@ def validate_common_fixture_fields(fixture: dict[str, Any], findings: list[Findi
         add_finding(findings, "error", "synthetic-statement-invalid", "Fixture synthetic statement must mention synthetic", fixture)
 
     artifact_ids = fixture.get("artifact_ids")
-    if not isinstance(artifact_ids, list) or not artifact_ids:
-        add_finding(findings, "error", "artifact-ids-invalid", "artifact_ids must be a non-empty list", fixture)
+    if not is_non_empty_string_list(artifact_ids, require_non_empty=True):
+        add_finding(findings, "error", "artifact-ids-invalid", "artifact_ids must be a non-empty string list", fixture)
 
     result = fixture.get("expected_validation_result")
     if result not in VALID_RESULTS:
         add_finding(findings, "error", "expected-result-invalid", "Invalid expected_validation_result", fixture)
 
     failed_rules = fixture.get("expected_failed_rules")
-    if not isinstance(failed_rules, list):
-        add_finding(findings, "error", "expected-failed-rules-invalid", "expected_failed_rules must be a list", fixture)
+    if not is_non_empty_string_list(failed_rules):
+        add_finding(findings, "error", "expected-failed-rules-invalid", "expected_failed_rules must be a string list", fixture)
     elif is_negative_fixture(fixture_type) and not failed_rules:
         add_finding(findings, "error", "negative-missing-failed-rules", "Negative fixtures need expected failed rules", fixture)
 
@@ -561,20 +569,20 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
                 add_finding(findings, "error", "output-text-field-empty", f"Output metadata text field must be non-empty: {field}", fixture)
         if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
             add_finding(findings, "error", "output-created-at-invalid", "Output metadata created_at must be an ISO date or datetime", fixture)
-        if not isinstance(artifact.get("source_packet_ids"), list):
-            add_finding(findings, "error", "output-source-packet-ids-invalid", "source_packet_ids must be a list", fixture)
+        if not is_non_empty_string_list(artifact.get("source_packet_ids")):
+            add_finding(findings, "error", "output-source-packet-ids-invalid", "source_packet_ids must be a string list", fixture)
         if not artifact.get("work_trace_id"):
             add_finding(findings, "error", "output-work-trace-missing", "Output metadata must link to a work trace", fixture)
-        if not isinstance(artifact.get("validation_evidence_ids"), list) or not artifact.get("validation_evidence_ids"):
+        if not is_non_empty_string_list(artifact.get("validation_evidence_ids"), require_non_empty=True):
             add_finding(
                 findings,
                 "error",
                 "output-validation-evidence-ids-invalid",
-                "validation_evidence_ids must be a non-empty list",
+                "validation_evidence_ids must be a non-empty string list",
                 fixture,
             )
-        if not isinstance(artifact.get("decision_record_ids"), list):
-            add_finding(findings, "error", "output-decision-record-ids-invalid", "decision_record_ids must be a list", fixture)
+        if not is_non_empty_string_list(artifact.get("decision_record_ids")):
+            add_finding(findings, "error", "output-decision-record-ids-invalid", "decision_record_ids must be a string list", fixture)
         if artifact.get("generation_boundary") not in VALID_GENERATION_BOUNDARIES:
             add_finding(findings, "error", "output-generation-boundary-invalid", "Invalid generation_boundary", fixture)
         if artifact.get("storage_boundary_basis") not in VALID_STORAGE_BOUNDARY_BASES:
@@ -636,11 +644,11 @@ def validate_work_trace(fixture: dict[str, Any], findings: list[Finding]) -> Non
         if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
             add_finding(findings, "error", "work-trace-created-at-invalid", "Work trace created_at must be an ISO date or datetime", fixture)
         for field in ("source_packet_ids", "generated_artifact_ids", "validation_evidence_ids", "decision_record_ids"):
-            if not isinstance(artifact.get(field), list):
-                add_finding(findings, "error", "work-trace-list-field-invalid", f"{field} must be a list", fixture)
+            if not is_non_empty_string_list(artifact.get(field)):
+                add_finding(findings, "error", "work-trace-list-field-invalid", f"{field} must be a string list", fixture)
         for field in ("steps_taken", "tools_used", "assumptions"):
-            if not isinstance(artifact.get(field), list):
-                add_finding(findings, "error", "work-trace-list-field-invalid", f"{field} must be a list", fixture)
+            if not is_non_empty_string_list(artifact.get(field)):
+                add_finding(findings, "error", "work-trace-list-field-invalid", f"{field} must be a string list", fixture)
             elif field in {"steps_taken", "tools_used"} and not artifact.get(field):
                 add_finding(findings, "error", "work-trace-required-list-empty", f"{field} must be non-empty", fixture)
         execution_layer = artifact.get("execution_layer")
@@ -698,16 +706,16 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
             add_finding(findings, "error", "validation-created-at-invalid", "Validation evidence created_at must be an ISO date or datetime", fixture)
         if artifact.get("result") not in VALID_RESULTS:
             add_finding(findings, "error", "validation-result-invalid", "Invalid validation result", fixture)
-        if not isinstance(artifact.get("failed_rules"), list):
-            add_finding(findings, "error", "validation-failed-rules-invalid", "failed_rules must be a list", fixture)
+        if not is_non_empty_string_list(artifact.get("failed_rules")):
+            add_finding(findings, "error", "validation-failed-rules-invalid", "failed_rules must be a string list", fixture)
         if artifact.get("blocking_status") not in VALID_BLOCKING_STATUS:
             add_finding(findings, "error", "blocking-status-invalid", "Invalid blocking_status", fixture)
-        if not isinstance(artifact.get("evidence_references"), list) or not artifact.get("evidence_references"):
+        if not is_non_empty_string_list(artifact.get("evidence_references"), require_non_empty=True):
             add_finding(
                 findings,
                 "error",
                 "validation-evidence-references-invalid",
-                "evidence_references must be a non-empty list",
+                "evidence_references must be a non-empty string list",
                 fixture,
             )
         if artifact.get("result") == "WAIVED" and not artifact.get("waiver_reason"):
@@ -749,16 +757,16 @@ def validate_user_input_required(fixture: dict[str, Any], findings: list[Finding
         add_finding(findings, "error", "user-input-created-at-invalid", "User-input created_at must be an ISO date or datetime", fixture)
     if artifact.get("why_automation_cannot_proceed") not in VALID_USER_INPUT_REASONS:
         add_finding(findings, "error", "user-input-reason-invalid", "Invalid why_automation_cannot_proceed", fixture)
-    if not isinstance(artifact.get("source_references"), list):
-        add_finding(findings, "error", "user-input-source-references-invalid", "source_references must be a list", fixture)
-    if "allowed_choices" in artifact and not isinstance(artifact.get("allowed_choices"), list):
-        add_finding(findings, "error", "user-input-allowed-choices-invalid", "allowed_choices must be a list when present", fixture)
-    if not isinstance(artifact.get("blocked_downstream_work"), list) or not artifact.get("blocked_downstream_work"):
+    if not is_non_empty_string_list(artifact.get("source_references")):
+        add_finding(findings, "error", "user-input-source-references-invalid", "source_references must be a string list", fixture)
+    if "allowed_choices" in artifact and not is_non_empty_string_list(artifact.get("allowed_choices")):
+        add_finding(findings, "error", "user-input-allowed-choices-invalid", "allowed_choices must be a string list when present", fixture)
+    if not is_non_empty_string_list(artifact.get("blocked_downstream_work"), require_non_empty=True):
         add_finding(
             findings,
             "error",
             "user-input-blocked-work-invalid",
-            "blocked_downstream_work must be a non-empty list",
+            "blocked_downstream_work must be a non-empty string list",
             fixture,
         )
     if artifact.get("risk_if_guessed") not in {"low", "medium", "high", "blocking"}:

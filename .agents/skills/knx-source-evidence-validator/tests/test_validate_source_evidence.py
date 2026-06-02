@@ -283,6 +283,50 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("output-source-support-summary-invalid", codes)
         self.assertIn("output-result-status-invalid", codes)
 
+    def test_reference_lists_reject_blank_elements(self):
+        pack = self._load_pack()
+
+        source_packet = self._find_fixture(pack, "valid-source-packet")
+        source_packet["artifact_ids"] = [" "]
+        pack["fixtures"].append(source_packet)
+
+        trace = self._find_fixture(pack, "valid-work-trace")
+        trace["artifact"]["generated_artifact_ids"] = [""]
+        trace["artifact"]["steps_taken"] = [" "]
+        pack["fixtures"].append(trace)
+
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["failed_rules"] = [" "]
+        evidence["artifact"]["evidence_references"] = [""]
+        pack["fixtures"].append(evidence)
+
+        user_input = self._find_fixture(pack, "valid-user-input-required")
+        user_input["artifact"]["source_references"] = [" "]
+        user_input["artifact"]["allowed_choices"] = [""]
+        user_input["artifact"]["blocked_downstream_work"] = [" "]
+        pack["fixtures"].append(user_input)
+
+        output = self._find_fixture(pack, "unsupported-inference-negative")
+        output["artifact"]["source_packet_ids"] = [""]
+        output["artifact"]["validation_evidence_ids"] = [" "]
+        output["artifact"]["decision_record_ids"] = [""]
+        pack["fixtures"].append(output)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("artifact-ids-invalid", codes)
+        self.assertIn("work-trace-list-field-invalid", codes)
+        self.assertIn("validation-failed-rules-invalid", codes)
+        self.assertIn("validation-evidence-references-invalid", codes)
+        self.assertIn("user-input-source-references-invalid", codes)
+        self.assertIn("user-input-allowed-choices-invalid", codes)
+        self.assertIn("user-input-blocked-work-invalid", codes)
+        self.assertIn("output-source-packet-ids-invalid", codes)
+        self.assertIn("output-validation-evidence-ids-invalid", codes)
+        self.assertIn("output-decision-record-ids-invalid", codes)
+
     def test_validation_evidence_rejects_invalid_controlled_vocab(self):
         pack = self._load_pack()
         evidence = self._find_fixture(pack, "valid-validation-evidence")
