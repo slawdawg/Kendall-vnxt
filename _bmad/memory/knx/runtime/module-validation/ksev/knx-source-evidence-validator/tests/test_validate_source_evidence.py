@@ -163,7 +163,9 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
     def test_synthetic_statements_must_explicitly_say_synthetic(self):
         pack = self._load_pack()
         pack["fixture_pack_id"] = ""
+        pack["created_at"] = "yesterday"
         pack["synthetic_only_statement"] = "All examples are safe examples."
+        pack["fixtures"][0]["created_at"] = "soon"
         pack["fixtures"][0]["synthetic_only_statement"] = "Example only."
 
         result = self._validate_temp_pack(pack)
@@ -171,6 +173,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("pack-text-field-empty", codes)
+        self.assertIn("pack-created-at-invalid", codes)
+        self.assertIn("fixture-created-at-invalid", codes)
         self.assertIn("pack-synthetic-statement-invalid", codes)
         self.assertIn("synthetic-statement-invalid", codes)
 
@@ -333,14 +337,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
     def test_source_packet_examples_reject_empty_required_text_fields(self):
         examples = self._load_source_packet_examples()
         examples["title"] = ""
+        examples["created_at"] = "today"
         examples["packets"][0]["title"] = " "
         examples["packets"][0]["source_location_or_description"] = ""
+        examples["packets"][0]["created_at"] = "later"
 
         result = self._validate_temp_source_packet_examples(examples)
+        codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
-        self.assertIn("example-set-text-field-empty", {finding["code"] for finding in result["findings"]})
-        self.assertIn("source-packet-text-field-empty", {finding["code"] for finding in result["findings"]})
+        self.assertIn("example-set-text-field-empty", codes)
+        self.assertIn("example-set-created-at-invalid", codes)
+        self.assertIn("source-packet-text-field-empty", codes)
+        self.assertIn("source-packet-created-at-invalid", codes)
 
     def test_source_packet_examples_reject_invalid_controlled_vocab(self):
         examples = self._load_source_packet_examples()

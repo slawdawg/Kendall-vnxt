@@ -218,6 +218,7 @@ SECRET_PATTERNS = [
         r"AKIA[0-9A-Z]{16}",
     )
 ]
+ISO_CREATED_AT_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\+\d{2}:\d{2}|Z)?)?$")
 
 
 @dataclass
@@ -291,6 +292,10 @@ def add_finding(
     findings.append(Finding(severity, code, message, fixture_type, artifact_id))
 
 
+def is_iso_created_at(value: Any) -> bool:
+    return isinstance(value, str) and bool(ISO_CREATED_AT_PATTERN.match(value))
+
+
 def load_fixture_pack(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]:
     findings: list[Finding] = []
     try:
@@ -359,6 +364,8 @@ def validate_pack_shape(pack: dict[str, Any], findings: list[Finding]) -> list[d
     for field in sorted(REQUIRED_PACK_TEXT_FIELDS):
         if field in pack and not str(pack.get(field, "")).strip():
             add_finding(findings, "error", "pack-text-field-empty", f"Fixture pack text field must be non-empty: {field}")
+    if "created_at" in pack and not is_iso_created_at(pack.get("created_at")):
+        add_finding(findings, "error", "pack-created-at-invalid", "Fixture pack created_at must be an ISO date or datetime")
 
     synthetic_statement = pack.get("synthetic_only_statement")
     if isinstance(synthetic_statement, str) and "synthetic" not in synthetic_statement.lower():
@@ -413,6 +420,8 @@ def validate_common_fixture_fields(fixture: dict[str, Any], findings: list[Findi
     if not isinstance(fixture_type, str):
         add_finding(findings, "error", "fixture-type-invalid", "fixture_type must be a string", fixture)
         return
+    if "created_at" in fixture and not is_iso_created_at(fixture.get("created_at")):
+        add_finding(findings, "error", "fixture-created-at-invalid", "Fixture created_at must be an ISO date or datetime", fixture)
 
     synthetic_statement = fixture.get("synthetic_only_statement")
     if not synthetic_statement:
@@ -482,6 +491,8 @@ def validate_source_packet(fixture: dict[str, Any], findings: list[Finding]) -> 
     for field in sorted(REQUIRED_SOURCE_PACKET_TEXT_FIELDS):
         if field in artifact and not str(artifact.get(field, "")).strip():
             add_finding(findings, "error", "fixture-source-packet-text-field-empty", f"Source packet text field must be non-empty: {field}", fixture)
+    if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
+        add_finding(findings, "error", "fixture-source-packet-created-at-invalid", "Source packet created_at must be an ISO date or datetime", fixture)
 
     if artifact.get("source_class") not in VALID_FIXTURE_SOURCE_PACKET_CLASSES:
         add_finding(findings, "error", "fixture-source-packet-class-invalid", "Invalid source packet source_class", fixture)
@@ -542,6 +553,8 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
         for field in sorted(REQUIRED_OUTPUT_TEXT_FIELDS):
             if field in artifact and not str(artifact.get(field, "")).strip():
                 add_finding(findings, "error", "output-text-field-empty", f"Output metadata text field must be non-empty: {field}", fixture)
+        if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
+            add_finding(findings, "error", "output-created-at-invalid", "Output metadata created_at must be an ISO date or datetime", fixture)
         if not isinstance(artifact.get("source_packet_ids"), list):
             add_finding(findings, "error", "output-source-packet-ids-invalid", "source_packet_ids must be a list", fixture)
         if not artifact.get("work_trace_id"):
@@ -614,6 +627,8 @@ def validate_work_trace(fixture: dict[str, Any], findings: list[Finding]) -> Non
         for field in sorted(REQUIRED_WORK_TRACE_TEXT_FIELDS):
             if field in artifact and not str(artifact.get(field, "")).strip():
                 add_finding(findings, "error", "work-trace-text-field-empty", f"Work trace text field must be non-empty: {field}", fixture)
+        if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
+            add_finding(findings, "error", "work-trace-created-at-invalid", "Work trace created_at must be an ISO date or datetime", fixture)
         for field in ("source_packet_ids", "generated_artifact_ids", "validation_evidence_ids", "decision_record_ids"):
             if not isinstance(artifact.get(field), list):
                 add_finding(findings, "error", "work-trace-list-field-invalid", f"{field} must be a list", fixture)
@@ -673,6 +688,8 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
         for field in sorted(REQUIRED_VALIDATION_TEXT_FIELDS):
             if field in artifact and not str(artifact.get(field, "")).strip():
                 add_finding(findings, "error", "validation-text-field-empty", f"Validation evidence text field must be non-empty: {field}", fixture)
+        if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
+            add_finding(findings, "error", "validation-created-at-invalid", "Validation evidence created_at must be an ISO date or datetime", fixture)
         if artifact.get("result") not in VALID_RESULTS:
             add_finding(findings, "error", "validation-result-invalid", "Invalid validation result", fixture)
         if not isinstance(artifact.get("failed_rules"), list):
@@ -722,6 +739,8 @@ def validate_user_input_required(fixture: dict[str, Any], findings: list[Finding
     for field in sorted(REQUIRED_USER_INPUT_TEXT_FIELDS):
         if field in artifact and not str(artifact.get(field, "")).strip():
             add_finding(findings, "error", "user-input-text-field-empty", f"User-input text field must be non-empty: {field}", fixture)
+    if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
+        add_finding(findings, "error", "user-input-created-at-invalid", "User-input created_at must be an ISO date or datetime", fixture)
     if artifact.get("why_automation_cannot_proceed") not in VALID_USER_INPUT_REASONS:
         add_finding(findings, "error", "user-input-reason-invalid", "Invalid why_automation_cannot_proceed", fixture)
     if not isinstance(artifact.get("source_references"), list):
@@ -772,6 +791,8 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
     for field in sorted(REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS):
         if field in artifact and not str(artifact.get(field, "")).strip():
             add_finding(findings, "error", "source-inventory-text-field-empty", f"Source inventory text field must be non-empty: {field}", fixture)
+    if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
+        add_finding(findings, "error", "source-inventory-created-at-invalid", "Source inventory created_at must be an ISO date or datetime", fixture)
     if artifact.get("source_root_approval_basis") not in VALID_SOURCE_ROOT_APPROVAL_BASES:
         add_finding(findings, "error", "source-inventory-approval-basis-invalid", "Invalid source_root_approval_basis", fixture)
     if artifact.get("inventory_scope") not in VALID_SOURCE_INVENTORY_SCOPES:
@@ -865,6 +886,8 @@ def validate_source_packet_examples(path: Path, approved_storage_root: Path | No
     for field in sorted(REQUIRED_EXAMPLE_SET_TEXT_FIELDS):
         if field in examples and not str(examples.get(field, "")).strip():
             add_finding(findings, "error", "example-set-text-field-empty", f"Source packet example set text field must be non-empty: {field}")
+    if "created_at" in examples and not is_iso_created_at(examples.get("created_at")):
+        add_finding(findings, "error", "example-set-created-at-invalid", "Source packet example set created_at must be an ISO date or datetime")
 
     for flag in BOUNDARY_FALSE_FLAGS:
         if examples.get(flag) is not False:
@@ -907,6 +930,15 @@ def validate_source_packet_example(packet: dict[str, Any], findings: list[Findin
                     artifact_id=str(packet_id) if packet_id else None,
                 )
             )
+    if "created_at" in packet and not is_iso_created_at(packet.get("created_at")):
+        findings.append(
+            Finding(
+                "error",
+                "source-packet-created-at-invalid",
+                "Source packet created_at must be an ISO date or datetime",
+                artifact_id=str(packet_id) if packet_id else None,
+            )
+        )
 
     if packet.get("source_class") not in VALID_SOURCE_PACKET_CLASSES:
         findings.append(

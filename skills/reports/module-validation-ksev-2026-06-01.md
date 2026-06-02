@@ -62,6 +62,7 @@ The standalone optional pack includes:
 - Non-empty text enforcement for source packet example identity and description fields.
 - Explicit synthetic-statement enforcement for fixture packs and fixture entries.
 - Non-empty text enforcement for fixture pack and source packet example set identity/date fields.
+- ISO date/datetime enforcement for fixture pack, fixture, artifact, and source packet example `created_at` fields.
 - Full identity-field and non-empty text enforcement for fixture source packet artifacts.
 - Controlled-vocabulary enforcement for fixture source packet artifacts.
 - Controlled-field enforcement for source inventory fixture artifacts.
@@ -135,6 +136,7 @@ Additional local hardening:
 
 - Added non-empty text checks for source packet example identity and description fields.
 - Added non-empty text checks for fixture pack and source packet example set identity/date fields.
+- Added ISO date/datetime checks for fixture pack, fixture, artifact, and source packet example `created_at` fields.
 - Added explicit synthetic-statement checks for fixture packs and fixture entries.
 - Added full identity-field and non-empty text checks for fixture source packet artifacts.
 - Added controlled-vocabulary checks for synthetic source packet fixture artifacts.
