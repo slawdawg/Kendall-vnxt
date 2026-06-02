@@ -32,6 +32,7 @@ VALID_SOURCE_PACKET_CLASSES = {
     "public-or-synthetic-sample-data",
     "generated-report",
 }
+VALID_FIXTURE_SOURCE_PACKET_CLASSES = VALID_SOURCE_PACKET_CLASSES | {"synthetic-fixture"}
 VALID_SOURCE_OWNERS = {"user", "project", "public", "synthetic", "unresolved"}
 VALID_APPROVAL_BASES = {
     "user-specified",
@@ -412,6 +413,27 @@ def validate_source_packet(fixture: dict[str, Any], findings: list[Finding]) -> 
 
     source_operation = artifact.get("source_operation")
     expected_result = fixture.get("expected_validation_result")
+
+    if artifact.get("source_class") not in VALID_FIXTURE_SOURCE_PACKET_CLASSES:
+        add_finding(findings, "error", "fixture-source-packet-class-invalid", "Invalid source packet source_class", fixture)
+    if artifact.get("source_owner_or_provider") not in VALID_SOURCE_OWNERS:
+        add_finding(findings, "error", "fixture-source-packet-owner-invalid", "Invalid source packet owner/provider", fixture)
+    if artifact.get("approval_basis") not in VALID_APPROVAL_BASES:
+        add_finding(findings, "error", "fixture-source-packet-approval-basis-invalid", "Invalid source packet approval_basis", fixture)
+    if artifact.get("source_support_level") not in VALID_SOURCE_SUPPORT_LEVELS:
+        add_finding(findings, "error", "fixture-source-packet-support-level-invalid", "Invalid source packet source_support_level", fixture)
+    if artifact.get("permitted_processing_boundary") not in VALID_PROCESSING_BOUNDARIES:
+        add_finding(findings, "error", "fixture-source-packet-processing-boundary-invalid", "Invalid permitted_processing_boundary", fixture)
+    if artifact.get("permitted_storage_boundary") not in VALID_STORAGE_BOUNDARIES:
+        add_finding(findings, "error", "fixture-source-packet-storage-boundary-invalid", "Invalid permitted_storage_boundary", fixture)
+    if artifact.get("downstream_allowed_use") not in VALID_DOWNSTREAM_ALLOWED_USES:
+        add_finding(findings, "error", "fixture-source-packet-downstream-use-invalid", "Invalid downstream_allowed_use", fixture)
+    if source_operation not in VALID_SOURCE_OPERATIONS:
+        add_finding(findings, "error", "fixture-source-packet-operation-invalid", "Invalid source_operation", fixture)
+    if artifact.get("uncertainty") not in VALID_UNCERTAINTY:
+        add_finding(findings, "error", "fixture-source-packet-uncertainty-invalid", "Invalid source packet uncertainty", fixture)
+    if artifact.get("forbidden_content_check") not in VALID_FORBIDDEN_CONTENT_CHECKS:
+        add_finding(findings, "error", "fixture-source-packet-forbidden-content-invalid", "Invalid forbidden_content_check", fixture)
 
     if fixture_type == "valid-source-packet" and source_operation != "read-planning":
         add_finding(findings, "error", "valid-source-operation-not-read-planning", "Valid source packet must use read-planning", fixture)

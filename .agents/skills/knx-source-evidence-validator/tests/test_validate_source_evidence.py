@@ -52,6 +52,36 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(mutation_findings, [])
 
+    def test_fixture_source_packet_rejects_invalid_controlled_vocab(self):
+        pack = self._load_pack()
+        source_packet = self._find_fixture(pack, "valid-source-packet")
+        source_packet["artifact"]["source_class"] = "customer-project-data"
+        source_packet["artifact"]["source_owner_or_provider"] = "customer"
+        source_packet["artifact"]["approval_basis"] = "hand-wave"
+        source_packet["artifact"]["source_support_level"] = "maybe"
+        source_packet["artifact"]["permitted_processing_boundary"] = "external-by-default"
+        source_packet["artifact"]["permitted_storage_boundary"] = "anywhere"
+        source_packet["artifact"]["downstream_allowed_use"] = "ship"
+        source_packet["artifact"]["source_operation"] = "ship-it"
+        source_packet["artifact"]["uncertainty"] = "shrug"
+        source_packet["artifact"]["forbidden_content_check"] = "unknown"
+        pack["fixtures"].append(source_packet)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("fixture-source-packet-class-invalid", codes)
+        self.assertIn("fixture-source-packet-owner-invalid", codes)
+        self.assertIn("fixture-source-packet-approval-basis-invalid", codes)
+        self.assertIn("fixture-source-packet-support-level-invalid", codes)
+        self.assertIn("fixture-source-packet-processing-boundary-invalid", codes)
+        self.assertIn("fixture-source-packet-storage-boundary-invalid", codes)
+        self.assertIn("fixture-source-packet-downstream-use-invalid", codes)
+        self.assertIn("fixture-source-packet-operation-invalid", codes)
+        self.assertIn("fixture-source-packet-uncertainty-invalid", codes)
+        self.assertIn("fixture-source-packet-forbidden-content-invalid", codes)
+
     def test_source_inventory_storage_negative_is_valid_expected_failure(self):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
         inventory_findings = [
