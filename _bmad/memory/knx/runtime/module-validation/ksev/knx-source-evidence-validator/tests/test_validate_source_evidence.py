@@ -554,11 +554,24 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("artifact-under-validation-invalid", codes)
         self.assertIn("validation-type-invalid", codes)
-        self.assertIn("validation-text-field-empty", codes)
+        self.assertIn("validation-text-field-invalid", codes)
         self.assertIn("validation-result-invalid", codes)
         self.assertIn("validation-failed-rules-invalid", codes)
         self.assertIn("blocking-status-invalid", codes)
         self.assertIn("validation-evidence-references-invalid", codes)
+
+    def test_validation_evidence_text_fields_must_be_strings(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["validation_evidence_id"] = 42
+        evidence["artifact"]["command_or_check_run"] = ["not", "a", "string"]
+        evidence["artifact"]["reviewer"] = {"name": "not-a-string"}
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("validation-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
     def test_valid_materialized_inventory_path_under_approved_root_passes_path_check(self):
         pack = self._load_pack()

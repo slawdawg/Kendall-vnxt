@@ -753,8 +753,16 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
         if artifact.get("validation_type") not in VALID_VALIDATION_TYPES:
             add_finding(findings, "error", "validation-type-invalid", "Invalid validation_type", fixture)
         for field in sorted(REQUIRED_VALIDATION_TEXT_FIELDS):
-            if field in artifact and not str(artifact.get(field, "")).strip():
-                add_finding(findings, "error", "validation-text-field-empty", f"Validation evidence text field must be non-empty: {field}", fixture)
+            if field in artifact and (
+                not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
+            ):
+                add_finding(
+                    findings,
+                    "error",
+                    "validation-text-field-invalid",
+                    f"Validation evidence text field must be a non-empty string: {field}",
+                    fixture,
+                )
         if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
             add_finding(findings, "error", "validation-created-at-invalid", "Validation evidence created_at must be an ISO date or datetime", fixture)
         if artifact.get("result") not in VALID_RESULTS:
