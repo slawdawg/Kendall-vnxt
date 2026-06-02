@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 43 passed.
+- Unit tests: 44 passed.
 - Fixture validation: PASS.
 - Fixture count: 14.
 - Source packet example validation: PASS.
@@ -134,7 +134,7 @@ Change:
 
 Verification:
 
-- Unit tests: 43 passed.
+- Unit tests: 44 passed.
 - Fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -177,3 +177,4 @@ Additional local hardening:
 - Added package-install and runtime-assistant-behavior false-flag enforcement for metadata-only source packet examples.
 - Added package-install and runtime-assistant-behavior false-flag enforcement for synthetic source inventory fixtures.
 - Added required-field checks for source inventory command/check, forbidden-content, created-at, and created-by fields.
+- Added non-empty string type checks for source inventory text fields.
