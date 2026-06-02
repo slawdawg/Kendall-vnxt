@@ -408,8 +408,15 @@ def validate_pack_shape(pack: dict[str, Any], findings: list[Finding]) -> list[d
             add_finding(findings, "error", "missing-pack-field", f"Missing top-level field: {field}")
 
     for field in sorted(REQUIRED_PACK_TEXT_FIELDS):
-        if field in pack and not str(pack.get(field, "")).strip():
-            add_finding(findings, "error", "pack-text-field-empty", f"Fixture pack text field must be non-empty: {field}")
+        if field in pack and (
+            not isinstance(pack.get(field), str) or not pack.get(field, "").strip()
+        ):
+            add_finding(
+                findings,
+                "error",
+                "pack-text-field-invalid",
+                f"Fixture pack text field must be a non-empty string: {field}",
+            )
     if "created_at" in pack and not is_iso_created_at(pack.get("created_at")):
         add_finding(findings, "error", "pack-created-at-invalid", "Fixture pack created_at must be an ISO date or datetime")
 

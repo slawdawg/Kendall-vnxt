@@ -351,11 +351,22 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
-        self.assertIn("pack-text-field-empty", codes)
+        self.assertIn("pack-text-field-invalid", codes)
         self.assertIn("pack-created-at-invalid", codes)
         self.assertIn("fixture-created-at-invalid", codes)
         self.assertIn("pack-synthetic-statement-invalid", codes)
         self.assertIn("synthetic-statement-invalid", codes)
+
+    def test_fixture_pack_text_fields_must_be_strings(self):
+        pack = self._load_pack()
+        pack["fixture_pack_id"] = 42
+        pack["title"] = ["not", "a", "string"]
+        pack["created_by"] = {"name": "not-a-string"}
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("pack-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
     def test_created_at_rejects_impossible_calendar_dates(self):
         pack = self._load_pack()
