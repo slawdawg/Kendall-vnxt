@@ -665,6 +665,10 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         output["artifact"]["result_status"] = "done"
         pack["fixtures"].append(output)
 
+        unsupported_output = self._find_fixture(pack, "unsupported-inference-negative")
+        unsupported_output["artifact"]["result_status"] = "validated"
+        pack["fixtures"].append(unsupported_output)
+
         result = self._validate_temp_pack(pack)
         codes = {finding["code"] for finding in result["findings"]}
 
@@ -676,6 +680,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("output-storage-boundary-basis-invalid", codes)
         self.assertIn("output-source-support-summary-invalid", codes)
         self.assertIn("output-result-status-invalid", codes)
+        self.assertIn("output-unsupported-result-validated", codes)
 
     def test_output_metadata_text_fields_must_be_strings(self):
         pack = self._load_pack()

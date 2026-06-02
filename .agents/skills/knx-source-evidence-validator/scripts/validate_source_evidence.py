@@ -773,6 +773,8 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
             add_finding(findings, "error", "output-uncertainty-invalid", "Invalid output uncertainty", fixture)
         if artifact.get("result_status") not in VALID_OUTPUT_STATUSES:
             add_finding(findings, "error", "output-result-status-invalid", "Invalid result_status", fixture)
+        if artifact.get("source_support_summary") in {"inferred", "unsupported"} and artifact.get("result_status") == "validated":
+            add_finding(findings, "error", "output-unsupported-result-validated", "Unsupported or inferred output metadata must not be marked validated", fixture)
 
     source_packet_ids = artifact.get("source_packet_ids")
     if fixture_type == "missing-source-negative":
