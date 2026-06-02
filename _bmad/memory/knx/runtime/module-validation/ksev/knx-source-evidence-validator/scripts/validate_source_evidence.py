@@ -1121,12 +1121,14 @@ def validate_source_packet_example(packet: dict[str, Any], findings: list[Findin
             )
 
     for field in sorted(REQUIRED_SOURCE_PACKET_TEXT_FIELDS):
-        if field in packet and not str(packet.get(field, "")).strip():
+        if field in packet and (
+            not isinstance(packet.get(field), str) or not packet.get(field, "").strip()
+        ):
             findings.append(
                 Finding(
                     "error",
-                    "source-packet-text-field-empty",
-                    f"Source packet text field must be non-empty: {field}",
+                    "source-packet-text-field-invalid",
+                    f"Source packet text field must be a non-empty string: {field}",
                     artifact_id=str(packet_id) if packet_id else None,
                 )
             )
