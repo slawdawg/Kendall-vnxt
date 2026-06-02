@@ -209,3 +209,4 @@ Additional local hardening:
 - Added high-risk decision approval-basis checks.
 - Added user-input review-condition checks.
 - Added work-trace blocking next-action checks.
+- Added validation evidence target consistency checks.
