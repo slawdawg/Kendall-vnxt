@@ -20,6 +20,7 @@ REQUIRED_FIXTURE_TYPES = {
     "valid-user-input-required",
     "valid-decision-record",
     "valid-validator-run-evidence",
+    "valid-runtime-evidence-inventory",
     "missing-source-negative",
     "external-action-negative",
     "unsupported-inference-negative",
@@ -179,9 +180,32 @@ VALID_SOURCE_INVENTORY_SCOPES = {
 VALID_SOURCE_INVENTORY_OPERATIONS = {"read-planning only", "metadata-only read-planning"}
 VALID_SOURCE_INVENTORY_TOOLS = {"git", "ripgrep", "PowerShell", "approved-custom-glue"}
 VALID_BOUNDARY_RESULTS = {"PASS", "CONCERNS", "FAIL", "WAIVED"}
+VALID_RUNTIME_INVENTORY_APPROVAL_BASES = {
+    "user-specified",
+    "profile-derived",
+    "data-boundary-derived",
+    "decision-record",
+    "unresolved",
+}
+VALID_RUNTIME_INVENTORY_SCOPES = {
+    "runtime-evidence-paths",
+    "extension-summary",
+    "runtime-evidence-category-summary",
+    "mixed",
+}
+VALID_RUNTIME_INVENTORY_OPERATIONS = {"metadata-only read-planning"}
+VALID_RUNTIME_INVENTORY_TOOLS = {"ripgrep", "PowerShell", "approved-custom-glue"}
 REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS = {
     "source_inventory_id",
     "source_root",
+    "inventory_command_or_check",
+    "generated_artifact_path",
+    "created_at",
+    "created_by",
+}
+REQUIRED_RUNTIME_INVENTORY_TEXT_FIELDS = {
+    "runtime_inventory_id",
+    "storage_root",
     "inventory_command_or_check",
     "generated_artifact_path",
     "created_at",
@@ -581,6 +605,7 @@ def validate_common_fixture_fields(fixture: dict[str, Any], findings: list[Findi
                 "source_inventory_id",
                 "decision_record_id",
                 "evidence_bundle_id",
+                "runtime_inventory_id",
             ):
                 primary_id = artifact.get(field)
                 if isinstance(primary_id, str) and primary_id.strip():
@@ -1154,6 +1179,97 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
             add_finding(findings, "error", "inventory-output-outside-approved-root", "Materialized source inventory must write under approved storage root", fixture)
 
 
+def validate_runtime_inventory(fixture: dict[str, Any], findings: list[Finding], approved_storage_root: Path) -> None:
+    artifact = fixture.get("artifact", {})
+    if not isinstance(artifact, dict) or "runtime_inventory_id" not in artifact:
+        return
+
+    for field in (
+        "storage_root",
+        "storage_root_approval_basis",
+        "inventory_scope",
+        "allowed_operation",
+        "inventory_tool",
+        "inventory_command_or_check",
+        "excluded_paths_or_patterns",
+        "file_count",
+        "generated_artifact_path",
+        "forbidden_content_check",
+        "boundary_check_result",
+        "source_mutation_performed",
+        "external_send_performed",
+        "package_install_performed",
+        "runtime_assistant_behavior_added",
+        "uncertainty",
+        "created_at",
+        "created_by",
+        "source_references",
+        "open_questions",
+    ):
+        if field not in artifact:
+            add_finding(findings, "error", "missing-runtime-inventory-field", f"Missing runtime inventory field: {field}", fixture)
+
+    for flag in (
+        "source_mutation_performed",
+        "external_send_performed",
+        "package_install_performed",
+        "runtime_assistant_behavior_added",
+    ):
+        if artifact.get(flag) is not False:
+            add_finding(findings, "error", "runtime-inventory-boundary-flag-not-false", f"Runtime inventory boundary flag must be false: {flag}", fixture)
+
+    for field in sorted(REQUIRED_RUNTIME_INVENTORY_TEXT_FIELDS):
+        if field in artifact and (
+            not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
+        ):
+            add_finding(
+                findings,
+                "error",
+                "runtime-inventory-text-field-invalid",
+                f"Runtime inventory text field must be a non-empty string: {field}",
+                fixture,
+            )
+    if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
+        add_finding(findings, "error", "runtime-inventory-created-at-invalid", "Runtime inventory created_at must be an ISO date or datetime", fixture)
+    if artifact.get("storage_root_approval_basis") not in VALID_RUNTIME_INVENTORY_APPROVAL_BASES:
+        add_finding(findings, "error", "runtime-inventory-approval-basis-invalid", "Invalid storage_root_approval_basis", fixture)
+    if artifact.get("inventory_scope") not in VALID_RUNTIME_INVENTORY_SCOPES:
+        add_finding(findings, "error", "runtime-inventory-scope-invalid", "Invalid inventory_scope", fixture)
+    if artifact.get("allowed_operation") not in VALID_RUNTIME_INVENTORY_OPERATIONS:
+        add_finding(findings, "error", "runtime-inventory-operation-invalid", "Invalid allowed_operation", fixture)
+    if artifact.get("inventory_tool") not in VALID_RUNTIME_INVENTORY_TOOLS:
+        add_finding(findings, "error", "runtime-inventory-tool-invalid", "Invalid inventory_tool", fixture)
+    if artifact.get("boundary_check_result") not in VALID_BOUNDARY_RESULTS:
+        add_finding(findings, "error", "runtime-inventory-boundary-result-invalid", "Invalid boundary_check_result", fixture)
+    if artifact.get("forbidden_content_check") not in VALID_FORBIDDEN_CONTENT_CHECKS:
+        add_finding(findings, "error", "runtime-inventory-forbidden-content-invalid", "Invalid forbidden_content_check", fixture)
+    if artifact.get("uncertainty") not in VALID_UNCERTAINTY:
+        add_finding(findings, "error", "runtime-inventory-uncertainty-invalid", "Invalid runtime inventory uncertainty", fixture)
+
+    file_count = artifact.get("file_count")
+    if not (is_int_not_bool(file_count) and file_count >= 0) and file_count != "unresolved":
+        add_finding(findings, "error", "runtime-inventory-file-count-invalid", "file_count must be a nonnegative integer or unresolved", fixture)
+    if not is_non_empty_string_list(artifact.get("excluded_paths_or_patterns")):
+        add_finding(findings, "error", "runtime-inventory-excluded-paths-invalid", "excluded_paths_or_patterns must be a string list", fixture)
+    if "top_file_groups" in artifact and not is_count_group_list(artifact.get("top_file_groups"), "extension"):
+        add_finding(findings, "error", "runtime-inventory-top-file-groups-invalid", "top_file_groups must be extension/count objects", fixture)
+    if "runtime_evidence_groups" in artifact and not is_count_group_list(artifact.get("runtime_evidence_groups"), "evidence_type"):
+        add_finding(findings, "error", "runtime-inventory-evidence-groups-invalid", "runtime_evidence_groups must be evidence_type/count objects", fixture)
+    if "checksums" in artifact:
+        add_finding(findings, "error", "runtime-inventory-checksums-present", "Runtime inventory checksums remain deferred by default", fixture)
+    if not is_non_empty_string_list(artifact.get("source_references")):
+        add_finding(findings, "error", "runtime-inventory-source-references-invalid", "source_references must be a string list", fixture)
+    if not is_non_empty_string_list(artifact.get("open_questions")):
+        add_finding(findings, "error", "runtime-inventory-open-questions-invalid", "open_questions must be a string list", fixture)
+
+    storage_root = artifact.get("storage_root")
+    if isinstance(storage_root, str) and storage_root.strip() and not is_under_path(storage_root, approved_storage_root):
+        add_finding(findings, "error", "runtime-inventory-storage-root-outside-approved-root", "Runtime inventory storage_root must stay under approved storage root", fixture)
+    generated_path = artifact.get("generated_artifact_path")
+    if isinstance(generated_path, str) and generated_path != "not-materialized" and not is_under_path(generated_path, approved_storage_root):
+        add_finding(findings, "error", "runtime-inventory-output-outside-approved-root", "Materialized runtime inventory must write under approved storage root", fixture)
+
+
 def validate_validator_run_evidence(fixture: dict[str, Any], findings: list[Finding]) -> None:
     artifact = fixture.get("artifact", {})
     if not isinstance(artifact, dict) or "evidence_bundle_id" not in artifact:
@@ -1342,6 +1458,7 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
         validate_user_input_required(fixture, findings)
         validate_decision_record(fixture, findings)
         validate_source_inventory(fixture, findings, approved_storage_root)
+        validate_runtime_inventory(fixture, findings, approved_storage_root)
         validate_validator_run_evidence(fixture, findings)
     validate_expected_evidence_ids(fixtures, findings)
     validate_unique_fixture_artifact_ids(fixtures, findings)

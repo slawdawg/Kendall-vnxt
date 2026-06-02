@@ -31,7 +31,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
 
         self.assertEqual(result["status"], "PASS")
-        self.assertEqual(result["summary"]["fixture_count"], 17)
+        self.assertEqual(result["summary"]["fixture_count"], 18)
         self.assertEqual(result["summary"]["errors"], 0)
         self.assertEqual(result["summary"]["warnings"], 0)
         self.assertEqual(result["findings"], [])
@@ -287,6 +287,67 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("source-inventory-excluded-paths-invalid", codes)
         self.assertIn("source-inventory-top-file-groups-invalid", codes)
         self.assertIn("source-inventory-source-class-groups-invalid", codes)
+
+    def test_runtime_inventory_rejects_invalid_contract_fields(self):
+        pack = self._load_pack()
+        inventory = self._find_fixture(pack, "valid-runtime-evidence-inventory")
+        inventory["artifact"]["runtime_inventory_id"] = ""
+        inventory["artifact"]["storage_root"] = "C:/unapproved-runtime-root"
+        inventory["artifact"]["storage_root_approval_basis"] = "because"
+        inventory["artifact"]["inventory_scope"] = "everything"
+        inventory["artifact"]["allowed_operation"] = "copy-runtime-state"
+        inventory["artifact"]["inventory_tool"] = "cloud-indexer"
+        inventory["artifact"]["inventory_command_or_check"] = " "
+        inventory["artifact"]["generated_artifact_path"] = "C:/unapproved-runtime-state/runtime.json"
+        inventory["artifact"]["forbidden_content_check"] = "unknown"
+        inventory["artifact"]["boundary_check_result"] = "OK"
+        inventory["artifact"]["source_mutation_performed"] = True
+        inventory["artifact"]["external_send_performed"] = True
+        inventory["artifact"]["uncertainty"] = "shrug"
+        inventory["artifact"]["file_count"] = True
+        inventory["artifact"]["excluded_paths_or_patterns"] = [" "]
+        inventory["artifact"]["top_file_groups"] = [{"extension": "", "count": -1}]
+        inventory["artifact"]["runtime_evidence_groups"] = [{"evidence_type": "", "count": "many"}]
+        inventory["artifact"]["source_references"] = [" "]
+        inventory["artifact"]["open_questions"] = [""]
+        inventory["artifact"]["checksums"] = {"deferred": "should stay absent"}
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("runtime-inventory-text-field-invalid", codes)
+        self.assertIn("runtime-inventory-approval-basis-invalid", codes)
+        self.assertIn("runtime-inventory-scope-invalid", codes)
+        self.assertIn("runtime-inventory-operation-invalid", codes)
+        self.assertIn("runtime-inventory-tool-invalid", codes)
+        self.assertIn("runtime-inventory-forbidden-content-invalid", codes)
+        self.assertIn("runtime-inventory-boundary-result-invalid", codes)
+        self.assertIn("runtime-inventory-boundary-flag-not-false", codes)
+        self.assertIn("runtime-inventory-uncertainty-invalid", codes)
+        self.assertIn("runtime-inventory-file-count-invalid", codes)
+        self.assertIn("runtime-inventory-excluded-paths-invalid", codes)
+        self.assertIn("runtime-inventory-top-file-groups-invalid", codes)
+        self.assertIn("runtime-inventory-evidence-groups-invalid", codes)
+        self.assertIn("runtime-inventory-source-references-invalid", codes)
+        self.assertIn("runtime-inventory-open-questions-invalid", codes)
+        self.assertIn("runtime-inventory-checksums-present", codes)
+        self.assertIn("runtime-inventory-storage-root-outside-approved-root", codes)
+        self.assertIn("runtime-inventory-output-outside-approved-root", codes)
+
+    def test_runtime_inventory_requires_contract_fields(self):
+        pack = self._load_pack()
+        inventory = self._find_fixture(pack, "valid-runtime-evidence-inventory")
+        del inventory["artifact"]["storage_root"]
+        del inventory["artifact"]["inventory_scope"]
+        del inventory["artifact"]["source_references"]
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-runtime-inventory-field", {finding["code"] for finding in result["findings"]})
 
     def test_numeric_contract_fields_reject_booleans(self):
         pack = self._load_pack()

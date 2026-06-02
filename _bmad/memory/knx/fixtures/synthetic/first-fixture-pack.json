@@ -485,6 +485,46 @@
           "runtime_assistant_behavior_added": false
         }
       }
+    },
+    {
+      "fixture_type": "valid-runtime-evidence-inventory",
+      "fixture_pack_id": "synthetic-first-pack-2026-05-31",
+      "synthetic_only_statement": "Synthetic runtime evidence inventory example only.",
+      "artifact_ids": ["ri-synth-valid-001"],
+      "expected_validation_result": "PASS",
+      "expected_failed_rules": [],
+      "forbidden_content_check": "pass",
+      "created_at": "2026-06-02",
+      "artifact": {
+        "runtime_inventory_id": "ri-synth-valid-001",
+        "storage_root": "_bmad/memory/knx/runtime",
+        "storage_root_approval_basis": "user-specified",
+        "inventory_scope": "runtime-evidence-category-summary",
+        "allowed_operation": "metadata-only read-planning",
+        "inventory_tool": "PowerShell",
+        "inventory_command_or_check": "synthetic runtime evidence grouping",
+        "excluded_paths_or_patterns": [],
+        "file_count": "unresolved",
+        "top_file_groups": [],
+        "runtime_evidence_groups": [
+          {
+            "evidence_type": "validator-report",
+            "count": 2
+          }
+        ],
+        "generated_artifact_path": "not-materialized",
+        "forbidden_content_check": "pass",
+        "boundary_check_result": "PASS",
+        "source_mutation_performed": false,
+        "external_send_performed": false,
+        "package_install_performed": false,
+        "runtime_assistant_behavior_added": false,
+        "uncertainty": "none",
+        "created_at": "2026-06-02",
+        "created_by": "KNX workflow",
+        "source_references": ["_bmad/memory/knx/runtime"],
+        "open_questions": []
+      }
     }
   ]
 }
