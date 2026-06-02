@@ -457,6 +457,27 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("boundary-flag-not-false", {finding["code"] for finding in result["findings"]})
 
+    def test_source_packet_examples_reject_malformed_packet_container(self):
+        examples = self._load_source_packet_examples()
+        del examples["created_by"]
+        examples["packets"] = "not-a-list"
+
+        result = self._validate_temp_source_packet_examples(examples)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-example-set-field", codes)
+        self.assertIn("packets-not-list", codes)
+
+        examples = self._load_source_packet_examples()
+        examples["packets"].append("not-an-object")
+
+        result = self._validate_temp_source_packet_examples(examples)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-packet-not-object", codes)
+
     def test_source_packet_examples_reject_empty_required_text_fields(self):
         examples = self._load_source_packet_examples()
         examples["title"] = ""

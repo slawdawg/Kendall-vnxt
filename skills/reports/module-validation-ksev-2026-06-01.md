@@ -134,7 +134,7 @@ Change:
 
 Verification:
 
-- Unit tests: 32 passed.
+- Unit tests: 33 passed.
 - Fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -144,6 +144,7 @@ Additional local hardening:
 - Added non-empty text checks for source packet example identity and description fields.
 - Added required `created_by` and controlled-status checks for source packet example sets.
 - Added regression coverage for source packet example boundary flags that must remain false.
+- Added regression coverage for malformed source packet example containers.
 - Added required excluded-source-class checks for source packet example sets.
 - Added duplicate-ID checks for fixture artifact IDs and source packet example IDs.
 - Added non-empty text checks for fixture pack and source packet example set identity/date fields.
