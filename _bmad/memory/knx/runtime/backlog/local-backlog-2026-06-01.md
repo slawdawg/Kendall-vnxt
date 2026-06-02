@@ -18,11 +18,12 @@ Status: active local-only backlog
 10. Keep `ksev` distribution readiness local-only until a later remote/publication gate is approved.
 11. Keep GitHub/remotes disabled until a later target URL and operation class are explicitly approved.
 12. Keep company evaluation planning local-only until exact audience, sharing mechanism, final artifact list, legal review path, and send/access action are explicitly approved.
+13. Keep IDE/workspace planning local-only until exact IDE target, file paths, action behavior, rollback plan, validation plan, user-visible behavior, and safety contract are explicitly approved.
 
 ## Parked
 
 - Company-facing sharing and external send. Company evaluation planning is local-only.
-- IDE one-click action.
+- IDE one-click action. IDE/workspace planning is local-only.
 - Public distribution and license activation.
 - GitHub/remotes.
 - Operational source intake and source mutation.

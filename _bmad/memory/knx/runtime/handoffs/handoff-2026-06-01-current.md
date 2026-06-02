@@ -25,6 +25,7 @@ Status: local-only greenfield implementation lane open
 - `ksev` public distribution readiness planning is materialized locally; publication remains blocked.
 - GitHub/remote readiness planning is materialized locally; remotes remain disabled.
 - Company evaluation planning is materialized locally; sharing remains blocked.
+- IDE/workspace planning is materialized locally; IDE and workspace writes remain disabled.
 
 ## Latest Validation
 
@@ -58,6 +59,7 @@ Hard-gated:
 - company sharing,
 - GitHub/remotes,
 - public distribution,
+- IDE/workspace configuration writes,
 - license or rights grants,
 - source mutation outside scoped KNX governance/evidence records,
 - writes outside approved KNX memory/runtime storage and approved local KNX module/config/help/report paths,

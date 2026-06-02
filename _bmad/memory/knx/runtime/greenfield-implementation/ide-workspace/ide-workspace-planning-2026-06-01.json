@@ -1,0 +1,56 @@
+{
+  "artifact_id": "knx-greenfield-ide-workspace-planning-2026-06-01",
+  "date": "2026-06-01",
+  "gate": 7,
+  "gate_name": "IDE/workspace configuration",
+  "status": "accepted_for_local_planning_only",
+  "decision_record": "_bmad/memory/knx/decisions/ide-workspace-planning-gate-2026-06-01.md",
+  "approved_scope": [
+    "local governance records",
+    "local planning evidence",
+    "local validation evidence",
+    "local commits under approved KNX memory/runtime boundary"
+  ],
+  "current_posture": {
+    "ide_workspace_writes_enabled": false,
+    "editor_integration_enabled": false,
+    "startup_automation_enabled": false,
+    "runtime_assistant_behavior_enabled": false,
+    "external_sends_enabled": false
+  },
+  "required_future_fields": [
+    "ide_target",
+    "exact_file_paths",
+    "action_button_task_shortcut_or_command_behavior",
+    "action_capability_class",
+    "rollback_plan",
+    "validation_plan",
+    "user_visible_behavior",
+    "safety_contract"
+  ],
+  "explicit_exclusions": [
+    ".vscode writes",
+    ".idea writes",
+    "workspace files",
+    "task files",
+    "launch files",
+    "button files",
+    "shortcut files",
+    "command files",
+    "shell profile edits",
+    "startup automation",
+    "editor integration",
+    "runtime assistant behavior",
+    "service daemon scheduled task or background helper installation",
+    "external sends or provider calls",
+    "customer production credential or account security access",
+    "source mutation outside already approved KNX paths"
+  ],
+  "validation": [
+    "json_parse",
+    "git_diff_check",
+    "sensitive_pattern_scan",
+    "local_commit"
+  ]
+}
+

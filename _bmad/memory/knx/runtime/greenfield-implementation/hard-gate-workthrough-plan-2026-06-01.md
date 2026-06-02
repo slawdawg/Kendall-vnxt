@@ -187,6 +187,27 @@ Materialized evidence:
 - `_bmad/memory/knx/runtime/greenfield-implementation/company-evaluation/company-evaluation-planning-2026-06-01.md`
 - `_bmad/memory/knx/runtime/greenfield-implementation/company-evaluation/company-evaluation-planning-2026-06-01.json`
 
+## Gate 7 Result
+
+Gate: IDE/workspace configuration.
+
+Status: accepted for local planning only.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/ide-workspace-planning-gate-2026-06-01.md`
+
+Summary:
+
+- Reopened IDE/workspace configuration path for local planning only.
+- Kept IDE/workspace writes disabled by default.
+- Did not approve `.vscode/`, `.idea/`, workspace, task, launch, button, shortcut, command, shell profile, startup automation, editor integration, runtime behavior, or external-send changes.
+
+Materialized evidence:
+
+- `_bmad/memory/knx/runtime/greenfield-implementation/ide-workspace/ide-workspace-planning-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/ide-workspace/ide-workspace-planning-2026-06-01.json`
+
 ## Next Action
 
-Proceed to Gate 7: IDE/workspace configuration.
+Proceed to Gate 8: runtime assistant behavior.
