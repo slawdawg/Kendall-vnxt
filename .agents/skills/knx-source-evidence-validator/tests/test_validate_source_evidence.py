@@ -275,6 +275,30 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("source-inventory-top-file-groups-invalid", codes)
         self.assertIn("source-inventory-source-class-groups-invalid", codes)
 
+    def test_numeric_contract_fields_reject_booleans(self):
+        pack = self._load_pack()
+        trace = self._find_fixture(pack, "valid-work-trace")
+        trace["artifact"]["execution_layer"] = True
+        pack["fixtures"].append(trace)
+
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["risk_score"] = False
+        pack["fixtures"].append(evidence)
+
+        inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
+        inventory["artifact"]["file_count"] = True
+        inventory["artifact"]["top_file_groups"] = [{"extension": ".md", "count": False}]
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("work-trace-layer-invalid", codes)
+        self.assertIn("risk-score-invalid", codes)
+        self.assertIn("source-inventory-file-count-invalid", codes)
+        self.assertIn("source-inventory-top-file-groups-invalid", codes)
+
     def test_source_inventory_requires_contract_fields(self):
         pack = self._load_pack()
         inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")

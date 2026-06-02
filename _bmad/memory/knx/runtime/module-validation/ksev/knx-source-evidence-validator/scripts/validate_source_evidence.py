@@ -333,6 +333,10 @@ def is_non_empty_string_list(value: Any, require_non_empty: bool = False) -> boo
     return all(isinstance(item, str) and bool(item.strip()) for item in value)
 
 
+def is_int_not_bool(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def duplicate_strings(values: list[str]) -> list[str]:
     seen = set()
     duplicates = set()
@@ -351,7 +355,7 @@ def is_count_group_list(value: Any, name_field: str) -> bool:
             return False
         if not isinstance(item.get(name_field), str) or not item.get(name_field, "").strip():
             return False
-        if not isinstance(item.get("count"), int) or item.get("count") < 0:
+        if not is_int_not_bool(item.get("count")) or item.get("count") < 0:
             return False
     return True
 
@@ -763,7 +767,7 @@ def validate_work_trace(fixture: dict[str, Any], findings: list[Finding]) -> Non
             elif field in {"steps_taken", "tools_used"} and not artifact.get(field):
                 add_finding(findings, "error", "work-trace-required-list-empty", f"{field} must be non-empty", fixture)
         execution_layer = artifact.get("execution_layer")
-        if not isinstance(execution_layer, int) or not 1 <= execution_layer <= 5:
+        if not is_int_not_bool(execution_layer) or not 1 <= execution_layer <= 5:
             add_finding(findings, "error", "work-trace-layer-invalid", "execution_layer must be an integer from 1 through 5", fixture)
         if artifact.get("uncertainty") not in VALID_UNCERTAINTY:
             add_finding(findings, "error", "work-trace-uncertainty-invalid", "Invalid work trace uncertainty", fixture)
@@ -850,7 +854,7 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
 
     if "risk_score" in artifact:
         risk_score = artifact.get("risk_score")
-        if not isinstance(risk_score, int) or not 0 <= risk_score <= 9:
+        if not is_int_not_bool(risk_score) or not 0 <= risk_score <= 9:
             add_finding(findings, "error", "risk-score-invalid", "risk_score must be an integer from 0 through 9", fixture)
         elif risk_score == 9 and artifact.get("blocking_status") not in {"blocking", "waived-blocking"}:
             add_finding(findings, "error", "risk-nine-not-blocking", "risk_score 9 must be blocking or waived-blocking", fixture)
@@ -978,7 +982,7 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
         add_finding(findings, "error", "source-inventory-uncertainty-invalid", "Invalid source inventory uncertainty", fixture)
     file_count = artifact.get("file_count")
     if "file_count" in artifact and (
-        not (isinstance(file_count, int) and file_count >= 0) and file_count != "unresolved"
+        not (is_int_not_bool(file_count) and file_count >= 0) and file_count != "unresolved"
     ):
         add_finding(findings, "error", "source-inventory-file-count-invalid", "file_count must be a nonnegative integer or unresolved", fixture)
     if "excluded_paths_or_patterns" in artifact and not is_non_empty_string_list(artifact.get("excluded_paths_or_patterns")):
