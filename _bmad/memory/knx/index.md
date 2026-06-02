@@ -20,7 +20,7 @@ Last updated: 2026-06-01
 ## Current Module State
 
 - KNX governance core: scaffolded and validated.
-- Optional source/evidence validator: scaffolded, structurally validated, safety-reviewed, hardened for fixture/source-packet, source inventory, work trace, validation evidence, user-input-required, and output metadata contract checks, and held as local installable packaging evidence.
+- Optional source/evidence validator: scaffolded, structurally validated, safety-reviewed, hardened for source packet examples, fixture/source-packet, source inventory, work trace, validation evidence, user-input-required, and output metadata contract checks, and held as local installable packaging evidence.
 - Latest validator distribution decision: [decisions/validator-distribution-2026-06-01.md](decisions/validator-distribution-2026-06-01.md)
 - Latest local Git commit decision: [decisions/local-git-commit-2026-06-01.md](decisions/local-git-commit-2026-06-01.md)
 - Latest validator validation report: [../../skills/reports/module-validation-ksev-2026-06-01.md](../../skills/reports/module-validation-ksev-2026-06-01.md)

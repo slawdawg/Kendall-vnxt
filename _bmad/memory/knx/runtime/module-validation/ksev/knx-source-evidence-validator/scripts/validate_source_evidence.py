@@ -151,6 +151,13 @@ REQUIRED_SOURCE_PACKET_FIELDS = {
     "created_at",
     "created_by",
 }
+REQUIRED_SOURCE_PACKET_TEXT_FIELDS = {
+    "source_packet_id",
+    "title",
+    "source_location_or_description",
+    "created_at",
+    "created_by",
+}
 VALID_DOWNSTREAM_ALLOWED_USES = {
     "planning",
     "draft-generation",
@@ -809,6 +816,17 @@ def validate_source_packet_example(packet: dict[str, Any], findings: list[Findin
                     "error",
                     "missing-source-packet-field",
                     f"Missing source packet field: {field}",
+                    artifact_id=str(packet_id) if packet_id else None,
+                )
+            )
+
+    for field in sorted(REQUIRED_SOURCE_PACKET_TEXT_FIELDS):
+        if field in packet and not str(packet.get(field, "")).strip():
+            findings.append(
+                Finding(
+                    "error",
+                    "source-packet-text-field-empty",
+                    f"Source packet text field must be non-empty: {field}",
                     artifact_id=str(packet_id) if packet_id else None,
                 )
             )
