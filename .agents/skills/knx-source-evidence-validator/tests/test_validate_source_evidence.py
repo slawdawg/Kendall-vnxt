@@ -641,6 +641,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("waiver-reason-missing", codes)
+        self.assertIn("waiver-id-missing", codes)
         self.assertIn("risk-nine-waiver-missing", codes)
 
     def test_validation_waiver_metadata_must_be_strings_when_present(self):
@@ -656,6 +657,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("waiver-id-invalid", codes)
         self.assertIn("waiver-reason-invalid", codes)
+
+    def test_validation_waiver_decision_must_resolve(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["result"] = "WAIVED"
+        evidence["artifact"]["waiver_id"] = "dec-missing-waiver-001"
+        evidence["artifact"]["waiver_reason"] = "Synthetic waiver reason for regression coverage."
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("unknown-waiver-decision-id", {finding["code"] for finding in result["findings"]})
 
     def test_work_trace_rejects_invalid_controlled_vocab(self):
         pack = self._load_pack()

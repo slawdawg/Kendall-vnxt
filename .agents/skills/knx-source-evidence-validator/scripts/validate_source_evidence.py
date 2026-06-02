@@ -976,6 +976,10 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
             not isinstance(artifact.get("waiver_reason"), str) or not artifact.get("waiver_reason", "").strip()
         ):
             add_finding(findings, "error", "waiver-reason-missing", "WAIVED validation needs waiver_reason", fixture)
+        if artifact.get("result") == "WAIVED" and (
+            not isinstance(artifact.get("waiver_id"), str) or artifact.get("waiver_id", "").strip() in {"", "none"}
+        ):
+            add_finding(findings, "error", "waiver-id-missing", "WAIVED validation needs a decision-record waiver_id", fixture)
 
     if "risk_score" in artifact:
         risk_score = artifact.get("risk_score")
@@ -1438,6 +1442,9 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
         for superseded_id in artifact.get("supersedes", []) if isinstance(artifact.get("supersedes"), list) else []:
             if isinstance(superseded_id, str) and superseded_id.strip() and superseded_id.strip() not in decision_record_ids:
                 add_finding(findings, "error", "unknown-superseded-decision-record-id", f"Unknown superseded decision_record_id reference: {superseded_id}", fixture)
+        waiver_id = artifact.get("waiver_id")
+        if isinstance(waiver_id, str) and waiver_id.strip() and waiver_id.strip() != "none" and waiver_id.strip() not in decision_record_ids:
+            add_finding(findings, "error", "unknown-waiver-decision-id", f"Unknown waiver decision_record_id reference: {waiver_id}", fixture)
         if fixture.get("expected_validation_result") == "PASS":
             for generated_artifact_id in artifact.get("generated_artifact_ids", []) if isinstance(artifact.get("generated_artifact_ids"), list) else []:
                 if isinstance(generated_artifact_id, str) and generated_artifact_id.strip() and generated_artifact_id.strip() not in output_artifact_ids:
