@@ -155,6 +155,14 @@ VALID_SOURCE_INVENTORY_SCOPES = {
 VALID_SOURCE_INVENTORY_OPERATIONS = {"read-planning only", "metadata-only read-planning"}
 VALID_SOURCE_INVENTORY_TOOLS = {"git", "ripgrep", "PowerShell", "approved-custom-glue"}
 VALID_BOUNDARY_RESULTS = {"PASS", "CONCERNS", "FAIL", "WAIVED"}
+REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS = {
+    "source_inventory_id",
+    "source_root",
+    "inventory_command_or_check",
+    "generated_artifact_path",
+    "created_at",
+    "created_by",
+}
 REQUIRED_SOURCE_PACKET_FIELDS = {
     "source_packet_id",
     "title",
@@ -755,6 +763,9 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
         add_finding(findings, "error", "source-inventory-mutated-source", "Source inventory must not mutate source", fixture)
     if artifact.get("external_send_performed") is not False:
         add_finding(findings, "error", "source-inventory-external-send", "Source inventory must not send externally", fixture)
+    for field in sorted(REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS):
+        if field in artifact and not str(artifact.get(field, "")).strip():
+            add_finding(findings, "error", "source-inventory-text-field-empty", f"Source inventory text field must be non-empty: {field}", fixture)
     if artifact.get("source_root_approval_basis") not in VALID_SOURCE_ROOT_APPROVAL_BASES:
         add_finding(findings, "error", "source-inventory-approval-basis-invalid", "Invalid source_root_approval_basis", fixture)
     if artifact.get("inventory_scope") not in VALID_SOURCE_INVENTORY_SCOPES:

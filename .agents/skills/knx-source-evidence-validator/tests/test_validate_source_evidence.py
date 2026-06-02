@@ -107,6 +107,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
     def test_source_inventory_rejects_invalid_controlled_vocab(self):
         pack = self._load_pack()
         inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
+        inventory["artifact"]["source_inventory_id"] = ""
+        inventory["artifact"]["inventory_command_or_check"] = " "
         inventory["artifact"]["source_root_approval_basis"] = "because"
         inventory["artifact"]["inventory_scope"] = "everything"
         inventory["artifact"]["allowed_operation"] = "scan-and-copy"
@@ -121,6 +123,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-inventory-text-field-empty", codes)
         self.assertIn("source-inventory-approval-basis-invalid", codes)
         self.assertIn("source-inventory-scope-invalid", codes)
         self.assertIn("source-inventory-operation-invalid", codes)
