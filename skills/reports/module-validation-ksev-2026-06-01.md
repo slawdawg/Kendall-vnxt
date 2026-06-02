@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 66 passed.
+- Unit tests: 68 passed.
 - Fixture validation: PASS.
 - Fixture count: 16.
 - Source packet example validation: PASS.
@@ -212,3 +212,4 @@ Additional local hardening:
 - Added validation evidence target consistency checks.
 - Added boundary validation target consistency checks.
 - Added missing artifact-field regression coverage for work traces, validation evidence, decision records, and user-input-required records.
+- Added missing-field regression coverage for fixture source packets and output metadata artifacts.
