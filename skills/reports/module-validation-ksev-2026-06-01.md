@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 79 passed.
+- Unit tests: 80 passed.
 - Fixture validation: PASS.
 - Fixture count: 18.
 - Source packet example validation: PASS.
@@ -80,6 +80,7 @@ The standalone optional pack includes:
 - Source-reference enforcement for explicit decision records.
 - Decision-record waiver ID enforcement for WAIVED validation evidence.
 - Waived-blocking status enforcement for WAIVED validation evidence.
+- Failed-rule list enforcement for CONCERNS, FAIL, and WAIVED validation evidence.
 - Non-empty text and required-list enforcement for work trace artifacts.
 - Non-empty string-list enforcement for fixture IDs, expected failed rules, work trace links/steps, validation references, user-input references/choices, and output metadata links.
 - Materialized-reference enforcement for source packet IDs, validation evidence IDs, and output work trace IDs.
@@ -144,7 +145,7 @@ Change:
 
 Verification:
 
-- Unit tests: 79 passed.
+- Unit tests: 80 passed.
 - Fixture validation: PASS, 18 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -233,3 +234,4 @@ Additional local hardening:
 - Added output metadata decision-record storage-boundary link checks.
 - Added output metadata storage-boundary basis and storage-location consistency checks.
 - Added WAIVED validation evidence blocking-status consistency checks.
+- Added failed-rule list checks for CONCERNS, FAIL, and WAIVED validation evidence.
