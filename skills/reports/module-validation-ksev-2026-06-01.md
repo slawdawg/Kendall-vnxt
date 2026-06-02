@@ -200,3 +200,4 @@ Additional local hardening:
 - Added decision-record fixture coverage and contract validation checks.
 - Added materialized decision-record reference checks.
 - Added materialized superseded-decision reference checks.
+- Added packet-level boundary flag checks for source packet examples.
