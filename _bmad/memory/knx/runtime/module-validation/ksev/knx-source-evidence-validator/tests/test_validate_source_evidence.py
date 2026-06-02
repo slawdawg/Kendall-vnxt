@@ -476,12 +476,25 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertEqual(result["status"], "FAIL")
-        self.assertIn("output-text-field-empty", codes)
+        self.assertIn("output-text-field-invalid", codes)
         self.assertIn("output-work-trace-missing", codes)
         self.assertIn("output-validation-evidence-ids-invalid", codes)
         self.assertIn("output-storage-boundary-basis-invalid", codes)
         self.assertIn("output-source-support-summary-invalid", codes)
         self.assertIn("output-result-status-invalid", codes)
+
+    def test_output_metadata_text_fields_must_be_strings(self):
+        pack = self._load_pack()
+        output = self._find_fixture(pack, "unsupported-inference-negative")
+        output["artifact"]["output_artifact_id"] = 42
+        output["artifact"]["work_trace_id"] = ["not", "a", "string"]
+        output["artifact"]["storage_location"] = {"path": "not-a-string"}
+        pack["fixtures"].append(output)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("output-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
     def test_fixture_references_must_resolve_to_materialized_ids(self):
         pack = self._load_pack()

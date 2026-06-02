@@ -610,8 +610,16 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
         if artifact.get("output_type") not in VALID_OUTPUT_TYPES:
             add_finding(findings, "error", "output-type-invalid", "Invalid output_type", fixture)
         for field in sorted(REQUIRED_OUTPUT_TEXT_FIELDS):
-            if field in artifact and not str(artifact.get(field, "")).strip():
-                add_finding(findings, "error", "output-text-field-empty", f"Output metadata text field must be non-empty: {field}", fixture)
+            if field in artifact and (
+                not isinstance(artifact.get(field), str) or not artifact.get(field, "").strip()
+            ):
+                add_finding(
+                    findings,
+                    "error",
+                    "output-text-field-invalid",
+                    f"Output metadata text field must be a non-empty string: {field}",
+                    fixture,
+                )
         if "created_at" in artifact and not is_iso_created_at(artifact.get("created_at")):
             add_finding(findings, "error", "output-created-at-invalid", "Output metadata created_at must be an ISO date or datetime", fixture)
         if not is_non_empty_string_list(artifact.get("source_packet_ids")):
