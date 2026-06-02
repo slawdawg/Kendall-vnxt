@@ -1131,6 +1131,30 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("boundary-validation-target-invalid", codes)
         self.assertIn("validation-evidence-references-invalid", codes)
 
+    def test_source_support_validation_targets_output_or_source_packet(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["validation_type"] = "source-support-check"
+        evidence["artifact"]["artifact_under_validation"] = "work trace"
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-support-validation-target-invalid", {finding["code"] for finding in result["findings"]})
+
+    def test_boundary_validation_targets_boundary_relevant_artifacts(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["validation_type"] = "boundary-check"
+        evidence["artifact"]["artifact_under_validation"] = "work trace"
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("boundary-validation-target-invalid", {finding["code"] for finding in result["findings"]})
+
     def test_validation_evidence_text_fields_must_be_strings(self):
         pack = self._load_pack()
         evidence = self._find_fixture(pack, "valid-validation-evidence")
