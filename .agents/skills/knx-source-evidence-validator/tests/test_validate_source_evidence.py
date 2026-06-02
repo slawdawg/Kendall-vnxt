@@ -310,6 +310,15 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("fixtures-not-list", codes)
 
         pack = self._load_pack()
+        pack["fixtures"].append("not-an-object")
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("fixture-not-object", codes)
+
+        pack = self._load_pack()
         fixture = self._find_fixture(pack, "valid-source-packet")
         fixture["fixture_type"] = 42
         pack["fixtures"].append(fixture)

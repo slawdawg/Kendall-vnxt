@@ -452,6 +452,10 @@ def validate_pack_shape(pack: dict[str, Any], findings: list[Finding]) -> list[d
             f"Fixture type is not in the current required set: {fixture_type}",
         )
 
+    for index, fixture in enumerate(fixtures):
+        if not isinstance(fixture, dict):
+            add_finding(findings, "error", "fixture-not-object", f"Fixture entry must be a JSON object at index {index}")
+
     return [fixture for fixture in fixtures if isinstance(fixture, dict)]
 
 
