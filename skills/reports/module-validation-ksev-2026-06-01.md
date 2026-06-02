@@ -43,9 +43,9 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 70 passed.
+- Unit tests: 72 passed.
 - Fixture validation: PASS.
-- Fixture count: 17.
+- Fixture count: 18.
 - Source packet example validation: PASS.
 - Source packet count: 3.
 - Errors: 0.
@@ -72,6 +72,7 @@ The standalone optional pack includes:
 - Controlled-vocabulary enforcement for fixture source packet artifacts.
 - Controlled-field enforcement for source inventory fixture artifacts.
 - Non-empty text enforcement for source inventory identity, command/check, path, and date fields.
+- Controlled-field, boundary flag, path, checksum-deferral, and group-shape enforcement for runtime evidence inventory fixture artifacts.
 - Required field and controlled-vocabulary enforcement for synthetic work traces, validation evidence, user-input-required records, and output metadata fixtures.
 - Required field, boundary flag, and shape enforcement for validator run evidence bundles.
 - Non-empty text and required-list enforcement for work trace artifacts.
@@ -135,8 +136,8 @@ Change:
 
 Verification:
 
-- Unit tests: 70 passed.
-- Fixture validation: PASS, 17 fixtures, 0 findings.
+- Unit tests: 72 passed.
+- Fixture validation: PASS, 18 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
 
@@ -215,3 +216,4 @@ Additional local hardening:
 - Added missing artifact-field regression coverage for work traces, validation evidence, decision records, and user-input-required records.
 - Added missing-field regression coverage for fixture source packets and output metadata artifacts.
 - Added validator run evidence bundle fixture coverage with required-field, boundary-flag, link, and output metadata shape checks.
+- Added runtime evidence inventory fixture coverage with required-field, controlled-vocabulary, boundary-flag, checksum-deferral, path-boundary, group-shape, and list-shape checks.
