@@ -617,6 +617,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
     def test_output_metadata_rejects_missing_required_links(self):
         pack = self._load_pack()
         output = self._find_fixture(pack, "unsupported-inference-negative")
+        output["artifact"]["source_packet_ids"] = []
         output["artifact"]["work_trace_id"] = ""
         output["artifact"]["storage_location"] = " "
         output["artifact"]["validation_evidence_ids"] = []
@@ -630,6 +631,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("output-text-field-invalid", codes)
+        self.assertIn("output-source-packet-ids-invalid", codes)
         self.assertIn("output-work-trace-missing", codes)
         self.assertIn("output-validation-evidence-ids-invalid", codes)
         self.assertIn("output-storage-boundary-basis-invalid", codes)

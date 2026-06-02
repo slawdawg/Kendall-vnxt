@@ -626,6 +626,7 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
     if not isinstance(artifact, dict):
         return
 
+    fixture_type = fixture.get("fixture_type")
     if "output_artifact_id" in artifact:
         for field in (
             "output_type",
@@ -661,6 +662,8 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
             add_finding(findings, "error", "output-created-at-invalid", "Output metadata created_at must be an ISO date or datetime", fixture)
         if not is_non_empty_string_list(artifact.get("source_packet_ids")):
             add_finding(findings, "error", "output-source-packet-ids-invalid", "source_packet_ids must be a string list", fixture)
+        elif fixture_type != "missing-source-negative" and not artifact.get("source_packet_ids"):
+            add_finding(findings, "error", "output-source-packet-ids-invalid", "source_packet_ids must be non-empty", fixture)
         if not artifact.get("work_trace_id"):
             add_finding(findings, "error", "output-work-trace-missing", "Output metadata must link to a work trace", fixture)
         if not is_non_empty_string_list(artifact.get("validation_evidence_ids"), require_non_empty=True):
@@ -678,7 +681,6 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
         if artifact.get("storage_boundary_basis") not in VALID_STORAGE_BOUNDARY_BASES:
             add_finding(findings, "error", "output-storage-boundary-basis-invalid", "Invalid storage_boundary_basis", fixture)
         storage_location = artifact.get("storage_location")
-        fixture_type = fixture.get("fixture_type")
         if (
             fixture_type != "forbidden-destination-negative"
             and isinstance(storage_location, str)
@@ -701,7 +703,6 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
         if artifact.get("result_status") not in VALID_OUTPUT_STATUSES:
             add_finding(findings, "error", "output-result-status-invalid", "Invalid result_status", fixture)
 
-    fixture_type = fixture.get("fixture_type")
     source_packet_ids = artifact.get("source_packet_ids")
     if fixture_type == "missing-source-negative":
         if source_packet_ids != []:
