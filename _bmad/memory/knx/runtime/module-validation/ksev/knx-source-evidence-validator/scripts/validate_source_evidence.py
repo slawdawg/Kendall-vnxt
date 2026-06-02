@@ -957,8 +957,11 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
         add_finding(findings, "error", "source-inventory-forbidden-content-invalid", "Invalid forbidden_content_check", fixture)
     if artifact.get("uncertainty") not in VALID_UNCERTAINTY:
         add_finding(findings, "error", "source-inventory-uncertainty-invalid", "Invalid source inventory uncertainty", fixture)
-    if "file_count" in artifact and (not isinstance(artifact.get("file_count"), int) or artifact.get("file_count") < 0):
-        add_finding(findings, "error", "source-inventory-file-count-invalid", "file_count must be a nonnegative integer", fixture)
+    file_count = artifact.get("file_count")
+    if "file_count" in artifact and (
+        not (isinstance(file_count, int) and file_count >= 0) and file_count != "unresolved"
+    ):
+        add_finding(findings, "error", "source-inventory-file-count-invalid", "file_count must be a nonnegative integer or unresolved", fixture)
 
     generated_path = artifact.get("generated_artifact_path")
     fixture_type = fixture.get("fixture_type")

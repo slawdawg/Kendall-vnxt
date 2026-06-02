@@ -218,6 +218,47 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("source-inventory-uncertainty-invalid", codes)
         self.assertIn("source-inventory-file-count-invalid", codes)
 
+    def test_source_inventory_file_count_allows_unresolved_sentinel(self):
+        pack = self._load_pack()
+        inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
+        inventory["fixture_type"] = "valid-source-inventory-evidence"
+        inventory["expected_validation_result"] = "PASS"
+        inventory["expected_failed_rules"] = []
+        inventory["artifact_ids"] = ["si-synth-valid-file-count-001"]
+        inventory["artifact"]["source_inventory_id"] = "si-synth-valid-file-count-001"
+        inventory["artifact"]["file_count"] = "unresolved"
+        inventory["artifact"]["generated_artifact_path"] = str(
+            validator.load_approved_storage_root() / "optional-source-evidence-pack" / "reports" / "inventory.json"
+        )
+        inventory["artifact"]["boundary_check_result"] = "PASS"
+        inventory["artifact"]["uncertainty"] = "none"
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertNotIn("source-inventory-file-count-invalid", {finding["code"] for finding in result["findings"]})
+
+    def test_source_inventory_file_count_rejects_invalid_strings(self):
+        pack = self._load_pack()
+        inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
+        inventory["fixture_type"] = "valid-source-inventory-evidence"
+        inventory["expected_validation_result"] = "PASS"
+        inventory["expected_failed_rules"] = []
+        inventory["artifact_ids"] = ["si-synth-invalid-file-count-001"]
+        inventory["artifact"]["source_inventory_id"] = "si-synth-invalid-file-count-001"
+        inventory["artifact"]["file_count"] = "twelve"
+        inventory["artifact"]["generated_artifact_path"] = str(
+            validator.load_approved_storage_root() / "optional-source-evidence-pack" / "reports" / "inventory.json"
+        )
+        inventory["artifact"]["boundary_check_result"] = "PASS"
+        inventory["artifact"]["uncertainty"] = "none"
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-inventory-file-count-invalid", {finding["code"] for finding in result["findings"]})
+
     def test_source_inventory_requires_contract_fields(self):
         pack = self._load_pack()
         inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
