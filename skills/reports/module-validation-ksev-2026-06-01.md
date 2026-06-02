@@ -205,3 +205,4 @@ Additional local hardening:
 - Added source-reference ID resolution checks.
 - Added PASS validation-evidence consistency checks.
 - Added evidence-reference ID resolution checks.
+- Added unsupported-output result status checks.
