@@ -230,6 +230,28 @@ Materialized evidence:
 - `_bmad/memory/knx/runtime/greenfield-implementation/runtime-behavior/runtime-assistant-behavior-planning-2026-06-01.md`
 - `_bmad/memory/knx/runtime/greenfield-implementation/runtime-behavior/runtime-assistant-behavior-planning-2026-06-01.json`
 
+## Gate 9 Result
+
+Gate: local model/GPU processing.
+
+Status: accepted for local planning only.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/local-model-gpu-processing-planning-gate-2026-06-01.md`
+
+Summary:
+
+- Reopened local model/GPU processing path for local planning only.
+- Defined candidate future processing classes.
+- Kept local model/GPU processing disabled.
+- Did not approve model installs, GPU/runtime configuration, inference, source/customer/production processing, external providers, credential/account access, runtime assistant behavior, or source mutation outside approved paths.
+
+Materialized evidence:
+
+- `_bmad/memory/knx/runtime/greenfield-implementation/local-model-gpu/local-model-gpu-processing-planning-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/local-model-gpu/local-model-gpu-processing-planning-2026-06-01.json`
+
 ## Next Action
 
-Proceed to Gate 9: local model/GPU processing.
+Proceed to Gate 10: customer/production/credential/account-security workflows.
