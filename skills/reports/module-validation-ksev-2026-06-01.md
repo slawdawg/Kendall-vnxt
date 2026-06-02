@@ -187,3 +187,4 @@ Additional local hardening:
 - Added non-empty string type checks for source packet example set text fields.
 - Added non-empty string type checks for fixture pack text fields.
 - Added string type checks for fixture-level synthetic-only statements.
+- Added object-shape checks for entries inside fixture packs.
