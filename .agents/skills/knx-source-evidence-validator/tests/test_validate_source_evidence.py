@@ -792,6 +792,18 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("decision-supersedes-invalid", codes)
         self.assertIn("decision-high-risk-approval-basis-invalid", codes)
 
+    def test_explicit_decision_requires_source_references(self):
+        pack = self._load_pack()
+        decision = self._find_fixture(pack, "valid-decision-record")
+        decision["artifact"]["approval_basis"] = "user-specified"
+        decision["artifact"]["source_references"] = []
+        pack["fixtures"].append(decision)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("decision-source-references-missing", {finding["code"] for finding in result["findings"]})
+
     def test_decision_record_requires_contract_fields(self):
         pack = self._load_pack()
         decision = self._find_fixture(pack, "valid-decision-record")

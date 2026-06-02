@@ -1079,6 +1079,8 @@ def validate_decision_record(fixture: dict[str, Any], findings: list[Finding]) -
         add_finding(findings, "error", "decision-approval-basis-invalid", "Invalid decision approval_basis", fixture)
     if not is_non_empty_string_list(artifact.get("source_references")):
         add_finding(findings, "error", "decision-source-references-invalid", "source_references must be a string list", fixture)
+    elif not artifact.get("source_references") and artifact.get("approval_basis") not in {"defaulted", "unresolved"}:
+        add_finding(findings, "error", "decision-source-references-missing", "Explicit decision approval needs source references", fixture)
     if "supersedes" in artifact and not is_non_empty_string_list(artifact.get("supersedes")):
         add_finding(findings, "error", "decision-supersedes-invalid", "supersedes must be a string list when present", fixture)
     risk_score = artifact.get("risk_score")
