@@ -22,8 +22,8 @@ Select-String -Path skills\reports\module-validation-ksev-2026-06-01.md -Pattern
 - Active source packet example validator report exists: PASS.
 - Active synthetic fixture validator report exists: PASS.
 - Current handoff exists: PASS.
-- Index latest substantive implementation pointer: `2f1efa6 Cover ksev runtime inventory evidence`.
-- Current handoff latest scoped implementation pointer: `2f1efa6 Cover ksev runtime inventory evidence`.
+- Index latest substantive implementation pointer: `32fd3be Cover ksev validator run references`.
+- Current handoff latest scoped implementation pointer: `32fd3be Cover ksev validator run references`.
 - Module validation report unit baseline: 72 passed.
 - Handoff validation baseline: fixture PASS with 18 fixtures, source packet example PASS, module validation pass.
 

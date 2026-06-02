@@ -78,6 +78,7 @@ The standalone optional pack includes:
 - Non-empty text and required-list enforcement for work trace artifacts.
 - Non-empty string-list enforcement for fixture IDs, expected failed rules, work trace links/steps, validation references, user-input references/choices, and output metadata links.
 - Materialized-reference enforcement for source packet IDs, validation evidence IDs, and output work trace IDs.
+- Materialized-reference enforcement for validator run work trace, validation evidence, and output metadata links.
 - Non-empty text enforcement for validation evidence identity, command/check, reviewer, and date fields.
 - Non-empty text and allowed-choice type enforcement for user-input-required artifacts.
 - Storage-boundary-basis enforcement for output metadata fixtures.
@@ -217,3 +218,4 @@ Additional local hardening:
 - Added missing-field regression coverage for fixture source packets and output metadata artifacts.
 - Added validator run evidence bundle fixture coverage with required-field, boundary-flag, link, and output metadata shape checks.
 - Added runtime evidence inventory fixture coverage with required-field, controlled-vocabulary, boundary-flag, checksum-deferral, path-boundary, group-shape, and list-shape checks.
+- Added validator run evidence bundle materialized-reference checks for work trace, validation evidence, and output metadata links.
