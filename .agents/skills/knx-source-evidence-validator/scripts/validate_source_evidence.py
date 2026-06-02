@@ -325,6 +325,10 @@ def validate_pack_shape(pack: dict[str, Any], findings: list[Finding]) -> list[d
         if field not in pack:
             add_finding(findings, "error", "missing-pack-field", f"Missing top-level field: {field}")
 
+    synthetic_statement = pack.get("synthetic_only_statement")
+    if isinstance(synthetic_statement, str) and "synthetic" not in synthetic_statement.lower():
+        add_finding(findings, "error", "pack-synthetic-statement-invalid", "Fixture pack must state it is synthetic")
+
     fixtures = pack.get("fixtures")
     if not isinstance(fixtures, list):
         add_finding(findings, "error", "fixtures-not-list", "Top-level fixtures field must be a list")
@@ -375,8 +379,11 @@ def validate_common_fixture_fields(fixture: dict[str, Any], findings: list[Findi
         add_finding(findings, "error", "fixture-type-invalid", "fixture_type must be a string", fixture)
         return
 
-    if not fixture.get("synthetic_only_statement"):
+    synthetic_statement = fixture.get("synthetic_only_statement")
+    if not synthetic_statement:
         add_finding(findings, "error", "synthetic-statement-missing", "Fixture must state it is synthetic", fixture)
+    elif "synthetic" not in str(synthetic_statement).lower():
+        add_finding(findings, "error", "synthetic-statement-invalid", "Fixture synthetic statement must mention synthetic", fixture)
 
     artifact_ids = fixture.get("artifact_ids")
     if not isinstance(artifact_ids, list) or not artifact_ids:

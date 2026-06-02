@@ -145,6 +145,18 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("json-parse-failed", {finding["code"] for finding in result["findings"]})
 
+    def test_synthetic_statements_must_explicitly_say_synthetic(self):
+        pack = self._load_pack()
+        pack["synthetic_only_statement"] = "All examples are safe examples."
+        pack["fixtures"][0]["synthetic_only_statement"] = "Example only."
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("pack-synthetic-statement-invalid", codes)
+        self.assertIn("synthetic-statement-invalid", codes)
+
     def test_risk_score_nine_requires_blocking_status(self):
         pack = self._load_pack()
         evidence = self._find_fixture(pack, "valid-validation-evidence")
