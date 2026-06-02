@@ -208,3 +208,4 @@ Additional local hardening:
 - Added unsupported-output result status checks.
 - Added high-risk decision approval-basis checks.
 - Added user-input review-condition checks.
+- Added work-trace blocking next-action checks.
