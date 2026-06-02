@@ -134,7 +134,7 @@ Change:
 
 Verification:
 
-- Unit tests: 38 passed.
+- Unit tests: 39 passed.
 - Fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -150,6 +150,7 @@ Additional local hardening:
 - Added required excluded-source-class checks for source packet example sets.
 - Added regression coverage for source packet operations that are valid vocabulary but not read-planning.
 - Added regression coverage for malformed fixture pack and common fixture metadata shapes.
+- Added regression coverage for source-mutation and external-action negative fixture contract rules.
 - Added duplicate-ID checks for fixture artifact IDs and source packet example IDs.
 - Added non-empty text checks for fixture pack and source packet example set identity/date fields.
 - Added required `created_by` and contract-reference checks for fixture packs.

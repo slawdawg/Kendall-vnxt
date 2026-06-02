@@ -52,6 +52,29 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(mutation_findings, [])
 
+    def test_negative_fixture_contract_rules_are_enforced(self):
+        pack = self._load_pack()
+        mutation = self._find_fixture(pack, "source-mutation-without-approval-negative")
+        mutation["artifact"]["source_operation"] = "read-planning"
+        mutation["expected_validation_result"] = "PASS"
+        pack["fixtures"].append(mutation)
+
+        external = self._find_fixture(pack, "external-action-negative")
+        external["artifact"]["execution_layer"] = 2
+        external["artifact"]["next_action"] = "proceed"
+        external["expected_validation_result"] = "PASS"
+        pack["fixtures"].append(external)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("mutation-negative-operation-invalid", codes)
+        self.assertIn("mutation-negative-result-invalid", codes)
+        self.assertIn("external-action-layer-invalid", codes)
+        self.assertIn("external-action-next-action-invalid", codes)
+        self.assertIn("external-action-result-invalid", codes)
+
     def test_fixture_source_packet_rejects_invalid_controlled_vocab(self):
         pack = self._load_pack()
         source_packet = self._find_fixture(pack, "valid-source-packet")
