@@ -442,6 +442,17 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(root, Path(temp_dir).resolve())
 
+    def test_fixture_pack_must_stay_under_synthetic_fixture_root(self):
+        pack = self._load_pack()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "fixture-pack.json"
+            path.write_text(json.dumps(pack), encoding="utf-8")
+
+            result = validator.validate_fixture_pack(path)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("fixture-pack-outside-synthetic-root", {finding["code"] for finding in result["findings"]})
+
     def test_malformed_json_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             malformed = Path(temp_dir) / "bad.json"
@@ -1331,7 +1342,7 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         raise AssertionError(f"Fixture not found: {fixture_type}")
 
     def _validate_temp_pack(self, pack):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=FIXTURE_PACK.parent) as temp_dir:
             path = Path(temp_dir) / "fixture-pack.json"
             path.write_text(json.dumps(pack), encoding="utf-8")
             return validator.validate_fixture_pack(path)

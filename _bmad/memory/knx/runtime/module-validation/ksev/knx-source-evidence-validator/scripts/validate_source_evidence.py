@@ -290,6 +290,7 @@ REQUIRED_EXCLUDED_SOURCE_CLASSES = {
 }
 DEFAULT_APPROVED_STORAGE_ROOT = Path("_bmad/memory/knx/runtime").resolve()
 KNX_MEMORY_ROOT = Path("_bmad/memory/knx").resolve()
+SYNTHETIC_FIXTURE_ROOT = Path("_bmad/memory/knx/fixtures/synthetic").resolve()
 
 SECRET_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
@@ -1471,6 +1472,13 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
     pack, findings = load_fixture_pack(path)
     if pack is None:
         return build_result(path, findings, 0, approved_storage_root)
+    if not is_under_path(str(path), SYNTHETIC_FIXTURE_ROOT):
+        add_finding(
+            findings,
+            "error",
+            "fixture-pack-outside-synthetic-root",
+            "Fixture packs must live under _bmad/memory/knx/fixtures/synthetic",
+        )
 
     fixtures = validate_pack_shape(pack, findings)
     for fixture in fixtures:
