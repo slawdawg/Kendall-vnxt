@@ -27,7 +27,7 @@ Last updated: 2026-06-02
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md)
-- Latest substantive KNX governance commit: `c598a14 Cover ksev generated artifact references`
+- Latest substantive KNX governance commit: `761066e Cover ksev decision record fixtures`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
