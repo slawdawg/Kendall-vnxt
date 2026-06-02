@@ -252,6 +252,27 @@ Materialized evidence:
 - `_bmad/memory/knx/runtime/greenfield-implementation/local-model-gpu/local-model-gpu-processing-planning-2026-06-01.md`
 - `_bmad/memory/knx/runtime/greenfield-implementation/local-model-gpu/local-model-gpu-processing-planning-2026-06-01.json`
 
+## Gate 10 Result
+
+Gate: customer/production/credential/account-security workflows.
+
+Status: accepted for local planning only.
+
+Decision record:
+
+- `_bmad/memory/knx/decisions/access-security-workflows-planning-gate-2026-06-01.md`
+
+Summary:
+
+- Reopened customer/production/credential/account-security workflow path for local planning only.
+- Defined access/security workflow classes as blocked by default.
+- Did not approve customer/production access, credential handling, auth/MFA/token work, account/security changes, external sends/providers, runtime assistant behavior, or source mutation outside approved paths.
+
+Materialized evidence:
+
+- `_bmad/memory/knx/runtime/greenfield-implementation/access-security/access-security-workflows-planning-2026-06-01.md`
+- `_bmad/memory/knx/runtime/greenfield-implementation/access-security/access-security-workflows-planning-2026-06-01.json`
+
 ## Next Action
 
-Proceed to Gate 10: customer/production/credential/account-security workflows.
+Proceed to Gate 11: destructive/data-loss actions or risk score `9` waivers.

@@ -1,0 +1,67 @@
+{
+  "artifact_id": "knx-greenfield-access-security-workflows-planning-2026-06-01",
+  "date": "2026-06-01",
+  "gate": 10,
+  "gate_name": "customer/production/credential/account-security workflows",
+  "status": "accepted_for_local_planning_only",
+  "decision_record": "_bmad/memory/knx/decisions/access-security-workflows-planning-gate-2026-06-01.md",
+  "approved_scope": [
+    "local governance records",
+    "local planning evidence",
+    "local validation evidence",
+    "local commits under approved KNX memory/runtime boundary"
+  ],
+  "blocked_workflow_classes": [
+    "customer system access",
+    "production system access",
+    "customer or production data handling",
+    "credential handling",
+    "token key secret or password work",
+    "auth MFA session or account-security changes",
+    "permission or role changes",
+    "security-sensitive troubleshooting",
+    "external account integration"
+  ],
+  "current_posture": {
+    "customer_access_enabled": false,
+    "production_access_enabled": false,
+    "customer_or_production_data_handling_enabled": false,
+    "credential_handling_enabled": false,
+    "auth_mfa_token_session_work_enabled": false,
+    "account_security_changes_enabled": false,
+    "external_sends_enabled": false,
+    "runtime_assistant_behavior_enabled": false
+  },
+  "required_future_fields": [
+    "exact_system_or_account",
+    "data_class",
+    "access_method",
+    "authority_and_authorization_basis",
+    "audit_and_logging_plan",
+    "rollback_and_recovery_plan",
+    "validation_plan",
+    "safety_contract",
+    "time_boundary",
+    "destination_and_sharing_boundary",
+    "credential_handling_policy",
+    "emergency_stop_condition"
+  ],
+  "explicit_exclusions": [
+    "customer access",
+    "production access",
+    "customer or production data processing",
+    "credential handling",
+    "token key secret password auth MFA session permission or role changes",
+    "account or security changes",
+    "external sends or provider calls",
+    "runtime assistant behavior",
+    "source mutation outside already approved KNX paths"
+  ],
+  "validation": [
+    "json_parse",
+    "git_diff_check",
+    "sensitive_pattern_scan",
+    "local_commit"
+  ]
+}
+

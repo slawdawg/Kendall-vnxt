@@ -28,6 +28,7 @@ Status: local-only greenfield implementation lane open
 - IDE/workspace planning is materialized locally; IDE and workspace writes remain disabled.
 - Runtime assistant behavior planning is materialized locally; runtime behavior remains disabled.
 - Local model/GPU processing planning is materialized locally; model/GPU processing remains disabled.
+- Access/security workflow planning is materialized locally; customer/production/credential/account-security workflows remain blocked.
 
 ## Latest Validation
 
@@ -64,6 +65,7 @@ Hard-gated:
 - IDE/workspace configuration writes,
 - runtime assistant behavior implementation,
 - local model/GPU processing implementation,
+- customer/production/credential/account-security workflow execution,
 - license or rights grants,
 - source mutation outside scoped KNX governance/evidence records,
 - writes outside approved KNX memory/runtime storage and approved local KNX module/config/help/report paths,
