@@ -34,7 +34,7 @@ Status: local-only greenfield implementation lane open
 
 ## Latest Validation
 
-- `ksev` unit tests: 40 passed.
+- `ksev` unit tests: 42 passed.
 - Synthetic fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation for `ksev`: pass, 0 findings.

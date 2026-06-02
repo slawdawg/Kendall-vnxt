@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 24 passed.
+- Unit tests: 42 passed.
 - Fixture validation: PASS.
 - Fixture count: 14.
 - Source packet example validation: PASS.
@@ -134,7 +134,7 @@ Change:
 
 Verification:
 
-- Unit tests: 39 passed.
+- Unit tests: 42 passed.
 - Fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -172,3 +172,5 @@ Additional local hardening:
 - Added required link and controlled-vocabulary checks for output metadata artifacts.
 - Added storage-boundary-basis checks for output metadata artifacts.
 - Added non-empty text checks for output metadata identity, trace, storage, and date fields.
+- Added non-empty string-list checks for metadata-only source packet example references and open questions.
+- Added copied-content exclusions for fixture source packet artifacts and source packet example sets.
