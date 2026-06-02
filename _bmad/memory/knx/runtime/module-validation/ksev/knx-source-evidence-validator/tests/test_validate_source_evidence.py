@@ -583,6 +583,16 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("duplicate-source-packet-id", {finding["code"] for finding in result["findings"]})
 
+    def test_source_packet_examples_require_packet_fields(self):
+        examples = self._load_source_packet_examples()
+        del examples["packets"][0]["source_owner_or_provider"]
+        del examples["packets"][0]["source_operation"]
+
+        result = self._validate_temp_source_packet_examples(examples)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-source-packet-field", {finding["code"] for finding in result["findings"]})
+
     def test_source_packet_examples_reject_invalid_controlled_vocab(self):
         examples = self._load_source_packet_examples()
         examples["packets"][0]["source_owner_or_provider"] = "customer"
