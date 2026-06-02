@@ -423,7 +423,10 @@ def validate_source_packet(fixture: dict[str, Any], findings: list[Finding]) -> 
 
     for field in (
         "source_packet_id",
+        "title",
         "source_class",
+        "source_location_or_description",
+        "source_owner_or_provider",
         "approval_basis",
         "source_support_level",
         "permitted_processing_boundary",
@@ -432,12 +435,18 @@ def validate_source_packet(fixture: dict[str, Any], findings: list[Finding]) -> 
         "source_operation",
         "uncertainty",
         "forbidden_content_check",
+        "created_at",
+        "created_by",
     ):
         if field not in artifact:
             add_finding(findings, "error", "missing-source-packet-field", f"Missing source packet field: {field}", fixture)
 
     source_operation = artifact.get("source_operation")
     expected_result = fixture.get("expected_validation_result")
+
+    for field in sorted(REQUIRED_SOURCE_PACKET_TEXT_FIELDS):
+        if field in artifact and not str(artifact.get(field, "")).strip():
+            add_finding(findings, "error", "fixture-source-packet-text-field-empty", f"Source packet text field must be non-empty: {field}", fixture)
 
     if artifact.get("source_class") not in VALID_FIXTURE_SOURCE_PACKET_CLASSES:
         add_finding(findings, "error", "fixture-source-packet-class-invalid", "Invalid source packet source_class", fixture)

@@ -82,6 +82,18 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("fixture-source-packet-uncertainty-invalid", codes)
         self.assertIn("fixture-source-packet-forbidden-content-invalid", codes)
 
+    def test_fixture_source_packet_rejects_empty_required_text_fields(self):
+        pack = self._load_pack()
+        source_packet = self._find_fixture(pack, "valid-source-packet")
+        source_packet["artifact"]["title"] = ""
+        source_packet["artifact"]["created_by"] = " "
+        pack["fixtures"].append(source_packet)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("fixture-source-packet-text-field-empty", {finding["code"] for finding in result["findings"]})
+
     def test_source_inventory_storage_negative_is_valid_expected_failure(self):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
         inventory_findings = [

@@ -43,7 +43,7 @@ python .agents\skills\knx-source-evidence-validator\scripts\validate_source_evid
 
 Results:
 
-- Unit tests: 23 passed.
+- Unit tests: 24 passed.
 - Fixture validation: PASS.
 - Fixture count: 14.
 - Source packet example validation: PASS.
@@ -61,6 +61,7 @@ The standalone optional pack includes:
 - Controlled-vocabulary enforcement for source packet example owner, approval basis, support level, processing boundary, storage boundary, operation, and uncertainty fields.
 - Non-empty text enforcement for source packet example identity and description fields.
 - Explicit synthetic-statement enforcement for fixture packs and fixture entries.
+- Full identity-field and non-empty text enforcement for fixture source packet artifacts.
 - Controlled-vocabulary enforcement for fixture source packet artifacts.
 - Controlled-field enforcement for source inventory fixture artifacts.
 - Required field and controlled-vocabulary enforcement for synthetic work traces, validation evidence, user-input-required records, and output metadata fixtures.
@@ -118,7 +119,7 @@ Change:
 
 Verification:
 
-- Unit tests: 23 passed.
+- Unit tests: 24 passed.
 - Fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -127,6 +128,7 @@ Additional local hardening:
 
 - Added non-empty text checks for source packet example identity and description fields.
 - Added explicit synthetic-statement checks for fixture packs and fixture entries.
+- Added full identity-field and non-empty text checks for fixture source packet artifacts.
 - Added controlled-vocabulary checks for synthetic source packet fixture artifacts.
 - Added controlled-field checks for source inventory fixture artifacts.
 - Added required field and controlled-vocabulary checks for synthetic work trace artifacts.
