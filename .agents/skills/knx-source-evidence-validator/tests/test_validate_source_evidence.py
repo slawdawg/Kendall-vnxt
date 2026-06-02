@@ -431,6 +431,23 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("risk-nine-not-blocking", {finding["code"] for finding in result["findings"]})
 
+    def test_validation_waiver_fields_must_be_non_empty_strings(self):
+        pack = self._load_pack()
+        evidence = self._find_fixture(pack, "valid-validation-evidence")
+        evidence["artifact"]["result"] = "WAIVED"
+        evidence["artifact"]["waiver_reason"] = ["not", "a", "string"]
+        evidence["artifact"]["risk_score"] = 9
+        evidence["artifact"]["blocking_status"] = "waived-blocking"
+        evidence["artifact"]["waiver_id"] = " "
+        pack["fixtures"].append(evidence)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("waiver-reason-missing", codes)
+        self.assertIn("risk-nine-waiver-missing", codes)
+
     def test_work_trace_rejects_invalid_controlled_vocab(self):
         pack = self._load_pack()
         trace = self._find_fixture(pack, "valid-work-trace")

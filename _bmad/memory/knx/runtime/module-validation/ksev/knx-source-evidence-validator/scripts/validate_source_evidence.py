@@ -824,7 +824,9 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
                 "evidence_references must be a non-empty string list",
                 fixture,
             )
-        if artifact.get("result") == "WAIVED" and not artifact.get("waiver_reason"):
+        if artifact.get("result") == "WAIVED" and (
+            not isinstance(artifact.get("waiver_reason"), str) or not artifact.get("waiver_reason", "").strip()
+        ):
             add_finding(findings, "error", "waiver-reason-missing", "WAIVED validation needs waiver_reason", fixture)
 
     if "risk_score" in artifact:
@@ -833,7 +835,9 @@ def validate_validation_evidence(fixture: dict[str, Any], findings: list[Finding
             add_finding(findings, "error", "risk-score-invalid", "risk_score must be an integer from 0 through 9", fixture)
         elif risk_score == 9 and artifact.get("blocking_status") not in {"blocking", "waived-blocking"}:
             add_finding(findings, "error", "risk-nine-not-blocking", "risk_score 9 must be blocking or waived-blocking", fixture)
-        elif risk_score == 9 and artifact.get("blocking_status") == "waived-blocking" and artifact.get("waiver_id") in {None, "", "none"}:
+        elif risk_score == 9 and artifact.get("blocking_status") == "waived-blocking" and (
+            not isinstance(artifact.get("waiver_id"), str) or artifact.get("waiver_id", "").strip() in {"", "none"}
+        ):
             add_finding(findings, "error", "risk-nine-waiver-missing", "waived risk_score 9 needs a waiver_id", fixture)
 
 
