@@ -20,14 +20,14 @@ Last updated: 2026-06-02
 ## Current Module State
 
 - KNX governance core: scaffolded and validated.
-- Optional source/evidence validator: scaffolded, structurally validated, safety-reviewed, hardened for synthetic fixtures, source packet examples, packet-level boundary flags, fixture/source-packet, source-reference ID, source inventory, work trace, validation evidence, decision-record, user-input-required, output metadata/storage-boundary, fixture artifact-ID, decision artifact-ID, generated-artifact, decision-record, and superseded-decision reference contract checks, and held as local installable packaging evidence.
+- Optional source/evidence validator: scaffolded, structurally validated, safety-reviewed, hardened for synthetic fixtures, source packet examples, packet-level boundary flags, fixture/source-packet, source-reference ID, source inventory, work trace, validation evidence, validation-result consistency, decision-record, user-input-required, output metadata/storage-boundary, fixture artifact-ID, decision artifact-ID, generated-artifact, decision-record, and superseded-decision reference contract checks, and held as local installable packaging evidence.
 - Latest validator distribution decision: [decisions/validator-distribution-2026-06-01.md](decisions/validator-distribution-2026-06-01.md)
 - Latest local Git commit decision: [decisions/local-git-commit-2026-06-01.md](decisions/local-git-commit-2026-06-01.md)
 - Latest validator validation report: [../../skills/reports/module-validation-ksev-2026-06-01.md](../../skills/reports/module-validation-ksev-2026-06-01.md)
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md)
-- Latest substantive KNX governance commit: `91030fe Cover ksev source reference ids`
+- Latest substantive KNX governance commit: `cf030ce Cover ksev pass validation evidence`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)

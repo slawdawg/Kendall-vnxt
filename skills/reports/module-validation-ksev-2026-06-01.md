@@ -203,3 +203,4 @@ Additional local hardening:
 - Added packet-level boundary flag checks for source packet examples.
 - Added decision-record primary artifact ID alignment checks.
 - Added source-reference ID resolution checks.
+- Added PASS validation-evidence consistency checks.
