@@ -117,6 +117,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("fixture-source-packet-text-field-invalid", {finding["code"] for finding in result["findings"]})
 
+    def test_fixture_source_packet_requires_contract_fields(self):
+        pack = self._load_pack()
+        source_packet = self._find_fixture(pack, "valid-source-packet")
+        del source_packet["artifact"]["title"]
+        del source_packet["artifact"]["approval_basis"]
+        del source_packet["artifact"]["created_by"]
+        pack["fixtures"].append(source_packet)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-source-packet-field", {finding["code"] for finding in result["findings"]})
+
     def test_fixture_source_packet_text_fields_must_be_strings(self):
         pack = self._load_pack()
         source_packet = self._find_fixture(pack, "valid-source-packet")
@@ -747,6 +760,19 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("output-text-field-invalid", {finding["code"] for finding in result["findings"]})
+
+    def test_output_metadata_requires_contract_fields(self):
+        pack = self._load_pack()
+        output = self._find_fixture(pack, "unsupported-inference-negative")
+        del output["artifact"]["output_type"]
+        del output["artifact"]["generation_boundary"]
+        del output["artifact"]["created_at"]
+        pack["fixtures"].append(output)
+
+        result = self._validate_temp_pack(pack)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("missing-output-field", {finding["code"] for finding in result["findings"]})
 
     def test_output_metadata_storage_must_stay_under_knx_storage(self):
         pack = self._load_pack()
