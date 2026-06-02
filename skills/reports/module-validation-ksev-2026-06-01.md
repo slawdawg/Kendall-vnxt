@@ -73,6 +73,7 @@ The standalone optional pack includes:
 - Required field and controlled-vocabulary enforcement for synthetic work traces, validation evidence, user-input-required records, and output metadata fixtures.
 - Non-empty text and required-list enforcement for work trace artifacts.
 - Non-empty string-list enforcement for fixture IDs, expected failed rules, work trace links/steps, validation references, user-input references/choices, and output metadata links.
+- Materialized-reference enforcement for source packet IDs, validation evidence IDs, and output work trace IDs.
 - Non-empty text enforcement for validation evidence identity, command/check, reviewer, and date fields.
 - Non-empty text and allowed-choice type enforcement for user-input-required artifacts.
 - Storage-boundary-basis enforcement for output metadata fixtures.
@@ -131,7 +132,7 @@ Change:
 
 Verification:
 
-- Unit tests: 30 passed.
+- Unit tests: 31 passed.
 - Fixture validation: PASS, 14 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
 - BMad module validation: pass, 0 findings.
@@ -152,6 +153,7 @@ Additional local hardening:
 - Added required field and controlled-vocabulary checks for synthetic work trace artifacts.
 - Added non-empty text and required-list checks for work trace artifacts.
 - Added non-empty string-list checks for fixture IDs, expected failed rules, work trace links/steps, validation references, user-input references/choices, and output metadata links.
+- Added materialized-reference checks for source packet IDs, validation evidence IDs, and output work trace IDs.
 - Added required field and controlled-vocabulary checks for validation evidence artifacts.
 - Added non-empty text checks for validation evidence identity, command/check, reviewer, and date fields.
 - Added required field and controlled-vocabulary checks for user-input-required artifacts.

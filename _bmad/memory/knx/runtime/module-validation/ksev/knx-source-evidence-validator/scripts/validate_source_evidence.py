@@ -900,6 +900,40 @@ def validate_unique_fixture_artifact_ids(fixtures: list[dict[str, Any]], finding
         add_finding(findings, "error", "duplicate-artifact-id", f"Fixture artifact_id is duplicated: {artifact_id}")
 
 
+def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[Finding]) -> None:
+    source_packet_ids = set()
+    validation_evidence_ids = set()
+    work_trace_ids = set()
+
+    for fixture in fixtures:
+        artifact = fixture.get("artifact", {})
+        if not isinstance(artifact, dict):
+            continue
+        source_packet_id = artifact.get("source_packet_id")
+        if isinstance(source_packet_id, str) and source_packet_id.strip():
+            source_packet_ids.add(source_packet_id.strip())
+        validation_evidence_id = artifact.get("validation_evidence_id")
+        if isinstance(validation_evidence_id, str) and validation_evidence_id.strip():
+            validation_evidence_ids.add(validation_evidence_id.strip())
+        work_trace_id = artifact.get("work_trace_id")
+        if "output_artifact_id" not in artifact and isinstance(work_trace_id, str) and work_trace_id.strip():
+            work_trace_ids.add(work_trace_id.strip())
+
+    for fixture in fixtures:
+        artifact = fixture.get("artifact", {})
+        if not isinstance(artifact, dict):
+            continue
+        for source_packet_id in artifact.get("source_packet_ids", []) if isinstance(artifact.get("source_packet_ids"), list) else []:
+            if isinstance(source_packet_id, str) and source_packet_id.strip() and source_packet_id.strip() not in source_packet_ids:
+                add_finding(findings, "error", "unknown-source-packet-id", f"Unknown source_packet_id reference: {source_packet_id}", fixture)
+        for evidence_id in artifact.get("validation_evidence_ids", []) if isinstance(artifact.get("validation_evidence_ids"), list) else []:
+            if isinstance(evidence_id, str) and evidence_id.strip() and evidence_id.strip() not in validation_evidence_ids:
+                add_finding(findings, "error", "unknown-validation-evidence-id", f"Unknown validation_evidence_id reference: {evidence_id}", fixture)
+        work_trace_id = artifact.get("work_trace_id")
+        if "output_artifact_id" in artifact and isinstance(work_trace_id, str) and work_trace_id.strip() and work_trace_id.strip() not in work_trace_ids:
+            add_finding(findings, "error", "unknown-work-trace-id", f"Unknown work_trace_id reference: {work_trace_id}", fixture)
+
+
 def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None) -> dict[str, Any]:
     if approved_storage_root is None:
         approved_storage_root = load_approved_storage_root()
@@ -919,6 +953,7 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
         validate_source_inventory(fixture, findings, approved_storage_root)
     validate_expected_evidence_ids(fixtures, findings)
     validate_unique_fixture_artifact_ids(fixtures, findings)
+    validate_fixture_references(fixtures, findings)
 
     return build_result(path, findings, len(fixtures), approved_storage_root)
 

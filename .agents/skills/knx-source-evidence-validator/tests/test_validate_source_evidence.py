@@ -307,6 +307,26 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("output-source-support-summary-invalid", codes)
         self.assertIn("output-result-status-invalid", codes)
 
+    def test_fixture_references_must_resolve_to_materialized_ids(self):
+        pack = self._load_pack()
+
+        trace = self._find_fixture(pack, "valid-work-trace")
+        trace["artifact"]["source_packet_ids"] = ["sp-missing-001"]
+        trace["artifact"]["validation_evidence_ids"] = ["ve-missing-001"]
+        pack["fixtures"].append(trace)
+
+        output = self._find_fixture(pack, "unsupported-inference-negative")
+        output["artifact"]["work_trace_id"] = "wt-missing-001"
+        pack["fixtures"].append(output)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("unknown-source-packet-id", codes)
+        self.assertIn("unknown-validation-evidence-id", codes)
+        self.assertIn("unknown-work-trace-id", codes)
+
     def test_reference_lists_reject_blank_elements(self):
         pack = self._load_pack()
 
