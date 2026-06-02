@@ -1175,8 +1175,13 @@ def validate_source_inventory(fixture: dict[str, Any], findings: list[Finding], 
                 add_finding(findings, "error", "inventory-negative-boundary-result-invalid", "Storage-boundary negative must have boundary_check_result FAIL", fixture)
             if fixture.get("expected_validation_result") != "FAIL":
                 add_finding(findings, "error", "inventory-negative-result-invalid", "Storage-boundary negative must expect FAIL", fixture)
-        elif generated_path != "not-materialized" and not under_root:
-            add_finding(findings, "error", "inventory-output-outside-approved-root", "Materialized source inventory must write under approved storage root", fixture)
+        elif generated_path != "not-materialized":
+            if not under_root:
+                add_finding(findings, "error", "inventory-output-outside-approved-root", "Materialized source inventory must write under approved storage root", fixture)
+            if not is_non_empty_string_list(artifact.get("validation_evidence_ids"), require_non_empty=True):
+                add_finding(findings, "error", "source-inventory-validation-links-invalid", "Materialized source inventory must link validation evidence", fixture)
+            if not is_non_empty_string_list(artifact.get("decision_record_ids"), require_non_empty=True):
+                add_finding(findings, "error", "source-inventory-decision-links-invalid", "Materialized source inventory must link the approving mature-tool decision", fixture)
 
 
 def validate_runtime_inventory(fixture: dict[str, Any], findings: list[Finding], approved_storage_root: Path) -> None:

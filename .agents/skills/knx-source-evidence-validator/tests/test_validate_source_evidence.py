@@ -243,6 +243,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         inventory["artifact"]["generated_artifact_path"] = str(
             validator.load_approved_storage_root() / "optional-source-evidence-pack" / "reports" / "inventory.json"
         )
+        inventory["artifact"]["validation_evidence_ids"] = ["ve-synth-valid-001"]
+        inventory["artifact"]["decision_record_ids"] = ["dec-synth-valid-001"]
         inventory["artifact"]["boundary_check_result"] = "PASS"
         inventory["artifact"]["uncertainty"] = "none"
         pack["fixtures"].append(inventory)
@@ -263,6 +265,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         inventory["artifact"]["generated_artifact_path"] = str(
             validator.load_approved_storage_root() / "optional-source-evidence-pack" / "reports" / "inventory.json"
         )
+        inventory["artifact"]["validation_evidence_ids"] = ["ve-synth-valid-001"]
+        inventory["artifact"]["decision_record_ids"] = ["dec-synth-valid-001"]
         inventory["artifact"]["boundary_check_result"] = "PASS"
         inventory["artifact"]["uncertainty"] = "none"
         pack["fixtures"].append(inventory)
@@ -287,6 +291,27 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertIn("source-inventory-excluded-paths-invalid", codes)
         self.assertIn("source-inventory-top-file-groups-invalid", codes)
         self.assertIn("source-inventory-source-class-groups-invalid", codes)
+
+    def test_materialized_source_inventory_requires_evidence_links(self):
+        pack = self._load_pack()
+        inventory = self._find_fixture(pack, "source-inventory-outside-approved-storage-negative")
+        inventory["fixture_type"] = "valid-source-inventory-evidence"
+        inventory["expected_validation_result"] = "PASS"
+        inventory["expected_failed_rules"] = []
+        inventory["artifact_ids"] = ["si-synth-missing-links-001"]
+        inventory["artifact"]["source_inventory_id"] = "si-synth-missing-links-001"
+        inventory["artifact"]["generated_artifact_path"] = str(
+            validator.load_approved_storage_root() / "optional-source-evidence-pack" / "reports" / "inventory.json"
+        )
+        inventory["artifact"]["boundary_check_result"] = "PASS"
+        pack["fixtures"].append(inventory)
+
+        result = self._validate_temp_pack(pack)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("source-inventory-validation-links-invalid", codes)
+        self.assertIn("source-inventory-decision-links-invalid", codes)
 
     def test_runtime_inventory_rejects_invalid_contract_fields(self):
         pack = self._load_pack()
@@ -1064,6 +1089,8 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         inventory["artifact"]["generated_artifact_path"] = str(
             validator.load_approved_storage_root() / "optional-source-evidence-pack" / "reports" / "inventory.json"
         )
+        inventory["artifact"]["validation_evidence_ids"] = ["ve-synth-valid-001"]
+        inventory["artifact"]["decision_record_ids"] = ["dec-synth-valid-001"]
         inventory["artifact"]["boundary_check_result"] = "PASS"
         pack["fixtures"].append(inventory)
 
