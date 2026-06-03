@@ -100,7 +100,7 @@ Audit expectation:
   - `../index.md`
   - `../handoffs/handoff-2026-06-01-current.md`
 - Current latest substantive KNX governance commit:
-  - `10c3b3f Prepare KNX branch merge guidance`
+  - `e5adf45 Refresh KNX records after squash rewrite`
 - Current runtime-evidence audit baseline:
   - `runtime-evidence-broader-audit-2026-06-02.md`
 - Current `ksev` pointer and validation audit baseline:

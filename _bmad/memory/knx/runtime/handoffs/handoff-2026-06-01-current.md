@@ -8,7 +8,7 @@ Status: greenfield initial local development complete; local-only maintenance la
 
 - KNX governance core is scaffolded and validated.
 - Optional `ksev` source/evidence validator is scaffolded, validated, and local-only.
-- Latest scoped local implementation commit: `10c3b3f Prepare KNX branch merge guidance`.
+- Latest scoped local implementation commit: `e5adf45 Refresh KNX records after squash rewrite`.
 - Fast-lane local governance profile is accepted.
 - Company-facing discussion path is parked.
 - IDE one-click action path is closed.
