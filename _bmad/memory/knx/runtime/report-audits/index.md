@@ -4,6 +4,10 @@ Last updated: 2026-06-02
 
 Purpose: classify runtime artifacts so future maintenance passes can distinguish active routing/evidence records from dated historical snapshots and proposal-only materials.
 
+Current audit entry point:
+
+- Start here before opening any individual audit file.
+
 ## Classification Rules
 
 - `active`: used to represent the current KNX local-only maintenance baseline and should be kept aligned when scoped state changes.
@@ -29,6 +33,37 @@ Purpose: classify runtime artifacts so future maintenance passes can distinguish
 Audit expectation:
 - refresh only when current validation, pointers, inventory counts, or routing state changes.
 
+## Active Audit Register
+
+### `ksev-report-pointer-audit-2026-06-02.md`
+
+- Classification: `active`
+- Verifies:
+  - current `ksev` report, handoff, and index pointer consistency
+  - current `ksev` unit-test baseline
+  - current fixture/source-packet validator report timestamps
+- Latest audited substantive commit:
+  - `629923a Refresh ksev report pointer audit`
+- Use when:
+  - `ksev` report outputs, `skills/reports/module-validation-ksev-2026-06-01.md`, the current handoff, or index latest-commit pointers change
+- Supersession note:
+  - remains current until a newer `ksev`-specific pointer/validation audit replaces it
+
+### `runtime-evidence-broader-audit-2026-06-02.md`
+
+- Classification: `active`
+- Verifies:
+  - broader runtime-evidence drift outside the narrow `ksev` refresh path
+  - which runtime artifacts are active versus historical/proposal-only
+  - whether stale-looking values require rewrite or should remain preserved as snapshots
+- Latest audited substantive commit:
+  - `9d5bc3b Audit broader KNX runtime evidence`
+- Use when:
+  - running broad runtime consistency scans
+  - deciding whether a dated runtime file should be updated or treated as historical
+- Supersession note:
+  - remains current until a newer broad runtime-evidence audit replaces it
+
 ## Historical Snapshots
 
 - `runtime/handoffs/handoff-2026-06-01.md`
@@ -43,6 +78,15 @@ Audit expectation:
 Audit expectation:
 - treat stale commits, counts, or validation baselines here as historical capture unless a newer active record explicitly depends on them.
 
+Historical audit candidates:
+
+- `runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md`
+  - preserved as a dated workflow-state capture
+- `runtime/commit-readiness/reports/commit-readiness-2026-06-01.md`
+  - preserved as a dated readiness checkpoint
+- `runtime/handoffs/handoff-2026-06-01.md`
+  - preserved as a superseded handoff snapshot
+
 ## Proposal-Only Records
 
 - `runtime/commit-readiness/reports/staging-plan-2026-06-01.md`
@@ -55,6 +99,8 @@ Audit expectation:
 - Latest substantive KNX governance commit is tracked in:
   - `../index.md`
   - `../handoffs/handoff-2026-06-01-current.md`
+- Current latest substantive KNX governance commit:
+  - `c66039e Classify KNX runtime audit artifacts`
 - Current runtime-evidence audit baseline:
   - `runtime-evidence-broader-audit-2026-06-02.md`
 - Current `ksev` pointer and validation audit baseline:
@@ -63,5 +109,6 @@ Audit expectation:
 ## Use In Future Passes
 
 1. Check `active` records first.
-2. Refresh `historical snapshot` artifacts only when preserving or annotating prior state is the goal.
-3. Leave `proposal-only` records untouched unless the proposal is being reopened.
+2. Use the active audit register above to choose the narrowest audit that fits the task.
+3. Refresh `historical snapshot` artifacts only when preserving or annotating prior state is the goal.
+4. Leave `proposal-only` records untouched unless the proposal is being reopened.

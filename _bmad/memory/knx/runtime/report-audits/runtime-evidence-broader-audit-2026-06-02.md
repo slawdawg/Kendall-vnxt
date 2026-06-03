@@ -43,3 +43,7 @@ No broader active runtime-evidence drift remains after refreshing the current `k
 Follow-on classification index:
 
 - `_bmad/memory/knx/runtime/report-audits/index.md`
+
+Current consolidated audit entry point:
+
+- `_bmad/memory/knx/runtime/report-audits/index.md`

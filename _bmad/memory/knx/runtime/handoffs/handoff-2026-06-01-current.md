@@ -8,7 +8,7 @@ Status: greenfield initial local development complete; local-only maintenance la
 
 - KNX governance core is scaffolded and validated.
 - Optional `ksev` source/evidence validator is scaffolded, validated, and local-only.
-- Latest scoped local implementation commit: `c66039e Classify KNX runtime audit artifacts`.
+- Latest scoped local implementation commit: `0b6e18e Consolidate KNX runtime audit index`.
 - Fast-lane local governance profile is accepted.
 - Company-facing discussion path is parked.
 - IDE one-click action path is closed.
@@ -105,7 +105,7 @@ Use `_bmad/memory/knx/runtime/greenfield-implementation/initial-local-developmen
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as the completed local planning record for Gates 1-11.
 
-Latest concrete local task: completed a broader runtime-evidence audit, refreshed the active `ksev` pointer-audit record to the current maintenance baseline, and confirmed that remaining stale baselines are confined to dated historical snapshot artifacts on 2026-06-02 local time.
+Latest concrete local task: consolidated the runtime audit index so active audits now record verification scope, latest validated commit, and supersession guidance, reducing future maintenance routing overhead on 2026-06-02 local time.
 
 Next concrete task is optional and should be driven by a concrete scoped maintenance need, validation refresh after changes, or pointer-sync follow-up inside the approved local-only lane.
 
