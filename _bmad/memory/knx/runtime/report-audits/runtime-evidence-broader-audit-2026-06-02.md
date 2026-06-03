@@ -39,3 +39,7 @@ Get-Content _bmad\memory\knx\runtime\report-audits\ksev-report-pointer-audit-202
 ## Conclusion
 
 No broader active runtime-evidence drift remains after refreshing the current `ksev` pointer audit. Remaining stale values are confined to dated historical artifacts whose purpose is to preserve prior state rather than mirror the current maintenance baseline.
+
+Follow-on classification index:
+
+- `_bmad/memory/knx/runtime/report-audits/index.md`
