@@ -8,7 +8,7 @@ Status: greenfield initial local development complete; local-only maintenance la
 
 - KNX governance core is scaffolded and validated.
 - Optional `ksev` source/evidence validator is scaffolded, validated, and local-only.
-- Latest scoped local implementation commit: `0b6e18e Consolidate KNX runtime audit index`.
+- Latest scoped local implementation commit: `817a604 Prepare KNX branch merge guidance`.
 - Fast-lane local governance profile is accepted.
 - Company-facing discussion path is parked.
 - IDE one-click action path is closed.
@@ -105,10 +105,12 @@ Use `_bmad/memory/knx/runtime/greenfield-implementation/initial-local-developmen
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as the completed local planning record for Gates 1-11.
 
-Latest concrete local task: consolidated the runtime audit index so active audits now record verification scope, latest validated commit, and supersession guidance, reducing future maintenance routing overhead on 2026-06-02 local time.
+Latest concrete local task: prepared local branch merge guidance for `greenfield-local-closure-pass`, confirming fast-forward posture against `main`, net diff scope, and optional squash boundaries for pointer-sync cleanup on 2026-06-02 local time.
 
 Next concrete task is optional and should be driven by a concrete scoped maintenance need, validation refresh after changes, or pointer-sync follow-up inside the approved local-only lane.
 
 Use `_bmad/memory/knx/runtime/report-audits/index.md` as the current runtime artifact classification reference before treating dated runtime records as active drift.
+
+Use `_bmad/memory/knx/runtime/report-audits/branch-merge-prep-2026-06-02.md` as the current local merge-prep reference for this branch.
 
 Parked and hard-gated paths remain closed unless explicitly reopened.
