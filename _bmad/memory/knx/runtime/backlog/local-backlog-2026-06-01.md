@@ -2,11 +2,11 @@
 
 Date: 2026-06-01
 
-Status: active local-only backlog
+Status: active local-only backlog after initial closure
 
 ## Active
 
-1. Continue the approved local-only greenfield implementation lane for the installable KNX governance core plus standalone `ksev` validator.
+1. Preserve the approved local-only greenfield closure baseline for the installable KNX governance core plus standalone `ksev` validator.
 2. Apply the default-proceed local workflow for eligible KNX governance, evidence, validation, packaging, handoff, and local commit work.
 3. Maintain the greenfield implementation runway under `_bmad/memory/knx/runtime/greenfield-implementation/`.
 4. Keep `ksev` shared local config/help registration current.
@@ -23,7 +23,7 @@ Status: active local-only backlog
 15. Keep local model/GPU processing planning local-only until exact hardware target, model/runtime, source classes, storage, execution context, resource limits, rollback, validation, and safety contract are explicitly approved.
 16. Keep customer/production/credential/account-security workflow planning local-only until exact system/account, data class, access method, authority, audit/logging, rollback, validation, and safety contract are explicitly approved.
 17. Keep destructive/data-loss and risk score `9` waiver planning local-only until exact target, action type, blast radius, backup/recovery, authority, validation, stop condition, rollback, and safety contract are explicitly approved.
-18. Continue scoped `ksev`/KNX module hardening and evidence validation work inside the approved local-only lane.
+18. Limit future scoped `ksev`/KNX module hardening and evidence validation work to concrete follow-up needs inside the approved local-only lane.
 
 ## Parked
 
@@ -50,4 +50,4 @@ Status: active local-only backlog
 
 ## Current Recommendation
 
-The current hard-gate planning sequence is complete. The scoped implementation evidence baseline was refreshed on 2026-06-02, and `ksev` source packet example validation now enforces additional controlled vocabularies. Proceed with the approved local-only greenfield implementation lane by concrete capability. Stop only for execution gates, genuine user input requirements, or user pause. Do not execute parked or hard-gated actions without a separate explicit decision.
+The current hard-gate planning sequence is complete. The scoped implementation evidence baseline and final local validation sweep were refreshed on 2026-06-02, and the greenfield initial local development closure is supported locally. Proceed only for concrete scoped maintenance, validation refresh, report/handoff/index alignment, or local commit work. Stop for execution gates, genuine user input requirements, or user pause. Do not execute parked or hard-gated actions without a separate explicit decision.

@@ -2,7 +2,7 @@
 
 Date: 2026-06-01
 
-Status: active local-only continuation plan; baseline refreshed 2026-06-02
+Status: closure continuation complete; final local validation sweep refreshed 2026-06-02
 
 ## Context
 
@@ -26,16 +26,22 @@ Refreshed on 2026-06-02.
 
 - Approved KNX implementation path inventory: PASS, 176 tracked files in approved scoped paths.
 - `ksev` source packet example validator: hardened with additional controlled-vocabulary checks.
-- `ksev` validation: PASS, 15 unit tests, fixture validation PASS, source packet example validation PASS, module validation PASS.
+- Final local validation sweep: PASS.
+- `knx` governance-core module validation: PASS, 0 findings, using a recreated KNX-only validation view that excludes standalone `ksev`.
+- `ksev` module validation: PASS, 0 findings.
+- `ksev` unit tests: 86 passed.
+- Synthetic fixture validation: PASS, 18 fixtures, 0 findings.
+- Source packet example validation: PASS, 3 source packets, 0 findings.
+- `git diff --check`: pass with no whitespace errors.
 
-## Next Concrete Task
+## Closure Outcome
 
-Continue scoped local `ksev`/KNX implementation and validation work:
+The greenfield initial local development lane is supported as complete for local-only closure. Active follow-through is now limited to scoped maintenance:
 
-1. Prefer concrete validator, module packaging, or evidence-contract hardening changes.
-2. Re-run relevant local validation after scoped module/validator/report changes.
-3. Update only current handoff/backlog/index records when routing or validation state changes.
-4. Commit scoped local implementation and validation changes.
+1. Re-run relevant local validation after scoped module, validator, fixture, or report changes.
+2. Update handoff, backlog, index, and closure records when routing or validation state changes.
+3. Commit scoped local implementation, validation, and documentation changes.
+4. Sync latest-commit pointers separately after substantive local commits.
 
 ## Stop Conditions
 

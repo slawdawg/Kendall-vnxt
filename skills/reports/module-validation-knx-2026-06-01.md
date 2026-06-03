@@ -134,3 +134,30 @@ Result:
 Scope note:
 
 - This validation checks the KNX governance-core module structure. It does not package source inventory evidence, validators, GitHub/remotes, external providers, local model/GPU, source mutation, customer/production, credential, account/security, or runtime assistant behavior into the governance core.
+
+## Final Local Closure Refresh
+
+Date: 2026-06-02
+
+Verification:
+
+```powershell
+python .\.agents\skills\bmad-module-builder\scripts\validate-module.py _bmad-output\test-artifacts\knx-module-validation-view
+```
+
+Result:
+
+- Status: pass
+- Total findings: 0
+- Critical findings: 0
+- High findings: 0
+- Medium findings: 0
+- Low findings: 0
+- Module code: knx
+- Module name: KendallAI vNext
+- Setup skill: knx-setup
+- Capability entries: 29
+
+Closure note:
+
+- The closure refresh used a recreated KNX-only validation view containing `knx-setup` plus the eight governance skills listed in the module CSV. Standalone `ksev` was excluded so the governance-core structure check matched the intended module scope.

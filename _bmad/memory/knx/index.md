@@ -27,7 +27,7 @@ Last updated: 2026-06-02
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
 - Latest handoff: [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md)
-- Latest substantive KNX governance commit: `af65a08 Cover ksev waived validation positive path`
+- Latest substantive KNX governance commit: `8d7e0e3 Record greenfield local closure checkpoint`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
@@ -75,6 +75,7 @@ Last updated: 2026-06-02
 - Latest pause decision: [decisions/pause-current-work-2026-06-01.md](decisions/pause-current-work-2026-06-01.md)
 - Latest greenfield implementation lane: [decisions/greenfield-implementation-lane-2026-06-01.md](decisions/greenfield-implementation-lane-2026-06-01.md)
 - Latest greenfield implementation runway: [runtime/greenfield-implementation/implementation-runway-2026-06-01.md](runtime/greenfield-implementation/implementation-runway-2026-06-01.md)
+- Latest greenfield initial local development closure: [runtime/greenfield-implementation/initial-local-development-closure-2026-06-02.md](runtime/greenfield-implementation/initial-local-development-closure-2026-06-02.md)
 - Latest `ksev` local registration trace: [runtime/greenfield-implementation/work-trace-ksev-registration-2026-06-01.md](runtime/greenfield-implementation/work-trace-ksev-registration-2026-06-01.md)
 - Latest hard-gate workthrough plan: [runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md](runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md)
 
@@ -82,7 +83,7 @@ Last updated: 2026-06-02
 
 - Latest coordinator decision: [decisions/governance-coordinator-2026-06-01.md](decisions/governance-coordinator-2026-06-01.md)
 - Latest data-boundary decision: [decisions/data-boundary-2026-06-01.md](decisions/data-boundary-2026-06-01.md)
-- Current recommended next workflow: continue the approved local-only greenfield implementation lane for the installable KNX governance core plus standalone `ksev` validator. Use `bmad-module-builder` only for named packaging or validation changes, `knx-source-evidence-contract` for fixture/evidence changes, `knx-mature-tool-review` before any new tooling or source inventory materialization workflow, and `knx-safety-validation-review` before any new optional pack, public release path, external send, source mutation, or operational source intake.
+- Current recommended operating posture: treat the greenfield initial local development lane as complete for local-only closure as of 2026-06-02. Use the approved local-only lane only for concrete scoped maintenance, validation refresh, report/handoff/index alignment, and local commit work. Use `bmad-module-builder` only for named packaging or validation changes, `knx-source-evidence-contract` for fixture/evidence changes, `knx-mature-tool-review` before any new tooling or source inventory materialization workflow, and `knx-safety-validation-review` before any new optional pack, public release path, external send, source mutation, or operational source intake.
 - First-pass source inventory evidence is materialized. It excludes runtime evidence paths and is limited to governance/validator source and report artifacts. Next routing should be by concrete capability.
 - First real source packet classes are selected: `user-authored-planning-document`, `public-or-synthetic-sample-data`, and `generated-report`.
 - Source mutation remains blocked by default outside the accepted scoped KNX module/governance exception. Future mutation beyond that exception requires a named workflow, exact target paths, rollback/recovery plan, validation plan, safety review, and explicit approval.
@@ -96,7 +97,7 @@ Last updated: 2026-06-02
 - Company evaluation access protocol is accepted for planning: no sharing, access, demo, repository access, or rights grant is approved.
 - Evaluation candidate packet scope is accepted for planning: first packet is documentation-only and local-only.
 - Local evaluation packet draft is materialized and hardened under approved runtime storage. It remains local-only and not approved for sharing.
-- External discussion-guide scope is accepted for planning, but the company-facing discussion path is parked at user request. The local guide draft remains local-only and unshared. IDE one-click action planning is closed. Current recommended next workflow is the approved local-only greenfield implementation lane.
+- External discussion-guide scope is accepted for planning, but the company-facing discussion path is parked at user request. The local guide draft remains local-only and unshared. IDE one-click action planning is closed. The approved local-only greenfield implementation lane is now in closure-complete maintenance mode.
 - Current KNX work is reopened only for the approved local-only greenfield implementation lane. Parked and hard-gated paths remain closed unless explicitly reopened. Operational source packets remain hard-gated.
 - Current local implementation runway is materialized under `runtime/greenfield-implementation/`.
 - `ksev` is registered in shared local config and help registry.
@@ -111,7 +112,7 @@ Last updated: 2026-06-02
 - Local model/GPU processing planning is materialized locally under `runtime/greenfield-implementation/local-model-gpu/`; model/GPU processing remains disabled.
 - Access/security workflow planning is materialized locally under `runtime/greenfield-implementation/access-security/`; customer/production/credential/account-security workflows remain blocked.
 - Destructive/risk-waiver planning is materialized locally under `runtime/greenfield-implementation/destructive-risk/`; destructive/data-loss actions and risk score `9` waivers remain blocked.
-- Post-gate continuation plan is materialized locally under `runtime/greenfield-implementation/post-gate-continuation-2026-06-01.md`; the scoped implementation evidence baseline was refreshed on 2026-06-02. Next routing should continue concrete local KNX/ksev implementation and validation work.
+- Post-gate continuation plan is materialized locally under `runtime/greenfield-implementation/post-gate-continuation-2026-06-01.md`; the scoped implementation evidence baseline and final local validation sweep were refreshed on 2026-06-02. Initial local development closure is recorded locally, and next routing should stay in scoped maintenance-by-capability mode.
 
 ## Active Boundaries
 
