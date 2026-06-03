@@ -6,7 +6,7 @@
     "allowed_operation":  "metadata-only read-planning",
     "inventory_tool":  "git ls-files",
     "inventory_command_or_check":  "git ls-files -- \u0027.agents/skills/knx-*\u0027 \u0027_bmad/config.yaml\u0027 \u0027_bmad/module-help.csv\u0027 \u0027_bmad/memory/knx/**\u0027 \u0027skills/reports/module-validation-*.md\u0027",
-    "file_count":  176,
+    "file_count":  178,
     "path_groups":  [
                         {
                             "group":  "knx-decision-record",
@@ -18,7 +18,7 @@
                         },
                         {
                             "group":  "knx-runtime-evidence",
-                            "count":  78
+                            "count":  80
                         },
                         {
                             "group":  "knx-skill-source",
@@ -36,7 +36,7 @@
     "extension_groups":  [
                              {
                                  "extension":  ".md",
-                                 "count":  129
+                                 "count":  131
                              },
                              {
                                  "extension":  ".json",
@@ -75,6 +75,6 @@
     "uncertainty":  "low",
     "open_questions":  [
                            "Whether future source inventory should include non-KNX product/app source remains hard-gated.",
-                           "Refresh reflects tracked Gate 1-11 planning artifacts and the post-gate continuation records inside approved KNX runtime paths."
+                           "Refresh reflects tracked Gate 1-11 planning artifacts, post-gate continuation records, and initial local development closure records inside approved KNX runtime paths."
                        ]
 }

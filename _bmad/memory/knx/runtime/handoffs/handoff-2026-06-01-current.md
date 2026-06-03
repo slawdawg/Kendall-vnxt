@@ -8,7 +8,7 @@ Status: greenfield initial local development complete; local-only maintenance la
 
 - KNX governance core is scaffolded and validated.
 - Optional `ksev` source/evidence validator is scaffolded, validated, and local-only.
-- Latest scoped local implementation commit: `8d7e0e3 Record greenfield local closure checkpoint`.
+- Latest scoped local implementation commit: `51fac27 Refresh greenfield inventory baseline`.
 - Fast-lane local governance profile is accepted.
 - Company-facing discussion path is parked.
 - IDE one-click action path is closed.
@@ -40,7 +40,7 @@ Status: greenfield initial local development complete; local-only maintenance la
 - BMad module validation for `ksev`: pass, 0 findings.
 - `ksev` local registration validation: PASS.
 - `ksev` report pointer audit: PASS, no active report/handoff/index pointer mismatch found.
-- Approved KNX path metadata inventory refreshed on 2026-06-02: 176 tracked files in approved scoped paths.
+- Approved KNX path metadata inventory refreshed on 2026-06-02: 178 tracked files in approved scoped paths.
 - Final local closure sweep refreshed on 2026-06-02: all required local validations passed.
 
 ## Active Fast-Lane Scope
@@ -104,7 +104,7 @@ Use `_bmad/memory/knx/runtime/greenfield-implementation/initial-local-developmen
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as the completed local planning record for Gates 1-11.
 
-Latest concrete local task: completed the final closure pass for the initial local development lane, including wording audit, report refresh, recreated KNX-only governance-core validation view, full local validation sweep, and closure record creation on 2026-06-02.
+Latest concrete local task: refreshed the approved KNX path metadata inventory after the closure checkpoint, bringing the tracked scoped-path count to 178 files and aligning the active maintenance records on 2026-06-02.
 
 Next concrete task is optional and should be driven by a concrete scoped maintenance need, validation refresh after changes, or pointer-sync follow-up inside the approved local-only lane.
 

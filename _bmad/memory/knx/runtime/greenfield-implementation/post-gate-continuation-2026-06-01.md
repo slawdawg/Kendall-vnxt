@@ -24,7 +24,7 @@ Proceed by concrete capability inside the approved local-only greenfield lane:
 
 Refreshed on 2026-06-02.
 
-- Approved KNX implementation path inventory: PASS, 176 tracked files in approved scoped paths.
+- Approved KNX implementation path inventory: PASS, 178 tracked files in approved scoped paths.
 - `ksev` source packet example validator: hardened with additional controlled-vocabulary checks.
 - Final local validation sweep: PASS.
 - `knx` governance-core module validation: PASS, 0 findings, using a recreated KNX-only validation view that excludes standalone `ksev`.
