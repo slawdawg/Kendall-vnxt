@@ -13,7 +13,9 @@ Test-Path _bmad\memory\knx\runtime\optional-source-evidence-validator\reports\so
 Test-Path _bmad\memory\knx\runtime\handoffs\handoff-2026-06-01-current.md
 Select-String -Path _bmad\memory\knx\index.md -Pattern 'Latest substantive KNX governance commit|Latest validator validation report|Latest source packet example validator report'
 Select-String -Path _bmad\memory\knx\runtime\handoffs\handoff-2026-06-01-current.md -Pattern 'Latest scoped local implementation commit|ksev unit tests|Synthetic fixture validation|Source packet example validation|BMad module validation'
-Select-String -Path skills\reports\module-validation-ksev-2026-06-01.md -Pattern 'Unit tests: 82 passed|Fixture validation: PASS|Source packet example validation: PASS|BMad module validation: pass'
+Select-String -Path skills\reports\module-validation-ksev-2026-06-01.md -Pattern 'Unit tests: 86 passed|Fixture validation: PASS|Source packet example validation: PASS|BMad module validation: pass'
+Select-String -Path _bmad\memory\knx\runtime\optional-source-evidence-validator\reports\source-evidence-validation.md -Pattern 'Created: 2026-06-03T02:32:42\+00:00|Status: PASS'
+Select-String -Path _bmad\memory\knx\runtime\source-packets\validator-report\source-evidence-validation.md -Pattern 'Created: 2026-06-03T02:32:42\+00:00|Status: PASS'
 ```
 
 ## Result
@@ -22,10 +24,12 @@ Select-String -Path skills\reports\module-validation-ksev-2026-06-01.md -Pattern
 - Active source packet example validator report exists: PASS.
 - Active synthetic fixture validator report exists: PASS.
 - Current handoff exists: PASS.
-- Index latest substantive implementation pointer: `034e6ef Cover ksev waived blocking result`.
-- Current handoff latest scoped implementation pointer: `034e6ef Cover ksev waived blocking result`.
-- Module validation report unit baseline: 82 passed.
+- Index latest substantive implementation pointer: `8a33f90 Refresh ksev validator evidence outputs`.
+- Current handoff latest scoped implementation pointer: `8a33f90 Refresh ksev validator evidence outputs`.
+- Module validation report unit baseline: 86 passed.
 - Handoff validation baseline: fixture PASS with 18 fixtures, source packet example PASS, module validation pass.
+- Materialized synthetic fixture validator report timestamp: `2026-06-03T02:32:42+00:00`.
+- Materialized source packet example validator report timestamp: `2026-06-03T02:32:42+00:00`.
 
 ## Finding
 
