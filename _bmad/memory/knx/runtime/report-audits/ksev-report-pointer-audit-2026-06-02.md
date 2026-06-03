@@ -24,8 +24,8 @@ Select-String -Path _bmad\memory\knx\runtime\source-packets\validator-report\sou
 - Active source packet example validator report exists: PASS.
 - Active synthetic fixture validator report exists: PASS.
 - Current handoff exists: PASS.
-- Index latest substantive implementation pointer: `629923a Refresh ksev report pointer audit`.
-- Current handoff latest scoped implementation pointer: `629923a Refresh ksev report pointer audit`.
+- Index latest substantive implementation pointer: `b6e3f5d Refresh ksev report pointer audit`.
+- Current handoff latest scoped implementation pointer: `b6e3f5d Refresh ksev report pointer audit`.
 - Module validation report unit baseline: 86 passed.
 - Handoff validation baseline: fixture PASS with 18 fixtures, source packet example PASS, module validation pass.
 - Materialized synthetic fixture validator report timestamp: `2026-06-03T02:32:42+00:00`.

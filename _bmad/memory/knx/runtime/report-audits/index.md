@@ -43,7 +43,7 @@ Audit expectation:
   - current `ksev` unit-test baseline
   - current fixture/source-packet validator report timestamps
 - Latest audited substantive commit:
-  - `629923a Refresh ksev report pointer audit`
+  - `b6e3f5d Refresh ksev report pointer audit`
 - Use when:
   - `ksev` report outputs, `skills/reports/module-validation-ksev-2026-06-01.md`, the current handoff, or index latest-commit pointers change
 - Supersession note:
@@ -57,7 +57,7 @@ Audit expectation:
   - which runtime artifacts are active versus historical/proposal-only
   - whether stale-looking values require rewrite or should remain preserved as snapshots
 - Latest audited substantive commit:
-  - `9d5bc3b Audit broader KNX runtime evidence`
+  - `c9ea848 Audit broader KNX runtime evidence`
 - Use when:
   - running broad runtime consistency scans
   - deciding whether a dated runtime file should be updated or treated as historical
@@ -100,7 +100,7 @@ Audit expectation:
   - `../index.md`
   - `../handoffs/handoff-2026-06-01-current.md`
 - Current latest substantive KNX governance commit:
-  - `c66039e Classify KNX runtime audit artifacts`
+  - `10c3b3f Prepare KNX branch merge guidance`
 - Current runtime-evidence audit baseline:
   - `runtime-evidence-broader-audit-2026-06-02.md`
 - Current `ksev` pointer and validation audit baseline:

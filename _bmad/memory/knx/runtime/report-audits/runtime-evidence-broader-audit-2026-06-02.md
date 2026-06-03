@@ -8,7 +8,7 @@ Scope: broader local-only runtime evidence audit outside the narrow `ksev` valid
 
 ```powershell
 rg -n "Latest .*commit|latest .*pointer|Index latest substantive implementation pointer|Current handoff latest scoped implementation pointer|unit baseline|tracked files in approved scoped paths|validation baseline" _bmad\memory\knx\runtime
-rg -n "034e6ef|af65a08|8d7e0e3|51fac27|8a33f90|629923a|d991b1c|82 passed|176 tracked files" _bmad\memory\knx\runtime
+rg -n "034e6ef|af65a08|a7d1c84|db325aa|82642bf|b6e3f5d|c9ea848|7576ceb|b00557d|10c3b3f|82 passed|176 tracked files" _bmad\memory\knx\runtime
 Get-Content _bmad\memory\knx\runtime\commit-readiness\reports\commit-readiness-2026-06-01.md
 Get-Content _bmad\memory\knx\runtime\commit-readiness\reports\staging-plan-2026-06-01.md
 Get-Content _bmad\memory\knx\runtime\report-audits\ksev-report-pointer-audit-2026-06-02.md
@@ -27,7 +27,7 @@ Get-Content _bmad\memory\knx\runtime\report-audits\ksev-report-pointer-audit-202
 
 1. Refreshed active drift:
    - `_bmad/memory/knx/runtime/report-audits/ksev-report-pointer-audit-2026-06-02.md`
-   - Reason: the audit body still reported `8a33f90` after index/handoff latest pointers had advanced to `629923a`.
+   - Reason: the audit body still reported the prior validator-evidence refresh commit after index/handoff latest pointers had advanced to the then-current `ksev` audit baseline.
 
 2. Historical-only drift, no rewrite performed:
    - `_bmad/memory/knx/runtime/commit-readiness/reports/commit-readiness-2026-06-01.md`
@@ -47,3 +47,7 @@ Follow-on classification index:
 Current consolidated audit entry point:
 
 - `_bmad/memory/knx/runtime/report-audits/index.md`
+
+Post-squash note:
+
+- The branch history was later rewritten into an 8-commit cleaned stack. Active hash references should use the post-squash equivalents recorded in `index.md` and the runtime audit index.

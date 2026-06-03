@@ -4,14 +4,17 @@ Date: 2026-06-02
 
 Scope: local-only merge preparation for `greenfield-local-closure-pass` relative to local `main`.
 
+Status: squash pass completed locally; backup branch preserved
+
 ## Branch State
 
 - Working branch: `greenfield-local-closure-pass`
 - Base branch checked: `main`
 - Worktree status at prep time: clean
 - `HEAD..main`: no commits
-- `main..HEAD`: 14 commits
+- `main..HEAD`: 8 commits after local squash cleanup
 - Merge posture: local fast-forward candidate from `main` to `greenfield-local-closure-pass`
+- Backup branch preserved: `backup/greenfield-local-closure-pass-pre-squash-20260602`
 
 ## Net Change Scope
 
@@ -31,33 +34,22 @@ Changed paths are limited to:
 
 ## Commit Stack
 
-Substantive commits:
+Current cleaned commit stack:
 
-1. `8d7e0e3 Record greenfield local closure checkpoint`
-2. `51fac27 Refresh greenfield inventory baseline`
-3. `8a33f90 Refresh ksev validator evidence outputs`
-4. `629923a Refresh ksev report pointer audit`
-5. `9d5bc3b Audit broader KNX runtime evidence`
-6. `c66039e Classify KNX runtime audit artifacts`
-7. `0b6e18e Consolidate KNX runtime audit index`
-
-Pointer-sync commits:
-
-1. `f3f0ab0 Sync greenfield closure pointers`
-2. `0f40128 Sync inventory refresh pointers`
-3. `f5228fe Sync validator evidence refresh pointers`
-4. `d991b1c Sync ksev audit pointers`
-5. `dc2f86b Sync broader audit pointers`
-6. `efb1395 Sync runtime audit classification pointers`
-7. `53e95cc Sync runtime audit index pointers`
+1. `a7d1c84 Record greenfield local closure checkpoint`
+2. `db325aa Refresh greenfield inventory baseline`
+3. `82642bf Refresh ksev validator evidence outputs`
+4. `b6e3f5d Refresh ksev report pointer audit`
+5. `c9ea848 Audit broader KNX runtime evidence`
+6. `7576ceb Classify KNX runtime audit artifacts`
+7. `b00557d Consolidate KNX runtime audit index`
+8. `10c3b3f Prepare KNX branch merge guidance`
 
 ## Merge Readiness Assessment
 
 - No local divergence from `main` detected.
 - No remote/GitHub dependency is required for the next step.
-- The branch is suitable for either:
-  - a local fast-forward merge as-is, or
-  - a local history cleanup first if reduced pointer-sync noise is preferred.
+- The branch is now suitable for a local fast-forward merge with cleaned history.
 
 ## Recommended Local Options
 
@@ -65,52 +57,31 @@ Pointer-sync commits:
 
 Use when:
 
-- preserving the exact maintenance trail is more important than commit compression.
+- the current cleaned 8-commit stack is acceptable to land directly.
 
 Pros:
 
-- zero rewrite of current branch history
-- keeps every substantive change paired with its pointer sync
+- no further history rewrite is required
+- preserves the cleaned maintenance milestones
 
 Tradeoff:
 
-- commit history is noisier than necessary
+- still retains several small maintenance-only commits
 
 ### Option B: Local history cleanup before merge
 
 Use when:
 
-- cleaner long-term history matters more than preserving each pointer-sync step.
+- even tighter long-term history matters more than preserving the current milestone boundaries.
 
-Recommended squash boundaries:
+Status:
 
-1. Closure checkpoint:
-   - `8d7e0e3`
-   - `f3f0ab0`
-2. Inventory refresh:
-   - `51fac27`
-   - `0f40128`
-3. Validator evidence refresh:
-   - `8a33f90`
-   - `f5228fe`
-4. `ksev` audit refresh:
-   - `629923a`
-   - `d991b1c`
-5. Broader runtime audit:
-   - `9d5bc3b`
-   - `dc2f86b`
-6. Runtime audit classification:
-   - `c66039e`
-   - `efb1395`
-7. Runtime audit index consolidation:
-   - `0b6e18e`
-   - `53e95cc`
+- completed for the pointer-sync pairs originally identified in this document
 
 Tradeoff:
 
-- requires local history rewrite
-- cleaner merge result if the branch is intended to become the durable mainline trail
+- additional cleanup would now be optional and more aggressive than originally planned
 
 ## Conclusion
 
-This branch is ready for local merge execution or local history cleanup, with no known active evidence drift in the audited KNX/`ksev` maintenance records.
+This branch is ready for local fast-forward merge execution, with no known active evidence drift in the audited KNX/`ksev` maintenance records and with the pre-squash branch preserved on the backup ref above.
