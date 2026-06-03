@@ -1,6 +1,6 @@
 {
   "validator": "knx-source-evidence-stdlib",
-  "created_at": "2026-06-03T01:43:46+00:00",
+  "created_at": "2026-06-03T02:32:42+00:00",
   "input_path": "_bmad\\memory\\knx\\fixtures\\synthetic\\first-fixture-pack.json",
   "approved_storage_root": "C:\\Users\\slaw_dawg\\.omnara\\worktrees\\Kendall_Nxt\\coagulant-sister\\_bmad\\memory\\knx\\runtime",
   "status": "PASS",

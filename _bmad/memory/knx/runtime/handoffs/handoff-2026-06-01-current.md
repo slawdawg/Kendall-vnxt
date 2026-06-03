@@ -8,7 +8,7 @@ Status: greenfield initial local development complete; local-only maintenance la
 
 - KNX governance core is scaffolded and validated.
 - Optional `ksev` source/evidence validator is scaffolded, validated, and local-only.
-- Latest scoped local implementation commit: `51fac27 Refresh greenfield inventory baseline`.
+- Latest scoped local implementation commit: `8a33f90 Refresh ksev validator evidence outputs`.
 - Fast-lane local governance profile is accepted.
 - Company-facing discussion path is parked.
 - IDE one-click action path is closed.
@@ -37,6 +37,7 @@ Status: greenfield initial local development complete; local-only maintenance la
 - `ksev` unit tests: 86 passed.
 - Synthetic fixture validation: PASS, 18 fixtures, 0 findings.
 - Source packet example validation: PASS, 3 source packets, 0 findings.
+- Materialized validator reports refreshed at 2026-06-03T02:32:42+00:00 for fixture-pack and source-packet-example outputs.
 - BMad module validation for `ksev`: pass, 0 findings.
 - `ksev` local registration validation: PASS.
 - `ksev` report pointer audit: PASS, no active report/handoff/index pointer mismatch found.
@@ -104,7 +105,7 @@ Use `_bmad/memory/knx/runtime/greenfield-implementation/initial-local-developmen
 
 Use `_bmad/memory/knx/runtime/greenfield-implementation/hard-gate-workthrough-plan-2026-06-01.md` as the completed local planning record for Gates 1-11.
 
-Latest concrete local task: refreshed the approved KNX path metadata inventory after the closure checkpoint, bringing the tracked scoped-path count to 178 files and aligning the active maintenance records on 2026-06-02.
+Latest concrete local task: refreshed the materialized `ksev` validator evidence outputs after the inventory checkpoint, confirming 86 passing unit tests plus PASS fixture-pack and source-packet-example reports with refreshed runtime artifacts on 2026-06-02 local time.
 
 Next concrete task is optional and should be driven by a concrete scoped maintenance need, validation refresh after changes, or pointer-sync follow-up inside the approved local-only lane.
 
