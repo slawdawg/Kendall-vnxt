@@ -1,0 +1,135 @@
+{
+  "identity": {
+    "module_id": "scheduling",
+    "display_name": "Scheduling",
+    "version": "0.1.0",
+    "publisher": "Kendall_Nxt",
+    "description": "Conflict detection, overload detection, and protected-time recommendations.",
+    "release_channel": "dev"
+  },
+  "capability": {
+    "purpose": "Protect time, detect conflicts, recommend buffers, and support tentative internal holds.",
+    "installed_capability_label": "Scheduling",
+    "internal_agents": [
+      "calendar-awareness-agent",
+      "time-protection-agent",
+      "conflict-detection-agent",
+      "travel-buffer-agent"
+    ],
+    "scope_of_agency": "mixed"
+  },
+  "data_access": {
+    "readable_data_classes": [
+      "calendar-events",
+      "assistant-preferences",
+      "domain-preferences"
+    ],
+    "writable_data_classes": [
+      "tentative-internal-holds",
+      "schedule-risk-signals"
+    ],
+    "forbidden_data_classes": [
+      "credentials"
+    ]
+  },
+  "actions": {
+    "advisory_outputs": [
+      "conflict-signal",
+      "overload-signal",
+      "buffer-recommendation",
+      "travel-block-recommendation"
+    ],
+    "drafting_outputs": [
+      "internal-scheduling-suggestion"
+    ],
+    "internal_actions": [
+      "create-tentative-internal-hold"
+    ],
+    "external_actions": [],
+    "forbidden_actions": [
+      "autonomous-external-reschedule",
+      "autonomous-customer-coordination"
+    ]
+  },
+  "trust": {
+    "initial_posture": "internal-action-limited",
+    "supported_autonomy_levels": [
+      "shadow",
+      "advisory",
+      "approval-bound",
+      "internal-action-limited"
+    ],
+    "approval_required_for": [
+      "tentative-hold-if-user-visible-disruption"
+    ],
+    "blocked_in_release_1": [
+      "external-coordination",
+      "existing-commitment-move"
+    ]
+  },
+  "memory": {
+    "readable_memory_classes": [
+      "core-preference",
+      "domain-preference",
+      "situational-exception",
+      "trust-history"
+    ],
+    "writable_memory_classes": [
+      "domain-preference",
+      "situational-exception",
+      "trust-history"
+    ],
+    "accepted_correction_types": [
+      "timing-correction",
+      "buffer-correction",
+      "context-correction"
+    ],
+    "shared_preference_propagation": true
+  },
+  "privacy": {
+    "local_only_by_default": true,
+    "hosted_eligible_data_classes": [],
+    "forbidden_outbound_contexts": [
+      "raw-calendar-details",
+      "raw-customer-identifiers"
+    ],
+    "sanitization_required": true
+  },
+  "observability": {
+    "status_events": [
+      "conflict-detected",
+      "overload-detected",
+      "hold-created"
+    ],
+    "audit_event_types": [
+      "tentative-hold-created",
+      "tentative-hold-removed"
+    ],
+    "metrics": [
+      "conflict-count",
+      "hold-count"
+    ]
+  },
+  "dependencies": {
+    "required_core_capabilities": [
+      "memory",
+      "trust-policy",
+      "briefing",
+      "audit"
+    ],
+    "required_modules": [],
+    "optional_modules": [
+      "tasks"
+    ]
+  },
+  "installation": {
+    "setup_steps": [
+      "configure-calendar-connector"
+    ],
+    "restart_required": false,
+    "migrations": [],
+    "compatible_core_versions": [
+      "0.1.x"
+    ]
+  }
+}

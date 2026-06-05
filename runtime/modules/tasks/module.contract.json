@@ -1,0 +1,125 @@
+{
+  "identity": {
+    "module_id": "tasks",
+    "display_name": "Tasks",
+    "version": "0.1.0",
+    "publisher": "Kendall_Nxt",
+    "description": "Internal task capture, reminders, and commitment summaries.",
+    "release_channel": "dev"
+  },
+  "capability": {
+    "purpose": "Manage internal tasks and reminders with auditability and undo.",
+    "installed_capability_label": "Tasks",
+    "internal_agents": [
+      "task-capture-agent",
+      "reminder-agent",
+      "commitment-summary-agent"
+    ],
+    "scope_of_agency": "internal-action"
+  },
+  "data_access": {
+    "readable_data_classes": [
+      "tasks",
+      "reminders",
+      "assistant-preferences",
+      "domain-preferences"
+    ],
+    "writable_data_classes": [
+      "tasks",
+      "reminders",
+      "task-summary-artifacts"
+    ],
+    "forbidden_data_classes": [
+      "credentials"
+    ]
+  },
+  "actions": {
+    "advisory_outputs": [
+      "task-summary",
+      "reminder-recommendation"
+    ],
+    "drafting_outputs": [],
+    "internal_actions": [
+      "create-task",
+      "update-task",
+      "create-reminder",
+      "update-reminder"
+    ],
+    "external_actions": [],
+    "forbidden_actions": [
+      "external-message-send"
+    ]
+  },
+  "trust": {
+    "initial_posture": "internal-action-limited",
+    "supported_autonomy_levels": [
+      "shadow",
+      "advisory",
+      "internal-action-limited"
+    ],
+    "approval_required_for": [],
+    "blocked_in_release_1": [
+      "external-action"
+    ]
+  },
+  "memory": {
+    "readable_memory_classes": [
+      "core-preference",
+      "domain-preference",
+      "trust-history"
+    ],
+    "writable_memory_classes": [
+      "domain-preference",
+      "trust-history"
+    ],
+    "accepted_correction_types": [
+      "task-correction",
+      "reminder-correction",
+      "priority-correction"
+    ],
+    "shared_preference_propagation": true
+  },
+  "privacy": {
+    "local_only_by_default": true,
+    "hosted_eligible_data_classes": [],
+    "forbidden_outbound_contexts": [
+      "raw-task-content"
+    ],
+    "sanitization_required": true
+  },
+  "observability": {
+    "status_events": [
+      "task-created",
+      "task-updated",
+      "reminder-created",
+      "reminder-updated"
+    ],
+    "audit_event_types": [
+      "task-change",
+      "reminder-change",
+      "undo"
+    ],
+    "metrics": [
+      "task-count",
+      "reminder-count"
+    ]
+  },
+  "dependencies": {
+    "required_core_capabilities": [
+      "memory",
+      "trust-policy",
+      "briefing",
+      "audit"
+    ],
+    "required_modules": [],
+    "optional_modules": []
+  },
+  "installation": {
+    "setup_steps": [],
+    "restart_required": false,
+    "migrations": [],
+    "compatible_core_versions": [
+      "0.1.x"
+    ]
+  }
+}
