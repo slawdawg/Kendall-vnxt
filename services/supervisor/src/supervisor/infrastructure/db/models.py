@@ -24,6 +24,12 @@ class WorkItem(Base):
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     state: Mapped[str] = mapped_column(String(32), default=WorkflowState.QUEUED.value)
     lane: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    assignee_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    assignee_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    escalation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    escalated_by_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    escalated_by_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status_summary: Mapped[str] = mapped_column(Text, default="")
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_step: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -46,6 +52,7 @@ class WorkflowEvent(Base):
     event_type: Mapped[str] = mapped_column(String(80))
     actor_type: Mapped[str] = mapped_column(String(50), default="system")
     actor_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    actor_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     correlation_id: Mapped[str] = mapped_column(String(36), default=lambda: str(uuid.uuid4()))
     summary: Mapped[str] = mapped_column(Text)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -84,4 +91,16 @@ class SupervisorControl(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     mode: Mapped[str] = mapped_column(String(16), default=RunMode.RUNNING.value)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class OperatorView(Base):
+    __tablename__ = "operator_views"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(120))
+    scope: Mapped[str] = mapped_column(String(32))
+    filters_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

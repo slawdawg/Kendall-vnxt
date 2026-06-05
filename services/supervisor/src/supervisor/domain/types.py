@@ -8,6 +8,7 @@ class WorkflowState(StrEnum):
     IMPLEMENTING = "implementing"
     VALIDATING = "validating"
     REVIEWING = "reviewing"
+    AWAITING_AUDIT = "awaiting_audit"
     NEEDS_REWORK = "needs_rework"
     BLOCKED = "blocked"
     DONE = "done"
@@ -38,6 +39,23 @@ class AuditMode(StrEnum):
     NONE = "none"
     ADVISORY = "advisory"
     REQUIRED = "required"
+
+
+class WorkItemFilterScope(StrEnum):
+    QUEUE = "queue"
+    ACTIVE_WORK = "active-work"
+    AUDIT = "audit"
+
+
+class WorkflowAction(StrEnum):
+    SUBMIT_FOR_VALIDATION = "submit_for_validation"
+    VALIDATION_PASSED = "validation_passed"
+    VALIDATION_FAILED = "validation_failed"
+    APPROVE_REVIEW = "approve_review"
+    COMPLETE_AUDIT_REVIEW = "complete_audit_review"
+    REQUEST_REWORK = "request_rework"
+    RESTART_IMPLEMENTATION = "restart_implementation"
+    RETURN_TO_READY = "return_to_ready"
 
 
 class ErrorCategory(StrEnum):

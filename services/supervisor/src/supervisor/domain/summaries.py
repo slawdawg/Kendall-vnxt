@@ -9,6 +9,7 @@ def default_status_summary(state: WorkflowState) -> str:
         WorkflowState.IMPLEMENTING: "Implementation is currently in progress.",
         WorkflowState.VALIDATING: "Validation is running against the latest attempt.",
         WorkflowState.REVIEWING: "The latest result is under review.",
+        WorkflowState.AWAITING_AUDIT: "Audit review is required before this item can complete.",
         WorkflowState.NEEDS_REWORK: "More work is needed before the item can complete.",
         WorkflowState.BLOCKED: "This item is blocked and needs attention before it can continue.",
         WorkflowState.DONE: "This item has completed the current workflow.",
@@ -17,14 +18,15 @@ def default_status_summary(state: WorkflowState) -> str:
 
 def next_step_summary(state: WorkflowState) -> str | None:
     return {
-        WorkflowState.QUEUED: "Triage",
-        WorkflowState.TRIAGED: "Readiness decision",
-        WorkflowState.READY: "Worker dispatch",
-        WorkflowState.IMPLEMENTING: "Validation",
-        WorkflowState.VALIDATING: "Review",
-        WorkflowState.REVIEWING: "Completion or rework",
-        WorkflowState.NEEDS_REWORK: "Implementation retry",
-        WorkflowState.BLOCKED: None,
+        WorkflowState.QUEUED: "Move into triage",
+        WorkflowState.TRIAGED: "Make readiness decision",
+        WorkflowState.READY: "Start implementation",
+        WorkflowState.IMPLEMENTING: "Send to validation",
+        WorkflowState.VALIDATING: "Accept validation or route to rework",
+        WorkflowState.REVIEWING: "Approve, request audit, or send to rework",
+        WorkflowState.AWAITING_AUDIT: "Complete audit review or request rework",
+        WorkflowState.NEEDS_REWORK: "Restart implementation",
+        WorkflowState.BLOCKED: "Return to ready",
         WorkflowState.DONE: None,
     }[state]
 

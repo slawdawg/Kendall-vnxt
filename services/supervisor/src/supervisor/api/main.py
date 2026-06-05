@@ -7,11 +7,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from supervisor.api.schemas import ApiEnvelope, ApiErrorEnvelope, ApiErrorShape, WorkItemCreate
+from supervisor.api.schemas import (
+    ApiEnvelope,
+    ApiErrorEnvelope,
+    ApiErrorShape,
+    OperatorViewCreate,
+    OperatorViewDefaultRequest,
+    WorkItemActionRequest,
+    WorkItemAssignmentRequest,
+    WorkItemCreate,
+    WorkItemEscalationRequest,
+)
 from supervisor.application.service import SupervisorService
 from supervisor.config.settings import get_settings
-from supervisor.domain.types import ErrorCategory, RunMode
+from supervisor.domain.types import ErrorCategory, RunMode, WorkItemFilterScope
 from supervisor.infrastructure.db.database import get_session, init_db
+from supervisor.infrastructure.db.models import WorkItem
 from supervisor.infrastructure.streaming.bus import EventBus
 from supervisor.worker.poller import Poller
 
@@ -80,9 +91,81 @@ async def get_work_item(work_item_id: str, session: AsyncSession = Depends(get_s
     raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
 
 
+@app.get("/work-items/{work_item_id}/events", response_model=ApiEnvelope)
+async def get_work_item_events(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    events = await service.list_work_item_events(session, work_item_id)
+    return ApiEnvelope(data=[service.to_event_view(event) for event in events])
+
+
 @app.post("/work-items/{work_item_id}/retry", response_model=ApiEnvelope)
 async def retry_work_item(work_item_id: str, session: AsyncSession = Depends(get_session)):
     item = await service.retry_item(session, work_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.post("/work-items/{work_item_id}/actions", response_model=ApiEnvelope)
+async def apply_work_item_action(
+    work_item_id: str,
+    payload: WorkItemActionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        item = await service.apply_action(
+            session,
+            work_item_id,
+            payload.action,
+            payload.note,
+            payload.actorId,
+            payload.actorLabel,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "invalid_workflow_action").model_dump(),
+        ) from exc
+    if not item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.post("/work-items/{work_item_id}/assignment", response_model=ApiEnvelope)
+async def assign_work_item(
+    work_item_id: str,
+    payload: WorkItemAssignmentRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    item = await service.assign_work_item(
+        session,
+        work_item_id,
+        payload.assigneeId,
+        payload.assigneeLabel,
+        payload.actorId,
+        payload.actorLabel,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.post("/work-items/{work_item_id}/escalation", response_model=ApiEnvelope)
+async def escalate_work_item(
+    work_item_id: str,
+    payload: WorkItemEscalationRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    item = await service.set_escalation(
+        session,
+        work_item_id,
+        payload.reason,
+        payload.clear,
+        payload.actorId,
+        payload.actorLabel,
+    )
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     return ApiEnvelope(data=service.to_work_item_view(item))
@@ -123,6 +206,41 @@ async def disable(session: AsyncSession = Depends(get_session)):
 async def list_audit_events(session: AsyncSession = Depends(get_session)):
     audits = await service.list_audit_events(session)
     return ApiEnvelope(data=[service.to_audit_view(audit) for audit in audits])
+
+
+@app.get("/operator-views", response_model=ApiEnvelope)
+async def list_operator_views(scope: WorkItemFilterScope | None = None, session: AsyncSession = Depends(get_session)):
+    views = await service.list_operator_views(session, scope)
+    return ApiEnvelope(data=[service.to_operator_view(view) for view in views])
+
+
+@app.post("/operator-views", response_model=ApiEnvelope)
+async def save_operator_view(payload: OperatorViewCreate, session: AsyncSession = Depends(get_session)):
+    try:
+        view = await service.save_operator_view(session, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_operator_view").model_dump()) from exc
+    return ApiEnvelope(data=service.to_operator_view(view))
+
+
+@app.post("/operator-views/{view_id}/default", response_model=ApiEnvelope)
+async def set_operator_view_default(
+    view_id: str,
+    payload: OperatorViewDefaultRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    view = await service.set_operator_view_default(session, view_id, payload.isDefault)
+    if not view:
+        raise HTTPException(status_code=404, detail=error_response("Operator view not found.", "operator_view_not_found").model_dump())
+    return ApiEnvelope(data=service.to_operator_view(view))
+
+
+@app.delete("/operator-views/{view_id}", response_model=ApiEnvelope)
+async def delete_operator_view(view_id: str, session: AsyncSession = Depends(get_session)):
+    deleted = await service.delete_operator_view(session, view_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=error_response("Operator view not found.", "operator_view_not_found").model_dump())
+    return ApiEnvelope(data={"deleted": True, "id": view_id})
 
 
 @app.get("/events")

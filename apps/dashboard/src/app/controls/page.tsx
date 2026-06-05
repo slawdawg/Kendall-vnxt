@@ -1,26 +1,28 @@
 import { ControlPanel } from "../../components/control-panel";
+import { OperatorProfilePanel } from "../../components/operator-profile-panel";
+import { PageIntro } from "../../components/page-intro";
 import { Shell } from "../../components/shell";
-import { getRunStatus } from "../../lib/supervisor";
+import { buildNavStats } from "../../lib/nav-stats";
+import { getRunStatus, getWorkItems } from "../../lib/supervisor";
 
 export default async function ControlsPage() {
-  const status = await getRunStatus();
+  const [status, items] = await Promise.all([getRunStatus(), getWorkItems()]);
+  const navStats = buildNavStats(items);
 
   return (
-    <Shell>
-      <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
-        <h2 className="text-2xl font-semibold">Supervisor controls</h2>
-        <p className="mt-3 max-w-2xl text-sm text-[var(--muted)]">{status.summary}</p>
-        <div className="mt-6 grid gap-4 md:grid-cols-4">
-          <div className="rounded-[1.25rem] border bg-white p-4">
-            <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Mode</p>
-            <p className="mt-2 text-2xl font-semibold">{status.mode}</p>
-          </div>
-          <div className="rounded-[1.25rem] border bg-white p-4">
-            <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Poll interval</p>
-            <p className="mt-2 text-2xl font-semibold">{status.pollIntervalSeconds}s</p>
-          </div>
-        </div>
-      </section>
+    <Shell navStats={navStats}>
+      <PageIntro
+        eyebrow="Controls"
+        title="Supervisor run controls"
+        description={status.summary}
+        metrics={[
+          { label: "Mode", value: status.mode },
+          { label: "Poll interval", value: `${status.pollIntervalSeconds}s` },
+          { label: "Queued", value: String(status.queueCount) },
+          { label: "Active", value: String(status.activeCount) },
+        ]}
+      />
+      <OperatorProfilePanel />
       <ControlPanel />
     </Shell>
   );

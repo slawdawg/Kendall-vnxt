@@ -1,10 +1,40 @@
+import { AuditWorkbench } from "../../components/audit-workbench";
+import { PageIntro } from "../../components/page-intro";
 import { Shell } from "../../components/shell";
-import { getAuditEvents } from "../../lib/supervisor";
+import Link from "next/link";
+import { buildNavStats } from "../../lib/nav-stats";
+import { getAuditEvents, getSavedOperatorViews, getWorkItems } from "../../lib/supervisor";
 
 export default async function AuditPage() {
-  const audits = await getAuditEvents();
+  const [audits, items, savedViews] = await Promise.all([
+    getAuditEvents(),
+    getWorkItems(),
+    getSavedOperatorViews("audit"),
+  ]);
+  const awaitingAudit = items.filter((item) => item.state === "awaiting_audit");
+  const completedWithAudit = items.filter((item) => item.state === "done" && item.auditMode !== "none");
+  const navStats = buildNavStats(items);
+
   return (
-    <Shell>
+    <Shell navStats={navStats}>
+      <PageIntro
+        eyebrow="Audit"
+        title="Audit backlog and completion trail"
+        description="Handle risk-gated approvals, clear the audit lane, and keep a readable record of why higher-risk work was accepted or rerouted."
+        metrics={[
+          { label: "Awaiting audit", value: String(awaitingAudit.length) },
+          { label: "Required", value: String(awaitingAudit.filter((item) => item.auditMode === "required").length) },
+          { label: "Advisory", value: String(awaitingAudit.filter((item) => item.auditMode === "advisory").length) },
+          { label: "Audit records", value: String(audits.length) },
+        ]}
+      />
+      <AuditWorkbench
+        awaitingAudit={awaitingAudit}
+        completedWithAudit={completedWithAudit}
+        audits={audits}
+        savedViews={savedViews}
+      />
+
       <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
         <h2 className="text-2xl font-semibold">Audit history</h2>
         <div className="mt-6 space-y-4">
@@ -12,11 +42,15 @@ export default async function AuditPage() {
             <p className="text-sm text-[var(--muted)]">No audit events have been recorded yet.</p>
           ) : (
             audits.map((audit) => (
-              <article key={audit.id} className="rounded-[1.25rem] border bg-white p-5">
+              <article key={audit.id} className="rounded-[1.25rem] border bg-[var(--surface)] p-5">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="font-mono text-xs uppercase tracking-[0.2em] text-[var(--accent)]">{audit.mode}</p>
-                    <h3 className="mt-2 text-lg font-semibold">{audit.reason}</h3>
+                    <h3 className="mt-2 text-lg font-semibold">
+                      <Link href={`/work-items/${audit.workItemId}`} className="transition hover:text-[var(--accent)]">
+                        {audit.reason}
+                      </Link>
+                    </h3>
                     <p className="mt-2 text-sm text-[var(--muted)]">{audit.outcome}</p>
                   </div>
                   <div className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{new Date(audit.createdAt).toLocaleString()}</div>

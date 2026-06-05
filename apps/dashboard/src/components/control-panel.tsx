@@ -6,7 +6,7 @@ import { getSupervisorBaseUrl } from "../lib/supervisor";
 
 const actions = [
   { mode: "enable", label: "Enable", tone: "bg-[var(--accent)] text-white" },
-  { mode: "pause", label: "Pause", tone: "bg-white text-[var(--foreground)]" },
+  { mode: "pause", label: "Pause", tone: "bg-[var(--surface)] text-[var(--foreground)] border border-[var(--line)]" },
   { mode: "drain", label: "Drain", tone: "bg-[var(--accent-2)] text-white" },
   { mode: "disable", label: "Disable", tone: "bg-[var(--warn)] text-white" },
 ] as const;

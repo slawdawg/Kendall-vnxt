@@ -1,19 +1,21 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import type { NavStats } from "../lib/nav-stats";
 
 const links = [
   { href: "/", label: "Overview" },
   { href: "/queue", label: "Queue" },
   { href: "/active-work", label: "Active Work" },
   { href: "/audit", label: "Audit" },
+  { href: "/attention", label: "Attention" },
   { href: "/controls", label: "Controls" },
 ];
 
-export function Shell({ children }: { children: ReactNode }) {
+export function Shell({ children, navStats }: { children: ReactNode; navStats?: NavStats }) {
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#eff7f1,_transparent_35%),linear-gradient(180deg,_#f4efe7,_#efe6d8)]">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(92,200,166,0.18),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(240,154,97,0.12),_transparent_24%),linear-gradient(180deg,_var(--background-elevated),_var(--background))]">
       <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-6">
-        <header className="rounded-[2rem] border bg-[var(--panel)]/90 p-6 shadow-[0_18px_60px_rgba(23,33,31,0.08)] backdrop-blur">
+        <header className="rounded-[2rem] border bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] p-6 shadow-[0_22px_60px_rgba(3,8,8,0.32)] backdrop-blur">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">
@@ -31,9 +33,21 @@ export function Shell({ children }: { children: ReactNode }) {
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="rounded-full border bg-white px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                  className="inline-flex items-center gap-2 rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
                 >
                   {link.label}
+                  {link.href === "/queue" && navStats ? (
+                    <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{navStats.queue}</span>
+                  ) : null}
+                  {link.href === "/active-work" && navStats ? (
+                    <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{navStats.active}</span>
+                  ) : null}
+                  {link.href === "/audit" && navStats ? (
+                    <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{navStats.audit}</span>
+                  ) : null}
+                  {link.href === "/attention" && navStats ? (
+                    <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{navStats.attention}</span>
+                  ) : null}
                 </Link>
               ))}
             </nav>

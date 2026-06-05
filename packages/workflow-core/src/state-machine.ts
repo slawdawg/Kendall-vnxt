@@ -6,7 +6,8 @@ export const LEGAL_TRANSITIONS: Record<WorkflowState, WorkflowState[]> = {
   ready: ["implementing", "blocked"],
   implementing: ["validating", "needs_rework", "blocked"],
   validating: ["reviewing", "needs_rework", "blocked"],
-  reviewing: ["done", "needs_rework", "blocked"],
+  reviewing: ["awaiting_audit", "done", "needs_rework", "blocked"],
+  awaiting_audit: ["done", "needs_rework", "blocked"],
   needs_rework: ["implementing", "blocked"],
   blocked: ["triaged", "ready"],
   done: []

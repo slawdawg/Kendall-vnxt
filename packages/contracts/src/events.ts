@@ -9,6 +9,7 @@ export interface SupervisorEvent {
   correlationId: string;
   actorType: string;
   actorId?: string;
+  actorLabel?: string;
   payload: {
     state?: WorkflowState;
     lane?: BmadLane | null;
