@@ -288,9 +288,16 @@ REQUIRED_EXCLUDED_SOURCE_CLASSES = {
     "source-mutation-records",
     "operational-source-intake",
 }
-DEFAULT_APPROVED_STORAGE_ROOT = Path("_bmad/memory/knx/runtime").resolve()
-KNX_MEMORY_ROOT = Path("_bmad/memory/knx").resolve()
-SYNTHETIC_FIXTURE_ROOT = Path("_bmad/memory/knx/fixtures/synthetic").resolve()
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_APPROVED_STORAGE_ROOT = (PROJECT_ROOT / "_bmad/memory/knx/runtime").resolve()
+KNX_MEMORY_ROOT = (PROJECT_ROOT / "_bmad/memory/knx").resolve()
+SYNTHETIC_FIXTURE_ROOT = (PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic").resolve()
+DEFAULT_FIXTURE_PACK_PATH = PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
+DEFAULT_REPORT_DIR = PROJECT_ROOT / "_bmad/memory/knx/runtime/optional-source-evidence-validator/reports"
+DEFAULT_CONFIG_USER_YAML_PATH = PROJECT_ROOT / "_bmad/config.user.yaml"
+DEFAULT_CONFIG_YAML_PATH = PROJECT_ROOT / "_bmad/config.yaml"
+DEFAULT_CONFIG_USER_TOML_PATH = PROJECT_ROOT / "_bmad/config.user.toml"
+DEFAULT_CONFIG_TOML_PATH = PROJECT_ROOT / "_bmad/config.toml"
 
 SECRET_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
@@ -315,47 +322,247 @@ class Finding:
     artifact_id: str | None = None
 
 
+class CliUsageError(ValueError):
+    """Raised when CLI arguments fail validation."""
+
+
 def is_negative_fixture(fixture_type: str) -> bool:
     return fixture_type.endswith("-negative")
 
 
-def simple_yaml_value(text: str, key: str) -> str | None:
-    pattern = re.compile(rf"^\s*{re.escape(key)}\s*:\s*(.*?)\s*$", re.MULTILINE)
-    match = pattern.search(text)
-    if not match:
-        return None
-    value = match.group(1).strip()
+def parse_config_value(text: str, key: str) -> tuple[bool, str | None]:
+    text = text.lstrip("\ufeff")
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*([:=])\s*(.*?)\s*$", re.MULTILINE)
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return False, None
+    match = matches[-1]
+    _delimiter = match.group(1)
+    value = match.group(2).strip()
     if not value:
-        return None
+        return True, None
+    quote_char = None
+    escaped = False
+    normalized_chars: list[str] = []
+    for char in value:
+        if escaped:
+            normalized_chars.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            normalized_chars.append(char)
+            escaped = True
+            continue
+        if char in {"'", '"'}:
+            normalized_chars.append(char)
+            if quote_char == char:
+                quote_char = None
+            elif quote_char is None:
+                quote_char = char
+            continue
+        if char == "#" and quote_char is None:
+            break
+        normalized_chars.append(char)
+    value = "".join(normalized_chars).strip()
     if (value.startswith("'") and value.endswith("'")) or (value.startswith('"') and value.endswith('"')):
         value = value[1:-1]
-    return value or None
+    value = value.strip()
+    return True, value or None
+
+
+def simple_config_value(text: str, key: str) -> str | None:
+    _found, value = parse_config_value(text, key)
+    return value
+
+
+def resolve_project_root_tokens(path_value: str) -> Path:
+    return Path(path_value.replace("{project-root}", str(PROJECT_ROOT)))
+
+
+def normalize_path_input(path_value: Path | str) -> Path:
+    if isinstance(path_value, Path):
+        path_text = str(path_value)
+    else:
+        path_text = path_value
+    path_text = path_text.strip()
+    if not path_text.strip():
+        raise ValueError("Path input must not be empty")
+    candidate = resolve_project_root_tokens(path_text)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate.resolve()
+
+
+def normalize_config_path_input(path_value: str) -> Path:
+    path_value = path_value.strip()
+    if not path_value.strip():
+        raise ValueError("Config path input must not be empty")
+    candidate = resolve_project_root_tokens(path_value)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate.resolve()
+
+
+def normalize_boundary_path_input(path_value: str) -> Path:
+    path_value = path_value.strip()
+    if not path_value.strip():
+        raise ValueError("Boundary path input must not be empty")
+    candidate = resolve_project_root_tokens(path_value)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate.resolve()
+
+
+def read_optional_config_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError) as exc:
+        raise OSError(f"Cannot read config file {path}: {exc}") from exc
+
+
+def enforce_approved_storage_root(root: Path, source_label: str) -> Path:
+    resolved_root = root.resolve()
+    if not is_under_path(str(resolved_root), DEFAULT_APPROVED_STORAGE_ROOT):
+        raise ValueError(
+            f"Approved storage root from {source_label} must stay under {DEFAULT_APPROVED_STORAGE_ROOT}: {resolved_root}"
+        )
+    return resolved_root
 
 
 def load_approved_storage_root(
     explicit_storage_root: str | None = None,
-    config_user_path: Path = Path("_bmad/config.user.yaml"),
-    config_path: Path = Path("_bmad/config.yaml"),
+    config_user_path: Path = DEFAULT_CONFIG_USER_YAML_PATH,
+    config_path: Path = DEFAULT_CONFIG_YAML_PATH,
+    config_user_toml_path: Path = DEFAULT_CONFIG_USER_TOML_PATH,
+    config_toml_path: Path = DEFAULT_CONFIG_TOML_PATH,
 ) -> Path:
-    if explicit_storage_root:
-        return Path(explicit_storage_root).resolve()
+    if explicit_storage_root is not None:
+        if not explicit_storage_root.strip():
+            raise ValueError("Explicit storage root must not be empty")
+        return enforce_approved_storage_root(
+            normalize_config_path_input(explicit_storage_root),
+            "explicit argument",
+        )
 
-    for path in (config_user_path, config_path):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
+    for path in (config_user_path, config_user_toml_path, config_path, config_toml_path):
+        text = read_optional_config_text(path)
+        if text is None:
             continue
-        value = simple_yaml_value(text, "knx_storage_root")
+        _found, value = parse_config_value(text, "knx_storage_root")
         if value:
-            return Path(value).resolve()
+            return enforce_approved_storage_root(
+                normalize_config_path_input(value),
+                str(path),
+            )
 
     return DEFAULT_APPROVED_STORAGE_ROOT
 
 
+def load_configured_path(
+    explicit_path: str | None,
+    setting_key: str,
+    default_path: Path,
+    config_user_path: Path = DEFAULT_CONFIG_USER_YAML_PATH,
+    config_path: Path = DEFAULT_CONFIG_YAML_PATH,
+    config_user_toml_path: Path = DEFAULT_CONFIG_USER_TOML_PATH,
+    config_toml_path: Path = DEFAULT_CONFIG_TOML_PATH,
+) -> Path:
+    if explicit_path is not None:
+        if not explicit_path.strip():
+            raise ValueError(f"Explicit {setting_key} path must not be empty")
+        return normalize_config_path_input(explicit_path)
+
+    for path in (config_user_path, config_user_toml_path, config_path, config_toml_path):
+        text = read_optional_config_text(path)
+        if text is None:
+            continue
+        _found, value = parse_config_value(text, setting_key)
+        if value:
+            return normalize_config_path_input(value)
+
+    return default_path.resolve()
+
+
+def load_configured_fixture_pack_path(
+    explicit_path: str | None,
+    config_user_path: Path = DEFAULT_CONFIG_USER_YAML_PATH,
+    config_path: Path = DEFAULT_CONFIG_YAML_PATH,
+    config_user_toml_path: Path = DEFAULT_CONFIG_USER_TOML_PATH,
+    config_toml_path: Path = DEFAULT_CONFIG_TOML_PATH,
+) -> Path:
+    fixture_pack_path = load_configured_path(
+        explicit_path,
+        "ksev_fixture_pack",
+        DEFAULT_FIXTURE_PACK_PATH,
+        config_user_path=config_user_path,
+        config_path=config_path,
+        config_user_toml_path=config_user_toml_path,
+        config_toml_path=config_toml_path,
+    )
+    if not is_under_path(str(fixture_pack_path), SYNTHETIC_FIXTURE_ROOT):
+        raise ValueError(
+            f"Fixture pack path must stay under {SYNTHETIC_FIXTURE_ROOT}: {fixture_pack_path}"
+        )
+    if fixture_pack_path.exists() and fixture_pack_path.is_dir():
+        raise ValueError(f"Fixture pack path must point to a file, not a directory: {fixture_pack_path}")
+    return fixture_pack_path
+
+
+def load_configured_report_dir(
+    explicit_path: str | None,
+    approved_storage_root: Path,
+    config_user_path: Path = DEFAULT_CONFIG_USER_YAML_PATH,
+    config_path: Path = DEFAULT_CONFIG_YAML_PATH,
+    config_user_toml_path: Path = DEFAULT_CONFIG_USER_TOML_PATH,
+    config_toml_path: Path = DEFAULT_CONFIG_TOML_PATH,
+) -> Path:
+    report_dir = load_configured_path(
+        explicit_path,
+        "ksev_report_dir",
+        DEFAULT_REPORT_DIR,
+        config_user_path=config_user_path,
+        config_path=config_path,
+        config_user_toml_path=config_user_toml_path,
+        config_toml_path=config_toml_path,
+    )
+    approved_storage_root = enforce_approved_storage_root(
+        approved_storage_root,
+        "approved_storage_root",
+    )
+    if not is_under_path(str(report_dir), approved_storage_root):
+        raise ValueError(
+            f"Report directory must stay under approved storage root {approved_storage_root}: {report_dir}"
+        )
+    if report_dir.exists() and report_dir.is_file():
+        raise ValueError(f"Report directory path must point to a directory, not a file: {report_dir}")
+    return report_dir
+
+
+def load_source_packet_examples_path(explicit_path: str, approved_storage_root: Path) -> Path:
+    if not explicit_path.strip():
+        raise ValueError("Explicit source packet examples path must not be empty")
+    source_packet_examples_path = normalize_config_path_input(explicit_path)
+    approved_storage_root = enforce_approved_storage_root(
+        approved_storage_root,
+        "approved_storage_root",
+    )
+    if not is_under_path(str(source_packet_examples_path), approved_storage_root):
+        raise ValueError(
+            f"Source packet examples path must stay under approved storage root {approved_storage_root}: {source_packet_examples_path}"
+        )
+    if source_packet_examples_path.exists() and source_packet_examples_path.is_dir():
+        raise ValueError(
+            f"Source packet examples path must point to a file, not a directory: {source_packet_examples_path}"
+        )
+    return source_packet_examples_path
+
+
 def is_under_path(path_value: str, root: Path) -> bool:
     try:
-        candidate = Path(path_value).resolve()
-    except OSError:
+        candidate = normalize_boundary_path_input(path_value)
+    except (OSError, ValueError):
         return False
     return candidate == root or root in candidate.parents
 
@@ -451,7 +658,7 @@ def load_fixture_pack(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]
     findings: list[Finding] = []
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         add_finding(findings, "error", "input-unreadable", f"Cannot read input: {exc}")
         return None, findings
 
@@ -481,7 +688,7 @@ def load_json_object(path: Path) -> tuple[dict[str, Any] | None, list[Finding]]:
     findings: list[Finding] = []
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         add_finding(findings, "error", "input-unreadable", f"Cannot read input: {exc}")
         return None, findings
 
@@ -1552,6 +1759,12 @@ def validate_fixture_references(fixtures: list[dict[str, Any]], findings: list[F
 def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None) -> dict[str, Any]:
     if approved_storage_root is None:
         approved_storage_root = load_approved_storage_root()
+    else:
+        approved_storage_root = enforce_approved_storage_root(
+            normalize_path_input(approved_storage_root),
+            "approved_storage_root",
+        )
+    path = normalize_path_input(path)
 
     pack, findings = load_fixture_pack(path)
     if pack is None:
@@ -1586,10 +1799,23 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
 def validate_source_packet_examples(path: Path, approved_storage_root: Path | None = None) -> dict[str, Any]:
     if approved_storage_root is None:
         approved_storage_root = load_approved_storage_root()
+    else:
+        approved_storage_root = enforce_approved_storage_root(
+            normalize_path_input(approved_storage_root),
+            "approved_storage_root",
+        )
+    path = normalize_path_input(path)
 
     examples, findings = load_json_object(path)
     if examples is None:
         return build_source_packet_examples_result(path, findings, 0, approved_storage_root)
+    if not is_under_path(str(path), approved_storage_root):
+        add_finding(
+            findings,
+            "error",
+            "source-packet-examples-outside-approved-root",
+            "Source packet example sets must live under the approved KNX runtime storage root",
+        )
 
     for field in ("source_packet_example_set_id", "title", "created_at", "created_by", "status", "packets", "excluded_classes"):
         if field not in examples:
@@ -1906,7 +2132,11 @@ def build_source_packet_examples_result(
 
 
 def write_reports(result: dict[str, Any], output_dir: Path, approved_storage_root: Path) -> tuple[Path, Path]:
-    output_dir = output_dir.resolve()
+    approved_storage_root = enforce_approved_storage_root(
+        normalize_path_input(approved_storage_root),
+        "approved_storage_root",
+    )
+    output_dir = normalize_path_input(output_dir)
     if not is_under_path(str(output_dir), approved_storage_root):
         raise ValueError(f"Output directory is outside approved storage root: {output_dir}")
 
@@ -1956,17 +2186,28 @@ def render_markdown(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate KNX source/evidence fixture packs.")
-    parser.add_argument(
+class NonExitingArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise CliUsageError(message)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = NonExitingArgumentParser(description="Validate KNX source/evidence fixture packs.")
+    target_group = parser.add_mutually_exclusive_group()
+    target_group.add_argument(
         "--fixture-pack",
-        default="_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
-        help="Path to the fixture pack JSON.",
+        default=None,
+        help="Path to the fixture pack JSON. Defaults to ksev_fixture_pack from config.",
+    )
+    target_group.add_argument(
+        "--source-packet-examples",
+        default=None,
+        help="Validate metadata-only source packet examples JSON instead of the synthetic fixture pack.",
     )
     parser.add_argument(
         "--output-dir",
-        default="_bmad/memory/knx/runtime/optional-source-evidence-validator/reports",
-        help="Directory for JSON and Markdown reports. Must be under approved KNX runtime storage.",
+        default=None,
+        help="Directory for JSON and Markdown reports. Defaults to ksev_report_dir from config and must be under approved KNX runtime storage.",
     )
     parser.add_argument(
         "--storage-root",
@@ -1974,27 +2215,66 @@ def parse_args() -> argparse.Namespace:
         help="Approved KNX runtime storage root. Defaults to knx_storage_root from _bmad/config.user.yaml.",
     )
     parser.add_argument("--no-write", action="store_true", help="Validate without writing reports.")
-    parser.add_argument(
-        "--source-packet-examples",
-        default=None,
-        help="Validate metadata-only source packet examples JSON instead of the synthetic fixture pack.",
-    )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
-    args = parse_args()
-    approved_storage_root = load_approved_storage_root(args.storage_root)
-    if args.source_packet_examples:
-        result = validate_source_packet_examples(Path(args.source_packet_examples), approved_storage_root)
-    else:
-        result = validate_fixture_pack(Path(args.fixture_pack), approved_storage_root)
+    try:
+        args = parse_args()
+        cli_storage_root = (
+            args.storage_root
+            if args.storage_root is not None and not args.storage_root.strip()
+            else str(normalize_config_path_input(args.storage_root))
+            if args.storage_root is not None
+            else None
+        )
+        cli_fixture_pack = (
+            args.fixture_pack
+            if args.fixture_pack is not None and not args.fixture_pack.strip()
+            else str(normalize_config_path_input(args.fixture_pack))
+            if args.fixture_pack is not None
+            else None
+        )
+        cli_source_packet_examples = (
+            args.source_packet_examples
+            if args.source_packet_examples is not None and not args.source_packet_examples.strip()
+            else str(normalize_config_path_input(args.source_packet_examples))
+            if args.source_packet_examples is not None
+            else None
+        )
+        cli_output_dir = (
+            args.output_dir
+            if args.output_dir is not None and not args.output_dir.strip()
+            else str(normalize_config_path_input(args.output_dir))
+            if args.output_dir is not None
+            else None
+        )
 
-    if not args.no_write:
-        write_reports(result, Path(args.output_dir), approved_storage_root)
+        approved_storage_root = load_approved_storage_root(cli_storage_root)
+        if args.source_packet_examples is not None:
+            source_packet_examples_path = load_source_packet_examples_path(
+                cli_source_packet_examples,
+                approved_storage_root,
+            )
+            result = validate_source_packet_examples(source_packet_examples_path, approved_storage_root)
+        else:
+            fixture_pack_path = load_configured_fixture_pack_path(
+                cli_fixture_pack,
+            )
+            result = validate_fixture_pack(fixture_pack_path, approved_storage_root)
 
-    print(json.dumps(result, indent=2))
-    return 1 if result["status"] == "FAIL" else 0
+        if not args.no_write:
+            output_dir_path = load_configured_report_dir(
+                cli_output_dir,
+                approved_storage_root,
+            )
+            write_reports(result, output_dir_path, approved_storage_root)
+
+        print(json.dumps(result, indent=2))
+        return 1 if result["status"] == "FAIL" else 0
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"status": "FAIL", "error": str(exc)}, indent=2))
+        return 1
 
 
 if __name__ == "__main__":

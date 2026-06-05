@@ -1,5 +1,9 @@
 import importlib.util
+import contextlib
+import io
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -27,6 +31,1380 @@ spec.loader.exec_module(validator)
 
 
 class SourceEvidenceValidatorTests(unittest.TestCase):
+    def test_boundary_constants_are_project_root_relative(self):
+        self.assertEqual(
+            validator.DEFAULT_APPROVED_STORAGE_ROOT,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime").resolve(),
+        )
+        self.assertEqual(
+            validator.KNX_MEMORY_ROOT,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx").resolve(),
+        )
+        self.assertEqual(
+            validator.SYNTHETIC_FIXTURE_ROOT,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic").resolve(),
+        )
+
+    def test_import_from_other_cwd_keeps_project_root_boundaries(self):
+        with tempfile.TemporaryDirectory() as other_cwd:
+            script = f"""
+import importlib.util
+import json
+import sys
+from pathlib import Path
+script_path = Path(r"{SCRIPT_PATH}")
+spec = importlib.util.spec_from_file_location("validate_source_evidence", script_path)
+module = importlib.util.module_from_spec(spec)
+sys.modules["validate_source_evidence"] = module
+spec.loader.exec_module(module)
+print(json.dumps({{
+    "approved_storage_root": str(module.DEFAULT_APPROVED_STORAGE_ROOT),
+    "synthetic_fixture_root": str(module.SYNTHETIC_FIXTURE_ROOT),
+}}))
+"""
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=other_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            payload["approved_storage_root"],
+            str((PROJECT_ROOT / "_bmad/memory/knx/runtime").resolve()),
+        )
+        self.assertEqual(
+            payload["synthetic_fixture_root"],
+            str((PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic").resolve()),
+        )
+
+    def test_import_from_other_cwd_uses_project_root_default_config_paths(self):
+        config_path = PROJECT_ROOT / "_bmad/config.user.yaml"
+        original = config_path.read_text(encoding="utf-8") if config_path.exists() else None
+        config_path.write_text(
+            "knx_storage_root: '{project-root}/_bmad/memory/knx/runtime/from-import-cwd-config'\n",
+            encoding="utf-8",
+        )
+        try:
+            with tempfile.TemporaryDirectory() as other_cwd:
+                script = f"""
+import importlib.util
+import json
+import sys
+from pathlib import Path
+script_path = Path(r"{SCRIPT_PATH}")
+spec = importlib.util.spec_from_file_location("validate_source_evidence", script_path)
+module = importlib.util.module_from_spec(spec)
+sys.modules["validate_source_evidence"] = module
+spec.loader.exec_module(module)
+print(json.dumps({{
+    "storage_root": str(module.load_approved_storage_root()),
+}}))
+"""
+                result = subprocess.run(
+                    [sys.executable, "-c", script],
+                    cwd=other_cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+        finally:
+            if original is None:
+                config_path.unlink(missing_ok=True)
+            else:
+                config_path.write_text(original, encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            payload["storage_root"],
+            str((PROJECT_ROOT / "_bmad/memory/knx/runtime/from-import-cwd-config").resolve()),
+        )
+
+    def test_import_from_other_cwd_relative_library_fixture_pack_path_still_works(self):
+        with tempfile.TemporaryDirectory() as other_cwd:
+            script = f"""
+import importlib.util
+import json
+import sys
+from pathlib import Path
+script_path = Path(r"{SCRIPT_PATH}")
+spec = importlib.util.spec_from_file_location("validate_source_evidence", script_path)
+module = importlib.util.module_from_spec(spec)
+sys.modules["validate_source_evidence"] = module
+spec.loader.exec_module(module)
+result = module.validate_fixture_pack(Path("_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"))
+print(json.dumps({{"status": result["status"]}}))
+"""
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=other_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PASS")
+
+    def test_import_from_other_cwd_relative_library_source_packet_examples_path_still_works(self):
+        with tempfile.TemporaryDirectory() as other_cwd:
+            script = f"""
+import importlib.util
+import json
+import sys
+from pathlib import Path
+script_path = Path(r"{SCRIPT_PATH}")
+spec = importlib.util.spec_from_file_location("validate_source_evidence", script_path)
+module = importlib.util.module_from_spec(spec)
+sys.modules["validate_source_evidence"] = module
+spec.loader.exec_module(module)
+result = module.validate_source_packet_examples(Path("_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json"))
+print(json.dumps({{"status": result["status"]}}))
+"""
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=other_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PASS")
+
+    def test_explicit_storage_root_must_stay_under_knx_runtime(self):
+        outside_root = Path(tempfile.gettempdir()) / "knx-storage-root-outside-runtime"
+
+        with self.assertRaisesRegex(ValueError, "Approved storage root from explicit argument must stay under"):
+            validator.load_approved_storage_root(str(outside_root))
+
+    def test_explicit_storage_root_must_not_be_empty(self):
+        with self.assertRaisesRegex(ValueError, "Explicit storage root must not be empty"):
+            validator.load_approved_storage_root("")
+
+    def test_configured_storage_root_must_stay_under_knx_runtime(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                f"knx_storage_root: '{Path(tempfile.gettempdir()) / 'knx-storage-root-outside-runtime'}'\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Approved storage root from .*config.yaml must stay under"):
+                validator.load_approved_storage_root(config_user_path=Path(temp_dir) / "missing-user.yaml", config_path=config_path)
+
+    def test_storage_root_loader_raises_on_unreadable_config_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bad_config_path = Path(temp_dir)
+
+            with self.assertRaisesRegex(OSError, "Cannot read config file"):
+                validator.load_approved_storage_root(
+                    config_user_path=Path(temp_dir) / "missing-user.yaml",
+                    config_path=bad_config_path,
+                )
+
+    def test_storage_root_loader_raises_on_invalid_utf8_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_bytes(b"\xff\xfe\x00\x00")
+
+            with self.assertRaisesRegex(OSError, "Cannot read config file"):
+                validator.load_approved_storage_root(
+                    config_user_path=Path(temp_dir) / "missing-user.yaml",
+                    config_path=config_path,
+                )
+
+    def test_configured_storage_root_allows_nested_runtime_path(self):
+        with tempfile.TemporaryDirectory(dir=validator.DEFAULT_APPROVED_STORAGE_ROOT) as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            nested_root = Path(temp_dir) / "custom-approved-root"
+            config_path.write_text(f"knx_storage_root: '{nested_root}'\n", encoding="utf-8")
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+            )
+
+            self.assertEqual(resolved, nested_root.resolve())
+
+    def test_configured_storage_root_expands_project_root_token(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "knx_storage_root: '{project-root}/_bmad/memory/knx/runtime/tokenized-root'\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/tokenized-root").resolve(),
+            )
+
+    def test_configured_storage_root_relative_path_is_project_root_relative(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "knx_storage_root: '_bmad/memory/knx/runtime/relative-storage-root'\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/relative-storage-root").resolve(),
+            )
+
+    def test_storage_root_can_be_loaded_from_toml_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_toml_path = Path(temp_dir) / "config.user.toml"
+            config_toml_path.write_text(
+                'knx_storage_root = "{project-root}/_bmad/memory/knx/runtime/toml-root"\n',
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=Path(temp_dir) / "missing-config.yaml",
+                config_user_toml_path=config_toml_path,
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/toml-root").resolve(),
+            )
+
+    def test_user_toml_storage_root_overrides_project_yaml(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "knx_storage_root: '{project-root}/_bmad/memory/knx/runtime/project-yaml-root'\n",
+                encoding="utf-8",
+            )
+            config_toml_path = Path(temp_dir) / "config.user.toml"
+            config_toml_path.write_text(
+                'knx_storage_root = "{project-root}/_bmad/memory/knx/runtime/user-toml-root"\n',
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=config_toml_path,
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/user-toml-root").resolve(),
+            )
+
+    def test_last_storage_root_in_single_config_file_wins(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "knx_storage_root: '{project-root}/_bmad/memory/knx/runtime/first-root'\n"
+                "knx_storage_root: '{project-root}/_bmad/memory/knx/runtime/second-root'\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/second-root").resolve(),
+            )
+
+    def test_blank_last_storage_root_in_single_config_file_unsets_earlier_value(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "knx_storage_root: '{project-root}/_bmad/memory/knx/runtime/first-root'\n"
+                "knx_storage_root: ''\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(resolved, validator.DEFAULT_APPROVED_STORAGE_ROOT)
+
+    def test_blank_storage_root_in_config_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text("knx_storage_root: ''\n", encoding="utf-8")
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(resolved, validator.DEFAULT_APPROVED_STORAGE_ROOT)
+
+    def test_blank_user_storage_root_falls_through_to_project_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_user_path = Path(temp_dir) / "config.user.yaml"
+            config_user_path.write_text("knx_storage_root: ''\n", encoding="utf-8")
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "knx_storage_root: '{project-root}/_bmad/memory/knx/runtime/project-fallback-root'\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=config_user_path,
+                config_path=config_path,
+                config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/project-fallback-root").resolve(),
+            )
+
+    def test_comment_only_storage_root_in_config_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text("knx_storage_root: # blank on purpose\n", encoding="utf-8")
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(resolved, validator.DEFAULT_APPROVED_STORAGE_ROOT)
+
+    def test_storage_root_preserves_semicolon_in_toml_value(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_toml_path = Path(temp_dir) / "config.user.toml"
+            config_toml_path.write_text(
+                'knx_storage_root = "{project-root}/_bmad/memory/knx/runtime/toml-root;v1"\n',
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=Path(temp_dir) / "missing-config.yaml",
+                config_user_toml_path=config_toml_path,
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/toml-root;v1").resolve(),
+            )
+
+    def test_storage_root_can_be_loaded_from_bom_prefixed_yaml_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "\ufeffknx_storage_root: '{project-root}/_bmad/memory/knx/runtime/bom-root'\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_approved_storage_root(
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/bom-root").resolve(),
+            )
+
+    def test_explicit_storage_root_expands_project_root_token(self):
+        root = validator.load_approved_storage_root("{project-root}/_bmad/memory/knx/runtime/explicit-tokenized-root")
+
+        self.assertEqual(
+            root,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/explicit-tokenized-root").resolve(),
+        )
+
+    def test_explicit_storage_root_trims_outer_whitespace(self):
+        root = validator.load_approved_storage_root("  {project-root}/_bmad/memory/knx/runtime/trimmed-root  ")
+
+        self.assertEqual(
+            root,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/trimmed-root").resolve(),
+        )
+
+    def test_explicit_relative_storage_root_is_project_root_relative(self):
+        root = validator.load_approved_storage_root("_bmad/memory/knx/runtime/explicit-relative-root")
+
+        self.assertEqual(
+            root,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/explicit-relative-root").resolve(),
+        )
+
+    def test_normalize_path_input_expands_project_root_token(self):
+        normalized = validator.normalize_path_input("{project-root}/_bmad/memory/knx/runtime/normalized-path")
+
+        self.assertEqual(
+            normalized,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/normalized-path").resolve(),
+        )
+
+    def test_normalize_path_input_anchors_relative_paths_to_project_root(self):
+        normalized = validator.normalize_path_input("_bmad/memory/knx/runtime/relative-input-path")
+
+        self.assertEqual(
+            normalized,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/relative-input-path").resolve(),
+        )
+
+    def test_normalize_path_input_trims_outer_whitespace(self):
+        normalized = validator.normalize_path_input("  _bmad/memory/knx/runtime/trimmed-input-path  ")
+
+        self.assertEqual(
+            normalized,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/trimmed-input-path").resolve(),
+        )
+
+    def test_normalize_path_input_rejects_empty_string(self):
+        with self.assertRaisesRegex(ValueError, "Path input must not be empty"):
+            validator.normalize_path_input("")
+
+    def test_normalize_config_path_input_anchors_relative_paths_to_project_root(self):
+        normalized = validator.normalize_config_path_input("_bmad/memory/knx/runtime/config-relative-path")
+
+        self.assertEqual(
+            normalized,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/config-relative-path").resolve(),
+        )
+
+    def test_normalize_config_path_input_rejects_empty_string(self):
+        with self.assertRaisesRegex(ValueError, "Config path input must not be empty"):
+            validator.normalize_config_path_input("")
+
+    def test_normalize_boundary_path_input_anchors_relative_paths_to_project_root(self):
+        normalized = validator.normalize_boundary_path_input("_bmad/memory/knx/runtime/boundary-relative-path")
+
+        self.assertEqual(
+            normalized,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/boundary-relative-path").resolve(),
+        )
+
+    def test_normalize_boundary_path_input_rejects_empty_string(self):
+        with self.assertRaisesRegex(ValueError, "Boundary path input must not be empty"):
+            validator.normalize_boundary_path_input("")
+
+    def test_is_under_path_returns_false_for_empty_input(self):
+        self.assertFalse(
+            validator.is_under_path("", validator.DEFAULT_APPROVED_STORAGE_ROOT)
+        )
+
+    def test_simple_config_value_strips_inline_comment_from_unquoted_value(self):
+        value = validator.simple_config_value(
+            "ksev_report_dir: {project-root}/_bmad/memory/knx/runtime/reports # local comment\n",
+            "ksev_report_dir",
+        )
+
+        self.assertEqual(value, "{project-root}/_bmad/memory/knx/runtime/reports")
+
+    def test_simple_config_value_handles_utf8_bom_prefix(self):
+        value = validator.simple_config_value(
+            "\ufeffksev_report_dir: {project-root}/_bmad/memory/knx/runtime/reports\n",
+            "ksev_report_dir",
+        )
+
+        self.assertEqual(value, "{project-root}/_bmad/memory/knx/runtime/reports")
+
+    def test_simple_config_value_preserves_semicolon_in_unquoted_toml_value(self):
+        value = validator.simple_config_value(
+            'ksev_report_dir = {project-root}/_bmad/memory/knx/runtime/reports;v1\n',
+            "ksev_report_dir",
+        )
+
+        self.assertEqual(value, "{project-root}/_bmad/memory/knx/runtime/reports;v1")
+
+    def test_simple_config_value_preserves_semicolon_in_yaml_value(self):
+        value = validator.simple_config_value(
+            "ksev_report_dir: {project-root}/_bmad/memory/knx/runtime/reports;v1\n",
+            "ksev_report_dir",
+        )
+
+        self.assertEqual(value, "{project-root}/_bmad/memory/knx/runtime/reports;v1")
+
+    def test_simple_config_value_preserves_hash_inside_quoted_value(self):
+        value = validator.simple_config_value(
+            'ksev_report_dir = "{project-root}/_bmad/memory/knx/runtime/reports#v1"\n',
+            "ksev_report_dir",
+        )
+
+        self.assertEqual(value, "{project-root}/_bmad/memory/knx/runtime/reports#v1")
+
+    def test_simple_config_value_strips_trailing_comment_after_quoted_yaml_value(self):
+        value = validator.simple_config_value(
+            'ksev_fixture_pack: "{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json" # local comment\n',
+            "ksev_fixture_pack",
+        )
+
+        self.assertEqual(
+            value,
+            "{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+        )
+
+    def test_simple_config_value_strips_trailing_comment_after_quoted_toml_value(self):
+        value = validator.simple_config_value(
+            'ksev_report_dir = "{project-root}/_bmad/memory/knx/runtime/reports" # local comment\n',
+            "ksev_report_dir",
+        )
+
+        self.assertEqual(
+            value,
+            "{project-root}/_bmad/memory/knx/runtime/reports",
+        )
+
+    def test_simple_config_value_preserves_semicolon_inside_quoted_value(self):
+        value = validator.simple_config_value(
+            'ksev_report_dir = "{project-root}/_bmad/memory/knx/runtime/reports;v1"\n',
+            "ksev_report_dir",
+        )
+
+        self.assertEqual(value, "{project-root}/_bmad/memory/knx/runtime/reports;v1")
+
+    def test_simple_config_value_uses_last_matching_key_in_file(self):
+        value = validator.simple_config_value(
+            'ksev_report_dir = "{project-root}/_bmad/memory/knx/runtime/first"\n'
+            'ksev_report_dir = "{project-root}/_bmad/memory/knx/runtime/second"\n',
+            "ksev_report_dir",
+        )
+
+        self.assertEqual(value, "{project-root}/_bmad/memory/knx/runtime/second")
+
+    def test_simple_config_value_blank_last_key_unsets_earlier_value(self):
+        value = validator.simple_config_value(
+            'ksev_report_dir = "{project-root}/_bmad/memory/knx/runtime/first"\n'
+            'ksev_report_dir = ""\n',
+            "ksev_report_dir",
+        )
+
+        self.assertIsNone(value)
+
+    def test_parse_config_value_reports_blank_value_when_key_is_present(self):
+        found, value = validator.parse_config_value(
+            "ksev_report_dir: ''\n",
+            "ksev_report_dir",
+        )
+
+        self.assertTrue(found)
+        self.assertIsNone(value)
+
+    def test_parse_config_value_treats_quoted_whitespace_as_blank(self):
+        found, value = validator.parse_config_value(
+            'ksev_report_dir: "   "\n',
+            "ksev_report_dir",
+        )
+
+        self.assertTrue(found)
+        self.assertIsNone(value)
+
+    def test_configured_fixture_pack_path_expands_project_root_token(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "ksev_fixture_pack: '{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json'\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_configured_path(
+                None,
+                "ksev_fixture_pack",
+                validator.DEFAULT_FIXTURE_PACK_PATH,
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(resolved, validator.DEFAULT_FIXTURE_PACK_PATH.resolve())
+
+    def test_configured_path_loader_raises_on_unreadable_config_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bad_config_path = Path(temp_dir)
+
+            with self.assertRaisesRegex(OSError, "Cannot read config file"):
+                validator.load_configured_path(
+                    None,
+                    "ksev_fixture_pack",
+                    validator.DEFAULT_FIXTURE_PACK_PATH,
+                    config_user_path=Path(temp_dir) / "missing-user.yaml",
+                    config_path=bad_config_path,
+                    config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                    config_toml_path=Path(temp_dir) / "missing-config.toml",
+                )
+
+    def test_configured_fixture_pack_path_must_stay_under_synthetic_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                f"ksev_fixture_pack: '{Path(tempfile.gettempdir()) / 'outside-fixture-pack.json'}'\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Fixture pack path must stay under"):
+                validator.load_configured_fixture_pack_path(
+                    None,
+                    config_user_path=Path(temp_dir) / "missing-user.yaml",
+                    config_path=config_path,
+                    config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                    config_toml_path=Path(temp_dir) / "missing-config.toml",
+                )
+
+    def test_configured_fixture_pack_path_rejects_existing_directory(self):
+        fixture_dir = FIXTURE_PACK.parent / "fixture-pack-dir"
+        fixture_dir.mkdir(exist_ok=True)
+        try:
+            with self.assertRaisesRegex(ValueError, "must point to a file, not a directory"):
+                validator.load_configured_fixture_pack_path(str(fixture_dir))
+        finally:
+            fixture_dir.rmdir()
+
+    def test_configured_report_dir_can_be_loaded_from_toml(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_toml_path = Path(temp_dir) / "config.user.toml"
+            config_toml_path.write_text(
+                'ksev_report_dir = "{project-root}/_bmad/memory/knx/runtime/custom-report-dir"\n',
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_configured_path(
+                None,
+                "ksev_report_dir",
+                validator.DEFAULT_REPORT_DIR,
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=Path(temp_dir) / "missing-config.yaml",
+                config_user_toml_path=config_toml_path,
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/custom-report-dir").resolve(),
+            )
+
+    def test_user_toml_report_dir_overrides_project_yaml(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "ksev_report_dir: '{project-root}/_bmad/memory/knx/runtime/project-yaml-report-dir'\n",
+                encoding="utf-8",
+            )
+            config_toml_path = Path(temp_dir) / "config.user.toml"
+            config_toml_path.write_text(
+                'ksev_report_dir = "{project-root}/_bmad/memory/knx/runtime/user-toml-report-dir"\n',
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_configured_path(
+                None,
+                "ksev_report_dir",
+                validator.DEFAULT_REPORT_DIR,
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=config_toml_path,
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/user-toml-report-dir").resolve(),
+            )
+
+    def test_last_report_dir_in_single_config_file_wins(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "ksev_report_dir: '{project-root}/_bmad/memory/knx/runtime/first-report-dir'\n"
+                "ksev_report_dir: '{project-root}/_bmad/memory/knx/runtime/second-report-dir'\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_configured_path(
+                None,
+                "ksev_report_dir",
+                validator.DEFAULT_REPORT_DIR,
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/second-report-dir").resolve(),
+            )
+
+    def test_blank_last_report_dir_in_single_config_file_unsets_earlier_value(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "ksev_report_dir: '{project-root}/_bmad/memory/knx/runtime/first-report-dir'\n"
+                "ksev_report_dir: ''\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_configured_path(
+                None,
+                "ksev_report_dir",
+                validator.DEFAULT_REPORT_DIR,
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(resolved, validator.DEFAULT_REPORT_DIR.resolve())
+
+    def test_blank_report_dir_in_config_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_toml_path = Path(temp_dir) / "config.user.toml"
+            config_toml_path.write_text('ksev_report_dir = ""\n', encoding="utf-8")
+
+            resolved = validator.load_configured_path(
+                None,
+                "ksev_report_dir",
+                validator.DEFAULT_REPORT_DIR,
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=Path(temp_dir) / "missing-config.yaml",
+                config_user_toml_path=config_toml_path,
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(resolved, validator.DEFAULT_REPORT_DIR.resolve())
+
+    def test_whitespace_only_report_dir_in_config_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_toml_path = Path(temp_dir) / "config.user.toml"
+            config_toml_path.write_text('ksev_report_dir = "   "\n', encoding="utf-8")
+
+            resolved = validator.load_configured_path(
+                None,
+                "ksev_report_dir",
+                validator.DEFAULT_REPORT_DIR,
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=Path(temp_dir) / "missing-config.yaml",
+                config_user_toml_path=config_toml_path,
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(resolved, validator.DEFAULT_REPORT_DIR.resolve())
+
+    def test_blank_user_report_dir_falls_through_to_project_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_user_toml_path = Path(temp_dir) / "config.user.toml"
+            config_user_toml_path.write_text('ksev_report_dir = ""\n', encoding="utf-8")
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "ksev_report_dir: '{project-root}/_bmad/memory/knx/runtime/project-fallback-report-dir'\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_configured_path(
+                None,
+                "ksev_report_dir",
+                validator.DEFAULT_REPORT_DIR,
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=config_user_toml_path,
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/project-fallback-report-dir").resolve(),
+            )
+
+    def test_configured_report_dir_relative_path_is_project_root_relative(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "ksev_report_dir: '_bmad/memory/knx/runtime/relative-report-dir'\n",
+                encoding="utf-8",
+            )
+
+            resolved = validator.load_configured_path(
+                None,
+                "ksev_report_dir",
+                validator.DEFAULT_REPORT_DIR,
+                config_user_path=Path(temp_dir) / "missing-user.yaml",
+                config_path=config_path,
+                config_user_toml_path=Path(temp_dir) / "missing-user.toml",
+                config_toml_path=Path(temp_dir) / "missing-config.toml",
+            )
+
+            self.assertEqual(
+                resolved,
+                (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/relative-report-dir").resolve(),
+            )
+
+    def test_configured_report_dir_must_stay_under_approved_storage_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_toml_path = Path(temp_dir) / "config.user.toml"
+            config_toml_path.write_text(
+                f'ksev_report_dir = "{Path(tempfile.gettempdir()) / "outside-report-dir"}"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Report directory must stay under approved storage root"):
+                validator.load_configured_report_dir(
+                    None,
+                    validator.load_approved_storage_root(),
+                    config_user_path=Path(temp_dir) / "missing-user.yaml",
+                    config_path=Path(temp_dir) / "missing-config.yaml",
+                    config_user_toml_path=config_toml_path,
+                    config_toml_path=Path(temp_dir) / "missing-config.toml",
+                )
+
+    def test_configured_report_dir_rejects_existing_file(self):
+        runtime_root = validator.load_approved_storage_root()
+        with tempfile.NamedTemporaryFile(dir=runtime_root, delete=False) as temp_file:
+            report_file = Path(temp_file.name)
+        try:
+            with self.assertRaisesRegex(ValueError, "must point to a directory, not a file"):
+                validator.load_configured_report_dir(str(report_file), runtime_root)
+        finally:
+            report_file.unlink(missing_ok=True)
+
+    def test_explicit_configured_path_expands_project_root_token(self):
+        resolved = validator.load_configured_path(
+            "{project-root}/_bmad/memory/knx/runtime/explicit-report-dir",
+            "ksev_report_dir",
+            validator.DEFAULT_REPORT_DIR,
+        )
+
+        self.assertEqual(
+            resolved,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/explicit-report-dir").resolve(),
+        )
+
+    def test_explicit_configured_path_trims_outer_whitespace(self):
+        resolved = validator.load_configured_path(
+            "  {project-root}/_bmad/memory/knx/runtime/trimmed-report-dir  ",
+            "ksev_report_dir",
+            validator.DEFAULT_REPORT_DIR,
+        )
+
+        self.assertEqual(
+            resolved,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/trimmed-report-dir").resolve(),
+        )
+
+    def test_explicit_configured_path_must_not_be_empty(self):
+        with self.assertRaisesRegex(ValueError, "Explicit ksev_report_dir path must not be empty"):
+            validator.load_configured_path(
+                "",
+                "ksev_report_dir",
+                validator.DEFAULT_REPORT_DIR,
+            )
+
+    def test_explicit_relative_configured_path_is_project_root_relative(self):
+        resolved = validator.load_configured_path(
+            "_bmad/memory/knx/runtime/explicit-relative-report-dir",
+            "ksev_report_dir",
+            validator.DEFAULT_REPORT_DIR,
+        )
+
+        self.assertEqual(
+            resolved,
+            (validator.PROJECT_ROOT / "_bmad/memory/knx/runtime/explicit-relative-report-dir").resolve(),
+        )
+
+    def test_explicit_fixture_pack_path_must_stay_under_synthetic_root(self):
+        outside_path = Path(tempfile.gettempdir()) / "outside-fixture-pack.json"
+
+        with self.assertRaisesRegex(ValueError, "Fixture pack path must stay under"):
+            validator.load_configured_fixture_pack_path(str(outside_path))
+
+    def test_explicit_report_dir_must_stay_under_approved_storage_root(self):
+        outside_path = Path(tempfile.gettempdir()) / "outside-report-dir"
+
+        with self.assertRaisesRegex(ValueError, "Report directory must stay under approved storage root"):
+            validator.load_configured_report_dir(
+                str(outside_path),
+                validator.load_approved_storage_root(),
+            )
+
+    def test_source_packet_examples_path_must_stay_under_approved_storage_root(self):
+        outside_path = Path(tempfile.gettempdir()) / "outside-source-packet-examples.json"
+
+        with self.assertRaisesRegex(ValueError, "Source packet examples path must stay under approved storage root"):
+            validator.load_source_packet_examples_path(
+                str(outside_path),
+                validator.load_approved_storage_root(),
+            )
+
+    def test_source_packet_examples_path_rejects_existing_directory(self):
+        source_packet_dir = SOURCE_PACKET_EXAMPLES.parent / "source-packet-examples-dir"
+        source_packet_dir.mkdir(exist_ok=True)
+        try:
+            with self.assertRaisesRegex(ValueError, "must point to a file, not a directory"):
+                validator.load_source_packet_examples_path(
+                    str(source_packet_dir),
+                    validator.load_approved_storage_root(),
+                )
+        finally:
+            source_packet_dir.rmdir()
+
+    def test_parse_args_rejects_multiple_validation_targets(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(validator.CliUsageError, "not allowed with argument"):
+                validator.parse_args(
+                    [
+                        "--fixture-pack",
+                        str(FIXTURE_PACK),
+                        "--source-packet-examples",
+                        str(SOURCE_PACKET_EXAMPLES),
+                    ]
+                )
+
+    def test_cli_multiple_validation_targets_returns_json_fail(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--fixture-pack",
+                str(FIXTURE_PACK),
+                "--source-packet-examples",
+                str(SOURCE_PACKET_EXAMPLES),
+                "--no-write",
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("not allowed with argument", payload["error"])
+
+    def test_cli_unknown_argument_returns_json_fail(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--unknown-flag",
+                "--no-write",
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("unrecognized arguments", payload["error"])
+
+    def test_cli_empty_storage_root_returns_json_fail(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--storage-root",
+                "",
+                "--no-write",
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("Explicit storage root must not be empty", payload["error"])
+
+    def test_cli_empty_fixture_pack_returns_json_fail(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--fixture-pack",
+                "",
+                "--no-write",
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("Explicit ksev_fixture_pack path must not be empty", payload["error"])
+
+    def test_cli_empty_source_packet_examples_returns_json_fail(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--source-packet-examples",
+                "",
+                "--no-write",
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("Explicit source packet examples path must not be empty", payload["error"])
+
+    def test_cli_existing_directory_source_packet_examples_returns_json_fail(self):
+        source_packet_dir = SOURCE_PACKET_EXAMPLES.parent / "source-packet-examples-dir"
+        source_packet_dir.mkdir(exist_ok=True)
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--source-packet-examples",
+                    str(source_packet_dir),
+                    "--no-write",
+                ],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            source_packet_dir.rmdir()
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("must point to a file, not a directory", payload["error"])
+
+    def test_cli_empty_output_dir_returns_json_fail(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--output-dir",
+                "",
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("Explicit ksev_report_dir path must not be empty", payload["error"])
+
+    def test_cli_defaults_work_from_other_cwd(self):
+        with tempfile.TemporaryDirectory() as other_cwd:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--no-write",
+                ],
+                cwd=other_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PASS")
+
+    def test_cli_relative_fixture_pack_path_works_from_other_cwd(self):
+        with tempfile.TemporaryDirectory() as other_cwd:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--fixture-pack",
+                    "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+                    "--no-write",
+                ],
+                cwd=other_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PASS")
+
+    def test_cli_relative_source_packet_examples_path_works_from_other_cwd(self):
+        with tempfile.TemporaryDirectory() as other_cwd:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--source-packet-examples",
+                    "_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json",
+                    "--no-write",
+                ],
+                cwd=other_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PASS")
+
+    def test_cli_relative_storage_root_works_from_other_cwd(self):
+        with tempfile.TemporaryDirectory() as other_cwd:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--storage-root",
+                    "_bmad/memory/knx/runtime",
+                    "--no-write",
+                ],
+                cwd=other_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PASS")
+
+    def test_cli_relative_output_dir_works_from_other_cwd(self):
+        relative_output_dir = "_bmad/memory/knx/runtime/test-cli-relative-output-dir"
+        output_dir = PROJECT_ROOT / relative_output_dir
+        shutil.rmtree(output_dir, ignore_errors=True)
+        try:
+            with tempfile.TemporaryDirectory() as other_cwd:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPT_PATH),
+                        "--fixture-pack",
+                        "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+                        "--output-dir",
+                        relative_output_dir,
+                    ],
+                    cwd=other_cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+            self.assertEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "PASS")
+            self.assertTrue((output_dir / "source-evidence-validation.json").exists())
+            self.assertTrue((output_dir / "source-evidence-validation.md").exists())
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+    def test_cli_report_write_oserror_returns_json_fail(self):
+        runtime_root = PROJECT_ROOT / "_bmad/memory/knx/runtime"
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=runtime_root, delete=False) as temp_file:
+            output_path = Path(temp_file.name)
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--fixture-pack",
+                    str(FIXTURE_PACK),
+                    "--output-dir",
+                    str(output_path),
+                ],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            output_path.unlink(missing_ok=True)
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertTrue(payload["error"])
+
+    def test_cli_existing_file_output_dir_returns_json_fail(self):
+        runtime_root = PROJECT_ROOT / "_bmad/memory/knx/runtime"
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=runtime_root, delete=False) as temp_file:
+            output_path = Path(temp_file.name)
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--fixture-pack",
+                    str(FIXTURE_PACK),
+                    "--output-dir",
+                    str(output_path),
+                ],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            output_path.unlink(missing_ok=True)
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("must point to a directory, not a file", payload["error"])
+
+    def test_cli_unreadable_default_config_returns_json_fail(self):
+        config_path = PROJECT_ROOT / "_bmad/config.user.yaml"
+        backup_path = PROJECT_ROOT / "_bmad/config.user.yaml.bak.test"
+        had_original = config_path.exists()
+        if had_original:
+            if backup_path.exists():
+                backup_path.unlink()
+            config_path.replace(backup_path)
+        config_path.mkdir()
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--no-write",
+                ],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            config_path.rmdir()
+            if had_original:
+                backup_path.replace(config_path)
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("Cannot read config file", payload["error"])
+
+    def test_cli_invalid_utf8_default_config_returns_json_fail(self):
+        config_path = PROJECT_ROOT / "_bmad/config.user.yaml"
+        backup_path = PROJECT_ROOT / "_bmad/config.user.yaml.bak.test"
+        had_original = config_path.exists()
+        if had_original:
+            if backup_path.exists():
+                backup_path.unlink()
+            config_path.replace(backup_path)
+        config_path.write_bytes(b"\xff\xfe\x00\x00")
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--no-write",
+                ],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            config_path.unlink(missing_ok=True)
+            if had_original:
+                backup_path.replace(config_path)
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "FAIL")
+        self.assertIn("Cannot read config file", payload["error"])
+
+    def test_cli_blank_default_config_value_falls_back_to_default(self):
+        config_path = PROJECT_ROOT / "_bmad/config.user.yaml"
+        backup_path = PROJECT_ROOT / "_bmad/config.user.yaml.bak.test"
+        had_original = config_path.exists()
+        if had_original:
+            if backup_path.exists():
+                backup_path.unlink()
+            config_path.replace(backup_path)
+        config_path.write_text("knx_storage_root: ''\n", encoding="utf-8")
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--no-write",
+                ],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            config_path.unlink(missing_ok=True)
+            if had_original:
+                backup_path.replace(config_path)
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PASS")
+
+    def test_cli_source_packet_examples_ignores_invalid_fixture_pack_config(self):
+        result = self._run_cli_with_temp_user_config(
+            "ksev_fixture_pack: 'C:/Users/slaw_dawg/AppData/Local/Temp/outside-fixture-pack.json'\n",
+            ["--source-packet-examples", str(SOURCE_PACKET_EXAMPLES), "--no-write"],
+        )
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PASS")
+
+    def test_cli_no_write_ignores_invalid_report_dir_config(self):
+        result = self._run_cli_with_temp_user_config(
+            "ksev_report_dir: 'C:/Users/slaw_dawg/AppData/Local/Temp/outside-report-dir'\n",
+            ["--fixture-pack", str(FIXTURE_PACK), "--no-write"],
+        )
+
+        self.assertEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "PASS")
+
     def test_current_fixture_pack_passes(self):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
 
@@ -35,6 +1413,32 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["summary"]["errors"], 0)
         self.assertEqual(result["summary"]["warnings"], 0)
         self.assertEqual(result["findings"], [])
+
+    def test_validate_fixture_pack_accepts_project_root_token_path(self):
+        result = validator.validate_fixture_pack(
+            Path("{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json")
+        )
+
+        self.assertEqual(result["status"], "PASS")
+
+    def test_validate_fixture_pack_rejects_empty_path_string(self):
+        with self.assertRaisesRegex(ValueError, "Path input must not be empty"):
+            validator.validate_fixture_pack("")
+
+    def test_validate_fixture_pack_accepts_tokenized_approved_storage_root(self):
+        result = validator.validate_fixture_pack(
+            FIXTURE_PACK,
+            Path("{project-root}/_bmad/memory/knx/runtime"),
+        )
+
+        self.assertEqual(result["status"], "PASS")
+
+    def test_validate_fixture_pack_rejects_invalid_explicit_approved_storage_root(self):
+        with self.assertRaisesRegex(ValueError, "Approved storage root from approved_storage_root must stay under"):
+            validator.validate_fixture_pack(
+                FIXTURE_PACK,
+                Path(tempfile.gettempdir()) / "outside-approved-storage-root",
+            )
 
     def test_required_negative_fixture_types_are_present(self):
         result = validator.validate_fixture_pack(FIXTURE_PACK)
@@ -437,10 +1841,11 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertTrue(str(root).endswith(str(Path("_bmad/memory/knx/runtime"))))
 
     def test_storage_root_can_be_overridden(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = validator.load_approved_storage_root(temp_dir)
+        with tempfile.TemporaryDirectory(dir=validator.DEFAULT_APPROVED_STORAGE_ROOT) as temp_dir:
+            nested_root = Path(temp_dir) / "approved-root"
+            root = validator.load_approved_storage_root(str(nested_root))
 
-        self.assertEqual(root, Path(temp_dir).resolve())
+        self.assertEqual(root, nested_root.resolve())
 
     def test_fixture_pack_must_stay_under_synthetic_fixture_root(self):
         pack = self._load_pack()
@@ -463,6 +1868,16 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("json-parse-failed", {finding["code"] for finding in result["findings"]})
 
+    def test_invalid_utf8_fixture_pack_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            malformed = Path(temp_dir) / "bad.json"
+            malformed.write_bytes(b"\xff\xfe\x00\x00")
+
+            result = validator.validate_fixture_pack(malformed)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("input-unreadable", {finding["code"] for finding in result["findings"]})
+
     def test_missing_inputs_fail_cleanly(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             missing = Path(temp_dir) / "missing.json"
@@ -474,6 +1889,18 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(source_packet_result["status"], "FAIL")
         self.assertIn("input-unreadable", {finding["code"] for finding in fixture_result["findings"]})
         self.assertIn("input-unreadable", {finding["code"] for finding in source_packet_result["findings"]})
+
+    def test_invalid_utf8_source_packet_examples_fail_cleanly(self):
+        report_root = validator.load_approved_storage_root() / "source-packets"
+        report_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=report_root) as temp_dir:
+            malformed = Path(temp_dir) / "bad.json"
+            malformed.write_bytes(b"\xff\xfe\x00\x00")
+
+            result = validator.validate_source_packet_examples(malformed)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn("input-unreadable", {finding["code"] for finding in result["findings"]})
 
     def test_top_level_json_must_be_object(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1289,6 +2716,46 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         self.assertEqual(result["summary"]["errors"], 0)
         self.assertEqual(result["findings"], [])
 
+    def test_validate_source_packet_examples_accepts_project_root_token_path(self):
+        result = validator.validate_source_packet_examples(
+            Path("{project-root}/_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json")
+        )
+
+        self.assertEqual(result["status"], "PASS")
+
+    def test_validate_source_packet_examples_rejects_empty_path_string(self):
+        with self.assertRaisesRegex(ValueError, "Path input must not be empty"):
+            validator.validate_source_packet_examples("")
+
+    def test_validate_source_packet_examples_accepts_tokenized_approved_storage_root(self):
+        result = validator.validate_source_packet_examples(
+            SOURCE_PACKET_EXAMPLES,
+            Path("{project-root}/_bmad/memory/knx/runtime"),
+        )
+
+        self.assertEqual(result["status"], "PASS")
+
+    def test_validate_source_packet_examples_rejects_invalid_explicit_approved_storage_root(self):
+        with self.assertRaisesRegex(ValueError, "Approved storage root from approved_storage_root must stay under"):
+            validator.validate_source_packet_examples(
+                SOURCE_PACKET_EXAMPLES,
+                Path(tempfile.gettempdir()) / "outside-approved-storage-root",
+            )
+
+    def test_source_packet_examples_must_stay_under_approved_storage_root(self):
+        examples = self._load_source_packet_examples()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "source-packet-examples.json"
+            path.write_text(json.dumps(examples), encoding="utf-8")
+
+            result = validator.validate_source_packet_examples(path)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn(
+            "source-packet-examples-outside-approved-root",
+            {finding["code"] for finding in result["findings"]},
+        )
+
     def test_source_packet_examples_reject_unapproved_class(self):
         examples = self._load_source_packet_examples()
         examples["packets"][0]["source_class"] = "customer-project-data"
@@ -1473,6 +2940,36 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
             self.assertEqual(json_path.name, "source-evidence-validation.json")
             self.assertEqual(md_path.name, "source-evidence-validation.md")
 
+    def test_write_reports_accepts_project_root_token_output_dir(self):
+        result = validator.validate_source_packet_examples(SOURCE_PACKET_EXAMPLES)
+        output_dir = Path("{project-root}/_bmad/memory/knx/runtime/source-packets/tokenized-report-dir")
+        json_path, md_path = validator.write_reports(
+            result,
+            output_dir,
+            Path("{project-root}/_bmad/memory/knx/runtime"),
+        )
+
+        self.assertEqual(json_path.parent, (PROJECT_ROOT / "_bmad/memory/knx/runtime/source-packets/tokenized-report-dir").resolve())
+        self.assertEqual(md_path.parent, json_path.parent)
+
+    def test_write_reports_rejects_empty_output_dir_string(self):
+        result = validator.validate_source_packet_examples(SOURCE_PACKET_EXAMPLES)
+        with self.assertRaisesRegex(ValueError, "Path input must not be empty"):
+            validator.write_reports(
+                result,
+                "",
+                validator.load_approved_storage_root(),
+            )
+
+    def test_write_reports_rejects_unapproved_storage_root_override(self):
+        result = validator.validate_source_packet_examples(SOURCE_PACKET_EXAMPLES)
+        with tempfile.TemporaryDirectory(dir=validator.DEFAULT_APPROVED_STORAGE_ROOT) as temp_dir:
+            output_dir = Path(temp_dir)
+            bad_root = Path(tempfile.gettempdir()) / "knx-storage-root-outside-runtime"
+
+            with self.assertRaisesRegex(ValueError, "Approved storage root from approved_storage_root must stay under"):
+                validator.write_reports(result, output_dir, bad_root)
+
     def _load_pack(self):
         return json.loads(FIXTURE_PACK.read_text(encoding="utf-8"))
 
@@ -1492,10 +2989,30 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         return json.loads(SOURCE_PACKET_EXAMPLES.read_text(encoding="utf-8"))
 
     def _validate_temp_source_packet_examples(self, examples):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        report_root = validator.load_approved_storage_root() / "source-packets"
+        report_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=report_root) as temp_dir:
             path = Path(temp_dir) / "source-packet-examples.json"
             path.write_text(json.dumps(examples), encoding="utf-8")
             return validator.validate_source_packet_examples(path)
+
+    def _run_cli_with_temp_user_config(self, config_text, args):
+        config_path = PROJECT_ROOT / "_bmad/config.user.yaml"
+        original = config_path.read_text(encoding="utf-8") if config_path.exists() else None
+        config_path.write_text(config_text, encoding="utf-8")
+        try:
+            return subprocess.run(
+                [sys.executable, str(SCRIPT_PATH), *args],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            if original is None:
+                config_path.unlink(missing_ok=True)
+            else:
+                config_path.write_text(original, encoding="utf-8")
 
 
 if __name__ == "__main__":
