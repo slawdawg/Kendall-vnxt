@@ -1,0 +1,12 @@
+{
+  "name": "@kendall/workflow-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@kendall/contracts": "file:../contracts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

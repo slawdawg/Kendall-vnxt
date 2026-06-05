@@ -1,0 +1,72 @@
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from supervisor.domain.types import AuditMode, BmadLane, ErrorCategory, RiskLevel, RunMode, WorkflowState
+
+
+class WorkItemCreate(BaseModel):
+    title: str
+    requestedOutcome: str
+    source: str
+    details: str | None = None
+    riskLevel: RiskLevel = RiskLevel.LOW
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkItemView(BaseModel):
+    id: str
+    title: str
+    requestedOutcome: str
+    source: str
+    details: str | None
+    riskLevel: RiskLevel
+    metadata: dict[str, Any]
+    state: WorkflowState
+    lane: BmadLane | None
+    statusSummary: str
+    blockedReason: str | None
+    nextStep: str | None
+    createdAt: datetime
+    updatedAt: datetime
+    lastEventAt: datetime
+    requiresAudit: bool
+    auditMode: AuditMode
+
+
+class RunStatusView(BaseModel):
+    mode: RunMode
+    pollIntervalSeconds: int
+    queueCount: int
+    activeCount: int
+    blockedCount: int
+    doneCount: int
+    summary: str
+
+
+class ApiErrorShape(BaseModel):
+    code: str
+    message: str
+    category: ErrorCategory
+    retryable: bool
+    correlationId: str
+    details: dict[str, Any] | None = None
+
+
+class ApiEnvelope(BaseModel):
+    data: Any
+    meta: dict[str, Any] | None = None
+
+
+class ApiErrorEnvelope(BaseModel):
+    error: ApiErrorShape
+
+
+class AuditEventView(BaseModel):
+    id: str
+    workItemId: str
+    reason: str
+    mode: AuditMode
+    outcome: str
+    createdAt: datetime

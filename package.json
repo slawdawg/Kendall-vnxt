@@ -1,0 +1,17 @@
+{
+  "name": "kendall-nxt",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:dashboard": "npm --workspace apps/dashboard run dev",
+    "dev:supervisor": "uv run --directory services/supervisor uvicorn supervisor.api.main:app --reload",
+    "build:dashboard": "npm --workspace apps/dashboard run build",
+    "lint:dashboard": "npm --workspace apps/dashboard run lint",
+    "test:supervisor": "uv run --directory services/supervisor pytest",
+    "check": "npm run build:dashboard && npm run test:supervisor"
+  }
+}
