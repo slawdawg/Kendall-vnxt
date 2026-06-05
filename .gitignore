@@ -32,6 +32,7 @@ coverage/
 *.log
 *.tmp
 *.temp
+runtime/.batch_timer_state.json
 
 # OS/editor noise
 .DS_Store

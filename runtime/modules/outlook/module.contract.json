@@ -1,0 +1,131 @@
+{
+  "identity": {
+    "module_id": "outlook",
+    "display_name": "Outlook",
+    "version": "0.1.0",
+    "publisher": "Kendall_Nxt",
+    "description": "Local-first email triage, draft assistance, and follow-up awareness.",
+    "release_channel": "dev"
+  },
+  "capability": {
+    "purpose": "Provide advisory email triage and drafting support without autonomous external sending.",
+    "installed_capability_label": "Outlook",
+    "internal_agents": [
+      "inbox-triage-agent",
+      "draft-support-agent",
+      "follow-up-detection-agent",
+      "relationship-context-agent"
+    ],
+    "scope_of_agency": "mixed"
+  },
+  "data_access": {
+    "readable_data_classes": [
+      "email-threads",
+      "contact-context",
+      "assistant-preferences",
+      "domain-preferences"
+    ],
+    "writable_data_classes": [
+      "draft-artifacts",
+      "follow-up-candidates"
+    ],
+    "forbidden_data_classes": [
+      "credentials"
+    ]
+  },
+  "actions": {
+    "advisory_outputs": [
+      "priority-triage",
+      "follow-up-recommendation"
+    ],
+    "drafting_outputs": [
+      "email-draft-suggestion"
+    ],
+    "internal_actions": [],
+    "external_actions": [],
+    "forbidden_actions": [
+      "autonomous-email-send"
+    ]
+  },
+  "trust": {
+    "initial_posture": "approval-bound",
+    "supported_autonomy_levels": [
+      "shadow",
+      "advisory",
+      "approval-bound"
+    ],
+    "approval_required_for": [
+      "draft-use"
+    ],
+    "blocked_in_release_1": [
+      "external-send",
+      "external-reply"
+    ]
+  },
+  "memory": {
+    "readable_memory_classes": [
+      "core-preference",
+      "domain-preference",
+      "situational-exception",
+      "trust-history"
+    ],
+    "writable_memory_classes": [
+      "domain-preference",
+      "factual-correction",
+      "trust-history"
+    ],
+    "accepted_correction_types": [
+      "tone-correction",
+      "technical-correction",
+      "context-correction"
+    ],
+    "shared_preference_propagation": true
+  },
+  "privacy": {
+    "local_only_by_default": true,
+    "hosted_eligible_data_classes": [],
+    "forbidden_outbound_contexts": [
+      "raw-customer-identifiers",
+      "unsanitized-email-content"
+    ],
+    "sanitization_required": true
+  },
+  "observability": {
+    "status_events": [
+      "triage-complete",
+      "draft-generated",
+      "follow-up-detected"
+    ],
+    "audit_event_types": [
+      "draft-created",
+      "triage-reviewed"
+    ],
+    "metrics": [
+      "triage-count",
+      "draft-count"
+    ]
+  },
+  "dependencies": {
+    "required_core_capabilities": [
+      "memory",
+      "trust-policy",
+      "briefing",
+      "inference-router",
+      "audit"
+    ],
+    "required_modules": [],
+    "optional_modules": [
+      "tasks"
+    ]
+  },
+  "installation": {
+    "setup_steps": [
+      "configure-outlook-connector"
+    ],
+    "restart_required": false,
+    "migrations": [],
+    "compatible_core_versions": [
+      "0.1.x"
+    ]
+  }
+}
