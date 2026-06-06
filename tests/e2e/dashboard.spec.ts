@@ -34,7 +34,16 @@ async function createWorkItem(request: APIRequestContext, payload: WorkItemCreat
 async function getWorkItem(request: APIRequestContext, workItemId: string) {
   const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
   expect(response.ok()).toBeTruthy();
-  return (await response.json()) as { data: { state: string } };
+  return (await response.json()) as {
+    data: {
+      state: string;
+      assigneeId?: string | null;
+      assigneeLabel?: string | null;
+      escalatedAt?: string | null;
+      escalationReason?: string | null;
+      attentionReason?: string | null;
+    };
+  };
 }
 
 async function waitForState(
@@ -160,6 +169,54 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#workflow-actions$`));
     await expect(page.locator("#workflow-actions")).toBeInViewport();
     await expect(page.getByRole("button", { name: "Approve work" })).toBeVisible();
+  });
+
+  test("lets an operator claim ownership, escalate, and clear escalation from the detail page", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Detail operator controls",
+      requestedOutcome: "Verify assignment and escalation controls persist through the supervisor.",
+      details: "Use the detail page controls to claim the item and mark it for follow-up.",
+    });
+
+    await waitForState(request, workItemId, "implementing");
+    await page.goto(`/work-items/${workItemId}`);
+    const assignmentPanel = page.locator("section").filter({ hasText: "Assignment" }).last();
+    const escalationPanel = page.locator("section").filter({ hasText: "Attention and escalation" }).last();
+
+    await page.getByRole("button", { name: "Claim ownership" }).click();
+    await expect(assignmentPanel.getByText("Assigned to Primary operator.")).toBeVisible();
+    await expect
+      .poll(async () => {
+        const body = await getWorkItem(request, workItemId);
+        return body.data.assigneeId ?? null;
+      })
+      .toBe("operator-1");
+
+    await escalationPanel.getByLabel("Escalation note").fill("Waiting on product confirmation before validation can continue.");
+    await page.getByRole("button", { name: "Escalate item" }).click();
+    await expect(escalationPanel.getByText("Escalation recorded.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Clear escalation" })).toBeVisible();
+    await expect
+      .poll(async () => {
+        const body = await getWorkItem(request, workItemId);
+        return body.data.escalationReason ?? null;
+      })
+      .toBe("Waiting on product confirmation before validation can continue.");
+
+    await page.reload();
+    await expect(page.locator("section").filter({ hasText: "Attention and escalation" }).last().getByText("Escalated by Primary operator.")).toBeVisible();
+    await expect(
+      page.locator("section").filter({ hasText: "Attention and escalation" }).last().getByText("Waiting on product confirmation before validation can continue.").first(),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Clear escalation" }).click();
+    await expect(page.locator("section").filter({ hasText: "Attention and escalation" }).last().getByText("Escalation cleared.")).toBeVisible();
+    await expect
+      .poll(async () => {
+        const body = await getWorkItem(request, workItemId);
+        return body.data.escalatedAt ?? null;
+      })
+      .toBe(null);
   });
 
   test("filters the attention queue down to self-detected supervisor issues", async ({ page, request }) => {
