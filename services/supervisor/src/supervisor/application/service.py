@@ -791,14 +791,46 @@ class SupervisorService:
 
         return False, None
 
+    def _origin_for_item(self, item: WorkItem) -> str:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        generated_by = metadata.get("generatedBy")
+        if isinstance(generated_by, str) and generated_by.strip().lower() == "supervisor":
+            return "supervisor"
+
+        normalized_source = item.source.strip().lower()
+        if normalized_source.startswith("supervisor"):
+            return "supervisor"
+
+        return "operator"
+
+    def _self_detected_issue_category(self, item: WorkItem) -> str | None:
+        if self._origin_for_item(item) != "supervisor":
+            return None
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        issue_category = metadata.get("issueCategory") or metadata.get("issueType")
+        if isinstance(issue_category, str) and issue_category.strip():
+            return issue_category.strip()
+
+        issue_flag = metadata.get("selfDetectedIssue")
+        if issue_flag is True:
+            return "general"
+        if isinstance(issue_flag, str) and issue_flag.strip().lower() == "true":
+            return "general"
+
+        return None
+
     def to_work_item_view(self, item: WorkItem) -> WorkItemView:
         age_minutes = self._age_minutes(item)
         needs_attention, attention_reason = self._derive_attention(item)
+        origin = self._origin_for_item(item)
+        self_detected_issue_category = self._self_detected_issue_category(item)
         return WorkItemView(
             id=item.id,
             title=item.title,
             requestedOutcome=item.requested_outcome,
             source=item.source,
+            origin=origin,
             details=item.details,
             riskLevel=item.risk_level,
             metadata=item.metadata_json,
@@ -815,6 +847,8 @@ class SupervisorService:
             statusSummary=item.status_summary,
             blockedReason=item.blocked_reason,
             nextStep=item.next_step,
+            selfDetectedIssue=self_detected_issue_category is not None,
+            selfDetectedIssueCategory=self_detected_issue_category,
             createdAt=self._normalize_timestamp(item.created_at),
             updatedAt=self._normalize_timestamp(item.updated_at),
             lastEventAt=self._normalize_timestamp(item.last_event_at),

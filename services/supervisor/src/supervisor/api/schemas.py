@@ -36,6 +36,7 @@ class WorkItemView(BaseModel):
     title: str
     requestedOutcome: str
     source: str
+    origin: str
     details: str | None
     riskLevel: RiskLevel
     metadata: dict[str, Any]
@@ -52,6 +53,8 @@ class WorkItemView(BaseModel):
     statusSummary: str
     blockedReason: str | None
     nextStep: str | None
+    selfDetectedIssue: bool = False
+    selfDetectedIssueCategory: str | None = None
     createdAt: datetime
     updatedAt: datetime
     lastEventAt: datetime
@@ -128,6 +131,8 @@ class WorkItemFilterView(BaseModel):
     risk: str = "all"
     audit: str = "all"
     source: str = "all"
+    origin: str = "all"
+    issues: str = "all"
 
 
 class OperatorViewCreate(BaseModel):

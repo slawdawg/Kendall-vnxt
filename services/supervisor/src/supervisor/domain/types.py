@@ -45,6 +45,7 @@ class WorkItemFilterScope(StrEnum):
     QUEUE = "queue"
     ACTIVE_WORK = "active-work"
     AUDIT = "audit"
+    ATTENTION = "attention"
 
 
 class WorkflowAction(StrEnum):

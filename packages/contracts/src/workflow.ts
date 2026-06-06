@@ -35,7 +35,7 @@ export type RunMode = (typeof RUN_MODES)[number];
 export const RISK_LEVELS = ["low", "medium", "high"] as const;
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
-export const WORK_ITEM_FILTER_SCOPES = ["queue", "active-work", "audit"] as const;
+export const WORK_ITEM_FILTER_SCOPES = ["queue", "active-work", "audit", "attention"] as const;
 export type WorkItemFilterScope = (typeof WORK_ITEM_FILTER_SCOPES)[number];
 
 export const AUDIT_FILTER_MODES = ["all", "none", "advisory", "required"] as const;
