@@ -63,6 +63,19 @@ const intakeTemplates = [
     outcomeStarter: "Produce a clear risk decision with enough evidence for operators to act confidently.",
     detailsStarter: "Risk concerns:\nEvidence to review:\nBlocking questions:\nDecision needed:\n",
   },
+  {
+    id: "operator-test-coverage",
+    name: "Expand dashboard coverage",
+    summary: "Use the supervisor-managed recipe for narrow dashboard browser coverage and verification work.",
+    source: "operator-dashboard:improvement",
+    riskLevel: "medium" as RiskLevelValue,
+    executionRecipeId: "dashboard-test-coverage",
+    titlePlaceholder: "Cover the assignment flow with Playwright",
+    outcomePlaceholder: "Describe the dashboard workflow that needs browser coverage or a focused test update.",
+    detailsPlaceholder: "Capture the target flow, expected evidence, and any scope limits for the recipe.",
+    outcomeStarter: "Expand focused dashboard coverage for the named workflow and leave the repo green after browser and shared checks.",
+    detailsStarter: "Target flow:\nExpected evidence:\nScope limits:\n",
+  },
 ] as const;
 
 type IntakeTemplate = (typeof intakeTemplates)[number];
@@ -203,6 +216,7 @@ export function CreateWorkItemForm() {
             metadata: {
               intakeTemplateId: form.templateId,
               intakeTemplateLabel: selectedTemplate.name,
+              executionRecipeId: "executionRecipeId" in selectedTemplate ? selectedTemplate.executionRecipeId : null,
               submittedByActorId: profile.actorId,
               submittedByActorLabel: profile.actorLabel,
             },

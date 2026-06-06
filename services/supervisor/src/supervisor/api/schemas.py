@@ -31,6 +31,16 @@ class WorkItemActionRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkItemExecutionRecipeView(BaseModel):
+    id: str
+    label: str
+    summary: str
+    branchPrefix: str
+    allowedPaths: list[str]
+    verificationCommands: list[str]
+    autonomyNotes: list[str]
+
+
 class WorkItemView(BaseModel):
     id: str
     title: str
@@ -55,6 +65,7 @@ class WorkItemView(BaseModel):
     nextStep: str | None
     selfDetectedIssue: bool = False
     selfDetectedIssueCategory: str | None = None
+    executionRecipe: WorkItemExecutionRecipeView | None = None
     createdAt: datetime
     updatedAt: datetime
     lastEventAt: datetime

@@ -13,11 +13,13 @@ from supervisor.api.schemas import (
     OperatorViewResponse,
     RunStatusView,
     WorkItemCreate,
+    WorkItemExecutionRecipeView,
     WorkItemFilterView,
     WorkflowEventView,
     WorkItemView,
 )
 from supervisor.config.settings import Settings
+from supervisor.domain.recipes import EXECUTION_RECIPES, ExecutionRecipe
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
 from supervisor.domain.types import AuditMode, BmadLane, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.infrastructure.db.models import AuditEvent, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
@@ -79,6 +81,15 @@ class SupervisorService:
             actor_id=submitted_by_id if isinstance(submitted_by_id, str) else None,
             actor_label=submitted_by_label if isinstance(submitted_by_label, str) else None,
         )
+        recipe = self._execution_recipe_for_item(item)
+        if recipe:
+            await self._record_event(
+                session,
+                item,
+                "recipe.selected",
+                f"Supervisor selected the {recipe.label} recipe.",
+                {"recipeId": recipe.id, "branchPrefix": recipe.branch_prefix},
+            )
         await session.commit()
         await session.refresh(item)
         await self._publish_item(item)
@@ -361,6 +372,17 @@ class SupervisorService:
             if not item.requested_outcome.strip():
                 item.blocked_reason = "Requested outcome is missing."
                 await self._transition(session, item, WorkflowState.BLOCKED, "work_item.blocked", default_status_summary(WorkflowState.BLOCKED))
+                return
+            recipe_error = self._validate_execution_recipe(item)
+            if recipe_error:
+                item.blocked_reason = recipe_error
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.BLOCKED,
+                    "recipe.blocked",
+                    default_status_summary(WorkflowState.BLOCKED),
+                )
                 return
             await self._transition(
                 session,
@@ -791,6 +813,37 @@ class SupervisorService:
 
         return False, None
 
+    def _execution_recipe_for_item(self, item: WorkItem) -> ExecutionRecipe | None:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        recipe_id = metadata.get("executionRecipeId")
+        if isinstance(recipe_id, str):
+            return EXECUTION_RECIPES.get(recipe_id)
+        return None
+
+    def _validate_execution_recipe(self, item: WorkItem) -> str | None:
+        recipe = self._execution_recipe_for_item(item)
+        if not recipe:
+            return None
+
+        if recipe.id == "dashboard-test-coverage":
+            if item.risk_level == "high":
+                return "Dashboard test coverage recipe only supports low or medium risk work."
+            if not item.source.startswith("operator-dashboard"):
+                return "Dashboard test coverage recipe requires an operator-dashboard source."
+
+        return None
+
+    def _to_execution_recipe_view(self, recipe: ExecutionRecipe) -> WorkItemExecutionRecipeView:
+        return WorkItemExecutionRecipeView(
+            id=recipe.id,
+            label=recipe.label,
+            summary=recipe.summary,
+            branchPrefix=recipe.branch_prefix,
+            allowedPaths=list(recipe.allowed_paths),
+            verificationCommands=list(recipe.verification_commands),
+            autonomyNotes=list(recipe.autonomy_notes),
+        )
+
     def _origin_for_item(self, item: WorkItem) -> str:
         metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
         generated_by = metadata.get("generatedBy")
@@ -825,6 +878,7 @@ class SupervisorService:
         needs_attention, attention_reason = self._derive_attention(item)
         origin = self._origin_for_item(item)
         self_detected_issue_category = self._self_detected_issue_category(item)
+        recipe = self._execution_recipe_for_item(item)
         return WorkItemView(
             id=item.id,
             title=item.title,
@@ -849,6 +903,7 @@ class SupervisorService:
             nextStep=item.next_step,
             selfDetectedIssue=self_detected_issue_category is not None,
             selfDetectedIssueCategory=self_detected_issue_category,
+            executionRecipe=self._to_execution_recipe_view(recipe) if recipe else None,
             createdAt=self._normalize_timestamp(item.created_at),
             updatedAt=self._normalize_timestamp(item.updated_at),
             lastEventAt=self._normalize_timestamp(item.last_event_at),

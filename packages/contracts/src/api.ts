@@ -17,6 +17,16 @@ export interface WorkItemPayload {
   metadata?: Record<string, string | number | boolean | null>;
 }
 
+export interface WorkItemExecutionRecipeView {
+  id: string;
+  label: string;
+  summary: string;
+  branchPrefix: string;
+  allowedPaths: string[];
+  verificationCommands: string[];
+  autonomyNotes: string[];
+}
+
 export interface WorkItemView extends WorkItemPayload {
   id: string;
   origin: "operator" | "supervisor";
@@ -35,6 +45,7 @@ export interface WorkItemView extends WorkItemPayload {
   nextStep: string | null;
   selfDetectedIssue: boolean;
   selfDetectedIssueCategory?: string | null;
+  executionRecipe?: WorkItemExecutionRecipeView | null;
   createdAt: string;
   updatedAt: string;
   lastEventAt: string;

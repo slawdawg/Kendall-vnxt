@@ -470,6 +470,79 @@ def test_supervisor_generated_self_detected_issue_is_exposed_in_work_item_view(t
         assert item["selfDetectedIssueCategory"] == "workspace-health"
 
 
+def test_execution_recipe_is_exposed_and_selected_event_is_recorded(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-view.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cover the assignment flow",
+                "requestedOutcome": "Add focused browser coverage for assignment updates and keep the repo green.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "medium",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "intakeTemplateId": "operator-test-coverage",
+                },
+            },
+        )
+        assert created.status_code == 200
+
+        item = created.json()["data"]
+        assert item["executionRecipe"]["id"] == "dashboard-test-coverage"
+        assert "pnpm run test:e2e:dashboard" in item["executionRecipe"]["verificationCommands"]
+
+        work_item_id = item["id"]
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        assert events_response.status_code == 200
+        event_types = [event["eventType"] for event in events_response.json()["data"]]
+        assert "recipe.selected" in event_types
+
+
+def test_invalid_high_risk_dashboard_recipe_blocks_during_triage(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-policy.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "High-risk browser coverage recipe",
+                "requestedOutcome": "Attempt to use the constrained dashboard recipe outside its allowed risk posture.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "high",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(2):
+            asyncio.run(process_once_for_tests())
+
+        item_response = client.get(f"/work-items/{work_item_id}")
+        assert item_response.status_code == 200
+        item = item_response.json()["data"]
+        assert item["state"] == "blocked"
+        assert item["blockedReason"] == "Dashboard test coverage recipe only supports low or medium risk work."
+
+
 def test_work_item_creation_records_operator_identity_from_metadata(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "submitted-by.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

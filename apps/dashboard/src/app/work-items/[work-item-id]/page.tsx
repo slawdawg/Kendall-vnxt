@@ -1,6 +1,7 @@
 import { AssignmentPanel } from "../../../components/assignment-panel";
 import { AttentionBadge } from "../../../components/attention-badge";
 import { EscalationPanel } from "../../../components/escalation-panel";
+import { ExecutionRecipePanel } from "../../../components/execution-recipe-panel";
 import { Shell } from "../../../components/shell";
 import { WorkItemActions } from "../../../components/work-item-actions";
 import { WorkItemHistory } from "../../../components/work-item-history";
@@ -117,6 +118,7 @@ export default async function WorkItemDetailPage({
               <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-[var(--muted)]">{item.details}</p>
             </section>
           ) : null}
+          {item.executionRecipe ? <ExecutionRecipePanel recipe={item.executionRecipe} /> : null}
           <WorkItemRetryHistory events={events} />
           <div id="workflow-history" className="scroll-mt-28">
             <WorkItemHistory events={events} />
