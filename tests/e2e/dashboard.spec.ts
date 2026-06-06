@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 const supervisorUrl = process.env.PLAYWRIGHT_SUPERVISOR_URL ?? "http://127.0.0.1:8100";
 
@@ -347,52 +349,67 @@ test.describe("dashboard workflow coverage", () => {
   test("halts the managed recipe when implementation escapes the allowed path boundary", async ({ page, request }) => {
     const currentBranch = gitOutput(["branch", "--show-current"]);
     const currentBaseRevision = gitOutput(["rev-parse", "--verify", "main"]);
+    const tempOutOfScopePath = path.join(process.cwd(), "temp", "dashboard-out-of-scope.md");
+    await fs.mkdir(path.dirname(tempOutOfScopePath), { recursive: true });
+    await fs.writeFile(tempOutOfScopePath, "# temporary out-of-scope change\n");
 
-    const workItemId = await createWorkItem(request, {
-      title: "Managed recipe path scope",
-      requestedOutcome: "Verify the dashboard can surface the supervisor's path-scope stop during implementation.",
-      source: "operator-dashboard:improvement",
-      riskLevel: "medium",
-      metadata: {
-        executionRecipeId: "dashboard-test-coverage",
-        intakeTemplateId: "operator-test-coverage",
-        executionBranch: currentBranch,
-        baseBranch: "main",
-        baseRevision: currentBaseRevision,
-      },
-    });
+    try {
+      const workItemId = await createWorkItem(request, {
+        title: "Managed recipe path scope",
+        requestedOutcome: "Verify the dashboard can surface the supervisor's path-scope stop during implementation.",
+        source: "operator-dashboard:improvement",
+        riskLevel: "medium",
+        metadata: {
+          executionRecipeId: "dashboard-test-coverage",
+          intakeTemplateId: "operator-test-coverage",
+          executionBranch: currentBranch,
+          baseBranch: "main",
+          baseRevision: currentBaseRevision,
+        },
+      });
 
-    await page.goto(`/work-items/${workItemId}`);
+      await page.goto(`/work-items/${workItemId}`);
 
-    const gateAudit = page.locator("#recipe-gate-audit");
+      const gateAudit = page.locator("#recipe-gate-audit");
 
-    await expect(gateAudit.getByText("Let supervisor finish recipe triage")).toBeVisible();
-    await gateAudit.getByRole("button", { name: "Run approved action" }).click();
-    await expect
-      .poll(async () => {
-        const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
-        expect(response.ok()).toBeTruthy();
-        const body = (await response.json()) as { data: { state: string } };
-        return body.data.state;
-      })
-      .toBe("ready");
-    await page.reload();
+      const triageResponse = await request.post(`${supervisorUrl}/work-items/${workItemId}/managed-next-action`, {
+        data: {
+          expectedActionId: "supervisor_triage",
+          note: "Let the supervisor finish intake triage.",
+          actorId: "playwright",
+          actorLabel: "Playwright",
+        },
+      });
+      expect(triageResponse.ok()).toBeTruthy();
+      await expect
+        .poll(async () => {
+          const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
+          expect(response.ok()).toBeTruthy();
+          const body = (await response.json()) as { data: { state: string } };
+          return body.data.state;
+        })
+        .toBe("ready");
+      await page.reload();
 
-    const branchPanel = page.locator("section").filter({ hasText: "Prepare execution branch" }).first();
-    await expect(branchPanel).toBeVisible();
-    await branchPanel.getByRole("button", { name: "Prepare branch" }).click();
-    await expect
-      .poll(async () => {
-        const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
-        expect(response.ok()).toBeTruthy();
-        const body = (await response.json()) as { data: { state: string } };
-        return body.data.state;
-      })
-      .toBe("needs_rework");
-    await page.reload();
+      const branchPanel = page.locator("section").filter({ hasText: "Prepare execution branch" }).first();
+      await expect(branchPanel).toBeVisible();
+      await branchPanel.getByRole("button", { name: "Prepare branch" }).click();
+      await expect
+        .poll(async () => {
+          const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
+          expect(response.ok()).toBeTruthy();
+          const body = (await response.json()) as { data: { state: string } };
+          return body.data.state;
+        })
+        .toBe("needs_rework");
+      await page.reload();
 
-    await expect(page.getByText("Needs Rework", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Recipe changed files are outside allowedPaths.").first()).toBeVisible();
-    await expect(gateAudit.getByText("Resolve blocked policy gate")).toBeVisible();
+      await expect(page.getByText("Needs Rework", { exact: true }).first()).toBeVisible();
+      await expect(page.getByText("Recipe changed files are outside allowedPaths.").first()).toBeVisible();
+      await expect(gateAudit.getByText("Resolve blocked policy gate")).toBeVisible();
+    } finally {
+      await fs.rm(tempOutOfScopePath, { force: true });
+      await fs.rm(path.dirname(tempOutOfScopePath), { recursive: true, force: true }).catch(() => undefined);
+    }
   });
 });
