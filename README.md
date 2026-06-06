@@ -37,6 +37,10 @@ Important environment variables:
 - `pnpm run preflight` checks that shared JS deps and the supervisor virtualenv are ready
 - `pnpm run doctor` is an alias for `preflight`
 
+## Planning
+
+- Current implementation checkpoint: [docs/implementation-checkpoint-2026-06-06.md](docs/implementation-checkpoint-2026-06-06.md)
+
 ## Why pnpm
 
 This repo uses a `pnpm` workspace so JS dependencies come from a shared global store instead of being re-downloaded per worktree. Fresh worktrees still need `pnpm run setup`, but the JS install is mostly local linking and reuse rather than a full reinstall.
