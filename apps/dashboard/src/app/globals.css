@@ -29,6 +29,11 @@ body {
   font-family: var(--font-display), sans-serif;
 }
 
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 1rem;
+}
+
 ::selection {
   background: color-mix(in srgb, var(--accent) 32%, transparent);
 }

@@ -1,10 +1,22 @@
-.PHONY: dev-dashboard dev-supervisor check
+.PHONY: setup preflight doctor dev-dashboard dev-supervisor lint-dashboard check
+
+setup:
+	pnpm run setup
+
+preflight:
+	pnpm run preflight
+
+doctor:
+	pnpm run doctor
 
 dev-dashboard:
-	npm --workspace apps/dashboard run dev
+	pnpm run dev:dashboard
 
 dev-supervisor:
-	uv run --directory services/supervisor uvicorn supervisor.api.main:app --reload
+	pnpm run dev:supervisor
+
+lint-dashboard:
+	pnpm run lint:dashboard
 
 check:
-	npm run check
+	pnpm run check
