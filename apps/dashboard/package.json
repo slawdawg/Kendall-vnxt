@@ -9,8 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@kendall/contracts": "file:../../packages/contracts",
-    "@kendall/workflow-core": "file:../../packages/workflow-core",
+    "@kendall/contracts": "workspace:*",
+    "@kendall/workflow-core": "workspace:*",
     "next": "16.2.7",
     "react": "19.2.4",
     "react-dom": "19.2.4"

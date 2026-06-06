@@ -9,11 +9,13 @@ Codex-first BMAD supervisor prototype with:
 
 ## Local run
 
-1. `npm install`
-2. `uv sync --directory services/supervisor`
-3. Copy `.env.example` to `.env` if you want to override defaults.
-4. `npm run dev:supervisor`
-5. `npm run dev:dashboard`
+1. Use Node `22.x` by default (`.node-version` is included for toolchains that honor it).
+2. One-time on a fresh machine: `corepack enable`
+3. `pnpm run setup`
+4. `pnpm run preflight`
+5. Copy `.env.example` to `.env` if you want to override defaults.
+6. `pnpm run dev:supervisor`
+7. `pnpm run dev:dashboard`
 
 Default local URLs:
 
@@ -29,8 +31,21 @@ Important environment variables:
 
 ## Verification
 
-- `npm run check` builds the dashboard and runs supervisor integration tests
-- `npm run lint:dashboard` runs the dashboard lint pass
+- `pnpm run check` builds the dashboard and runs supervisor integration tests
+- `pnpm run lint:dashboard` runs the dashboard lint pass
+- `pnpm run preflight` checks that shared JS deps and the supervisor virtualenv are ready
+- `pnpm run doctor` is an alias for `preflight`
+
+## Why pnpm
+
+This repo uses a `pnpm` workspace so JS dependencies come from a shared global store instead of being re-downloaded per worktree. Fresh worktrees still need `pnpm run setup`, but the JS install is mostly local linking and reuse rather than a full reinstall.
+
+## Setup Commands
+
+- `pnpm run setup` installs workspace dependencies and syncs the supervisor virtualenv
+- `pnpm run setup:js` installs the JS workspace only
+- `pnpm run setup:py` syncs the supervisor virtualenv only
+- `pnpm run doctor` confirms the local Node/dependency/runtime setup is usable
 
 ## Container stack
 
