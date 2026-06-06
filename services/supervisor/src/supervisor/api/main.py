@@ -15,8 +15,11 @@ from supervisor.api.schemas import (
     OperatorViewDefaultRequest,
     WorkItemActionRequest,
     WorkItemAssignmentRequest,
+    WorkItemBranchPreparationRequest,
     WorkItemCreate,
+    WorkItemDeliveryReadinessRequest,
     WorkItemEscalationRequest,
+    WorkItemManagedActionRequest,
 )
 from supervisor.application.service import SupervisorService
 from supervisor.config.settings import get_settings
@@ -82,6 +85,11 @@ async def list_work_items(session: AsyncSession = Depends(get_session)):
     return ApiEnvelope(data=[service.to_work_item_view(item) for item in items])
 
 
+@app.get("/execution-recipes", response_model=ApiEnvelope)
+async def list_execution_recipes():
+    return ApiEnvelope(data=service.list_execution_recipes())
+
+
 @app.get("/work-items/{work_item_id}", response_model=ApiEnvelope)
 async def get_work_item(work_item_id: str, session: AsyncSession = Depends(get_session)):
     items = await service.list_work_items(session)
@@ -98,6 +106,32 @@ async def get_work_item_events(work_item_id: str, session: AsyncSession = Depend
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     events = await service.list_work_item_events(session, work_item_id)
     return ApiEnvelope(data=[service.to_event_view(event) for event in events])
+
+
+@app.get("/work-items/{work_item_id}/recipe-gate-audit", response_model=ApiEnvelope)
+async def get_work_item_recipe_gate_audit(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    audit = await service.get_recipe_gate_audit(session, work_item_id)
+    if not audit:
+        raise HTTPException(status_code=404, detail=error_response("Recipe gate audit not found.", "recipe_gate_audit_not_found").model_dump())
+    return ApiEnvelope(data=audit)
+
+
+@app.post("/work-items/{work_item_id}/prepare-branch", response_model=ApiEnvelope)
+async def prepare_work_item_branch(
+    work_item_id: str,
+    payload: WorkItemBranchPreparationRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        item = await service.prepare_recipe_branch(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "invalid_branch_preparation").model_dump(),
+        ) from exc
+    if not item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=service.to_work_item_view(item))
 
 
 @app.post("/work-items/{work_item_id}/retry", response_model=ApiEnvelope)
@@ -127,6 +161,42 @@ async def apply_work_item_action(
         raise HTTPException(
             status_code=409,
             detail=error_response(str(exc), "invalid_workflow_action").model_dump(),
+        ) from exc
+    if not item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.post("/work-items/{work_item_id}/managed-next-action", response_model=ApiEnvelope)
+async def execute_managed_next_action(
+    work_item_id: str,
+    payload: WorkItemManagedActionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        item = await service.execute_managed_next_action(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "invalid_managed_next_action").model_dump(),
+        ) from exc
+    if not item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.post("/work-items/{work_item_id}/delivery-readiness", response_model=ApiEnvelope)
+async def record_delivery_readiness(
+    work_item_id: str,
+    payload: WorkItemDeliveryReadinessRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        item = await service.record_delivery_readiness(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "invalid_delivery_readiness").model_dump(),
         ) from exc
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())

@@ -17,14 +17,79 @@ export interface WorkItemPayload {
   metadata?: Record<string, string | number | boolean | null>;
 }
 
+export interface WorkItemPolicyGateView {
+  id: string;
+  label: string;
+  requiredBefore: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface WorkItemRemoteAutomationPolicyView {
+  status: string;
+  summary: string;
+  allowedOperations: string[];
+  blockedOperations: string[];
+  approvalRequirements: string[];
+}
+
 export interface WorkItemExecutionRecipeView {
   id: string;
   label: string;
   summary: string;
   branchPrefix: string;
   allowedPaths: string[];
+  implementationCommands: string[];
   verificationCommands: string[];
+  policyGates: WorkItemPolicyGateView[];
+  operatorCheckpoints: string[];
   autonomyNotes: string[];
+  remoteAutomationPolicy: WorkItemRemoteAutomationPolicyView;
+}
+
+export interface WorkItemDeliveryReadinessView {
+  pullRequestStatus: string;
+  pullRequestUrl?: string | null;
+  ciStatus: string;
+  mergeStatus: string;
+  deliveryWaived: boolean;
+  deliveryWaiverReason?: string | null;
+  remoteOperationsPerformed: boolean;
+  remoteOperationsPolicy: string;
+  readyForApproval: boolean;
+}
+
+export interface WorkItemRecipeGateAuditEntryView {
+  gateId: string;
+  label: string;
+  requiredBefore: string;
+  status: "pending" | "passed" | "blocked";
+  summary: string;
+  evidence: string[];
+  latestEventType?: string | null;
+  latestEventAt?: string | null;
+  reason?: string | null;
+}
+
+export interface WorkItemManagedActionView {
+  actionId: string;
+  label: string;
+  status: "available" | "blocked" | "waiting" | "complete";
+  reason: string;
+  requiredGate?: string | null;
+  operatorCheckpoint?: string | null;
+  allowedActor: "supervisor" | "operator";
+  remoteOperation: boolean;
+}
+
+export interface WorkItemRecipeGateAuditView {
+  recipeId: string;
+  status: "pending" | "passed" | "blocked";
+  passedCount: number;
+  blockedCount: number;
+  pendingCount: number;
+  gates: WorkItemRecipeGateAuditEntryView[];
+  nextManagedAction: WorkItemManagedActionView;
 }
 
 export interface WorkItemView extends WorkItemPayload {
@@ -46,6 +111,7 @@ export interface WorkItemView extends WorkItemPayload {
   selfDetectedIssue: boolean;
   selfDetectedIssueCategory?: string | null;
   executionRecipe?: WorkItemExecutionRecipeView | null;
+  deliveryReadiness?: WorkItemDeliveryReadinessView | null;
   createdAt: string;
   updatedAt: string;
   lastEventAt: string;
@@ -84,7 +150,7 @@ export interface WorkflowEventView {
   actorLabel?: string | null;
   correlationId: string;
   summary: string;
-  payload: Record<string, string | number | boolean | null | undefined>;
+  payload: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -103,6 +169,31 @@ export interface WorkItemAssignmentPayload {
 export interface WorkItemEscalationPayload {
   reason?: string | null;
   clear?: boolean;
+  actorId?: string | null;
+  actorLabel?: string | null;
+}
+
+export interface WorkItemDeliveryReadinessPayload {
+  pullRequestStatus?: string | null;
+  pullRequestUrl?: string | null;
+  ciStatus?: string | null;
+  mergeStatus?: string | null;
+  deliveryWaived?: boolean;
+  deliveryWaiverReason?: string | null;
+  note?: string | null;
+  actorId?: string | null;
+  actorLabel?: string | null;
+}
+
+export interface WorkItemManagedActionPayload {
+  expectedActionId?: string | null;
+  note?: string | null;
+  actorId?: string | null;
+  actorLabel?: string | null;
+}
+
+export interface WorkItemBranchPreparationPayload {
+  note?: string | null;
   actorId?: string | null;
   actorLabel?: string | null;
 }

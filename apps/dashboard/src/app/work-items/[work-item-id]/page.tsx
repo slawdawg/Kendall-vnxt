@@ -1,13 +1,16 @@
 import { AssignmentPanel } from "../../../components/assignment-panel";
 import { AttentionBadge } from "../../../components/attention-badge";
+import { BranchPreparationPanel } from "../../../components/branch-preparation-panel";
+import { DeliveryReadinessPanel } from "../../../components/delivery-readiness-panel";
 import { EscalationPanel } from "../../../components/escalation-panel";
 import { ExecutionRecipePanel } from "../../../components/execution-recipe-panel";
+import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
 import { Shell } from "../../../components/shell";
 import { WorkItemActions } from "../../../components/work-item-actions";
 import { WorkItemHistory } from "../../../components/work-item-history";
 import { WorkItemRetryHistory } from "../../../components/work-item-retry-history";
 import { buildNavStats } from "../../../lib/nav-stats";
-import { getWorkItem, getWorkItemEvents, getWorkItems } from "../../../lib/supervisor";
+import { getRecipeGateAudit, getWorkItem, getWorkItemEvents, getWorkItems } from "../../../lib/supervisor";
 import { formatLane, formatWorkflowState } from "../../../lib/workflow-display";
 
 export default async function WorkItemDetailPage({
@@ -17,6 +20,8 @@ export default async function WorkItemDetailPage({
 }) {
   const { "work-item-id": workItemId } = await params;
   const [item, events, items] = await Promise.all([getWorkItem(workItemId), getWorkItemEvents(workItemId), getWorkItems()]);
+  const recipeGateAudit = item.executionRecipe ? await getRecipeGateAudit(workItemId) : null;
+  const metadata = item.metadata ?? {};
   const navStats = buildNavStats(items);
   const retryCount = Math.max(0, events.filter((event) => event.eventType === "work_item.implementing").length - 1);
 
@@ -93,6 +98,14 @@ export default async function WorkItemDetailPage({
             >
               Retries
             </a>
+            {recipeGateAudit ? (
+              <a
+                href="#recipe-gate-audit"
+                className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+              >
+                Gates
+              </a>
+            ) : null}
             <a
               href="#workflow-history"
               className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
@@ -119,6 +132,16 @@ export default async function WorkItemDetailPage({
             </section>
           ) : null}
           {item.executionRecipe ? <ExecutionRecipePanel recipe={item.executionRecipe} /> : null}
+          {item.executionRecipe ? (
+            <BranchPreparationPanel
+              workItemId={item.id}
+              executionBranch={typeof metadata.executionBranch === "string" ? metadata.executionBranch : null}
+              baseBranch={typeof metadata.baseBranch === "string" ? metadata.baseBranch : null}
+              baseRevision={typeof metadata.baseRevision === "string" ? metadata.baseRevision : null}
+            />
+          ) : null}
+          {recipeGateAudit ? <RecipeGateAuditPanel audit={recipeGateAudit} workItemId={item.id} /> : null}
+          {item.deliveryReadiness ? <DeliveryReadinessPanel workItemId={item.id} deliveryReadiness={item.deliveryReadiness} /> : null}
           <WorkItemRetryHistory events={events} />
           <div id="workflow-history" className="scroll-mt-28">
             <WorkItemHistory events={events} />

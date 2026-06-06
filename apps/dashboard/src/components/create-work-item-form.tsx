@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import type { WorkItemExecutionRecipeView } from "@kendall/contracts";
 
 import { getSupervisorBaseUrl } from "../lib/supervisor";
 import { useOperatorProfile } from "../lib/operator-profile";
@@ -76,6 +77,19 @@ const intakeTemplates = [
     outcomeStarter: "Expand focused dashboard coverage for the named workflow and leave the repo green after browser and shared checks.",
     detailsStarter: "Target flow:\nExpected evidence:\nScope limits:\n",
   },
+  {
+    id: "operator-mobile-coverage",
+    name: "Harden mobile dashboard",
+    summary: "Use the supervisor-managed recipe for mobile dashboard coverage and verification work.",
+    source: "operator-dashboard:improvement",
+    riskLevel: "medium" as RiskLevelValue,
+    executionRecipeId: "dashboard-mobile-coverage",
+    titlePlaceholder: "Cover mobile intake with Playwright",
+    outcomePlaceholder: "Describe the mobile dashboard workflow that needs browser coverage or a focused test update.",
+    detailsPlaceholder: "Capture the target mobile flow, expected evidence, and any scope limits for the recipe.",
+    outcomeStarter: "Expand focused mobile dashboard coverage for the named workflow and leave the repo green after browser and shared checks.",
+    detailsStarter: "Target mobile flow:\nExpected evidence:\nScope limits:\n",
+  },
 ] as const;
 
 type IntakeTemplate = (typeof intakeTemplates)[number];
@@ -134,7 +148,11 @@ function isDefaultDraft(form: typeof defaultForm): boolean {
   );
 }
 
-export function CreateWorkItemForm() {
+function recipeIdForTemplate(template: IntakeTemplate): string | null {
+  return "executionRecipeId" in template ? template.executionRecipeId : null;
+}
+
+export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: WorkItemExecutionRecipeView[] }) {
   const router = useRouter();
   const { profile } = useOperatorProfile();
   const [pending, startTransition] = useTransition();
@@ -143,6 +161,8 @@ export function CreateWorkItemForm() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const skipInitialPersist = useRef(true);
   const selectedTemplate = intakeTemplates.find((template) => template.id === form.templateId) ?? intakeTemplates[0];
+  const recipeById = new Map(executionRecipes.map((recipe) => [recipe.id, recipe]));
+  const selectedRecipe = recipeById.get(recipeIdForTemplate(selectedTemplate) ?? "");
 
   useEffect(() => {
     // Hydrate the client-only draft after mount so refresh restores work in progress.
@@ -216,7 +236,7 @@ export function CreateWorkItemForm() {
             metadata: {
               intakeTemplateId: form.templateId,
               intakeTemplateLabel: selectedTemplate.name,
-              executionRecipeId: "executionRecipeId" in selectedTemplate ? selectedTemplate.executionRecipeId : null,
+              executionRecipeId: recipeIdForTemplate(selectedTemplate),
               submittedByActorId: profile.actorId,
               submittedByActorLabel: profile.actorLabel,
             },
@@ -295,6 +315,9 @@ export function CreateWorkItemForm() {
             <span className="rounded-full bg-[var(--panel)] px-3 py-1">Template: {selectedTemplate.name}</span>
             <span className="rounded-full bg-[var(--panel)] px-3 py-1">Source: {form.source}</span>
             <span className="rounded-full bg-[var(--panel)] px-3 py-1">Risk: {form.riskLevel}</span>
+            {selectedRecipe ? (
+              <span className="rounded-full bg-[var(--panel)] px-3 py-1">Recipe: {selectedRecipe.label}</span>
+            ) : null}
           </div>
           <button
             type="button"
@@ -305,6 +328,29 @@ export function CreateWorkItemForm() {
           </button>
         </div>
       </div>
+
+      {selectedRecipe ? (
+        <div className="mt-4 rounded-2xl border bg-[var(--surface)] p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold">{selectedRecipe.label}</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">{selectedRecipe.summary}</p>
+            </div>
+            <span className="w-fit rounded-full bg-[var(--panel)] px-3 py-1 text-xs text-[var(--muted)]">
+              {selectedRecipe.remoteAutomationPolicy.status}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2 text-xs text-[var(--muted)] lg:grid-cols-3">
+            <p className="rounded-xl bg-[var(--panel)] px-3 py-2">Branch: {selectedRecipe.branchPrefix}*</p>
+            <p className="rounded-xl bg-[var(--panel)] px-3 py-2">
+              Gates: {selectedRecipe.policyGates.map((gate) => gate.label).join(", ")}
+            </p>
+            <p className="rounded-xl bg-[var(--panel)] px-3 py-2">
+              Checks: {selectedRecipe.verificationCommands.join(" + ")}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <label className="mt-4 flex flex-col gap-2">
         <span className="text-sm font-medium">3. Describe the result you need</span>

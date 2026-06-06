@@ -168,3 +168,78 @@ Until a new checkpoint supersedes this one:
 - prefer slices that increase supervisor-owned execution capability
 - treat dashboard work as support work for that goal
 - avoid spending multiple consecutive slices on UI/test hardening alone unless it unblocks supervisor adoption
+
+## Supervisor Execution Progress - 2026-06-06
+
+The first constrained execution recipe is now represented as supervisor-owned policy, not just dashboard text.
+
+Implemented:
+
+- `dashboard-test-coverage` and `dashboard-mobile-coverage` recipe metadata now include policy gates and operator checkpoints.
+- Work-item views expose policy gates, verification commands, allowed paths, autonomy guardrails, and checkpoints through shared contracts.
+- The dashboard detail page renders the recipe gates and checkpoints from live supervisor data.
+- Recipe triage blocks unknown recipe IDs instead of silently falling back to unmanaged manual work.
+- Recipe workflow actions require operator checkpoint notes before validation, review entry, and final review approval.
+- Workflow events now carry recipe gate evidence for recipe selection, scope review, clean-worktree start, verification, review entry, and operator approval.
+- Recipe triage now generates non-mutating branch records when branch metadata is missing, recording `executionBranch`, `baseBranch`, and `baseRevision` before implementation is allowed to proceed.
+- Recipe implementation now blocks unless the supervisor can verify branch ownership: recorded `executionBranch`, matching branch prefix, current branch match, current `baseRevision`, and recorded base revision ancestry.
+- Recipe implementation start now runs only selected recipe commands from structured argument vectors, records `recipe.implementation_passed` evidence on success, and routes to rework with `recipe.implementation_failed` evidence on failure.
+- The dashboard recipe now includes a deterministic code-edit generator, `node scripts/dashboard-test-coverage-recipe.mjs`, which idempotently maintains `tests/e2e/supervisor-managed-recipe.spec.ts` inside the recipe `allowedPaths` boundary.
+- The mobile dashboard recipe now includes a deterministic code-edit generator, `node scripts/dashboard-mobile-coverage-recipe.mjs`, which idempotently maintains `tests/e2e/supervisor-managed-mobile-recipe.spec.ts` inside the recipe `allowedPaths` boundary.
+- Recipe implementation automation now performs an immediate post-command path-scope check before entering implementation, recording `recipe.implementation_path_scope_passed` or routing to rework with `recipe.implementation_path_scope_failed`.
+- Recipe validation handoff now enforces the recipe `allowedPaths` boundary before commands run, recording `recipe.path_scope_passed` or routing to rework with `recipe.path_scope_failed` evidence.
+- Recipe validation handoff now runs only the selected recipe's verification commands, records `recipe.verification_passed` evidence on success, and routes to rework with `recipe.verification_failed` evidence on failure.
+- Recipe review entry now records `recipe.delivery_gate_recorded` with a local delivery package: changed paths, out-of-scope paths, diff summary availability, branch/base metadata, and record-only PR/CI/merge status before final operator review.
+- Recipe final approval now requires recorded PR/CI/merge readiness or an explicit operator waiver; local delivery packages remain review evidence and remote operations remain record-only.
+- The supervisor exposes a delivery-readiness endpoint that records PR, CI, merge, URL, and waiver evidence without performing remote operations.
+- Work-item views and the dashboard detail page now surface delivery readiness and whether the recipe is ready for final approval.
+- Execution recipes now expose a first-class remote automation policy: allowed record-only operations, blocked remote operations, and the KNX boundary requirements that must be met before live PR/CI/merge automation can be enabled.
+- The supervisor now exposes a recipe gate audit endpoint that derives pass/pending/blocked status for each policy gate from workflow events, delivery readiness, and final review state.
+- The dashboard detail page renders the recipe gate audit as an operator-visible policy ledger.
+- The dashboard workflow history now renders `recipe.delivery_gate_recorded` as a local delivery package panel with changed paths, out-of-scope paths, diff stat, package status, and remote-operation policy.
+- The supervisor now exposes `GET /execution-recipes` as the recipe catalog, and the dashboard intake form renders selected recipe details from that supervisor-owned catalog.
+- The supervisor now exposes `GET /work-items/{id}/recipe-gate-audit`, summarizing each recipe gate as pending, passed, or blocked from workflow evidence and current delivery state.
+- The dashboard work-item detail page now renders the recipe gate audit as an operator checkpoint ledger.
+- The supervisor now exposes `POST /work-items/{id}/prepare-branch`, which creates or switches to the recorded recipe branch only after clean-worktree and base-revision checks pass.
+- The dashboard work-item detail page now renders a branch preparation checkpoint so operators can trigger and review the supervisor-owned branch boundary before implementation.
+- The supervisor recipe gate audit now includes `nextManagedAction`, a deterministic next step with action id, status, required gate, operator checkpoint, allowed actor, and remote-operation flag.
+- The dashboard recipe gate audit now renders the supervisor-approved next managed action above the policy ledger.
+- The supervisor now exposes `POST /work-items/{id}/managed-next-action`, which executes only the current available managed action, rejects stale expected action ids, rejects blocked/remote actions, and routes evidence-heavy delivery readiness back to the dedicated checkpoint form.
+- The dashboard recipe gate audit now lets operators trigger executable managed actions from the policy ledger while preserving checkpoint notes and supervisor-side gate validation.
+- The supervisor now resolves recipe command executables through `pnpm.cmd` or `corepack pnpm` when `pnpm` is not directly on `PATH`, so the managed implementation step can run reliably in the Windows browser server environment.
+- Browser coverage now proves the managed recipe stops safely at the path-scope gate when the current workspace includes out-of-scope changes, rather than pretending the supervisor can run through an unsafe implementation attempt.
+- The supervisor now has an opt-in remote delivery executor that can push the branch, create a PR, wait for CI, and merge when `SUPERVISOR_ALLOW_REMOTE_DELIVERY` is enabled.
+- The dashboard recipe gate audit now exposes a supervisor-executable remote delivery step when remote delivery is explicitly enabled.
+
+Verification:
+
+- `uv run pytest tests/integration/test_supervisor_flow.py -q`: 16 passed.
+- `pnpm run check`: preflight passed, dashboard build passed, supervisor integration suite passed.
+- Local Chrome-backed browser verification confirmed the recipe panel renders policy gates and operator checkpoints from a seeded supervisor work item.
+- Later branch-gate verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 18 passed; `pnpm run check`: passed; `git diff --check`: passed.
+- Branch-record verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 17 passed; `pnpm run check`: passed; `git diff --check`: passed.
+- Constrained command verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 18 passed; `pnpm run check`: passed; `git diff --check`: passed.
+- Allowed-path gate verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 19 passed; `pnpm run check`: passed; `git diff --check`: passed.
+- Delivery-readiness gate verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 19 passed; `pnpm run check`: passed; `git diff --check`: passed.
+- Implementation automation gate verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 21 passed; `pnpm run check`: passed; `pnpm run test:e2e:dashboard`: 7 passed; `git diff --check`: passed.
+- Deterministic code-edit recipe verification: `node scripts/dashboard-test-coverage-recipe.mjs`: no changes needed; `pnpm run lint:dashboard`: passed; `pnpm run test:e2e:dashboard`: 7 passed.
+- Second recipe verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 22 passed; `node scripts/dashboard-mobile-coverage-recipe.mjs`: no changes needed; `pnpm run lint:dashboard`: passed; `pnpm run test:e2e:dashboard`: 8 passed; `pnpm run check`: passed; `git diff --check`: passed.
+- Local delivery package verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 22 passed; `pnpm run check`: passed; `git diff --check`: passed.
+- Delivery package dashboard rendering verification: `pnpm run build:dashboard`: passed; `pnpm run lint:dashboard`: passed; `pnpm run test:e2e:dashboard`: 9 passed; `uv run pytest tests/integration/test_supervisor_flow.py -q`: 23 passed; `pnpm run check`: passed; `git diff --check`: passed.
+- Delivery readiness approval verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 23 passed; `pnpm --filter @kendall/dashboard build`: passed; `pnpm run check`: passed; `pnpm run test:e2e:dashboard`: 9 passed.
+- Unsafe delivery package rejection verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 24 passed; `pnpm run check`: passed; `git diff --check`: passed.
+- Remote automation policy verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 25 passed; `pnpm --filter @kendall/dashboard build`: passed.
+- Recipe gate audit verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 25 passed; `pnpm --filter @kendall/dashboard build`: passed.
+- Recipe catalog verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 25 passed; `pnpm run build:dashboard`: passed; `pnpm run check`: passed; `pnpm run test:e2e:dashboard`: 10 passed; `git diff --check`: passed with existing CRLF normalization warnings.
+- Gate audit verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 25 passed; `pnpm run build:dashboard`: passed; `pnpm run lint:dashboard`: passed; `pnpm run test:e2e:dashboard`: 10 passed; `pnpm run check`: passed; `git diff --check`: passed with existing CRLF normalization warnings.
+- Managed next action verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 28 passed; `pnpm run check`: passed; `pnpm run test:e2e:dashboard`: 10 passed.
+- Managed triage browser verification: `pnpm exec playwright test tests/e2e/dashboard.spec.ts -g "runs the supervisor-approved managed triage action from the gate audit"`: passed; `pnpm run test:e2e:dashboard`: 11 passed.
+- Path-scope browser verification: `pnpm exec playwright test tests/e2e/dashboard.spec.ts -g "halts the managed recipe when implementation escapes the allowed path boundary"`: passed; `pnpm run test:e2e:dashboard`: 12 passed.
+- Remote-delivery integration verification: `uv run --directory services/supervisor pytest tests/integration/test_supervisor_flow.py -q -k remote_delivery`: 2 passed.
+- Branch preparation verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 27 passed; `pnpm run build:dashboard`: passed; `pnpm run lint:dashboard`: passed; `pnpm run check`: passed; `pnpm run test:e2e:dashboard`: 10 passed; `git diff --check`: passed with existing CRLF normalization warnings.
+- Next managed action verification: `uv run pytest tests/integration/test_supervisor_flow.py -q`: 29 passed; `pnpm run build:dashboard`: passed; `pnpm run lint:dashboard`: passed; `pnpm run check`: passed; `pnpm run test:e2e:dashboard`: 12 passed; `git diff --check`: passed with existing CRLF normalization warnings.
+
+Remaining before supervisor-owned end-to-end development flow:
+
+- live remote-delivery smoke proof against a real repository/CI target instead of a mocked integration harness
+- operator review checkpoints for each automation boundary

@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 
-const supervisorUrl = "http://127.0.0.1:8100";
+const supervisorUrl = process.env.PLAYWRIGHT_SUPERVISOR_URL ?? "http://127.0.0.1:8100";
 
 type WorkItemCreatePayload = {
   title: string;
@@ -89,7 +90,22 @@ async function escalateWorkItem(request: APIRequestContext, workItemId: string, 
   expect(response.ok()).toBeTruthy();
 }
 
+function gitOutput(args: string[]) {
+  return execFileSync("git", args, { cwd: process.cwd(), encoding: "utf8" }).trim();
+}
+
 test.describe("dashboard workflow coverage", () => {
+  test("shows supervisor-owned recipe details during intake", async ({ page }) => {
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Expand dashboard coverage" }).click();
+    await expect(page.getByText("Template selected: Expand dashboard coverage. Fill in the blanks and launch the work.")).toBeVisible();
+    await expect(page.getByText("Recipe: Dashboard test coverage")).toBeVisible();
+    await expect(page.getByText("Branch: e2e-*")).toBeVisible();
+    await expect(page.getByText("blocked", { exact: true })).toBeVisible();
+    await expect(page.getByText(/pnpm run test:e2e:dashboard/)).toBeVisible();
+  });
+
   test("guides a non-coder through intake templates and advanced fields", async ({ page }) => {
     await page.goto("/");
 
@@ -248,5 +264,135 @@ test.describe("dashboard workflow coverage", () => {
     await expect(issueCard.getByText("Issue category: workspace-health")).toBeVisible();
 
     await expect(page.locator("article").filter({ hasText: "Operator escalation control" })).toHaveCount(0);
+  });
+
+  test("shows delivery readiness controls for managed recipe work", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Managed delivery package review",
+      requestedOutcome: "Verify managed recipe delivery evidence is visible before operator approval.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+      },
+    });
+    await page.goto(`/work-items/${workItemId}`);
+
+    const deliveryPanel = page.locator("section").filter({ hasText: "Review readiness" }).first();
+    await expect(deliveryPanel).toBeVisible();
+    await expect(deliveryPanel.getByText("record-only; supervisor did not create a PR, wait for CI, or merge")).toBeVisible();
+    await expect(deliveryPanel.getByText("Needs evidence", { exact: true })).toBeVisible();
+    await expect(deliveryPanel.getByRole("button", { name: "Record readiness" })).toBeVisible();
+
+    const gateAudit = page.locator("#recipe-gate-audit");
+    await expect(gateAudit.getByText("Supervisor policy ledger")).toBeVisible();
+    await expect(gateAudit.getByText("Next managed action")).toBeVisible();
+    await expect(gateAudit.getByText("Remote: blocked")).toBeVisible();
+    await expect(gateAudit.getByRole("button", { name: "Run approved action" })).toBeVisible();
+    await expect(gateAudit.getByText("Delivery readiness gate")).toBeVisible();
+    await expect(gateAudit.getByText("Delivery readiness evidence or waiver is still required.")).toBeVisible();
+
+    const recipePanel = page.locator("section").filter({ hasText: "Execution recipe" }).first();
+    await expect(recipePanel.getByText("Remote automation policy")).toBeVisible();
+    await expect(recipePanel.getByText("pull request creation")).toBeVisible();
+    await expect(recipePanel.getByText("KNX data boundary accepts the remote destination")).toBeVisible();
+
+    const branchPanel = page.locator("section").filter({ hasText: "Prepare execution branch" }).first();
+    await expect(branchPanel).toBeVisible();
+    await expect(branchPanel.getByRole("button", { name: "Prepare branch" })).toBeVisible();
+
+    const gateAuditPanel = page.locator("#recipe-gate-audit");
+    await expect(gateAuditPanel).toBeVisible();
+    await expect(gateAuditPanel.getByText("Scope gate", { exact: true })).toBeVisible();
+    await expect(gateAuditPanel.getByText("Delivery readiness gate")).toBeVisible();
+    await expect(gateAuditPanel.getByText("Pending").first()).toBeVisible();
+  });
+
+  test("runs the supervisor-approved managed triage action from the gate audit", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Managed triage action",
+      requestedOutcome: "Verify the dashboard can trigger the supervisor-approved next action.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+      },
+    });
+
+    await page.goto(`/work-items/${workItemId}`);
+
+    const gateAudit = page.locator("#recipe-gate-audit");
+    await expect(gateAudit.getByText("Supervisor policy ledger")).toBeVisible();
+    await expect(gateAudit.getByText("Next managed action")).toBeVisible();
+    await expect(gateAudit.getByText("Let supervisor finish recipe triage")).toBeVisible();
+    await expect(gateAudit.getByRole("button", { name: "Run approved action" })).toBeVisible();
+
+    await gateAudit.getByRole("button", { name: "Run approved action" }).click();
+
+    await expect
+      .poll(async () => {
+        const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
+        expect(response.ok()).toBeTruthy();
+        const body = (await response.json()) as { data: { state: string; nextStep: string | null } };
+        return body.data.state;
+      })
+      .toBe("ready");
+
+    await expect(page.getByRole("button", { name: "Prepare branch" })).toBeVisible();
+    await expect(page.getByText("Prepare execution branch")).toBeVisible();
+  });
+
+  test("halts the managed recipe when implementation escapes the allowed path boundary", async ({ page, request }) => {
+    const currentBranch = gitOutput(["branch", "--show-current"]);
+    const currentBaseRevision = gitOutput(["rev-parse", "--verify", "main"]);
+
+    const workItemId = await createWorkItem(request, {
+      title: "Managed recipe path scope",
+      requestedOutcome: "Verify the dashboard can surface the supervisor's path-scope stop during implementation.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+        executionBranch: currentBranch,
+        baseBranch: "main",
+        baseRevision: currentBaseRevision,
+      },
+    });
+
+    await page.goto(`/work-items/${workItemId}`);
+
+    const gateAudit = page.locator("#recipe-gate-audit");
+
+    await expect(gateAudit.getByText("Let supervisor finish recipe triage")).toBeVisible();
+    await gateAudit.getByRole("button", { name: "Run approved action" }).click();
+    await expect
+      .poll(async () => {
+        const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
+        expect(response.ok()).toBeTruthy();
+        const body = (await response.json()) as { data: { state: string } };
+        return body.data.state;
+      })
+      .toBe("ready");
+    await page.reload();
+
+    const branchPanel = page.locator("section").filter({ hasText: "Prepare execution branch" }).first();
+    await expect(branchPanel).toBeVisible();
+    await branchPanel.getByRole("button", { name: "Prepare branch" }).click();
+    await expect
+      .poll(async () => {
+        const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
+        expect(response.ok()).toBeTruthy();
+        const body = (await response.json()) as { data: { state: string } };
+        return body.data.state;
+      })
+      .toBe("needs_rework");
+    await page.reload();
+
+    await expect(page.getByText("Needs Rework", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Recipe changed files are outside allowedPaths.").first()).toBeVisible();
+    await expect(gateAudit.getByText("Resolve blocked policy gate")).toBeVisible();
   });
 });

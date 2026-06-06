@@ -5,10 +5,10 @@ import { LiveFeed } from "../components/live-feed";
 import { PageIntro } from "../components/page-intro";
 import { WorkGrid } from "../components/work-grid";
 import { buildNavStats } from "../lib/nav-stats";
-import { getRunStatus, getWorkItems } from "../lib/supervisor";
+import { getExecutionRecipes, getRunStatus, getWorkItems } from "../lib/supervisor";
 
 export default async function Home() {
-  const [status, items] = await Promise.all([getRunStatus(), getWorkItems()]);
+  const [status, items, executionRecipes] = await Promise.all([getRunStatus(), getWorkItems(), getExecutionRecipes()]);
   const navStats = buildNavStats(items);
 
   return (
@@ -24,7 +24,7 @@ export default async function Home() {
           ["Blocked", String(status.blockedCount)],
         ].map(([label, value]) => ({ label, value }))}
       />
-      <CreateWorkItemForm />
+      <CreateWorkItemForm executionRecipes={executionRecipes} />
       <section className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Mode snapshot</p>

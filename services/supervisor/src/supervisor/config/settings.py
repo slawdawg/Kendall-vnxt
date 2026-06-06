@@ -18,6 +18,7 @@ class Settings(BaseSettings):
         alias="SUPERVISOR_CORS_ORIGINS",
     )
     allow_dirty_repo: bool = Field(default=False, alias="SUPERVISOR_ALLOW_DIRTY_REPO")
+    allow_remote_delivery: bool = Field(default=False, alias="SUPERVISOR_ALLOW_REMOTE_DELIVERY")
     lease_ttl_seconds: int = 30
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
