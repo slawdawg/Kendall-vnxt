@@ -30,6 +30,8 @@ __pycache__/
 .ruff_cache/
 .coverage
 coverage/
+playwright-report/
+test-results/
 
 # Logs and temporary files
 *.log

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { getSupervisorBaseUrl } from "../lib/supervisor";
@@ -14,21 +14,93 @@ const riskOptions = [
 
 type RiskLevelValue = (typeof riskOptions)[number]["value"];
 
+const storageKey = "kendall-dashboard-intake-draft";
+const defaultForm = {
+  title: "",
+  requestedOutcome: "",
+  source: "operator-dashboard",
+  details: "",
+  riskLevel: "medium" as RiskLevelValue,
+};
+
+function readStoredDraft(): typeof defaultForm {
+  if (typeof window === "undefined") {
+    return defaultForm;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return defaultForm;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<typeof defaultForm>;
+    return {
+      title: typeof parsed.title === "string" ? parsed.title : defaultForm.title,
+      requestedOutcome:
+        typeof parsed.requestedOutcome === "string" ? parsed.requestedOutcome : defaultForm.requestedOutcome,
+      source: typeof parsed.source === "string" && parsed.source.trim() ? parsed.source : defaultForm.source,
+      details: typeof parsed.details === "string" ? parsed.details : defaultForm.details,
+      riskLevel:
+        parsed.riskLevel === "low" || parsed.riskLevel === "medium" || parsed.riskLevel === "high"
+          ? parsed.riskLevel
+          : defaultForm.riskLevel,
+    };
+  } catch {
+    return defaultForm;
+  }
+}
+
+function isDefaultDraft(form: typeof defaultForm): boolean {
+  return (
+    form.title === defaultForm.title &&
+    form.requestedOutcome === defaultForm.requestedOutcome &&
+    form.source === defaultForm.source &&
+    form.details === defaultForm.details &&
+    form.riskLevel === defaultForm.riskLevel
+  );
+}
+
 export function CreateWorkItemForm() {
   const router = useRouter();
   const { profile } = useOperatorProfile();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState("Ready to accept a new work item.");
-  const [form, setForm] = useState({
-    title: "",
-    requestedOutcome: "",
-    source: "operator-dashboard",
-    details: "",
-    riskLevel: "medium" as RiskLevelValue,
-  });
+  const [form, setForm] = useState(defaultForm);
+  const skipInitialPersist = useRef(true);
+
+  useEffect(() => {
+    // Hydrate the client-only draft after mount so refresh restores work in progress.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setForm(readStoredDraft());
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (skipInitialPersist.current) {
+      skipInitialPersist.current = false;
+      return;
+    }
+
+    if (isDefaultDraft(form)) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+
+    window.localStorage.setItem(storageKey, JSON.stringify(form));
+  }, [form]);
 
   function updateField(field: keyof typeof form, value: string) {
-    setForm((current) => ({ ...current, [field]: value }));
+    setForm((current) => {
+      const next = { ...current, [field]: value };
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      }
+      return next;
+    });
   }
 
   function submit() {
@@ -57,13 +129,8 @@ export function CreateWorkItemForm() {
         }
 
         const payload = (await response.json()) as { data: { id: string; title: string } };
-        setForm({
-          title: "",
-          requestedOutcome: "",
-          source: "operator-dashboard",
-          details: "",
-          riskLevel: "medium",
-        });
+        setForm(defaultForm);
+        window.localStorage.removeItem(storageKey);
         setMessage(`Created "${payload.data.title}" as ${profile.actorLabel}. Opening the work item detail view now.`);
         router.refresh();
         router.push(`/work-items/${payload.data.id}`);
