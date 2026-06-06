@@ -9,7 +9,7 @@ Codex-first BMAD supervisor prototype with:
 
 ## Local run
 
-1. Use Node `22.x` by default (`.node-version` is included for toolchains that honor it).
+1. Use Node `22.13.0+` by default (`.node-version` is included for toolchains that honor it).
 2. One-time on a fresh machine: `corepack enable`
 3. `pnpm run setup`
 4. `pnpm run preflight`

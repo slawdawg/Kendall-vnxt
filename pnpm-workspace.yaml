@@ -1,7 +1,7 @@
 packages:
   - apps/*
   - packages/*
-nodeVersion: 22.0.0
+nodeVersion: 22.13.0
 engineStrict: true
 allowBuilds:
   sharp: true

@@ -58,7 +58,7 @@ function verifyJsWorkspace() {
   const currentNodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
   if (!supportedNodeMajors.has(currentNodeMajor)) {
     recordFailure(
-      `Node ${process.versions.node} is outside the supported range. Use Node 22.x, 23.x, or 24.x before running workspace commands.`,
+      `Node ${process.versions.node} is outside the supported range. Use Node 22.13.0+ or a current 23.x/24.x release before running workspace commands.`,
     );
     return;
   }
