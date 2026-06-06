@@ -2,6 +2,9 @@
   "name": "kendall-nxt",
   "version": "0.1.0",
   "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  },
   "engines": {
     "node": ">=22 <25",
     "pnpm": "11.5.2"
@@ -19,6 +22,7 @@
     "dev:supervisor": "pnpm run preflight:python && uv run --directory services/supervisor uvicorn supervisor.api.main:app --reload",
     "build:dashboard": "pnpm --filter @kendall/dashboard build",
     "lint:dashboard": "pnpm --filter @kendall/dashboard lint",
+    "test:e2e:dashboard": "playwright test",
     "test:supervisor": "uv run --directory services/supervisor pytest",
     "check": "pnpm run preflight && pnpm run build:dashboard && pnpm run test:supervisor"
   }

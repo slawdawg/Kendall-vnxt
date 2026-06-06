@@ -32,6 +32,7 @@ Important environment variables:
 ## Verification
 
 - `pnpm run check` builds the dashboard and runs supervisor integration tests
+- `pnpm run test:e2e:dashboard` runs browser coverage for intake drafts, workflow actions, and detail navigation
 - `pnpm run lint:dashboard` runs the dashboard lint pass
 - `pnpm run preflight` checks that shared JS deps and the supervisor virtualenv are ready
 - `pnpm run doctor` is an alias for `preflight`

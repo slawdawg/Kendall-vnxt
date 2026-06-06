@@ -18,4 +18,5 @@ The dashboard expects the supervisor API on `http://localhost:8000` unless overr
 ```bash
 pnpm run lint:dashboard
 pnpm run build:dashboard
+pnpm run test:e2e:dashboard
 ```

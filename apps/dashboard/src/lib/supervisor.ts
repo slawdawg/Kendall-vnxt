@@ -18,11 +18,7 @@ export function getSupervisorBaseUrl(): string {
     return publicBaseUrl;
   }
 
-  if (
-    !configuredPublicBaseUrl ||
-    configuredPublicBaseUrl.includes("localhost") ||
-    configuredPublicBaseUrl.includes("127.0.0.1")
-  ) {
+  if (!configuredPublicBaseUrl) {
     return `${window.location.protocol}//${window.location.hostname}:8000`;
   }
 

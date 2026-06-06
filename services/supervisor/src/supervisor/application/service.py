@@ -741,6 +741,8 @@ class SupervisorService:
         )
 
     def _repo_is_dirty(self) -> bool:
+        if self.settings.allow_dirty_repo:
+            return False
         try:
             result = subprocess.run(
                 ["git", "status", "--porcelain"],
