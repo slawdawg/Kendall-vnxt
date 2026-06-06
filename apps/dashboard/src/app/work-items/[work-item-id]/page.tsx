@@ -4,6 +4,7 @@ import { EscalationPanel } from "../../../components/escalation-panel";
 import { Shell } from "../../../components/shell";
 import { WorkItemActions } from "../../../components/work-item-actions";
 import { WorkItemHistory } from "../../../components/work-item-history";
+import { WorkItemRetryHistory } from "../../../components/work-item-retry-history";
 import { buildNavStats } from "../../../lib/nav-stats";
 import { getWorkItem, getWorkItemEvents, getWorkItems } from "../../../lib/supervisor";
 import { formatLane, formatWorkflowState } from "../../../lib/workflow-display";
@@ -16,6 +17,7 @@ export default async function WorkItemDetailPage({
   const { "work-item-id": workItemId } = await params;
   const [item, events, items] = await Promise.all([getWorkItem(workItemId), getWorkItemEvents(workItemId), getWorkItems()]);
   const navStats = buildNavStats(items);
+  const retryCount = Math.max(0, events.filter((event) => event.eventType === "work_item.implementing").length - 1);
 
   return (
     <Shell navStats={navStats}>
@@ -36,6 +38,7 @@ export default async function WorkItemDetailPage({
             ["Workflow group", formatLane(item.lane)],
             ["Source", item.source],
             ["Age", `${item.ageMinutes} min`],
+            ["Retries", String(retryCount)],
             ["Audit mode", item.auditMode],
             ["Last updated", new Date(item.updatedAt).toLocaleString()],
           ].map(([label, value]) => (
@@ -84,6 +87,12 @@ export default async function WorkItemDetailPage({
               </a>
             ) : null}
             <a
+              href="#retry-history"
+              className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Retries
+            </a>
+            <a
               href="#workflow-history"
               className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
@@ -108,6 +117,7 @@ export default async function WorkItemDetailPage({
               <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-[var(--muted)]">{item.details}</p>
             </section>
           ) : null}
+          <WorkItemRetryHistory events={events} />
           <div id="workflow-history" className="scroll-mt-28">
             <WorkItemHistory events={events} />
           </div>

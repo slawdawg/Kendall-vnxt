@@ -74,7 +74,7 @@ export function WorkItemFilterPanel({
         ))}
       </div>
 
-      <div className="mt-5 grid gap-4 lg:grid-cols-[2fr_1fr_1fr_1fr]">
+      <div className="mt-5 grid gap-4 xl:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr]">
         <label className="flex flex-col gap-2">
           <span className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--muted)]">Search</span>
           <input
@@ -126,6 +126,31 @@ export function WorkItemFilterPanel({
                 {source}
               </option>
             ))}
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-2">
+          <span className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--muted)]">Origin</span>
+          <select
+            value={filters.origin}
+            onChange={(event) => onChange({ ...filters, origin: event.target.value as WorkItemFilterState["origin"] })}
+            className="rounded-2xl border bg-[var(--surface)] px-4 py-3 text-sm outline-none transition focus:border-[var(--accent)]"
+          >
+            <option value="all">All origins</option>
+            <option value="operator">Operator</option>
+            <option value="supervisor">Supervisor</option>
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-2">
+          <span className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--muted)]">Issues</span>
+          <select
+            value={filters.issues}
+            onChange={(event) => onChange({ ...filters, issues: event.target.value as WorkItemFilterState["issues"] })}
+            className="rounded-2xl border bg-[var(--surface)] px-4 py-3 text-sm outline-none transition focus:border-[var(--accent)]"
+          >
+            <option value="all">All items</option>
+            <option value="self-detected">Self-detected only</option>
           </select>
         </label>
       </div>
@@ -182,7 +207,7 @@ export function WorkItemFilterPanel({
                   </div>
                   <p className="mt-2 text-sm text-[var(--muted)]">
                     q={view.filters.query || "all"} | risk={view.filters.risk} | audit={view.filters.audit} |
-                    source={view.filters.source}
+                    source={view.filters.source} | origin={view.filters.origin} | issues={view.filters.issues}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">

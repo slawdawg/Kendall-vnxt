@@ -158,6 +158,58 @@ def test_validation_failure_routes_work_to_rework(tmp_path, monkeypatch) -> None
         assert item_response.json()["data"]["lane"] == "corrective_loop"
 
 
+def test_retry_endpoint_returns_work_to_ready_and_records_retry_event(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "retry-endpoint.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Retry endpoint loopback",
+                "requestedOutcome": "Move a blocked item back into the ready queue and retain history.",
+                "source": "pytest",
+                "riskLevel": "medium",
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "submit_for_validation"},
+        )
+        client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "validation_failed", "note": "Need another pass before release."},
+        )
+        blocked = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "restart_implementation", "note": "Restart blocked by local repo state."},
+        )
+        retried = client.post(f"/work-items/{work_item_id}/retry")
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert blocked.status_code == 200
+        assert retried.status_code == 200
+        assert item_response.status_code == 200
+        assert events_response.status_code == 200
+        assert item_response.json()["data"]["state"] == "ready"
+
+        event_types = [event["eventType"] for event in events_response.json()["data"]]
+        assert "work_item.retry_requested" in event_types
+
+
 def test_work_item_events_endpoint_returns_timeline(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "events.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -346,7 +398,7 @@ def test_operator_views_are_persisted_and_scoped(tmp_path, monkeypatch) -> None:
             json={
                 "name": "High risk queue",
                 "scope": "queue",
-                "filters": {"query": "", "risk": "high", "audit": "required", "source": "all"},
+                "filters": {"query": "", "risk": "high", "audit": "required", "source": "all", "origin": "all", "issues": "all"},
             },
         )
         audit_view = client.post(
@@ -354,7 +406,7 @@ def test_operator_views_are_persisted_and_scoped(tmp_path, monkeypatch) -> None:
             json={
                 "name": "Audit backlog",
                 "scope": "audit",
-                "filters": {"query": "smoke", "risk": "all", "audit": "required", "source": "all"},
+                "filters": {"query": "smoke", "risk": "all", "audit": "required", "source": "all", "origin": "all", "issues": "all"},
             },
         )
 
@@ -378,7 +430,44 @@ def test_operator_views_are_persisted_and_scoped(tmp_path, monkeypatch) -> None:
         assert queue_only.json()["data"][0]["scope"] == "queue"
         assert audit_only.json()["data"][0]["scope"] == "audit"
         assert audit_only.json()["data"][0]["filters"]["query"] == "smoke"
+        assert audit_only.json()["data"][0]["filters"]["origin"] == "all"
         assert queue_after_delete.json()["data"] == []
+
+
+def test_supervisor_generated_self_detected_issue_is_exposed_in_work_item_view(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "self-detected.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Repository drift detected",
+                "requestedOutcome": "Surface a real self-detected issue in the operator dashboard.",
+                "source": "supervisor-monitor",
+                "riskLevel": "medium",
+                "metadata": {
+                    "generatedBy": "supervisor",
+                    "selfDetectedIssue": True,
+                    "issueCategory": "workspace-health",
+                },
+            },
+        )
+        assert created.status_code == 200
+
+        work_item_id = created.json()["data"]["id"]
+        item_response = client.get(f"/work-items/{work_item_id}")
+        assert item_response.status_code == 200
+
+        item = item_response.json()["data"]
+        assert item["origin"] == "supervisor"
+        assert item["selfDetectedIssue"] is True
+        assert item["selfDetectedIssueCategory"] == "workspace-health"
 
 
 def test_work_item_creation_records_operator_identity_from_metadata(tmp_path, monkeypatch) -> None:

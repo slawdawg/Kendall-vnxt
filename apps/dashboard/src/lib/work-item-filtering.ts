@@ -7,6 +7,8 @@ export const defaultWorkItemFilters: WorkItemFilterState = {
   risk: "all",
   audit: "all",
   source: "all",
+  origin: "all",
+  issues: "all",
 };
 
 export type WorkItemFilterPreset = {
@@ -19,6 +21,7 @@ export const sharedFilterPresets: WorkItemFilterPreset[] = [
   { label: "High risk", filters: { risk: "high" } },
   { label: "Needs audit", filters: { audit: "required" } },
   { label: "Review lane", filters: { audit: "required", risk: "high" } },
+  { label: "Self-detected issues", filters: { origin: "supervisor", issues: "self-detected" } },
 ];
 
 export function getSourceOptions(items: WorkItemView[]): string[] {
@@ -41,6 +44,14 @@ export function filterWorkItems(items: WorkItemView[], filters: WorkItemFilterSt
       return false;
     }
 
+    if (filters.origin !== "all" && item.origin !== filters.origin) {
+      return false;
+    }
+
+    if (filters.issues === "self-detected" && !item.selfDetectedIssue) {
+      return false;
+    }
+
     if (!query) {
       return true;
     }
@@ -51,9 +62,11 @@ export function filterWorkItems(items: WorkItemView[], filters: WorkItemFilterSt
       item.statusSummary,
       item.details ?? "",
       item.source,
+      item.origin,
       item.state,
       item.auditMode,
       item.riskLevel,
+      item.selfDetectedIssueCategory ?? "",
     ]
       .join(" ")
       .toLowerCase()
@@ -66,12 +79,16 @@ export function filtersFromSearchParams(searchParams: URLSearchParams): WorkItem
   const risk = searchParams.get("risk");
   const audit = searchParams.get("audit");
   const source = searchParams.get("source") ?? "all";
+  const origin = searchParams.get("origin");
+  const issues = searchParams.get("issues");
 
   return {
     query,
     risk: risk === "low" || risk === "medium" || risk === "high" ? risk : "all",
     audit: audit === "none" || audit === "advisory" || audit === "required" ? audit : "all",
     source,
+    origin: origin === "operator" || origin === "supervisor" ? origin : "all",
+    issues: issues === "self-detected" ? issues : "all",
   };
 }
 
@@ -89,6 +106,12 @@ export function filtersToSearchParams(filters: WorkItemFilterState): URLSearchPa
   }
   if (filters.source !== "all") {
     params.set("source", filters.source);
+  }
+  if (filters.origin !== "all") {
+    params.set("origin", filters.origin);
+  }
+  if (filters.issues !== "all") {
+    params.set("issues", filters.issues);
   }
 
   return params;
@@ -109,6 +132,8 @@ export function areFiltersEqual(left: WorkItemFilterState, right: WorkItemFilter
     left.query === right.query &&
     left.risk === right.risk &&
     left.audit === right.audit &&
-    left.source === right.source
+    left.source === right.source &&
+    left.origin === right.origin &&
+    left.issues === right.issues
   );
 }

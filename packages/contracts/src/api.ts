@@ -19,6 +19,7 @@ export interface WorkItemPayload {
 
 export interface WorkItemView extends WorkItemPayload {
   id: string;
+  origin: "operator" | "supervisor";
   state: WorkflowState;
   lane: BmadLane | null;
   assigneeId?: string | null;
@@ -32,6 +33,8 @@ export interface WorkItemView extends WorkItemPayload {
   statusSummary: string;
   blockedReason: string | null;
   nextStep: string | null;
+  selfDetectedIssue: boolean;
+  selfDetectedIssueCategory?: string | null;
   createdAt: string;
   updatedAt: string;
   lastEventAt: string;
@@ -98,6 +101,8 @@ export interface WorkItemFilterView {
   risk: "all" | RiskLevel;
   audit: AuditFilterMode;
   source: string;
+  origin: "all" | "operator" | "supervisor";
+  issues: "all" | "self-detected";
 }
 
 export interface SavedWorkItemView {
