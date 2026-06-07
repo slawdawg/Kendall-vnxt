@@ -71,6 +71,12 @@ export interface WorkItemRecipeGateAuditEntryView {
   reason?: string | null;
 }
 
+export interface WorkItemManagedActionRecoveryView {
+  mode: "retryable" | "operator-checkpoint" | "human-only";
+  label: string;
+  detail: string;
+}
+
 export interface WorkItemManagedActionView {
   actionId: string;
   label: string;
@@ -80,6 +86,7 @@ export interface WorkItemManagedActionView {
   operatorCheckpoint?: string | null;
   allowedActor: "supervisor" | "operator";
   remoteOperation: boolean;
+  recovery?: WorkItemManagedActionRecoveryView | null;
 }
 
 export interface WorkItemRecipeGateAuditView {

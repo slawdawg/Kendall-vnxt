@@ -346,70 +346,51 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Prepare execution branch")).toBeVisible();
   });
 
-  test("halts the managed recipe when implementation escapes the allowed path boundary", async ({ page, request }) => {
+  test("surfaces recovery guidance when managed recipe blocks on branch policy", async ({ page, request }) => {
     const currentBranch = gitOutput(["branch", "--show-current"]);
     const currentBaseRevision = gitOutput(["rev-parse", "--verify", "main"]);
-    const tempOutOfScopePath = path.join(process.cwd(), "temp", "dashboard-out-of-scope.md");
-    await fs.mkdir(path.dirname(tempOutOfScopePath), { recursive: true });
-    await fs.writeFile(tempOutOfScopePath, "# temporary out-of-scope change\n");
 
-    try {
-      const workItemId = await createWorkItem(request, {
-        title: "Managed recipe path scope",
-        requestedOutcome: "Verify the dashboard can surface the supervisor's path-scope stop during implementation.",
-        source: "operator-dashboard:improvement",
-        riskLevel: "medium",
-        metadata: {
-          executionRecipeId: "dashboard-test-coverage",
-          intakeTemplateId: "operator-test-coverage",
-          executionBranch: currentBranch,
-          baseBranch: "main",
-          baseRevision: currentBaseRevision,
-        },
-      });
+    const workItemId = await createWorkItem(request, {
+      title: "Managed recipe branch recovery",
+      requestedOutcome: "Verify the dashboard can surface supervisor recovery guidance when branch policy blocks.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+        executionBranch: currentBranch,
+        baseBranch: "main",
+        baseRevision: currentBaseRevision,
+      },
+    });
 
-      await page.goto(`/work-items/${workItemId}`);
+    await page.goto(`/work-items/${workItemId}`);
 
-      const gateAudit = page.locator("#recipe-gate-audit");
+    const gateAudit = page.locator("#recipe-gate-audit");
 
-      const triageResponse = await request.post(`${supervisorUrl}/work-items/${workItemId}/managed-next-action`, {
-        data: {
-          expectedActionId: "supervisor_triage",
-          note: "Let the supervisor finish intake triage.",
-          actorId: "playwright",
-          actorLabel: "Playwright",
-        },
-      });
-      expect(triageResponse.ok()).toBeTruthy();
-      await expect
-        .poll(async () => {
-          const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
-          expect(response.ok()).toBeTruthy();
-          const body = (await response.json()) as { data: { state: string } };
-          return body.data.state;
-        })
-        .toBe("ready");
-      await page.reload();
+    const triageResponse = await request.post(`${supervisorUrl}/work-items/${workItemId}/managed-next-action`, {
+      data: {
+        expectedActionId: "supervisor_triage",
+        note: "Let the supervisor finish intake triage.",
+        actorId: "playwright",
+        actorLabel: "Playwright",
+      },
+    });
+    expect(triageResponse.ok()).toBeTruthy();
+    await expect
+      .poll(async () => {
+        const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
+        expect(response.ok()).toBeTruthy();
+        const body = (await response.json()) as { data: { state: string } };
+        return body.data.state;
+      })
+      .toBe("blocked");
+    await page.reload();
 
-      const branchPanel = page.locator("section").filter({ hasText: "Prepare execution branch" }).first();
-      await expect(branchPanel).toBeVisible();
-      await branchPanel.getByRole("button", { name: "Prepare branch" }).click();
-      await expect
-        .poll(async () => {
-          const response = await request.get(`${supervisorUrl}/work-items/${workItemId}`);
-          expect(response.ok()).toBeTruthy();
-          const body = (await response.json()) as { data: { state: string } };
-          return body.data.state;
-        })
-        .toBe("needs_rework");
-      await page.reload();
-
-      await expect(page.getByText("Needs Rework", { exact: true }).first()).toBeVisible();
-      await expect(page.getByText("Recipe changed files are outside allowedPaths.").first()).toBeVisible();
-      await expect(gateAudit.getByText("Resolve blocked policy gate")).toBeVisible();
-    } finally {
-      await fs.rm(tempOutOfScopePath, { force: true });
-      await fs.rm(path.dirname(tempOutOfScopePath), { recursive: true, force: true }).catch(() => undefined);
-    }
+    await expect(page.getByText("Blocked", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Recipe branch must start with e2e-.").first()).toBeVisible();
+    await expect(gateAudit.getByText("Resolve blocked policy gate")).toBeVisible();
+    await expect(gateAudit.getByText("Review branch ownership")).toBeVisible();
+    await expect(gateAudit.getByText("operator-checkpoint")).toBeVisible();
   });
 });

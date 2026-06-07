@@ -865,14 +865,23 @@ def test_recipe_branch_preparation_blocks_when_repo_is_dirty(tmp_path, monkeypat
 
         response = client.post(f"/work-items/{work_item_id}/prepare-branch", json={})
         events_response = client.get(f"/work-items/{work_item_id}/events")
+        audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
 
         assert response.status_code == 200
+        assert audit_response.status_code == 200
         item = response.json()["data"]
         assert item["state"] == "blocked"
         assert item["blockedReason"] == "Repository is dirty. Clean the working tree before preparing a recipe branch."
         branch_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.branch_preparation_failed")
         assert branch_event["payload"]["policyGate"] == "branch-ownership"
         assert branch_event["payload"]["reason"] == item["blockedReason"]
+        next_action = audit_response.json()["data"]["nextManagedAction"]
+        assert next_action["actionId"] == "resolve_blocked_gate"
+        assert next_action["recovery"] == {
+            "mode": "human-only",
+            "label": "Clean the working tree manually",
+            "detail": "Inspect the local changes and commit, stash, or remove them before allowing the supervisor to continue.",
+        }
 
 
 def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeypatch) -> None:
@@ -1538,6 +1547,143 @@ def test_recipe_review_blocks_remote_delivery_until_live_target_is_ready(tmp_pat
         assert remote_action["status"] == "blocked"
         assert remote_action["remoteOperation"] is True
         assert "GitHub CLI authentication is not available" in remote_action["reason"]
+        assert remote_action["recovery"] == {
+            "mode": "operator-checkpoint",
+            "label": "Restore live target readiness",
+            "detail": "Resolve the remote-delivery preflight issue, then refresh the policy ledger before retrying remote delivery.",
+        }
+
+
+def test_recipe_gate_audit_reports_recovery_metadata_for_branch_block(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-branch-recovery.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        "Current branch does not match the recorded recipe execution branch.",
+        {
+            "expectedBranch": "e2e-branch-recovery",
+            "currentBranch": "feature/manual-branch",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Recipe branch recovery",
+                "requestedOutcome": "Prove branch-policy blocks expose recovery metadata.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-branch-recovery",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        blocked_action = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={"expectedActionId": "resolve_blocked_gate", "note": "Try to resolve automatically."},
+        )
+
+        assert audit_response.status_code == 200
+        assert blocked_action.status_code == 409
+
+        next_action = audit_response.json()["data"]["nextManagedAction"]
+        assert next_action["actionId"] == "resolve_blocked_gate"
+        assert next_action["status"] == "blocked"
+        assert next_action["requiredGate"] == "branch-ownership"
+        assert next_action["recovery"] == {
+            "mode": "operator-checkpoint",
+            "label": "Review branch ownership",
+            "detail": "Confirm the recorded execution branch, prepare the branch again if safe, or hand the work item back for manual branch repair.",
+        }
+
+
+def test_recipe_gate_audit_reports_human_only_recovery_for_path_scope_block(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-path-scope-recovery.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-path-scope-recovery",
+            "currentBranch": "e2e-path-scope-recovery",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+    ]
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        "Changes escaped the allowed recipe paths: temp/unplanned-change.md",
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["temp/unplanned-change.md"],
+            "outOfScopePaths": ["temp/unplanned-change.md"],
+        },
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Recipe path scope recovery",
+                "requestedOutcome": "Prove path-scope blocks expose human-only recovery metadata.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-path-scope-recovery",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+
+        assert audit_response.status_code == 200
+
+        next_action = audit_response.json()["data"]["nextManagedAction"]
+        assert next_action["actionId"] == "resolve_blocked_gate"
+        assert next_action["status"] == "blocked"
+        assert next_action["requiredGate"] == "path-scope"
+        assert next_action["recovery"] == {
+            "mode": "human-only",
+            "label": "Repair out-of-scope changes manually",
+            "detail": "Review and remove or intentionally re-scope the out-of-bound changes before the supervisor can continue.",
+        }
 
 
 def test_recipe_review_blocks_when_local_delivery_package_has_out_of_scope_paths(tmp_path, monkeypatch) -> None:
