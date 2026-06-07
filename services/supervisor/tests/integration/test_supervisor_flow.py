@@ -1,5 +1,8 @@
 import asyncio
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -8,6 +11,68 @@ def _reset_supervisor_modules() -> None:
     for module_name in list(sys.modules):
         if module_name == "supervisor" or module_name.startswith("supervisor."):
             sys.modules.pop(module_name, None)
+
+
+def _run_git(repo_root: Path, *args: str) -> None:
+    subprocess.run(["git", *args], capture_output=True, text=True, check=True, cwd=repo_root)
+
+
+def _create_remote_delivery_repo(tmp_path: Path, branch_name: str) -> tuple[Path, Path, Path]:
+    repo_root = tmp_path / "remote-delivery-repo"
+    remote_root = tmp_path / "remote-delivery-remote.git"
+    shim_dir = tmp_path / "shim-bin"
+    repo_root.mkdir()
+    shim_dir.mkdir()
+
+    _run_git(tmp_path, "init", "--bare", remote_root.as_posix())
+    _run_git(tmp_path, "init", "-b", "main")
+    _run_git(repo_root, "config", "user.email", "codex@example.com")
+    _run_git(repo_root, "config", "user.name", "Codex")
+    (repo_root / "README.md").write_text("# remote delivery smoke test\n", encoding="utf-8")
+    _run_git(repo_root, "add", "README.md")
+    _run_git(repo_root, "commit", "-m", "Initial commit")
+    _run_git(repo_root, "remote", "add", "origin", remote_root.as_posix())
+    _run_git(repo_root, "checkout", "-b", branch_name)
+    (repo_root / "README.md").write_text("# remote delivery smoke test\n\nbranch ready for push\n", encoding="utf-8")
+    _run_git(repo_root, "add", "README.md")
+    _run_git(repo_root, "commit", "-m", "Prepare remote delivery branch")
+
+    gh_shim = shim_dir / "gh.cmd"
+    gh_shim.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                "setlocal enabledelayedexpansion",
+                "set \"GH_LOG=%GH_SHIM_LOG_PATH%\"",
+                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"create\" (",
+                "  echo https://github.com/example/repo/pull/789",
+                "  if not \"!GH_LOG!\"==\"\" echo create>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
+                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"view\" (",
+                "  echo https://github.com/example/repo/pull/789",
+                "  if not \"!GH_LOG!\"==\"\" echo view>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
+                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"checks\" (",
+                "  echo checks passed",
+                "  if not \"!GH_LOG!\"==\"\" echo checks>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
+                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"merge\" (",
+                "  echo merged",
+                "  if not \"!GH_LOG!\"==\"\" echo merge>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
+                "echo unexpected gh command",
+                "if not \"!GH_LOG!\"==\"\" echo unexpected>>\"!GH_LOG!\"",
+                "exit /b 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    return repo_root, remote_root, gh_shim
 
 
 def test_work_item_progresses_to_done_and_triggers_audit(tmp_path, monkeypatch) -> None:
@@ -1339,8 +1404,8 @@ def test_recipe_review_blocks_when_local_delivery_package_has_out_of_scope_paths
             "outOfScopePaths": [],
         },
     )
-    service._recipe_changed_paths = lambda item: ["docs/unplanned-change.md", "tests/e2e/dashboard.spec.ts"]  # type: ignore[method-assign]
-    service._git_output = lambda args: (True, " docs/unplanned-change.md | 1 +\n tests/e2e/dashboard.spec.ts | 12 ++++++++++++")  # type: ignore[method-assign]
+    service._recipe_changed_paths = lambda item: ["temp/unplanned-change.md", "tests/e2e/dashboard.spec.ts"]  # type: ignore[method-assign]
+    service._git_output = lambda args: (True, " temp/unplanned-change.md | 1 +\n tests/e2e/dashboard.spec.ts | 12 ++++++++++++")  # type: ignore[method-assign]
     service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
         {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
         {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
@@ -1397,7 +1462,7 @@ def test_recipe_review_blocks_when_local_delivery_package_has_out_of_scope_paths
         assert item["state"] == "reviewing"
         assert delivery["readyForApproval"] is False
         assert delivery_event["payload"]["readyForApproval"] is False
-        assert delivery_event["payload"]["outOfScopePaths"] == ["docs/unplanned-change.md"]
+        assert delivery_event["payload"]["outOfScopePaths"] == ["temp/unplanned-change.md"]
 
 
 def test_invalid_high_risk_dashboard_recipe_blocks_during_triage(tmp_path, monkeypatch) -> None:

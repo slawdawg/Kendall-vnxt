@@ -243,3 +243,22 @@ Remaining before supervisor-owned end-to-end development flow:
 
 - live remote-delivery smoke proof against a real repository/CI target instead of a mocked integration harness
 - operator review checkpoints for each automation boundary
+
+## Latest Supervisor-Managed Execution Update
+
+Progress:
+
+- The dashboard browser suite is green again with the managed path-scope stop aligned to the current supervisor state ladder.
+- The supervisor now has an opt-in remote-delivery executor behind `SUPERVISOR_ALLOW_REMOTE_DELIVERY`, with mocked integration coverage for push, PR creation, CI watch, and merge reporting.
+- The recipe gate audit still surfaces the live remote-delivery policy so operators can see whether remote operations are blocked, recorded, or explicitly enabled.
+
+Verification:
+
+- `uv run --directory services/supervisor pytest tests/integration/test_supervisor_flow.py -q -k remote_delivery`: 2 passed.
+- `pnpm run test:e2e:dashboard`: 12 passed.
+- `pnpm exec playwright test tests/e2e/dashboard.spec.ts -g "halts the managed recipe when implementation escapes the allowed path boundary"`: passed.
+
+Current status:
+
+- Supervisor-owned execution is now covering branch prep, path scope, managed actions, delivery readiness, and an opt-in remote-delivery seam.
+- A live end-to-end remote-delivery smoke run against a real repo/CI target is still the next high-value proof before claiming full supervisor ownership.
