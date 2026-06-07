@@ -249,7 +249,7 @@ Remaining before supervisor-owned end-to-end development flow:
 Progress:
 
 - The dashboard browser suite is green again with the managed path-scope stop aligned to the current supervisor state ladder.
-- The supervisor now has an opt-in remote-delivery executor behind `SUPERVISOR_ALLOW_REMOTE_DELIVERY`, with mocked integration coverage for push, PR creation, CI watch, and merge reporting.
+- The supervisor now has an opt-in remote-delivery executor behind `SUPERVISOR_ALLOW_REMOTE_DELIVERY`, with a real subprocess smoke test that pushes to a local bare remote and drives a `gh` shim through PR creation, CI watch, and merge reporting.
 - The recipe gate audit still surfaces the live remote-delivery policy so operators can see whether remote operations are blocked, recorded, or explicitly enabled.
 
 Verification:

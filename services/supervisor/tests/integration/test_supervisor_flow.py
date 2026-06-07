@@ -25,7 +25,7 @@ def _create_remote_delivery_repo(tmp_path: Path, branch_name: str) -> tuple[Path
     shim_dir.mkdir()
 
     _run_git(tmp_path, "init", "--bare", remote_root.as_posix())
-    _run_git(tmp_path, "init", "-b", "main")
+    _run_git(repo_root, "init", "-b", "main")
     _run_git(repo_root, "config", "user.email", "codex@example.com")
     _run_git(repo_root, "config", "user.name", "Codex")
     (repo_root / "README.md").write_text("# remote delivery smoke test\n", encoding="utf-8")
@@ -83,6 +83,7 @@ def test_work_item_progresses_to_done_and_triggers_audit(tmp_path, monkeypatch) 
     _reset_supervisor_modules()
 
     from supervisor.api.main import app, process_once_for_tests, service
+    import supervisor.application.service as service_module
 
     service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
 
@@ -1257,8 +1258,14 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
     _reset_supervisor_modules()
 
     from supervisor.api.main import app, process_once_for_tests, service
+    import supervisor.application.service as service_module
+
+    repo_root, remote_root, gh_shim = _create_remote_delivery_repo(tmp_path, "e2e-remote-delivery-enabled")
+    gh_log_path = tmp_path / "gh-shim.log"
+    monkeypatch.setenv("GH_SHIM_LOG_PATH", gh_log_path.as_posix())
 
     service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._repo_root = lambda: repo_root.as_posix()  # type: ignore[method-assign]
     service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
         None,
         {
@@ -1287,17 +1294,15 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
         {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
     ]
-    service._remote_delivery_commands = lambda item: [  # type: ignore[method-assign]
-        {"command": "git push -u origin e2e-remote-delivery-enabled", "exitCode": 0, "stdout": "pushed", "stderr": ""},
-        {
-            "command": "gh pr create --base main --head e2e-remote-delivery-enabled --title Managed remote delivery --body Verify the supervisor can execute remote delivery.",
-            "exitCode": 0,
-            "stdout": "https://github.com/example/repo/pull/456",
-            "stderr": "",
-        },
-        {"command": "gh pr checks --watch --fail-fast", "exitCode": 0, "stdout": "checks passed", "stderr": ""},
-        {"command": "gh pr merge --squash --delete-branch", "exitCode": 0, "stdout": "merged", "stderr": ""},
-    ]
+
+    original_which = service_module.shutil.which
+
+    def fake_which(executable):  # type: ignore[no-untyped-def]
+        if executable == "gh":
+            return gh_shim.as_posix()
+        return original_which(executable)
+
+    monkeypatch.setattr(service_module.shutil, "which", fake_which)
 
     with TestClient(app) as client:
         created = client.post(
@@ -1366,6 +1371,16 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         after_action = audit_after_remote.json()["data"]["nextManagedAction"]
 
         assert item["state"] == "done"
+        assert (
+            subprocess.run(
+                ["git", "--git-dir", remote_root.as_posix(), "rev-parse", "--verify", "refs/heads/e2e-remote-delivery-enabled"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+        assert gh_log_path.read_text(encoding="utf-8").splitlines() == ["create", "checks", "merge"]
         assert delivery["remoteOperationsPerformed"] is True
         assert delivery["pullRequestStatus"] == "recorded"
         assert delivery["ciStatus"] == "passed"
