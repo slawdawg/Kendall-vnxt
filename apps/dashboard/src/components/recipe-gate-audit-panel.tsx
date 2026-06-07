@@ -75,6 +75,17 @@ export function RecipeGateAuditPanel({ audit, workItemId }: { audit: WorkItemRec
           {nextAction.operatorCheckpoint ? <span className="rounded-full border px-3 py-1">Checkpoint: {nextAction.operatorCheckpoint}</span> : null}
           <span className="rounded-full border px-3 py-1">Remote: {nextAction.remoteOperation ? "required" : "blocked"}</span>
         </div>
+        {nextAction.recovery ? (
+          <div className="mt-4 rounded-2xl border border-[color-mix(in_srgb,var(--warn)_32%,transparent)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold">{nextAction.recovery.label}</p>
+              <span className="rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--warn)]">
+                {nextAction.recovery.mode}
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-[var(--muted)]">{nextAction.recovery.detail}</p>
+          </div>
+        ) : null}
         {canExecute ? (
           <div className="mt-4 space-y-3">
             <label className="flex flex-col gap-2">

@@ -96,6 +96,12 @@ class WorkItemRecipeGateAuditEntryView(BaseModel):
     reason: str | None = None
 
 
+class WorkItemManagedActionRecoveryView(BaseModel):
+    mode: str
+    label: str
+    detail: str
+
+
 class WorkItemManagedActionView(BaseModel):
     actionId: str
     label: str
@@ -105,6 +111,7 @@ class WorkItemManagedActionView(BaseModel):
     operatorCheckpoint: str | None = None
     allowedActor: str
     remoteOperation: bool = False
+    recovery: WorkItemManagedActionRecoveryView | None = None
 
 
 class WorkItemRecipeGateAuditView(BaseModel):

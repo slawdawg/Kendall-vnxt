@@ -2272,6 +2272,7 @@ class SupervisorService:
                 requiredGate=blocked_gate.gateId,
                 operatorCheckpoint="blocked-gate-resolution",
                 allowedActor="operator",
+                recovery=self._blocked_gate_recovery(blocked_gate),
             )
 
         state = WorkflowState(item.state)
@@ -2342,6 +2343,7 @@ class SupervisorService:
                     operatorCheckpoint="remote-delivery" if remote_ready else "remote-delivery-preflight",
                     allowedActor="supervisor",
                     remoteOperation=True,
+                    recovery=None if remote_ready else self._remote_delivery_preflight_recovery(),
                 )
             return WorkItemManagedActionView(
                 actionId=WorkflowAction.APPROVE_REVIEW.value if delivery_ready else "record_delivery_readiness",
@@ -2375,6 +2377,7 @@ class SupervisorService:
                 requiredGate=None,
                 operatorCheckpoint="blocked-work-item-resolution",
                 allowedActor="operator",
+                recovery=self._blocked_work_item_recovery(item),
             )
         if state == WorkflowState.DONE:
             return WorkItemManagedActionView(
@@ -2395,6 +2398,65 @@ class SupervisorService:
             operatorCheckpoint="operator-review",
             allowedActor="operator",
         )
+
+    def _blocked_gate_recovery(self, gate: WorkItemRecipeGateAuditEntryView) -> dict[str, str]:
+        reason = (gate.reason or "").lower()
+        if "dirty" in reason or "working tree" in reason:
+            return {
+                "mode": "human-only",
+                "label": "Clean the working tree manually",
+                "detail": "Inspect the local changes and commit, stash, or remove them before allowing the supervisor to continue.",
+            }
+        if gate.gateId == "path-scope":
+            return {
+                "mode": "human-only",
+                "label": "Repair out-of-scope changes manually",
+                "detail": "Review and remove or intentionally re-scope the out-of-bound changes before the supervisor can continue.",
+            }
+        if gate.gateId == "branch-ownership":
+            return {
+                "mode": "operator-checkpoint",
+                "label": "Review branch ownership",
+                "detail": "Confirm the recorded execution branch, prepare the branch again if safe, or hand the work item back for manual branch repair.",
+            }
+        if gate.gateId == "clean-worktree":
+            return {
+                "mode": "human-only",
+                "label": "Clean the working tree manually",
+                "detail": "Inspect the local changes and commit, stash, or remove them before allowing the supervisor to continue.",
+            }
+        return {
+            "mode": "operator-checkpoint",
+            "label": "Review blocked policy gate",
+            "detail": "Review the gate evidence and record the appropriate operator checkpoint before continuing.",
+        }
+
+    def _blocked_work_item_recovery(self, item: WorkItem) -> dict[str, str]:
+        reason = (item.blocked_reason or "").lower()
+        if "dirty" in reason or "working tree" in reason:
+            return {
+                "mode": "human-only",
+                "label": "Clean the working tree manually",
+                "detail": "Inspect the local changes and commit, stash, or remove them before allowing the supervisor to continue.",
+            }
+        if "branch" in reason:
+            return {
+                "mode": "operator-checkpoint",
+                "label": "Review branch ownership",
+                "detail": "Confirm the recorded execution branch, prepare the branch again if safe, or hand the work item back for manual branch repair.",
+            }
+        return {
+            "mode": "operator-checkpoint",
+            "label": "Review blocked work item",
+            "detail": "Review the blocked reason and decide whether to repair locally, re-scope the work, or hand it back for manual handling.",
+        }
+
+    def _remote_delivery_preflight_recovery(self) -> dict[str, str]:
+        return {
+            "mode": "operator-checkpoint",
+            "label": "Restore live target readiness",
+            "detail": "Resolve the remote-delivery preflight issue, then refresh the policy ledger before retrying remote delivery.",
+        }
 
     def _recipe_gate_audit_entry(
         self,
