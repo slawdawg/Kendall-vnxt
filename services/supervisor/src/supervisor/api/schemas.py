@@ -31,14 +31,104 @@ class WorkItemActionRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkItemManagedActionRequest(BaseModel):
+    expectedActionId: str | None = None
+    note: str | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
+class WorkItemDeliveryReadinessRequest(BaseModel):
+    pullRequestStatus: str | None = None
+    pullRequestUrl: str | None = None
+    ciStatus: str | None = None
+    mergeStatus: str | None = None
+    deliveryWaived: bool = False
+    deliveryWaiverReason: str | None = None
+    note: str | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
+class WorkItemBranchPreparationRequest(BaseModel):
+    note: str | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
+class WorkItemDeliveryReadinessView(BaseModel):
+    pullRequestStatus: str
+    pullRequestUrl: str | None = None
+    ciStatus: str
+    mergeStatus: str
+    deliveryWaived: bool = False
+    deliveryWaiverReason: str | None = None
+    remoteOperationsPerformed: bool = False
+    remoteOperationsPolicy: str
+    readyForApproval: bool = False
+
+
+class WorkItemPolicyGateView(BaseModel):
+    id: str
+    label: str
+    requiredBefore: str
+    summary: str
+    evidence: list[str]
+
+
+class WorkItemRemoteAutomationPolicyView(BaseModel):
+    status: str
+    summary: str
+    allowedOperations: list[str]
+    blockedOperations: list[str]
+    approvalRequirements: list[str]
+
+
+class WorkItemRecipeGateAuditEntryView(BaseModel):
+    gateId: str
+    label: str
+    requiredBefore: str
+    status: str
+    summary: str
+    evidence: list[str]
+    latestEventType: str | None = None
+    latestEventAt: datetime | None = None
+    reason: str | None = None
+
+
+class WorkItemManagedActionView(BaseModel):
+    actionId: str
+    label: str
+    status: str
+    reason: str
+    requiredGate: str | None = None
+    operatorCheckpoint: str | None = None
+    allowedActor: str
+    remoteOperation: bool = False
+
+
+class WorkItemRecipeGateAuditView(BaseModel):
+    recipeId: str
+    status: str
+    passedCount: int
+    blockedCount: int
+    pendingCount: int
+    gates: list[WorkItemRecipeGateAuditEntryView]
+    nextManagedAction: WorkItemManagedActionView
+
+
 class WorkItemExecutionRecipeView(BaseModel):
     id: str
     label: str
     summary: str
     branchPrefix: str
     allowedPaths: list[str]
+    implementationCommands: list[str]
     verificationCommands: list[str]
+    policyGates: list[WorkItemPolicyGateView]
+    operatorCheckpoints: list[str]
     autonomyNotes: list[str]
+    remoteAutomationPolicy: WorkItemRemoteAutomationPolicyView
 
 
 class WorkItemView(BaseModel):
@@ -66,6 +156,7 @@ class WorkItemView(BaseModel):
     selfDetectedIssue: bool = False
     selfDetectedIssueCategory: str | None = None
     executionRecipe: WorkItemExecutionRecipeView | None = None
+    deliveryReadiness: WorkItemDeliveryReadinessView | None = None
     createdAt: datetime
     updatedAt: datetime
     lastEventAt: datetime

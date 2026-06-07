@@ -1,5 +1,8 @@
 import asyncio
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -10,6 +13,118 @@ def _reset_supervisor_modules() -> None:
             sys.modules.pop(module_name, None)
 
 
+def _run_git(repo_root: Path, *args: str) -> None:
+    subprocess.run(["git", *args], capture_output=True, text=True, check=True, cwd=repo_root)
+
+
+def _create_remote_delivery_repo(tmp_path: Path, branch_name: str) -> tuple[Path, Path, Path]:
+    repo_root = tmp_path / "remote-delivery-repo"
+    remote_root = tmp_path / "remote-delivery-remote.git"
+    shim_dir = tmp_path / "shim-bin"
+    repo_root.mkdir()
+    shim_dir.mkdir()
+
+    _run_git(tmp_path, "init", "--bare", remote_root.as_posix())
+    _run_git(repo_root, "init", "-b", "main")
+    _run_git(repo_root, "config", "user.email", "codex@example.com")
+    _run_git(repo_root, "config", "user.name", "Codex")
+    (repo_root / "README.md").write_text("# remote delivery smoke test\n", encoding="utf-8")
+    _run_git(repo_root, "add", "README.md")
+    _run_git(repo_root, "commit", "-m", "Initial commit")
+    _run_git(repo_root, "remote", "add", "origin", remote_root.as_posix())
+    _run_git(repo_root, "checkout", "-b", branch_name)
+    (repo_root / "README.md").write_text("# remote delivery smoke test\n\nbranch ready for push\n", encoding="utf-8")
+    _run_git(repo_root, "add", "README.md")
+    _run_git(repo_root, "commit", "-m", "Prepare remote delivery branch")
+
+    gh_cmd_shim = shim_dir / "gh.cmd"
+    gh_cmd_shim.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                "setlocal enabledelayedexpansion",
+                "set \"GH_LOG=%GH_SHIM_LOG_PATH%\"",
+                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"create\" (",
+                "  echo https://github.com/example/repo/pull/789",
+                "  if not \"!GH_LOG!\"==\"\" echo create>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
+                "if /I \"%1\"==\"auth\" if /I \"%2\"==\"status\" (",
+                "  echo github.com",
+                "  echo   ✓ Logged in to github.com account slawdawg (keyring)",
+                "  if not \"!GH_LOG!\"==\"\" echo auth>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
+                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"view\" (",
+                "  echo https://github.com/example/repo/pull/789",
+                "  if not \"!GH_LOG!\"==\"\" echo view>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
+                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"checks\" (",
+                "  echo checks passed",
+                "  if not \"!GH_LOG!\"==\"\" echo checks>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
+                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"merge\" (",
+                "  echo merged",
+                "  if not \"!GH_LOG!\"==\"\" echo merge>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
+                "echo unexpected gh command",
+                "if not \"!GH_LOG!\"==\"\" echo unexpected>>\"!GH_LOG!\"",
+                "exit /b 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    gh_shim = shim_dir / "gh"
+    gh_shim.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env sh",
+                'GH_LOG="${GH_SHIM_LOG_PATH:-}"',
+                'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then',
+                "  echo https://github.com/example/repo/pull/789",
+                '  [ -n "$GH_LOG" ] && echo create >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then',
+                "  echo github.com",
+                "  echo '  Logged in to github.com account slawdawg (keyring)'",
+                '  [ -n "$GH_LOG" ] && echo auth >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then',
+                "  echo https://github.com/example/repo/pull/789",
+                '  [ -n "$GH_LOG" ] && echo view >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                'if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then',
+                "  echo checks passed",
+                '  [ -n "$GH_LOG" ] && echo checks >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                'if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then',
+                "  echo merged",
+                '  [ -n "$GH_LOG" ] && echo merge >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                "echo unexpected gh command",
+                '  [ -n "$GH_LOG" ] && echo unexpected >> "$GH_LOG"',
+                "exit 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gh_shim.chmod(0o755)
+
+    if os.name == "nt":
+        gh_shim = gh_cmd_shim
+
+    return repo_root, remote_root, gh_shim
+
+
 def test_work_item_progresses_to_done_and_triggers_audit(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "supervisor.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -18,6 +133,7 @@ def test_work_item_progresses_to_done_and_triggers_audit(tmp_path, monkeypatch) 
     _reset_supervisor_modules()
 
     from supervisor.api.main import app, process_once_for_tests, service
+    import supervisor.application.service as service_module
 
     service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
 
@@ -470,6 +586,33 @@ def test_supervisor_generated_self_detected_issue_is_exposed_in_work_item_view(t
         assert item["selfDetectedIssueCategory"] == "workspace-health"
 
 
+def test_execution_recipe_catalog_is_exposed_by_supervisor(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-catalog.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/execution-recipes")
+        assert response.status_code == 200
+
+        recipes = response.json()["data"]
+        recipe_by_id = {recipe["id"]: recipe for recipe in recipes}
+        assert set(recipe_by_id) == {"dashboard-test-coverage", "dashboard-mobile-coverage"}
+        assert recipe_by_id["dashboard-test-coverage"]["implementationCommands"] == [
+            "node scripts/dashboard-test-coverage-recipe.mjs",
+            "pnpm run lint:dashboard",
+        ]
+        assert recipe_by_id["dashboard-mobile-coverage"]["branchPrefix"] == "mobile-e2e-"
+        assert "delivery-readiness" in [
+            gate["id"] for gate in recipe_by_id["dashboard-mobile-coverage"]["policyGates"]
+        ]
+        assert recipe_by_id["dashboard-test-coverage"]["remoteAutomationPolicy"]["status"] == "blocked"
+
+
 def test_execution_recipe_is_exposed_and_selected_event_is_recorded(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "recipe-view.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -497,6 +640,18 @@ def test_execution_recipe_is_exposed_and_selected_event_is_recorded(tmp_path, mo
 
         item = created.json()["data"]
         assert item["executionRecipe"]["id"] == "dashboard-test-coverage"
+        assert item["executionRecipe"]["policyGates"][0]["id"] == "scope"
+        assert "path-scope" in [gate["id"] for gate in item["executionRecipe"]["policyGates"]]
+        assert "delivery-readiness" in [gate["id"] for gate in item["executionRecipe"]["policyGates"]]
+        assert "Review the generated scope before implementation begins." in item["executionRecipe"]["operatorCheckpoints"]
+        assert "Confirm PR, CI, and merge readiness before final approval." in item["executionRecipe"]["operatorCheckpoints"]
+        assert item["executionRecipe"]["implementationCommands"] == [
+            "node scripts/dashboard-test-coverage-recipe.mjs",
+            "pnpm run lint:dashboard",
+        ]
+        assert item["executionRecipe"]["remoteAutomationPolicy"]["status"] == "blocked"
+        assert "pull request creation" in item["executionRecipe"]["remoteAutomationPolicy"]["blockedOperations"]
+        assert "KNX data boundary accepts the remote destination" in item["executionRecipe"]["remoteAutomationPolicy"]["approvalRequirements"]
         assert "pnpm run test:e2e:dashboard" in item["executionRecipe"]["verificationCommands"]
 
         work_item_id = item["id"]
@@ -504,6 +659,974 @@ def test_execution_recipe_is_exposed_and_selected_event_is_recorded(tmp_path, mo
         assert events_response.status_code == 200
         event_types = [event["eventType"] for event in events_response.json()["data"]]
         assert "recipe.selected" in event_types
+
+
+def test_mobile_execution_recipe_is_exposed_and_selected_event_is_recorded(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "mobile-recipe-view.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cover mobile intake",
+                "requestedOutcome": "Add focused mobile browser coverage for the dashboard intake flow.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "medium",
+                "metadata": {
+                    "executionRecipeId": "dashboard-mobile-coverage",
+                    "intakeTemplateId": "operator-mobile-coverage",
+                },
+            },
+        )
+        assert created.status_code == 200
+
+        item = created.json()["data"]
+        assert item["executionRecipe"]["id"] == "dashboard-mobile-coverage"
+        assert item["executionRecipe"]["label"] == "Dashboard mobile coverage"
+        assert item["executionRecipe"]["branchPrefix"] == "mobile-e2e-"
+        assert item["executionRecipe"]["implementationCommands"] == [
+            "node scripts/dashboard-mobile-coverage-recipe.mjs",
+            "pnpm run lint:dashboard",
+        ]
+        assert item["executionRecipe"]["remoteAutomationPolicy"]["status"] == "blocked"
+        assert "record explicit local-only waiver" in item["executionRecipe"]["remoteAutomationPolicy"]["allowedOperations"]
+        assert "path-scope" in [gate["id"] for gate in item["executionRecipe"]["policyGates"]]
+        assert "pnpm run test:e2e:dashboard" in item["executionRecipe"]["verificationCommands"]
+
+        work_item_id = item["id"]
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        assert events_response.status_code == 200
+        selected_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.selected")
+        assert selected_event["payload"]["recipeId"] == "dashboard-mobile-coverage"
+        assert selected_event["payload"]["branchPrefix"] == "mobile-e2e-"
+
+
+def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-branch-prep.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    current_branch = {"value": "main"}
+    git_commands = []
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    def fake_git_output(args):  # type: ignore[no-untyped-def]
+        if args == ["git", "branch", "--show-current"]:
+            return True, current_branch["value"]
+        if args == ["git", "rev-parse", "--verify", "main"]:
+            return True, "base-revision"
+        return True, "base-revision"
+
+    def fake_git_success(args):  # type: ignore[no-untyped-def]
+        if args == ["git", "show-ref", "--verify", "--quiet", "refs/heads/e2e-branch-prep"]:
+            return False
+        if args == ["git", "merge-base", "--is-ancestor", "base-revision", "HEAD"]:
+            return True
+        return True
+
+    def fake_run_git_command(args):  # type: ignore[no-untyped-def]
+        git_commands.append(args)
+        current_branch["value"] = "e2e-branch-prep"
+        return {"command": " ".join(args), "exitCode": 0, "stdout": "created", "stderr": ""}
+
+    service._git_output = fake_git_output  # type: ignore[method-assign]
+    service._git_success = fake_git_success  # type: ignore[method-assign]
+    service._run_git_command = fake_run_git_command  # type: ignore[method-assign]
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": [],
+        },
+    )
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Branch prep",
+                "requestedOutcome": "Prepare a recipe branch before implementation starts.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "medium",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-branch-prep",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        asyncio.run(process_once_for_tests())
+        asyncio.run(process_once_for_tests())
+
+        audit_before_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        response = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={
+                "expectedActionId": "prepare_recipe_branch",
+                "note": "Prepare the supervised recipe branch.",
+                "actorId": "operator-1",
+                "actorLabel": "Primary operator",
+            },
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+
+        assert audit_before_response.status_code == 200
+        before_action = audit_before_response.json()["data"]["nextManagedAction"]
+        assert before_action["actionId"] == "prepare_recipe_branch"
+        assert before_action["requiredGate"] == "branch-ownership"
+        assert before_action["operatorCheckpoint"] == "branch-preparation"
+        assert before_action["allowedActor"] == "operator"
+        assert before_action["remoteOperation"] is False
+        assert response.status_code == 200
+        assert response.json()["data"]["state"] == "ready"
+        assert git_commands == [["git", "switch", "-c", "e2e-branch-prep", "base-revision"]]
+        branch_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.branch_prepared")
+        assert branch_event["actorLabel"] == "Primary operator"
+        assert branch_event["payload"]["policyGate"] == "branch-ownership"
+        assert branch_event["payload"]["operatorCheckpoint"] == "branch-preparation"
+        assert branch_event["payload"]["expectedBranch"] == "e2e-branch-prep"
+        assert branch_event["payload"]["command"]["exitCode"] == 0
+        audit_after = audit_response.json()["data"]
+        gate_statuses = {gate["gateId"]: gate["status"] for gate in audit_after["gates"]}
+        assert gate_statuses["branch-ownership"] == "passed"
+        assert audit_after["nextManagedAction"]["actionId"] == "run_recipe_implementation"
+        assert audit_after["nextManagedAction"]["allowedActor"] == "supervisor"
+
+        run_response = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={
+                "expectedActionId": "run_recipe_implementation",
+                "actorId": "operator-1",
+                "actorLabel": "Primary operator",
+            },
+        )
+        run_events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert run_response.status_code == 200
+        assert run_response.json()["data"]["state"] == "implementing"
+        run_event_types = [event["eventType"] for event in run_events_response.json()["data"]]
+        assert "recipe.implementation_passed" in run_event_types
+        assert "recipe.implementing" in run_event_types
+
+
+def test_recipe_branch_preparation_blocks_when_repo_is_dirty(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-branch-prep-dirty.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: True  # type: ignore[method-assign]
+    service._git_output = lambda args: (  # type: ignore[method-assign]
+        (True, "main")
+        if args == ["git", "branch", "--show-current"]
+        else (True, "base-revision")
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Dirty branch prep",
+                "requestedOutcome": "Dirty worktrees must block branch preparation.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "medium",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-dirty-branch-prep",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        asyncio.run(process_once_for_tests())
+        asyncio.run(process_once_for_tests())
+
+        response = client.post(f"/work-items/{work_item_id}/prepare-branch", json={})
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert response.status_code == 200
+        item = response.json()["data"]
+        assert item["state"] == "blocked"
+        assert item["blockedReason"] == "Repository is dirty. Clean the working tree before preparing a recipe branch."
+        branch_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.branch_preparation_failed")
+        assert branch_event["payload"]["policyGate"] == "branch-ownership"
+        assert branch_event["payload"]["reason"] == item["blockedReason"]
+
+
+def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-managed-next-action.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._prepare_recipe_branch = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-managed-next-action",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBranch": "e2e-managed-next-action",
+            "currentBaseRevision": "base-revision",
+            "alreadyPrepared": True,
+        },
+    )
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-managed-next-action",
+            "currentBranch": "e2e-managed-next-action",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": [],
+        },
+    )
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Managed next action",
+                "requestedOutcome": "Prove the supervisor executes only the current approved recipe step.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-managed-next-action",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        triaged = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={
+                "expectedActionId": "supervisor_triage",
+                "note": "Supervisor may validate scope.",
+                "actorId": "operator:managed-action-test",
+                "actorLabel": "Primary operator",
+            },
+        )
+        stale = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={"expectedActionId": "supervisor_triage"},
+        )
+        prepared = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={
+                "expectedActionId": "prepare_recipe_branch",
+                "note": "Branch checkpoint approved.",
+                "actorId": "operator:managed-action-test",
+                "actorLabel": "Primary operator",
+            },
+        )
+        implemented = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={"expectedActionId": "run_recipe_implementation"},
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+
+        assert triaged.status_code == 200
+        assert triaged.json()["data"]["state"] == "ready"
+        assert stale.status_code == 409
+        assert "Managed action changed from supervisor_triage to prepare_recipe_branch" in stale.json()["detail"]["error"]["message"]
+        assert prepared.status_code == 200
+        assert prepared.json()["data"]["state"] == "ready"
+        assert implemented.status_code == 200
+        assert implemented.json()["data"]["state"] == "implementing"
+        assert events_response.status_code == 200
+        assert audit_response.status_code == 200
+
+        events = events_response.json()["data"]
+        branch_event = next(event for event in events if event["eventType"] == "recipe.branch_prepared")
+        implementation_event = next(event for event in events if event["eventType"] == "recipe.implementation_passed")
+        audit = audit_response.json()["data"]
+
+        assert branch_event["actorLabel"] == "Primary operator"
+        assert branch_event["payload"]["operatorCheckpoint"] == "branch-preparation"
+        assert implementation_event["payload"]["operatorCheckpoint"] == "implementation-command-run"
+        assert audit["nextManagedAction"]["actionId"] == "submit_for_validation"
+
+
+def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-checkpoints.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-recipe-checkpoints",
+            "currentBranch": "e2e-recipe-checkpoints",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": [],
+        },
+    )
+    original_git_output = service._git_output
+    service._recipe_changed_paths = lambda item: ["tests/e2e/dashboard.spec.ts"]  # type: ignore[method-assign]
+    service._git_output = lambda args: (  # type: ignore[method-assign]
+        (True, " tests/e2e/dashboard.spec.ts | 12 ++++++++++++")
+        if args[:3] == ["git", "diff", "--stat"]
+        else original_git_output(args)
+    )
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+    service._run_recipe_verification_commands = lambda recipe: [  # type: ignore[method-assign]
+        {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Recipe checkpoint evidence",
+                "requestedOutcome": "Prove recipe work cannot skip operator checkpoint evidence.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-recipe-checkpoints",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        missing_validation_note = client.post(f"/work-items/{work_item_id}/actions", json={"action": "submit_for_validation"})
+        validation_note = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "submit_for_validation", "note": "Dashboard recipe checks are ready for validation."},
+        )
+        missing_review_note = client.post(f"/work-items/{work_item_id}/actions", json={"action": "validation_passed"})
+        review_note = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "validation_passed", "note": "Required recipe verification passed."},
+        )
+        missing_approval_note = client.post(f"/work-items/{work_item_id}/actions", json={"action": "approve_review"})
+        approval_without_delivery = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "approve_review", "note": "Operator approves before delivery evidence."},
+        )
+        delivery_ready = client.post(
+            f"/work-items/{work_item_id}/delivery-readiness",
+            json={
+                "pullRequestStatus": "recorded",
+                "pullRequestUrl": "https://github.com/example/repo/pull/456",
+                "ciStatus": "passed",
+                "mergeStatus": "ready",
+                "note": "Delivery evidence is recorded.",
+            },
+        )
+        approval_note = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "approve_review", "note": "Operator approves the recipe output."},
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+
+        assert missing_validation_note.status_code == 409
+        assert validation_note.status_code == 200
+        assert missing_review_note.status_code == 409
+        assert review_note.status_code == 200
+        assert missing_approval_note.status_code == 409
+        assert approval_without_delivery.status_code == 409
+        assert delivery_ready.status_code == 200
+        assert approval_note.status_code == 200
+        assert events_response.status_code == 200
+        assert audit_response.status_code == 200
+
+        events = events_response.json()["data"]
+        audit = audit_response.json()["data"]
+        selected_event = next(event for event in events if event["eventType"] == "recipe.selected")
+        ready_event = next(event for event in events if event["eventType"] == "recipe.ready")
+        implementation_path_scope_event = next(event for event in events if event["eventType"] == "recipe.implementation_path_scope_passed")
+        implementation_event = next(event for event in events if event["eventType"] == "recipe.implementation_passed")
+        implementing_event = next(event for event in events if event["eventType"] == "recipe.implementing")
+        path_scope_event = next(event for event in events if event["eventType"] == "recipe.path_scope_passed")
+        delivery_event = next(event for event in events if event["eventType"] == "recipe.delivery_gate_recorded")
+        reviewing_event = next(event for event in events if event["eventType"] == "workflow.reviewing")
+        done_event = next(event for event in events if event["eventType"] == "workflow.done")
+
+        assert selected_event["payload"]["policyGates"] == [
+            "scope",
+            "clean-worktree",
+            "branch-ownership",
+            "implementation-automation",
+            "path-scope",
+            "verification",
+            "delivery-readiness",
+            "review",
+        ]
+        assert ready_event["payload"]["policyGate"] == "scope"
+        assert ready_event["payload"]["operatorCheckpoint"] == "scope-reviewed"
+        assert implementation_path_scope_event["payload"]["policyGate"] == "path-scope"
+        assert implementation_path_scope_event["payload"]["operatorCheckpoint"] == "implementation-path-scope"
+        assert implementation_path_scope_event["payload"]["outOfScopePaths"] == []
+        assert implementation_event["payload"]["policyGate"] == "implementation-automation"
+        assert implementation_event["payload"]["operatorCheckpoint"] == "implementation-command-run"
+        assert implementation_event["payload"]["commands"][0]["command"] == "node scripts/dashboard-test-coverage-recipe.mjs"
+        assert implementing_event["payload"]["policyGate"] == "branch-ownership"
+        assert implementing_event["payload"]["operatorCheckpoint"] == "implementation-start"
+        assert implementing_event["payload"]["passedPolicyGates"] == ["clean-worktree", "branch-ownership", "implementation-automation"]
+        assert implementing_event["payload"]["expectedBranch"] == "e2e-recipe-checkpoints"
+        assert path_scope_event["payload"]["policyGate"] == "path-scope"
+        assert path_scope_event["payload"]["operatorCheckpoint"] == "path-scope-check"
+        assert path_scope_event["payload"]["changedPaths"] == ["tests/e2e/dashboard.spec.ts"]
+        assert path_scope_event["payload"]["outOfScopePaths"] == []
+        verification_event = next(event for event in events if event["eventType"] == "recipe.verification_passed")
+        assert verification_event["payload"]["operatorCheckpoint"] == "verification-command-run"
+        assert [result["command"] for result in verification_event["payload"]["commands"]] == [
+            "pnpm run test:e2e:dashboard",
+            "pnpm run check",
+        ]
+        assert delivery_event["payload"]["policyGate"] == "delivery-readiness"
+        assert delivery_event["payload"]["operatorCheckpoint"] == "delivery-gate"
+        assert delivery_event["payload"]["localDeliveryPackageStatus"] == "ready"
+        assert delivery_event["payload"]["localDeliveryPackageKind"] == "git-diff-summary"
+        assert delivery_event["payload"]["changedPaths"] == ["tests/e2e/dashboard.spec.ts"]
+        assert delivery_event["payload"]["outOfScopePaths"] == []
+        assert delivery_event["payload"]["diffStatAvailable"] is True
+        assert "tests/e2e/dashboard.spec.ts" in delivery_event["payload"]["diffStat"]
+        assert delivery_event["payload"]["readyForApproval"] is False
+        assert delivery_event["payload"]["pullRequestStatus"] == "not_recorded"
+        assert delivery_event["payload"]["ciStatus"] == "not_recorded"
+        assert delivery_event["payload"]["mergeStatus"] == "not_recorded"
+        assert delivery_event["payload"]["remoteOperationsPerformed"] is False
+        assert reviewing_event["payload"]["policyGate"] == "verification"
+        assert reviewing_event["payload"]["operatorCheckpoint"] == "review-entry"
+        assert done_event["payload"]["policyGate"] == "review"
+        assert done_event["payload"]["operatorCheckpoint"] == "operator-review"
+        assert audit["recipeId"] == "dashboard-test-coverage"
+        assert audit["status"] == "passed"
+        assert audit["passedCount"] == 8
+        assert audit["blockedCount"] == 0
+        assert audit["nextManagedAction"]["actionId"] == "complete"
+        assert audit["nextManagedAction"]["status"] == "complete"
+        assert audit["nextManagedAction"]["remoteOperation"] is False
+        gate_status = {entry["gateId"]: entry["status"] for entry in audit["gates"]}
+        assert gate_status == {
+            "scope": "passed",
+            "clean-worktree": "passed",
+            "branch-ownership": "passed",
+            "implementation-automation": "passed",
+            "path-scope": "passed",
+            "verification": "passed",
+            "delivery-readiness": "passed",
+            "review": "passed",
+        }
+
+
+def test_recipe_review_can_record_remote_delivery_evidence_before_approval(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-delivery-ready.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-delivery-ready",
+            "currentBranch": "e2e-delivery-ready",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": [],
+        },
+    )
+    service._recipe_changed_paths = lambda item: ["tests/e2e/dashboard.spec.ts"]  # type: ignore[method-assign]
+    service._git_output = lambda args: (True, " tests/e2e/dashboard.spec.ts | 12 ++++++++++++")  # type: ignore[method-assign]
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+    service._run_recipe_verification_commands = lambda recipe: [  # type: ignore[method-assign]
+        {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Recipe delivery evidence",
+                "requestedOutcome": "Prove delivery evidence can unlock recipe review approval.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-delivery-ready",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "submit_for_validation", "note": "Recipe checks are ready."},
+        ).status_code == 200
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "validation_passed", "note": "Verification evidence is recorded."},
+        ).status_code == 200
+        audit_before_delivery = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        blocked_approval = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "approve_review", "note": "Operator approves before delivery evidence."},
+        )
+        delivery_ready = client.post(
+            f"/work-items/{work_item_id}/delivery-readiness",
+            json={
+                "pullRequestStatus": "recorded",
+                "pullRequestUrl": "https://github.com/example/repo/pull/123",
+                "ciStatus": "passed",
+                "mergeStatus": "ready",
+                "note": "PR, CI, and merge readiness are recorded.",
+            },
+        )
+        approved = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "approve_review", "note": "Operator approves after delivery evidence."},
+        )
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        audit_after_delivery = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+
+        assert audit_before_delivery.status_code == 200
+        assert blocked_approval.status_code == 409
+        assert delivery_ready.status_code == 200
+        assert approved.status_code == 200
+        assert item_response.status_code == 200
+        assert events_response.status_code == 200
+        assert audit_after_delivery.status_code == 200
+
+        item = item_response.json()["data"]
+        delivery = item["deliveryReadiness"]
+        update_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.delivery_readiness_updated")
+        before_action = audit_before_delivery.json()["data"]["nextManagedAction"]
+        after_action = audit_after_delivery.json()["data"]["nextManagedAction"]
+
+        assert item["state"] == "done"
+        assert before_action["actionId"] == "record_delivery_readiness"
+        assert before_action["status"] == "available"
+        assert before_action["requiredGate"] == "delivery-readiness"
+        assert before_action["allowedActor"] == "operator"
+        assert before_action["remoteOperation"] is False
+        assert after_action["actionId"] == "complete"
+        assert delivery["readyForApproval"] is True
+        assert delivery["pullRequestStatus"] == "recorded"
+        assert delivery["ciStatus"] == "passed"
+        assert delivery["mergeStatus"] == "ready"
+        assert delivery["remoteOperationsPerformed"] is False
+        assert update_event["payload"]["pullRequestUrl"] == "https://github.com/example/repo/pull/123"
+
+
+def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-remote-delivery-enabled.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_REMOTE_DELIVERY", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+    import supervisor.application.service as service_module
+
+    repo_root, remote_root, gh_shim = _create_remote_delivery_repo(tmp_path, "e2e-remote-delivery-enabled")
+    gh_log_path = tmp_path / "gh-shim.log"
+    monkeypatch.setenv("GH_SHIM_LOG_PATH", gh_log_path.as_posix())
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._repo_root = lambda: repo_root.as_posix()  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-remote-delivery-enabled",
+            "currentBranch": "e2e-remote-delivery-enabled",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": [],
+        },
+    )
+    service._recipe_changed_paths = lambda item: ["tests/e2e/dashboard.spec.ts"]  # type: ignore[method-assign]
+    service._git_output = lambda args: (True, " tests/e2e/dashboard.spec.ts | 12 ++++++++++++")  # type: ignore[method-assign]
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+    service._run_recipe_verification_commands = lambda recipe: [  # type: ignore[method-assign]
+        {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    original_which = service_module.shutil.which
+
+    def fake_which(executable):  # type: ignore[no-untyped-def]
+        if executable == "gh":
+            return gh_shim.as_posix()
+        return original_which(executable)
+
+    monkeypatch.setattr(service_module.shutil, "which", fake_which)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Remote delivery enabled",
+                "requestedOutcome": "Prove the supervisor can execute remote delivery when policy allows it.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-remote-delivery-enabled",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "submit_for_validation", "note": "Recipe checks are ready."},
+        ).status_code == 200
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "validation_passed", "note": "Verification evidence is recorded."},
+        ).status_code == 200
+
+        audit_before_remote = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        remote_action = audit_before_remote.json()["data"]["nextManagedAction"]
+        assert remote_action["actionId"] == "execute_remote_delivery"
+        assert remote_action["status"] == "available"
+        assert remote_action["remoteOperation"] is True
+        assert remote_action["allowedActor"] == "supervisor"
+
+        executed = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={
+                "expectedActionId": "execute_remote_delivery",
+                "note": "Execute the approved remote delivery.",
+                "actorId": "supervisor-1",
+                "actorLabel": "Supervisor",
+            },
+        )
+        audit_after_remote = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        approved = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "approve_review", "note": "Operator approves after remote delivery."},
+        )
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert executed.status_code == 200
+        assert approved.status_code == 200
+        assert item_response.status_code == 200
+        assert audit_after_remote.status_code == 200
+        assert events_response.status_code == 200
+
+        item = item_response.json()["data"]
+        delivery = item["deliveryReadiness"]
+        event_types = [event["eventType"] for event in events_response.json()["data"]]
+        after_action = audit_after_remote.json()["data"]["nextManagedAction"]
+
+        assert item["state"] == "done"
+        assert (
+            subprocess.run(
+                ["git", "--git-dir", remote_root.as_posix(), "rev-parse", "--verify", "refs/heads/e2e-remote-delivery-enabled"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+        gh_log_entries = gh_log_path.read_text(encoding="utf-8").splitlines()
+        assert "auth" in gh_log_entries
+
+        remote_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.remote_delivery_executed")
+        remote_commands = remote_event["payload"]["commands"]
+        assert [command["command"] for command in remote_commands[:4]] == [
+            "git push -u origin e2e-remote-delivery-enabled",
+            "gh pr create --base main --head e2e-remote-delivery-enabled --title Remote delivery enabled --body Prove the supervisor can execute remote delivery when policy allows it.",
+            "gh pr checks --watch --fail-fast",
+            "gh pr merge --squash --delete-branch",
+        ]
+        assert delivery["remoteOperationsPerformed"] is True
+        assert delivery["pullRequestStatus"] == "recorded"
+        assert delivery["ciStatus"] == "passed"
+        assert delivery["mergeStatus"] == "merged"
+        assert delivery["readyForApproval"] is True
+        assert "recipe.remote_delivery_executed" in event_types
+        assert after_action["actionId"] == "approve_review"
+        assert after_action["remoteOperation"] is False
+
+
+def test_recipe_review_blocks_remote_delivery_until_live_target_is_ready(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-remote-delivery-preflight.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_REMOTE_DELIVERY", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-remote-delivery-preflight",
+            "currentBranch": "e2e-remote-delivery-preflight",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": [],
+        },
+    )
+    service._recipe_changed_paths = lambda item: ["tests/e2e/dashboard.spec.ts"]  # type: ignore[method-assign]
+    service._git_output = lambda args: (True, " tests/e2e/dashboard.spec.ts | 12 ++++++++++++")  # type: ignore[method-assign]
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+    service._run_recipe_verification_commands = lambda recipe: [  # type: ignore[method-assign]
+        {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    def fake_run_remote_command(args, timeout=600):  # type: ignore[no-untyped-def]
+        if args == ["git", "remote", "get-url", "origin"]:
+            return {"command": "git remote get-url origin", "exitCode": 0, "stdout": "https://github.com/example/repo.git", "stderr": ""}
+        if args == ["gh", "auth", "status"]:
+            return {"command": "gh auth status", "exitCode": 1, "stdout": "", "stderr": "not logged in"}
+        raise AssertionError(f"unexpected remote command: {args}")
+
+    service._run_remote_command = fake_run_remote_command  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Remote delivery preflight",
+                "requestedOutcome": "Prove the supervisor blocks remote delivery until the live target is ready.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-remote-delivery-preflight",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "submit_for_validation", "note": "Recipe checks are ready."},
+        ).status_code == 200
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "validation_passed", "note": "Verification evidence is recorded."},
+        ).status_code == 200
+
+        audit_before_remote = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        remote_action = audit_before_remote.json()["data"]["nextManagedAction"]
+
+        assert remote_action["actionId"] == "execute_remote_delivery"
+        assert remote_action["status"] == "blocked"
+        assert remote_action["remoteOperation"] is True
+        assert "GitHub CLI authentication is not available" in remote_action["reason"]
+
+
+def test_recipe_review_blocks_when_local_delivery_package_has_out_of_scope_paths(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-delivery-out-of-scope.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-delivery-out-of-scope",
+            "currentBranch": "e2e-delivery-out-of-scope",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": [],
+        },
+    )
+    service._recipe_changed_paths = lambda item: ["temp/unplanned-change.md", "tests/e2e/dashboard.spec.ts"]  # type: ignore[method-assign]
+    service._git_output = lambda args: (True, " temp/unplanned-change.md | 1 +\n tests/e2e/dashboard.spec.ts | 12 ++++++++++++")  # type: ignore[method-assign]
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+    service._run_recipe_verification_commands = lambda recipe: [  # type: ignore[method-assign]
+        {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Recipe delivery out of scope",
+                "requestedOutcome": "Prove local delivery packages cannot approve review when files leave recipe scope.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-delivery-out-of-scope",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "submit_for_validation", "note": "Recipe checks are ready."},
+        ).status_code == 200
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "validation_passed", "note": "Verification evidence is recorded."},
+        ).status_code == 200
+        blocked_approval = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "approve_review", "note": "Operator approves after local package review."},
+        )
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert blocked_approval.status_code == 409
+        assert item_response.status_code == 200
+        assert events_response.status_code == 200
+        item = item_response.json()["data"]
+        delivery = item["deliveryReadiness"]
+        delivery_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.delivery_gate_recorded")
+
+        assert item["state"] == "reviewing"
+        assert delivery["readyForApproval"] is False
+        assert delivery_event["payload"]["readyForApproval"] is False
+        assert delivery_event["payload"]["outOfScopePaths"] == ["temp/unplanned-change.md"]
 
 
 def test_invalid_high_risk_dashboard_recipe_blocks_during_triage(tmp_path, monkeypatch) -> None:
@@ -541,6 +1664,419 @@ def test_invalid_high_risk_dashboard_recipe_blocks_during_triage(tmp_path, monke
         item = item_response.json()["data"]
         assert item["state"] == "blocked"
         assert item["blockedReason"] == "Dashboard test coverage recipe only supports low or medium risk work."
+
+
+def test_recipe_implementation_command_failure_routes_to_rework_before_start(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-implementation-failure.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-implementation-failure",
+            "currentBranch": "e2e-implementation-failure",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "pnpm run lint:dashboard", "exitCode": 1, "stdout": "", "stderr": "lint failed"},
+    ]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Recipe implementation command failure",
+                "requestedOutcome": "Prove failed recipe implementation automation cannot start implementation.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-implementation-failure",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert item_response.status_code == 200
+        assert events_response.status_code == 200
+        item = item_response.json()["data"]
+        events = events_response.json()["data"]
+        implementation_event = next(event for event in events if event["eventType"] == "recipe.implementation_failed")
+
+        assert item["state"] == "needs_rework"
+        assert item["lane"] == "corrective_loop"
+        assert implementation_event["payload"]["policyGate"] == "implementation-automation"
+        assert implementation_event["payload"]["operatorCheckpoint"] == "implementation-command-run"
+        assert implementation_event["payload"]["commands"][0]["exitCode"] == 1
+        assert "recipe.implementing" not in [event["eventType"] for event in events]
+
+
+def test_recipe_implementation_path_scope_failure_blocks_before_start(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-implementation-path-scope.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-implementation-path-scope",
+            "currentBranch": "e2e-implementation-path-scope",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        "Recipe changed files are outside allowedPaths.",
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["docs/unplanned-change.md", "tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": ["docs/unplanned-change.md"],
+        },
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Recipe implementation path scope failure",
+                "requestedOutcome": "Prove implementation automation cannot start managed work after writing outside scope.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-implementation-path-scope",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert item_response.status_code == 200
+        assert events_response.status_code == 200
+        item = item_response.json()["data"]
+        events = events_response.json()["data"]
+        path_event = next(event for event in events if event["eventType"] == "recipe.implementation_path_scope_failed")
+
+        assert item["state"] == "needs_rework"
+        assert item["lane"] == "corrective_loop"
+        assert path_event["payload"]["policyGate"] == "path-scope"
+        assert path_event["payload"]["operatorCheckpoint"] == "implementation-path-scope"
+        assert path_event["payload"]["outOfScopePaths"] == ["docs/unplanned-change.md"]
+        assert "recipe.implementation_passed" not in [event["eventType"] for event in events]
+        assert "recipe.implementing" not in [event["eventType"] for event in events]
+
+
+def test_recipe_path_scope_failure_routes_to_rework_before_verification(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-path-scope.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-path-scope",
+            "currentBranch": "e2e-path-scope",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    path_scope_calls = 0
+
+    def fake_path_scope_policy(item, recipe):  # noqa: ANN001
+        nonlocal path_scope_calls
+        path_scope_calls += 1
+        if path_scope_calls == 1:
+            return (
+                None,
+                {
+                    "allowedPaths": ["tests/e2e", "apps/dashboard"],
+                    "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+                    "outOfScopePaths": [],
+                },
+            )
+        return (
+            "Recipe changed files are outside allowedPaths.",
+            {
+                "allowedPaths": ["tests/e2e", "apps/dashboard"],
+                "changedPaths": ["docs/unplanned-change.md", "tests/e2e/dashboard.spec.ts"],
+                "outOfScopePaths": ["docs/unplanned-change.md"],
+            },
+        )
+
+    service._recipe_path_scope_policy = fake_path_scope_policy  # type: ignore[method-assign]
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    def fail_if_verification_runs(recipe):  # noqa: ANN001
+        raise AssertionError("verification commands must not run after path scope failure")
+
+    service._run_recipe_verification_commands = fail_if_verification_runs  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Recipe path scope failure",
+                "requestedOutcome": "Prove recipe changes cannot escape the allowed path boundary.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-path-scope",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        submitted = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "submit_for_validation", "note": "Run recipe handoff checks."},
+        )
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert submitted.status_code == 200
+        assert item_response.status_code == 200
+        assert events_response.status_code == 200
+        item = item_response.json()["data"]
+        events = events_response.json()["data"]
+        path_event = next(event for event in events if event["eventType"] == "recipe.path_scope_failed")
+
+        assert item["state"] == "needs_rework"
+        assert item["lane"] == "corrective_loop"
+        assert path_event["payload"]["policyGate"] == "path-scope"
+        assert path_event["payload"]["operatorCheckpoint"] == "path-scope-check"
+        assert path_event["payload"]["outOfScopePaths"] == ["docs/unplanned-change.md"]
+        assert "recipe.verification_passed" not in [event["eventType"] for event in events]
+        assert "recipe.verification_failed" not in [event["eventType"] for event in events]
+        assert "workflow.validating" not in [event["eventType"] for event in events]
+
+
+def test_recipe_verification_command_failure_routes_to_rework(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-command-failure.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-command-failure",
+            "currentBranch": "e2e-command-failure",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["apps/dashboard/src/app/page.tsx"],
+            "outOfScopePaths": [],
+        },
+    )
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+    service._run_recipe_verification_commands = lambda recipe: [  # type: ignore[method-assign]
+        {"command": "pnpm run test:e2e:dashboard", "exitCode": 1, "stdout": "", "stderr": "failed"},
+        {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Recipe command failure",
+                "requestedOutcome": "Prove failed recipe commands cannot enter validation.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-command-failure",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        submitted = client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "submit_for_validation", "note": "Run recipe verification."},
+        )
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert submitted.status_code == 200
+        assert item_response.status_code == 200
+        assert events_response.status_code == 200
+        item = item_response.json()["data"]
+        events = events_response.json()["data"]
+        failure_event = next(event for event in events if event["eventType"] == "recipe.verification_failed")
+
+        assert item["state"] == "needs_rework"
+        assert item["lane"] == "corrective_loop"
+        assert failure_event["payload"]["operatorCheckpoint"] == "verification-command-run"
+        assert failure_event["payload"]["commands"][0]["exitCode"] == 1
+        assert "workflow.validating" not in [event["eventType"] for event in events]
+
+
+def test_unknown_execution_recipe_blocks_during_triage(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "unknown-recipe.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Unsupported recipe",
+                "requestedOutcome": "Prove unmanaged recipe requests cannot silently continue.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "does-not-exist",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(2):
+            asyncio.run(process_once_for_tests())
+
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert item_response.status_code == 200
+        assert events_response.status_code == 200
+        item = item_response.json()["data"]
+        event_types = [event["eventType"] for event in events_response.json()["data"]]
+        assert item["state"] == "blocked"
+        assert item["blockedReason"] == "Unknown execution recipe requested: does-not-exist."
+        assert "recipe.blocked" in event_types
+
+
+def test_recipe_work_blocks_when_recorded_base_revision_is_stale(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-stale-branch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    def fake_git_output(args: list[str]) -> tuple[bool, str]:
+        if args == ["git", "branch", "--show-current"]:
+            return True, "e2e-stale-branch"
+        if args == ["git", "rev-parse", "--verify", "main"]:
+            return True, "new-base-revision"
+        return False, "unexpected git command"
+
+    service._git_output = fake_git_output  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Stale recipe branch",
+                "requestedOutcome": "Prove stale recipe branches stop before implementation.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-stale-branch",
+                    "baseBranch": "main",
+                    "baseRevision": "old-base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        item_response = client.get(f"/work-items/{work_item_id}")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+        assert item_response.status_code == 200
+        assert events_response.status_code == 200
+        item = item_response.json()["data"]
+        branch_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.branch_blocked")
+        assert item["state"] == "blocked"
+        assert item["blockedReason"] == "Recipe branch is stale: main moved since baseRevision was recorded."
+        assert branch_event["payload"]["expectedBranch"] == "e2e-stale-branch"
+        assert branch_event["payload"]["currentBranch"] == "e2e-stale-branch"
+        assert branch_event["payload"]["baseRevision"] == "old-base-revision"
+        assert branch_event["payload"]["currentBaseRevision"] == "new-base-revision"
 
 
 def test_work_item_creation_records_operator_identity_from_metadata(tmp_path, monkeypatch) -> None:

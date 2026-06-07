@@ -1,9 +1,14 @@
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
-const dashboardUrl = "http://127.0.0.1:3100";
-const supervisorUrl = "http://127.0.0.1:8100";
-const dbUrl = "sqlite+aiosqlite:///./.data/e2e-supervisor.db";
+const dashboardUrl = process.env.PLAYWRIGHT_DASHBOARD_URL ?? "http://127.0.0.1:3100";
+const supervisorUrl = process.env.PLAYWRIGHT_SUPERVISOR_URL ?? "http://127.0.0.1:8100";
+const dashboardPort = new URL(dashboardUrl).port || "3100";
+const supervisorPort = new URL(supervisorUrl).port || "8100";
+const dbPath = (
+  process.env.PLAYWRIGHT_E2E_DB_PATH ?? path.join(__dirname, ".data", `e2e-supervisor-${process.pid}.db`)
+).replaceAll("\\", "/");
+const dbUrl = `sqlite+aiosqlite:///${dbPath}`;
 
 export default defineConfig({
   testDir: path.join(__dirname, "tests", "e2e"),
@@ -18,7 +23,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "uv run --directory services/supervisor uvicorn supervisor.api.main:app --host 127.0.0.1 --port 8100",
+      command: `uv run --directory services/supervisor uvicorn supervisor.api.main:app --host 127.0.0.1 --port ${supervisorPort}`,
       url: `${supervisorUrl}/health`,
       reuseExistingServer: false,
       timeout: 120_000,
@@ -30,7 +35,7 @@ export default defineConfig({
       },
     },
     {
-      command: "pnpm --filter @kendall/dashboard build && pnpm --filter @kendall/dashboard exec next start --hostname 127.0.0.1 --port 3100",
+      command: `pnpm --filter @kendall/dashboard build && pnpm --filter @kendall/dashboard exec next start --hostname 127.0.0.1 --port ${dashboardPort}`,
       url: dashboardUrl,
       reuseExistingServer: false,
       timeout: 120_000,

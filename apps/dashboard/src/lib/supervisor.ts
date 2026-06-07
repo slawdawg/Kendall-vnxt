@@ -3,8 +3,12 @@ import type {
   RunStatusView,
   SavedWorkItemView,
   SavedWorkItemViewPayload,
+  WorkItemBranchPreparationPayload,
   WorkItemAssignmentPayload,
   WorkItemFilterScope,
+  WorkItemExecutionRecipeView,
+  WorkItemManagedActionPayload,
+  WorkItemRecipeGateAuditView,
   WorkflowEventView,
   WorkItemView,
 } from "@kendall/contracts";
@@ -48,6 +52,14 @@ export async function getWorkItem(id: string): Promise<WorkItemView> {
 
 export async function getWorkItemEvents(id: string): Promise<WorkflowEventView[]> {
   return requestJson<WorkflowEventView[]>(`/work-items/${id}/events`);
+}
+
+export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView[]> {
+  return requestJson<WorkItemExecutionRecipeView[]>("/execution-recipes");
+}
+
+export async function getRecipeGateAudit(workItemId: string): Promise<WorkItemRecipeGateAuditView> {
+  return requestJson<WorkItemRecipeGateAuditView>(`/work-items/${workItemId}/recipe-gate-audit`);
 }
 
 export async function getAuditEvents(): Promise<
@@ -111,6 +123,35 @@ export async function assignWorkItem(workItemId: string, payload: WorkItemAssign
   });
   if (!response.ok) {
     throw new Error("Unable to update assignment.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<WorkItemView>;
+  return envelope.data;
+}
+
+export async function prepareRecipeBranch(workItemId: string, payload: WorkItemBranchPreparationPayload): Promise<WorkItemView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/prepare-branch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error("Unable to prepare recipe branch.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<WorkItemView>;
+  return envelope.data;
+}
+
+export async function executeManagedNextAction(workItemId: string, payload: WorkItemManagedActionPayload): Promise<WorkItemView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/managed-next-action`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as
+      | { detail?: { error?: { message?: string } } }
+      | null;
+    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to execute the managed next action.");
   }
   const envelope = (await response.json()) as ApiEnvelope<WorkItemView>;
   return envelope.data;

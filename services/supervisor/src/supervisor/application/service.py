@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import shutil
 import subprocess
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,13 +15,22 @@ from supervisor.api.schemas import (
     OperatorViewResponse,
     RunStatusView,
     WorkItemCreate,
+    WorkItemBranchPreparationRequest,
+    WorkItemDeliveryReadinessRequest,
+    WorkItemDeliveryReadinessView,
     WorkItemExecutionRecipeView,
+    WorkItemManagedActionRequest,
+    WorkItemManagedActionView,
+    WorkItemPolicyGateView,
+    WorkItemRecipeGateAuditEntryView,
+    WorkItemRecipeGateAuditView,
+    WorkItemRemoteAutomationPolicyView,
     WorkItemFilterView,
     WorkflowEventView,
     WorkItemView,
 )
 from supervisor.config.settings import Settings
-from supervisor.domain.recipes import EXECUTION_RECIPES, ExecutionRecipe
+from supervisor.domain.recipes import EXECUTION_RECIPES, ExecutionRecipe, RecipeCommand
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
 from supervisor.domain.types import AuditMode, BmadLane, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.infrastructure.db.models import AuditEvent, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
@@ -34,6 +45,10 @@ ACTIVE_STATES = {
 }
 
 _LANE_UNSET = object()
+
+PR_STATUSES = {"not_recorded", "recorded", "ready", "waived"}
+CI_STATUSES = {"not_recorded", "pending", "passed", "failed", "waived"}
+MERGE_STATUSES = {"not_recorded", "ready", "merged", "blocked", "waived"}
 
 
 class SupervisorService:
@@ -88,7 +103,12 @@ class SupervisorService:
                 item,
                 "recipe.selected",
                 f"Supervisor selected the {recipe.label} recipe.",
-                {"recipeId": recipe.id, "branchPrefix": recipe.branch_prefix},
+                {
+                    "recipeId": recipe.id,
+                    "branchPrefix": recipe.branch_prefix,
+                    "policyGates": [gate.id for gate in recipe.policy_gates],
+                    "operatorCheckpoints": list(recipe.operator_checkpoints),
+                },
             )
         await session.commit()
         await session.refresh(item)
@@ -98,6 +118,9 @@ class SupervisorService:
     async def list_work_items(self, session: AsyncSession) -> list[WorkItem]:
         result = await session.execute(select(WorkItem).order_by(WorkItem.created_at.desc()))
         return list(result.scalars())
+
+    def list_execution_recipes(self) -> list[WorkItemExecutionRecipeView]:
+        return [self._to_execution_recipe_view(recipe) for recipe in EXECUTION_RECIPES.values()]
 
     async def list_audit_events(self, session: AsyncSession) -> list[AuditEvent]:
         result = await session.execute(select(AuditEvent).order_by(AuditEvent.created_at.desc()))
@@ -110,6 +133,16 @@ class SupervisorService:
             .order_by(WorkflowEvent.created_at.desc())
         )
         return list(result.scalars())
+
+    async def get_recipe_gate_audit(self, session: AsyncSession, work_item_id: str) -> WorkItemRecipeGateAuditView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        recipe = self._execution_recipe_for_item(item)
+        if not recipe:
+            return None
+        events = await self.list_work_item_events(session, work_item_id)
+        return self._recipe_gate_audit_view(item, recipe, events)
 
     async def list_operator_views(
         self,
@@ -352,6 +385,301 @@ class SupervisorService:
         await self._publish_item(item)
         return item
 
+    async def execute_managed_next_action(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemManagedActionRequest,
+    ) -> WorkItem | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+
+        recipe = self._execution_recipe_for_item(item)
+        if not recipe:
+            raise ValueError("Managed next actions can only run for recipe-managed work.")
+
+        events = await self.list_work_item_events(session, work_item_id)
+        audit = self._recipe_gate_audit_view(item, recipe, events)
+        next_action = audit.nextManagedAction
+        if payload.expectedActionId and payload.expectedActionId != next_action.actionId:
+            raise ValueError(f"Managed action changed from {payload.expectedActionId} to {next_action.actionId}. Refresh before continuing.")
+        if next_action.status != "available":
+            raise ValueError(f"Managed action {next_action.actionId} is {next_action.status}: {next_action.reason}")
+        if next_action.remoteOperation and next_action.actionId != "execute_remote_delivery":
+            raise ValueError("Managed next action requires remote automation, which is blocked by policy.")
+
+        if next_action.actionId == "record_delivery_readiness":
+            raise ValueError("Record delivery readiness through the delivery readiness checkpoint form.")
+        if next_action.actionId == "execute_remote_delivery":
+            if not self._remote_delivery_enabled():
+                raise ValueError("Remote delivery automation is disabled by policy.")
+            if item.state != WorkflowState.REVIEWING.value:
+                raise ValueError("Remote delivery can only run during review.")
+            remote_results = self._remote_delivery_commands(item)
+            if any(result["exitCode"] != 0 for result in remote_results):
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.remote_delivery_failed",
+                    f"Remote delivery failed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "delivery-readiness",
+                        "remote-delivery",
+                        {"commands": remote_results},
+                    ),
+                    actor_type="system",
+                    actor_id=payload.actorId,
+                    actor_label=payload.actorLabel,
+                )
+                item.state = WorkflowState.NEEDS_REWORK.value
+                item.lane = BmadLane.CORRECTIVE_LOOP.value
+                item.next_step = next_step_summary(WorkflowState.NEEDS_REWORK)
+                item.status_summary = default_status_summary(WorkflowState.NEEDS_REWORK)
+                item.updated_at = datetime.now(timezone.utc)
+                item.last_event_at = item.updated_at
+                await session.commit()
+                await session.refresh(item)
+                await self._publish_item(item)
+                return item
+
+            metadata = dict(item.metadata_json) if isinstance(item.metadata_json, dict) else {}
+            pr_url = next((result["stdout"].strip() for result in remote_results if result["command"].startswith("gh pr create") and result["stdout"].strip().startswith("https://github.com/")), None)
+            if not pr_url:
+                pr_url = next((result["stdout"].strip() for result in remote_results if result["stdout"].strip().startswith("https://github.com/")), None)
+            metadata.update(
+                {
+                    "pullRequestStatus": "recorded",
+                    "pullRequestUrl": pr_url,
+                    "ciStatus": "passed",
+                    "mergeStatus": "merged",
+                    "remoteOperationsPerformed": True,
+                }
+            )
+            item.metadata_json = metadata
+            await self._record_event(
+                session,
+                item,
+                "recipe.remote_delivery_executed",
+                f"Remote delivery executed for {recipe.label}.",
+                self._recipe_policy_payload(
+                    recipe,
+                    "delivery-readiness",
+                    "remote-delivery",
+                    {"commands": remote_results, "pullRequestUrl": pr_url, "remoteOperationsPerformed": True},
+                ),
+                actor_type="supervisor",
+                actor_id=payload.actorId,
+                actor_label=payload.actorLabel,
+            )
+            item.updated_at = datetime.now(timezone.utc)
+            item.last_event_at = item.updated_at
+            await session.commit()
+            await session.refresh(item)
+            await self._publish_item(item)
+            return item
+        if next_action.actionId == "prepare_recipe_branch":
+            return await self.prepare_recipe_branch(
+                session,
+                work_item_id,
+                WorkItemBranchPreparationRequest(
+                    note=payload.note,
+                    actorId=payload.actorId,
+                    actorLabel=payload.actorLabel,
+                ),
+            )
+        if next_action.actionId in {"supervisor_triage", "run_recipe_implementation"}:
+            control = await self.ensure_control(session)
+            if control.mode != RunMode.RUNNING.value:
+                raise ValueError("Supervisor managed actions require running mode.")
+            max_steps = 2 if next_action.actionId == "supervisor_triage" else 1
+            for _ in range(max_steps):
+                before_state = item.state
+                await self._advance_item(session, item, RunMode.RUNNING)
+                if item.state == before_state or item.state not in {WorkflowState.QUEUED.value, WorkflowState.TRIAGED.value}:
+                    break
+            await session.commit()
+            await session.refresh(item)
+            await self._publish_item(item)
+            return item
+
+        workflow_action = next((candidate for candidate in WorkflowAction if candidate.value == next_action.actionId), None)
+        if workflow_action:
+            await self._apply_action_to_item(
+                session,
+                item,
+                workflow_action,
+                payload.note,
+                payload.actorId,
+                payload.actorLabel,
+            )
+            await session.commit()
+            await session.refresh(item)
+            await self._publish_item(item)
+            return item
+
+        raise ValueError(f"Managed action {next_action.actionId} is not executable by the supervisor.")
+
+    async def record_delivery_readiness(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemDeliveryReadinessRequest,
+    ) -> WorkItem | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+
+        recipe = self._execution_recipe_for_item(item)
+        if not recipe:
+            raise ValueError("Delivery readiness can only be recorded for managed recipe work.")
+        if item.state not in {WorkflowState.VALIDATING.value, WorkflowState.REVIEWING.value}:
+            raise ValueError("Delivery readiness can only be recorded during validation or review.")
+
+        delivery_payload = self._normalize_delivery_readiness_payload(item, payload)
+        metadata = dict(item.metadata_json) if isinstance(item.metadata_json, dict) else {}
+        metadata.update(
+            {
+                "pullRequestStatus": delivery_payload["pullRequestStatus"],
+                "pullRequestUrl": delivery_payload["pullRequestUrl"],
+                "ciStatus": delivery_payload["ciStatus"],
+                "mergeStatus": delivery_payload["mergeStatus"],
+                "deliveryWaived": delivery_payload["deliveryWaived"],
+                "deliveryWaiverReason": delivery_payload["deliveryWaiverReason"],
+            }
+        )
+        item.metadata_json = metadata
+        item.updated_at = datetime.now(timezone.utc)
+        item.last_event_at = item.updated_at
+
+        await self._record_event(
+            session,
+            item,
+            "recipe.delivery_readiness_updated",
+            f"Operator recorded delivery readiness for {recipe.label}.",
+            self._recipe_policy_payload(
+                recipe,
+                "delivery-readiness",
+                "delivery-readiness-update",
+                delivery_payload | {"note": payload.note},
+            ),
+            actor_type="operator",
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
+        )
+        await session.commit()
+        await session.refresh(item)
+        await self._publish_item(item)
+        return item
+
+    async def prepare_recipe_branch(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemBranchPreparationRequest,
+    ) -> WorkItem | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+
+        recipe = self._execution_recipe_for_item(item)
+        if not recipe:
+            raise ValueError("Branch preparation can only be run for managed recipe work.")
+        if item.state not in {WorkflowState.READY.value, WorkflowState.BLOCKED.value}:
+            raise ValueError("Branch preparation can only run after recipe scope has been triaged.")
+
+        note = payload.note.strip() if payload.note else None
+        branch_record_error, branch_record_payload = self._ensure_recipe_branch_record(item, recipe)
+        if branch_record_error:
+            await self._block_recipe_branch_preparation(
+                session,
+                item,
+                recipe,
+                branch_record_error,
+                branch_record_payload | {"note": note},
+                payload.actorId,
+                payload.actorLabel,
+            )
+            await session.commit()
+            await session.refresh(item)
+            await self._publish_item(item)
+            return item
+
+        if self._repo_is_dirty():
+            await self._block_recipe_branch_preparation(
+                session,
+                item,
+                recipe,
+                "Repository is dirty. Clean the working tree before preparing a recipe branch.",
+                {"note": note},
+                payload.actorId,
+                payload.actorLabel,
+            )
+            await session.commit()
+            await session.refresh(item)
+            await self._publish_item(item)
+            return item
+
+        preparation_error, preparation_payload = self._prepare_recipe_branch(item, recipe)
+        preparation_payload["note"] = note
+        if preparation_error:
+            await self._block_recipe_branch_preparation(
+                session,
+                item,
+                recipe,
+                preparation_error,
+                preparation_payload,
+                payload.actorId,
+                payload.actorLabel,
+            )
+            await session.commit()
+            await session.refresh(item)
+            await self._publish_item(item)
+            return item
+
+        item.blocked_reason = None
+        if item.state == WorkflowState.BLOCKED.value:
+            await self._transition(
+                session,
+                item,
+                WorkflowState.READY,
+                "recipe.branch_prepared",
+                "Recipe execution branch is prepared for supervisor implementation.",
+                payload_overrides=self._recipe_policy_payload(
+                    recipe,
+                    "branch-ownership",
+                    "branch-preparation",
+                    preparation_payload,
+                ),
+                actor_type="operator",
+                actor_id=payload.actorId,
+                actor_label=payload.actorLabel,
+                lane_override=BmadLane.IMPLEMENTATION.value,
+            )
+        else:
+            item.updated_at = datetime.now(timezone.utc)
+            item.last_event_at = item.updated_at
+            await self._record_event(
+                session,
+                item,
+                "recipe.branch_prepared",
+                "Recipe execution branch is prepared for supervisor implementation.",
+                self._recipe_policy_payload(
+                    recipe,
+                    "branch-ownership",
+                    "branch-preparation",
+                    preparation_payload,
+                ),
+                actor_type="operator",
+                actor_id=payload.actorId,
+                actor_label=payload.actorLabel,
+            )
+        await session.commit()
+        await session.refresh(item)
+        await self._publish_item(item)
+        return item
+
     async def process_once(self, session: AsyncSession) -> None:
         async with self._loop_lock:
             control = await self.ensure_control(session)
@@ -384,12 +712,39 @@ class SupervisorService:
                     default_status_summary(WorkflowState.BLOCKED),
                 )
                 return
+            recipe = self._execution_recipe_for_item(item)
+            branch_record_error, branch_record_payload = self._ensure_recipe_branch_record(item, recipe)
+            if branch_record_error:
+                item.blocked_reason = branch_record_error
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.BLOCKED,
+                    "recipe.branch_blocked",
+                    default_status_summary(WorkflowState.BLOCKED),
+                    payload_overrides=self._recipe_policy_payload(
+                        recipe,
+                        "branch-ownership",
+                        "branch-record",
+                        branch_record_payload | {"reason": branch_record_error},
+                    ),
+                )
+                return
+            if recipe and branch_record_payload:
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.branch_recorded",
+                    "Supervisor recorded the recipe execution branch target.",
+                    self._recipe_policy_payload(recipe, "branch-ownership", "branch-record", branch_record_payload),
+                )
             await self._transition(
                 session,
                 item,
                 WorkflowState.READY,
-                "work_item.ready",
+                "recipe.ready" if recipe else "work_item.ready",
                 default_status_summary(WorkflowState.READY),
+                payload_overrides=self._recipe_policy_payload(recipe, "scope", "scope-reviewed"),
                 lane_override=BmadLane.IMPLEMENTATION.value,
             )
             return
@@ -400,13 +755,134 @@ class SupervisorService:
                 item.blocked_reason = "Repository is dirty. Clean the working tree before new work starts."
                 await self._transition(session, item, WorkflowState.BLOCKED, "repo.blocked", default_status_summary(WorkflowState.BLOCKED))
                 return
+            recipe = self._execution_recipe_for_item(item)
+            branch_error, branch_payload = self._recipe_branch_policy(item, recipe)
+            if branch_error:
+                item.blocked_reason = branch_error
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.BLOCKED,
+                    "recipe.branch_blocked",
+                    default_status_summary(WorkflowState.BLOCKED),
+                    payload_overrides=self._recipe_policy_payload(
+                        recipe,
+                        "branch-ownership",
+                        "branch-policy",
+                        branch_payload | {"reason": branch_error},
+                    ),
+                )
+                return
+            command_results = self._run_recipe_implementation_commands(recipe, item)
+            if recipe and not all(result["exitCode"] == 0 for result in command_results):
+                item.blocked_reason = None
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.implementation_failed",
+                    f"Recipe implementation automation failed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "implementation-automation",
+                        "implementation-command-run",
+                        {
+                            "commands": command_results,
+                            "passedPolicyGates": ["clean-worktree", "branch-ownership"],
+                        },
+                    ),
+                )
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.NEEDS_REWORK,
+                    "workflow.needs_rework",
+                    "Recipe implementation automation failed before implementation start.",
+                    payload_overrides=self._recipe_policy_payload(
+                        recipe,
+                        "implementation-automation",
+                        "implementation-command-run",
+                        {
+                            "commands": command_results,
+                            "passedPolicyGates": ["clean-worktree", "branch-ownership"],
+                        },
+                    ),
+                    actor_type="system",
+                    lane_override=BmadLane.CORRECTIVE_LOOP.value,
+                )
+                return
+            path_error, path_payload = self._recipe_path_scope_policy(item, recipe)
+            if recipe and path_error:
+                item.blocked_reason = None
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.implementation_path_scope_failed",
+                    f"Recipe implementation path scope failed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "path-scope",
+                        "implementation-path-scope",
+                        path_payload | {"reason": path_error, "passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"]},
+                    ),
+                )
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.NEEDS_REWORK,
+                    "workflow.needs_rework",
+                    "Recipe implementation automation escaped the allowed path boundary.",
+                    payload_overrides=self._recipe_policy_payload(
+                        recipe,
+                        "path-scope",
+                        "implementation-path-scope",
+                        path_payload | {"reason": path_error, "passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"]},
+                    ),
+                    actor_type="system",
+                    lane_override=BmadLane.CORRECTIVE_LOOP.value,
+                )
+                return
+            if recipe:
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.implementation_path_scope_passed",
+                    f"Recipe implementation path scope passed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "path-scope",
+                        "implementation-path-scope",
+                        path_payload | {"passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"]},
+                    ),
+                )
+            if recipe:
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.implementation_passed",
+                    f"Recipe implementation automation passed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "implementation-automation",
+                        "implementation-command-run",
+                        {
+                            "commands": command_results,
+                            "passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"],
+                        },
+                    ),
+                )
             await self._create_or_refresh_lease(session, item)
             await self._transition(
                 session,
                 item,
                 WorkflowState.IMPLEMENTING,
-                "work_item.implementing",
+                "recipe.implementing" if recipe else "work_item.implementing",
                 default_status_summary(WorkflowState.IMPLEMENTING),
+                payload_overrides=self._recipe_policy_payload(
+                    recipe,
+                    "branch-ownership",
+                    "implementation-start",
+                    branch_payload | {"passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"]} if recipe else {},
+                ),
                 lane_override=BmadLane.IMPLEMENTATION.value,
             )
             return
@@ -425,13 +901,116 @@ class SupervisorService:
         self._enforce_action_policy(item, action, clean_note)
 
         if action == WorkflowAction.SUBMIT_FOR_VALIDATION and current == WorkflowState.IMPLEMENTING:
+            recipe = self._execution_recipe_for_item(item)
+            path_error, path_payload = self._recipe_path_scope_policy(item, recipe)
+            if recipe and path_error:
+                item.blocked_reason = None
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.path_scope_failed",
+                    f"Recipe path scope failed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "path-scope",
+                        "path-scope-check",
+                        path_payload | {"note": clean_note, "reason": path_error},
+                    ),
+                )
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.NEEDS_REWORK,
+                    "workflow.needs_rework",
+                    "Recipe changed files escaped the allowed path boundary.",
+                    payload_overrides=self._recipe_policy_payload(
+                        recipe,
+                        "path-scope",
+                        "path-scope-check",
+                        path_payload | {"note": clean_note, "reason": path_error},
+                    ),
+                    actor_type="system",
+                    lane_override=BmadLane.CORRECTIVE_LOOP.value,
+                )
+                return
+            if recipe:
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.path_scope_passed",
+                    f"Recipe path scope passed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "path-scope",
+                        "path-scope-check",
+                        path_payload | {"note": clean_note},
+                    ),
+                )
+            command_results = self._run_recipe_verification_commands(recipe)
+            if recipe and not all(result["exitCode"] == 0 for result in command_results):
+                item.blocked_reason = None
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.verification_failed",
+                    f"Recipe verification failed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "verification",
+                        "verification-command-run",
+                        {
+                            "note": clean_note,
+                            "commands": command_results,
+                        },
+                    ),
+                )
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.NEEDS_REWORK,
+                    "workflow.needs_rework",
+                    "Recipe verification failed before validation handoff.",
+                    payload_overrides=self._recipe_policy_payload(
+                        recipe,
+                        "verification",
+                        "verification-command-run",
+                        {
+                            "note": clean_note,
+                            "commands": command_results,
+                        },
+                    ),
+                    actor_type="system",
+                    lane_override=BmadLane.CORRECTIVE_LOOP.value,
+                )
+                return
+            if recipe:
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.verification_passed",
+                    f"Recipe verification passed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "verification",
+                        "verification-command-run",
+                        {
+                            "note": clean_note,
+                            "commands": command_results,
+                        },
+                    ),
+                )
             await self._transition(
                 session,
                 item,
                 WorkflowState.VALIDATING,
                 "workflow.validating",
                 clean_note or default_status_summary(WorkflowState.VALIDATING),
-                payload_overrides={"note": clean_note},
+                payload_overrides=self._recipe_policy_payload(
+                    recipe,
+                    "verification",
+                    "validation-evidence",
+                    {"note": clean_note, "commands": command_results if recipe else None},
+                ),
                 actor_type="operator",
                 actor_id=actor_id,
                 actor_label=actor_label,
@@ -440,13 +1019,35 @@ class SupervisorService:
             return
 
         if action == WorkflowAction.VALIDATION_PASSED and current == WorkflowState.VALIDATING:
+            recipe = self._execution_recipe_for_item(item)
+            if recipe:
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.delivery_gate_recorded",
+                    "Supervisor recorded recipe delivery gate status before review.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "delivery-readiness",
+                        "delivery-gate",
+                        self._recipe_delivery_gate_payload(item, recipe),
+                    ),
+                    actor_type="operator",
+                    actor_id=actor_id,
+                    actor_label=actor_label,
+                )
             await self._transition(
                 session,
                 item,
                 WorkflowState.REVIEWING,
                 "workflow.reviewing",
                 clean_note or default_status_summary(WorkflowState.REVIEWING),
-                payload_overrides={"note": clean_note},
+                payload_overrides=self._recipe_policy_payload(
+                    recipe,
+                    "verification",
+                    "review-entry",
+                    {"note": clean_note},
+                ),
                 actor_type="operator",
                 actor_id=actor_id,
                 actor_label=actor_label,
@@ -480,7 +1081,12 @@ class SupervisorService:
                     WorkflowState.AWAITING_AUDIT,
                     "workflow.awaiting_audit",
                     clean_note or default_status_summary(WorkflowState.AWAITING_AUDIT),
-                    payload_overrides={"note": clean_note, "auditMode": item.audit_mode},
+                    payload_overrides=self._recipe_policy_payload(
+                        self._execution_recipe_for_item(item),
+                        "review",
+                        "operator-review",
+                        {"note": clean_note, "auditMode": item.audit_mode},
+                    ),
                     actor_type="operator",
                     actor_id=actor_id,
                     actor_label=actor_label,
@@ -493,7 +1099,12 @@ class SupervisorService:
                 WorkflowState.DONE,
                 "workflow.done",
                 clean_note or default_status_summary(WorkflowState.DONE),
-                payload_overrides={"note": clean_note},
+                payload_overrides=self._recipe_policy_payload(
+                    self._execution_recipe_for_item(item),
+                    "review",
+                    "operator-review",
+                    {"note": clean_note},
+                ),
                 actor_type="operator",
                 actor_id=actor_id,
                 actor_label=actor_label,
@@ -510,7 +1121,12 @@ class SupervisorService:
                 WorkflowState.DONE,
                 "workflow.done",
                 clean_note or default_status_summary(WorkflowState.DONE),
-                payload_overrides={"note": clean_note, "auditMode": item.audit_mode},
+                payload_overrides=self._recipe_policy_payload(
+                    self._execution_recipe_for_item(item),
+                    "review",
+                    "audit-complete",
+                    {"note": clean_note, "auditMode": item.audit_mode},
+                ),
                 actor_type="operator",
                 actor_id=actor_id,
                 actor_label=actor_label,
@@ -555,15 +1171,163 @@ class SupervisorService:
                 item.blocked_reason = "Repository is dirty. Clean the working tree before implementation restarts."
                 await self._transition(session, item, WorkflowState.BLOCKED, "repo.blocked", default_status_summary(WorkflowState.BLOCKED))
                 return
+            recipe = self._execution_recipe_for_item(item)
+            branch_error, branch_payload = self._recipe_branch_policy(item, recipe)
+            if branch_error:
+                item.blocked_reason = branch_error
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.BLOCKED,
+                    "recipe.branch_blocked",
+                    default_status_summary(WorkflowState.BLOCKED),
+                    payload_overrides=self._recipe_policy_payload(
+                        recipe,
+                        "branch-ownership",
+                        "branch-policy",
+                        branch_payload | {"reason": branch_error},
+                    ),
+                    actor_type="operator",
+                    actor_id=actor_id,
+                    actor_label=actor_label,
+                )
+                return
+            command_results = self._run_recipe_implementation_commands(recipe, item)
+            if recipe and not all(result["exitCode"] == 0 for result in command_results):
+                item.blocked_reason = None
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.implementation_failed",
+                    f"Recipe implementation automation failed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "implementation-automation",
+                        "implementation-restart-command-run",
+                        {
+                            "note": clean_note,
+                            "commands": command_results,
+                            "passedPolicyGates": ["clean-worktree", "branch-ownership"],
+                        },
+                    ),
+                    actor_type="system",
+                )
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.NEEDS_REWORK,
+                    "workflow.needs_rework",
+                    "Recipe implementation automation failed before implementation restart.",
+                    payload_overrides=self._recipe_policy_payload(
+                        recipe,
+                        "implementation-automation",
+                        "implementation-restart-command-run",
+                        {
+                            "note": clean_note,
+                            "commands": command_results,
+                            "passedPolicyGates": ["clean-worktree", "branch-ownership"],
+                        },
+                    ),
+                    actor_type="system",
+                    lane_override=BmadLane.CORRECTIVE_LOOP.value,
+                )
+                return
+            path_error, path_payload = self._recipe_path_scope_policy(item, recipe)
+            if recipe and path_error:
+                item.blocked_reason = None
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.implementation_path_scope_failed",
+                    f"Recipe implementation path scope failed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "path-scope",
+                        "implementation-restart-path-scope",
+                        path_payload
+                        | {
+                            "note": clean_note,
+                            "reason": path_error,
+                            "passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"],
+                        },
+                    ),
+                    actor_type="system",
+                )
+                await self._transition(
+                    session,
+                    item,
+                    WorkflowState.NEEDS_REWORK,
+                    "workflow.needs_rework",
+                    "Recipe implementation automation escaped the allowed path boundary.",
+                    payload_overrides=self._recipe_policy_payload(
+                        recipe,
+                        "path-scope",
+                        "implementation-restart-path-scope",
+                        path_payload
+                        | {
+                            "note": clean_note,
+                            "reason": path_error,
+                            "passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"],
+                        },
+                    ),
+                    actor_type="system",
+                    lane_override=BmadLane.CORRECTIVE_LOOP.value,
+                )
+                return
+            if recipe:
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.implementation_path_scope_passed",
+                    f"Recipe implementation path scope passed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "path-scope",
+                        "implementation-restart-path-scope",
+                        path_payload
+                        | {
+                            "note": clean_note,
+                            "passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"],
+                        },
+                    ),
+                    actor_type="operator",
+                    actor_id=actor_id,
+                    actor_label=actor_label,
+                )
+            if recipe:
+                await self._record_event(
+                    session,
+                    item,
+                    "recipe.implementation_passed",
+                    f"Recipe implementation automation passed for {recipe.label}.",
+                    self._recipe_policy_payload(
+                        recipe,
+                        "implementation-automation",
+                        "implementation-restart-command-run",
+                        {
+                            "note": clean_note,
+                            "commands": command_results,
+                            "passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"],
+                        },
+                    ),
+                    actor_type="operator",
+                    actor_id=actor_id,
+                    actor_label=actor_label,
+                )
             await self._create_or_refresh_lease(session, item)
             item.blocked_reason = None
             await self._transition(
                 session,
                 item,
                 WorkflowState.IMPLEMENTING,
-                "work_item.implementing",
+                "recipe.implementing" if recipe else "work_item.implementing",
                 clean_note or default_status_summary(WorkflowState.IMPLEMENTING),
-                payload_overrides={"note": clean_note},
+                payload_overrides=self._recipe_policy_payload(
+                    recipe,
+                    "branch-ownership",
+                    "implementation-restart",
+                    branch_payload | {"note": clean_note, "passedPolicyGates": ["clean-worktree", "branch-ownership", "implementation-automation"]} if recipe else {"note": clean_note},
+                ),
                 actor_type="operator",
                 actor_id=actor_id,
                 actor_label=actor_label,
@@ -600,8 +1364,17 @@ class SupervisorService:
         if action in note_required_actions and not note:
             raise ValueError(f"Action {action.value} requires an operator note.")
 
-        if action == WorkflowAction.APPROVE_REVIEW and item.requires_audit and not note:
-            raise ValueError("Risk-reviewed approval requires an operator note before the audit gate begins.")
+        recipe = self._execution_recipe_for_item(item)
+        if recipe and action in {WorkflowAction.SUBMIT_FOR_VALIDATION, WorkflowAction.VALIDATION_PASSED} and not note:
+            raise ValueError(f"Recipe action {action.value} requires an operator checkpoint note.")
+
+        if action == WorkflowAction.APPROVE_REVIEW and (item.requires_audit or recipe) and not note:
+            raise ValueError("Review approval requires an operator note before the final gate can advance.")
+
+        if recipe and action == WorkflowAction.APPROVE_REVIEW:
+            delivery_error = self._recipe_delivery_review_error(item)
+            if delivery_error:
+                raise ValueError(delivery_error)
 
     async def _maybe_create_audit(self, session: AsyncSession, item: WorkItem) -> None:
         if item.risk_level == "low":
@@ -771,10 +1544,297 @@ class SupervisorService:
                 capture_output=True,
                 text=True,
                 check=False,
+                cwd=self._repo_root(),
             )
             return bool(result.stdout.strip())
         except OSError:
             return False
+
+    def _git_output(self, args: list[str]) -> tuple[bool, str]:
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=self._repo_root(),
+            )
+        except OSError as exc:
+            return False, str(exc)
+        output = result.stdout.strip() or result.stderr.strip()
+        return result.returncode == 0, output
+
+    def _git_success(self, args: list[str]) -> bool:
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=self._repo_root(),
+            )
+        except OSError:
+            return False
+        return result.returncode == 0
+
+    def _run_git_command(self, args: list[str]) -> dict:
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=self._repo_root(),
+            )
+        except OSError as exc:
+            return {"command": " ".join(args), "exitCode": 1, "stdout": "", "stderr": str(exc)}
+        return {
+            "command": " ".join(args),
+            "exitCode": result.returncode,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+        }
+
+    def _run_recipe_verification_commands(self, recipe: ExecutionRecipe | None) -> list[dict]:
+        if not recipe:
+            return []
+
+        return [self._run_recipe_command(command) for command in recipe.verification_commands]
+
+    def _run_recipe_implementation_commands(self, recipe: ExecutionRecipe | None, item: WorkItem) -> list[dict]:
+        if not recipe:
+            return []
+
+        return [self._run_recipe_command(command, recipe, item) for command in recipe.implementation_commands]
+
+    def _run_recipe_command(self, command: RecipeCommand, recipe: ExecutionRecipe | None = None, item: WorkItem | None = None) -> dict:
+        args = self._resolve_recipe_command_args(list(command.args))
+        if not args:
+            return {"command": command.display, "exitCode": 1, "stdout": "", "stderr": "Empty recipe command."}
+
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=600,
+                cwd=self._repo_root(),
+                env=self._recipe_command_env(recipe, item),
+            )
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "command": command.display,
+                "exitCode": 124,
+                "stdout": exc.stdout or "",
+                "stderr": "Recipe command timed out.",
+            }
+        except OSError as exc:
+            return {"command": command.display, "exitCode": 1, "stdout": "", "stderr": str(exc)}
+
+        return {
+            "command": command.display,
+            "exitCode": result.returncode,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+        }
+
+    def _run_remote_command(self, args: list[str], timeout: int = 600) -> dict:
+        resolved_args = self._resolve_recipe_command_args(args)
+        try:
+            result = subprocess.run(
+                resolved_args,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+                cwd=self._repo_root(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "command": " ".join(args),
+                "exitCode": 124,
+                "stdout": exc.stdout or "",
+                "stderr": "Remote delivery command timed out.",
+            }
+        except OSError as exc:
+            return {"command": " ".join(args), "exitCode": 1, "stdout": "", "stderr": str(exc)}
+
+        return {
+            "command": " ".join(args),
+            "exitCode": result.returncode,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+        }
+
+    def _resolve_recipe_command_args(self, args: list[str]) -> list[str]:
+        if not args:
+            return args
+
+        executable = args[0]
+        resolved = shutil.which(executable)
+        if resolved:
+            return [resolved, *args[1:]]
+
+        if executable == "pnpm":
+            pnpm_cmd = shutil.which("pnpm.cmd")
+            if pnpm_cmd:
+                return [pnpm_cmd, *args[1:]]
+
+            corepack = shutil.which("corepack")
+            if corepack:
+                return [corepack, "pnpm", *args[1:]]
+
+        return args
+
+    def _remote_delivery_enabled(self) -> bool:
+        return self.settings.allow_remote_delivery
+
+    def _remote_delivery_policy_view(self, recipe: ExecutionRecipe) -> WorkItemRemoteAutomationPolicyView:
+        policy = recipe.remote_automation_policy
+        remote_ready, remote_reason = self._remote_delivery_preflight_status()
+        if not self._remote_delivery_enabled():
+            return WorkItemRemoteAutomationPolicyView(
+                status=policy.status,
+                summary=policy.summary,
+                allowedOperations=list(policy.allowed_operations),
+                blockedOperations=list(policy.blocked_operations),
+                approvalRequirements=list(policy.approval_requirements),
+            )
+        return WorkItemRemoteAutomationPolicyView(
+            status="available" if remote_ready else "blocked",
+            summary=(
+                "Remote delivery automation is enabled for approved recipe work and the live delivery target is ready."
+                if remote_ready
+                else f"Remote delivery automation is enabled but the live delivery target is not ready: {remote_reason}"
+            ),
+            allowedOperations=["git push", "pull request creation", "CI wait", "merge"],
+            blockedOperations=["release", "deployment"],
+            approvalRequirements=list(policy.approval_requirements)
+            + ["GitHub auth and an origin remote must be available before live delivery can run."],
+        )
+
+    def _remote_delivery_commands(self, item: WorkItem) -> list[dict]:
+        remote_ready, remote_reason = self._remote_delivery_preflight_status()
+        if not remote_ready:
+            return [
+                {
+                    "command": "remote-delivery-preflight",
+                    "exitCode": 1,
+                    "stdout": "",
+                    "stderr": remote_reason,
+                }
+            ]
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        execution_branch = metadata.get("executionBranch")
+        base_branch = metadata.get("baseBranch") if isinstance(metadata.get("baseBranch"), str) and metadata.get("baseBranch").strip() else "main"
+        title = item.title.strip()
+        body = item.requested_outcome.strip()
+        commands: list[dict] = []
+
+        if not isinstance(execution_branch, str) or not execution_branch.strip():
+            return [
+                {
+                    "command": "remote-delivery",
+                    "exitCode": 1,
+                    "stdout": "",
+                    "stderr": "Remote delivery requires executionBranch metadata.",
+                }
+            ]
+
+        execution_branch = execution_branch.strip()
+        commands.append(self._run_remote_command(["git", "push", "-u", "origin", execution_branch]))
+        if commands[-1]["exitCode"] != 0:
+            return commands
+
+        pr_create = self._run_remote_command([
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            base_branch,
+            "--head",
+            execution_branch,
+            "--title",
+            title,
+            "--body",
+            body,
+        ])
+        commands.append(pr_create)
+        if pr_create["exitCode"] != 0:
+            return commands
+
+        pr_url = self._extract_pull_request_url(pr_create["stdout"])
+        if not pr_url:
+            pr_view = self._run_remote_command(["gh", "pr", "view", "--json", "url", "--jq", ".url"])
+            commands.append(pr_view)
+            if pr_view["exitCode"] == 0:
+                pr_url = pr_view["stdout"].strip()
+
+        checks = self._run_remote_command(["gh", "pr", "checks", "--watch", "--fail-fast"])
+        commands.append(checks)
+        if checks["exitCode"] != 0:
+            return commands
+
+        merge = self._run_remote_command(["gh", "pr", "merge", "--squash", "--delete-branch"])
+        commands.append(merge)
+        if merge["exitCode"] != 0:
+            return commands
+
+        commands.append(
+            {
+                "command": "remote-delivery",
+                "exitCode": 0,
+                "stdout": pr_url or "",
+                "stderr": "",
+            }
+        )
+        return commands
+
+    def _remote_delivery_preflight_status(self) -> tuple[bool, str]:
+        origin_result = self._run_remote_command(["git", "remote", "get-url", "origin"], timeout=30)
+        if origin_result["exitCode"] != 0:
+            return False, "Git origin remote is missing or inaccessible."
+        auth_result = self._run_remote_command(["gh", "auth", "status"], timeout=30)
+        if auth_result["exitCode"] != 0:
+            return False, "GitHub CLI authentication is not available."
+        return True, ""
+
+    def _extract_pull_request_url(self, stdout: str) -> str | None:
+        for line in stdout.splitlines():
+            candidate = line.strip()
+            if candidate.startswith("https://github.com/"):
+                return candidate
+        return None
+
+    def _repo_root(self) -> str | None:
+        ok, output = self._git_output_uncached(["git", "rev-parse", "--show-toplevel"])
+        return output if ok and output else None
+
+    def _git_output_uncached(self, args: list[str]) -> tuple[bool, str]:
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            return False, str(exc)
+        output = result.stdout.strip() or result.stderr.strip()
+        return result.returncode == 0, output
+
+    def _recipe_command_env(self, recipe: ExecutionRecipe | None, item: WorkItem | None) -> dict[str, str]:
+        env = dict(os.environ)
+        if recipe:
+            env["KENDALL_RECIPE_ID"] = recipe.id
+            env["KENDALL_RECIPE_ALLOWED_PATHS"] = json.dumps(list(recipe.allowed_paths))
+        if item:
+            env["KENDALL_WORK_ITEM_ID"] = item.id
+            env["KENDALL_WORK_ITEM_TITLE"] = item.title
+            env["KENDALL_WORK_ITEM_SOURCE"] = item.source
+            env["KENDALL_WORK_ITEM_REQUESTED_OUTCOME"] = item.requested_outcome
+        return env
 
     def _normalize_timestamp(self, value: datetime | None) -> datetime:
         if value is None:
@@ -814,24 +1874,628 @@ class SupervisorService:
         return False, None
 
     def _execution_recipe_for_item(self, item: WorkItem) -> ExecutionRecipe | None:
-        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
-        recipe_id = metadata.get("executionRecipeId")
-        if isinstance(recipe_id, str):
+        recipe_id = self._requested_execution_recipe_id(item)
+        if recipe_id:
             return EXECUTION_RECIPES.get(recipe_id)
         return None
 
-    def _validate_execution_recipe(self, item: WorkItem) -> str | None:
-        recipe = self._execution_recipe_for_item(item)
-        if not recipe:
-            return None
+    def _requested_execution_recipe_id(self, item: WorkItem) -> str | None:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        recipe_id = metadata.get("executionRecipeId")
+        if isinstance(recipe_id, str) and recipe_id.strip():
+            return recipe_id.strip()
+        return None
 
-        if recipe.id == "dashboard-test-coverage":
+    def _validate_execution_recipe(self, item: WorkItem) -> str | None:
+        recipe_id = self._requested_execution_recipe_id(item)
+        if not recipe_id:
+            return None
+        recipe = EXECUTION_RECIPES.get(recipe_id)
+        if not recipe:
+            return f"Unknown execution recipe requested: {recipe_id}."
+
+        if recipe.id in {"dashboard-test-coverage", "dashboard-mobile-coverage"}:
             if item.risk_level == "high":
-                return "Dashboard test coverage recipe only supports low or medium risk work."
+                return f"{recipe.label} recipe only supports low or medium risk work."
             if not item.source.startswith("operator-dashboard"):
-                return "Dashboard test coverage recipe requires an operator-dashboard source."
+                return f"{recipe.label} recipe requires an operator-dashboard source."
 
         return None
+
+    def _recipe_branch_policy(self, item: WorkItem, recipe: ExecutionRecipe | None) -> tuple[str | None, dict]:
+        if not recipe:
+            return None, {}
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        expected_branch = metadata.get("executionBranch")
+        base_branch = metadata.get("baseBranch")
+        base_revision = metadata.get("baseRevision")
+        normalized_base_branch = base_branch.strip() if isinstance(base_branch, str) and base_branch.strip() else "main"
+
+        payload = {
+            "branchPrefix": recipe.branch_prefix,
+            "expectedBranch": expected_branch if isinstance(expected_branch, str) else None,
+            "baseBranch": normalized_base_branch,
+            "baseRevision": base_revision if isinstance(base_revision, str) else None,
+        }
+
+        if not isinstance(expected_branch, str) or not expected_branch.strip():
+            return "Recipe work requires executionBranch metadata before implementation can start.", payload
+
+        expected_branch = expected_branch.strip()
+        payload["expectedBranch"] = expected_branch
+        if not expected_branch.startswith(recipe.branch_prefix):
+            return f"Recipe branch must start with {recipe.branch_prefix}.", payload
+
+        if not isinstance(base_revision, str) or not base_revision.strip():
+            return "Recipe work requires baseRevision metadata before implementation can start.", payload
+
+        base_revision = base_revision.strip()
+        payload["baseRevision"] = base_revision
+        base_branch = payload["baseBranch"]
+
+        ok, current_branch = self._git_output(["git", "branch", "--show-current"])
+        payload["currentBranch"] = current_branch if ok else None
+        if not ok or not current_branch:
+            return "Recipe branch ownership could not be verified from the current Git worktree.", payload
+        if current_branch != expected_branch:
+            return f"Recipe branch mismatch: expected {expected_branch}, found {current_branch}.", payload
+
+        ok, current_base_revision = self._git_output(["git", "rev-parse", "--verify", base_branch])
+        payload["currentBaseRevision"] = current_base_revision if ok else None
+        if not ok or not current_base_revision:
+            return f"Recipe base branch could not be verified: {base_branch}.", payload
+        if current_base_revision != base_revision:
+            return f"Recipe branch is stale: {base_branch} moved since baseRevision was recorded.", payload
+
+        if not self._git_success(["git", "merge-base", "--is-ancestor", base_revision, "HEAD"]):
+            return "Recipe branch does not contain its recorded baseRevision.", payload
+
+        return None, payload
+
+    def _prepare_recipe_branch(self, item: WorkItem, recipe: ExecutionRecipe) -> tuple[str | None, dict]:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        expected_branch = metadata.get("executionBranch")
+        base_branch = metadata.get("baseBranch")
+        base_revision = metadata.get("baseRevision")
+        normalized_base_branch = base_branch.strip() if isinstance(base_branch, str) and base_branch.strip() else "main"
+        payload = {
+            "branchPrefix": recipe.branch_prefix,
+            "expectedBranch": expected_branch if isinstance(expected_branch, str) else None,
+            "baseBranch": normalized_base_branch,
+            "baseRevision": base_revision if isinstance(base_revision, str) else None,
+        }
+
+        if not isinstance(expected_branch, str) or not expected_branch.strip():
+            return "Recipe work requires executionBranch metadata before branch preparation can run.", payload
+        if not expected_branch.strip().startswith(recipe.branch_prefix):
+            return f"Recipe branch must start with {recipe.branch_prefix}.", payload
+        if not isinstance(base_revision, str) or not base_revision.strip():
+            return "Recipe work requires baseRevision metadata before branch preparation can run.", payload
+
+        expected_branch = expected_branch.strip()
+        base_revision = base_revision.strip()
+        payload["expectedBranch"] = expected_branch
+        payload["baseRevision"] = base_revision
+
+        ok, current_branch = self._git_output(["git", "branch", "--show-current"])
+        payload["currentBranch"] = current_branch if ok else None
+        if not ok or not current_branch:
+            return "Recipe branch preparation could not determine the current Git branch.", payload
+
+        ok, current_base_revision = self._git_output(["git", "rev-parse", "--verify", normalized_base_branch])
+        payload["currentBaseRevision"] = current_base_revision if ok else None
+        if not ok or not current_base_revision:
+            return f"Recipe base branch could not be verified: {normalized_base_branch}.", payload
+        if current_base_revision != base_revision:
+            return f"Recipe branch is stale: {normalized_base_branch} moved since baseRevision was recorded.", payload
+
+        if current_branch == expected_branch:
+            policy_error, policy_payload = self._recipe_branch_policy(item, recipe)
+            return policy_error, payload | policy_payload | {"alreadyPrepared": True}
+
+        branch_exists = self._git_success(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{expected_branch}"])
+        command = ["git", "switch", expected_branch] if branch_exists else ["git", "switch", "-c", expected_branch, base_revision]
+        result = self._run_git_command(command)
+        payload["command"] = result
+        payload["branchExisted"] = branch_exists
+        if result["exitCode"] != 0:
+            return "Recipe branch preparation command failed.", payload
+
+        policy_error, policy_payload = self._recipe_branch_policy(item, recipe)
+        if policy_error:
+            return policy_error, payload | policy_payload
+
+        return None, payload | policy_payload | {"alreadyPrepared": False}
+
+    async def _block_recipe_branch_preparation(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        recipe: ExecutionRecipe,
+        reason: str,
+        payload: dict,
+        actor_id: str | None,
+        actor_label: str | None,
+    ) -> None:
+        item.blocked_reason = reason
+        await self._transition(
+            session,
+            item,
+            WorkflowState.BLOCKED,
+            "recipe.branch_preparation_failed",
+            reason,
+            payload_overrides=self._recipe_policy_payload(
+                recipe,
+                "branch-ownership",
+                "branch-preparation",
+                payload | {"reason": reason},
+            ),
+            actor_type="operator",
+            actor_id=actor_id,
+            actor_label=actor_label,
+            lane_override=BmadLane.IMPLEMENTATION.value,
+        )
+
+    def _recipe_path_scope_policy(self, item: WorkItem, recipe: ExecutionRecipe | None) -> tuple[str | None, dict]:
+        if not recipe:
+            return None, {}
+
+        changed_paths = self._recipe_changed_paths(item)
+        allowed_paths = list(recipe.allowed_paths)
+        out_of_scope_paths = [path for path in changed_paths if not self._path_is_allowed(path, recipe.allowed_paths)]
+        payload = {
+            "allowedPaths": allowed_paths,
+            "changedPaths": changed_paths,
+            "outOfScopePaths": out_of_scope_paths,
+        }
+
+        if out_of_scope_paths:
+            return "Recipe changed files are outside allowedPaths.", payload
+
+        return None, payload
+
+    def _recipe_changed_paths(self, item: WorkItem) -> list[str]:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        base_revision = metadata.get("baseRevision")
+        commands = []
+        if isinstance(base_revision, str) and base_revision.strip():
+            commands.append(["git", "diff", "--name-only", f"{base_revision.strip()}...HEAD"])
+        commands.extend(
+            [
+                ["git", "diff", "--name-only"],
+                ["git", "diff", "--cached", "--name-only"],
+                ["git", "ls-files", "--others", "--exclude-standard"],
+            ]
+        )
+
+        paths: set[str] = set()
+        for command in commands:
+            ok, output = self._git_output(command)
+            if not ok:
+                continue
+            for line in output.splitlines():
+                normalized = self._normalize_repo_path(line)
+                if normalized:
+                    paths.add(normalized)
+
+        return sorted(paths)
+
+    def _normalize_repo_path(self, path: str) -> str:
+        normalized = path.strip().replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized
+
+    def _path_is_allowed(self, path: str, allowed_paths: tuple[str, ...]) -> bool:
+        normalized_path = self._normalize_repo_path(path)
+        for allowed_path in allowed_paths:
+            normalized_allowed = self._normalize_repo_path(allowed_path).rstrip("/")
+            if normalized_path == normalized_allowed or normalized_path.startswith(f"{normalized_allowed}/"):
+                return True
+        return False
+
+    def _ensure_recipe_branch_record(self, item: WorkItem, recipe: ExecutionRecipe | None) -> tuple[str | None, dict]:
+        if not recipe:
+            return None, {}
+
+        metadata = dict(item.metadata_json) if isinstance(item.metadata_json, dict) else {}
+        existing_branch = metadata.get("executionBranch")
+        existing_base_branch = metadata.get("baseBranch")
+        existing_base_revision = metadata.get("baseRevision")
+        if (
+            isinstance(existing_branch, str)
+            and existing_branch.strip()
+            and isinstance(existing_base_branch, str)
+            and existing_base_branch.strip()
+            and isinstance(existing_base_revision, str)
+            and existing_base_revision.strip()
+        ):
+            return None, {}
+
+        ok, base_branch = self._git_output(["git", "branch", "--show-current"])
+        if not ok or not base_branch:
+            return "Recipe branch record could not determine the current base branch.", {}
+
+        ok, base_revision = self._git_output(["git", "rev-parse", "HEAD"])
+        if not ok or not base_revision:
+            return "Recipe branch record could not determine the current base revision.", {"baseBranch": base_branch}
+
+        execution_branch = existing_branch.strip() if isinstance(existing_branch, str) and existing_branch.strip() else self._recipe_execution_branch(item, recipe)
+        if not execution_branch.startswith(recipe.branch_prefix):
+            return f"Recipe branch must start with {recipe.branch_prefix}.", {"expectedBranch": execution_branch, "branchPrefix": recipe.branch_prefix}
+
+        metadata["executionBranch"] = execution_branch
+        metadata["baseBranch"] = existing_base_branch.strip() if isinstance(existing_base_branch, str) and existing_base_branch.strip() else base_branch
+        metadata["baseRevision"] = existing_base_revision.strip() if isinstance(existing_base_revision, str) and existing_base_revision.strip() else base_revision
+        item.metadata_json = metadata
+        return None, {
+            "expectedBranch": metadata["executionBranch"],
+            "baseBranch": metadata["baseBranch"],
+            "baseRevision": metadata["baseRevision"],
+            "branchPrefix": recipe.branch_prefix,
+        }
+
+    def _recipe_execution_branch(self, item: WorkItem, recipe: ExecutionRecipe) -> str:
+        normalized = []
+        for character in item.title.lower():
+            if character.isalnum():
+                normalized.append(character)
+            elif normalized and normalized[-1] != "-":
+                normalized.append("-")
+        slug = "".join(normalized).strip("-")[:32] or "work"
+        return f"{recipe.branch_prefix}{slug}-{item.id[:8]}"
+
+    def _recipe_delivery_gate_payload(self, item: WorkItem, recipe: ExecutionRecipe | None) -> dict:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        changed_paths = self._recipe_changed_paths(item) if recipe else []
+        out_of_scope_paths = [path for path in changed_paths if recipe and not self._path_is_allowed(path, recipe.allowed_paths)]
+        base_revision = metadata.get("baseRevision") if isinstance(metadata.get("baseRevision"), str) else None
+        diff_command = ["git", "diff", "--stat", f"{base_revision}...HEAD"] if base_revision else ["git", "diff", "--stat"]
+        ok, diff_stat = self._git_output(diff_command)
+        payload = {
+            "localDeliveryPackageStatus": "ready",
+            "localDeliveryPackageKind": "git-diff-summary",
+            "changedPaths": changed_paths,
+            "outOfScopePaths": out_of_scope_paths,
+            "diffStat": diff_stat if ok else None,
+            "diffStatAvailable": ok,
+            "baseBranch": metadata.get("baseBranch") if isinstance(metadata.get("baseBranch"), str) else None,
+            "baseRevision": base_revision,
+            "executionBranch": metadata.get("executionBranch") if isinstance(metadata.get("executionBranch"), str) else None,
+            "pullRequestStatus": metadata.get("pullRequestStatus") if isinstance(metadata.get("pullRequestStatus"), str) else "not_recorded",
+            "pullRequestUrl": metadata.get("pullRequestUrl") if isinstance(metadata.get("pullRequestUrl"), str) else None,
+            "ciStatus": metadata.get("ciStatus") if isinstance(metadata.get("ciStatus"), str) else "not_recorded",
+            "mergeStatus": metadata.get("mergeStatus") if isinstance(metadata.get("mergeStatus"), str) else "not_recorded",
+            "deliveryWaived": metadata.get("deliveryWaived") is True,
+            "deliveryWaiverReason": metadata.get("deliveryWaiverReason") if isinstance(metadata.get("deliveryWaiverReason"), str) else None,
+            "remoteOperationsPerformed": metadata.get("remoteOperationsPerformed") is True,
+            "remoteOperationsPolicy": (
+                "live remote delivery executed by the supervisor"
+                if metadata.get("remoteOperationsPerformed") is True
+                else (
+                    "live remote delivery is enabled; supervisor can create a PR, wait for CI, and merge"
+                    if self._remote_delivery_enabled()
+                    else "record-only; supervisor did not create a PR, wait for CI, or merge"
+                )
+            ),
+        }
+        payload["readyForApproval"] = self._delivery_ready_for_approval(payload)
+        return payload
+
+    def _normalize_delivery_readiness_payload(self, item: WorkItem, payload: WorkItemDeliveryReadinessRequest) -> dict:
+        recipe = self._execution_recipe_for_item(item)
+        current = self._recipe_delivery_gate_payload(item, recipe)
+        pull_request_status = self._delivery_status_value(payload.pullRequestStatus, current["pullRequestStatus"], PR_STATUSES, "pullRequestStatus")
+        ci_status = self._delivery_status_value(payload.ciStatus, current["ciStatus"], CI_STATUSES, "ciStatus")
+        merge_status = self._delivery_status_value(payload.mergeStatus, current["mergeStatus"], MERGE_STATUSES, "mergeStatus")
+        pull_request_url = payload.pullRequestUrl.strip() if isinstance(payload.pullRequestUrl, str) and payload.pullRequestUrl.strip() else current["pullRequestUrl"]
+        delivery_waived = payload.deliveryWaived
+        waiver_reason = (
+            payload.deliveryWaiverReason.strip()
+            if isinstance(payload.deliveryWaiverReason, str) and payload.deliveryWaiverReason.strip()
+            else current["deliveryWaiverReason"]
+        )
+        if delivery_waived and not waiver_reason:
+            raise ValueError("Delivery waiver requires a reason.")
+
+        normalized = {
+            **current,
+            "pullRequestStatus": pull_request_status,
+            "pullRequestUrl": pull_request_url,
+            "ciStatus": ci_status,
+            "mergeStatus": merge_status,
+            "deliveryWaived": delivery_waived,
+            "deliveryWaiverReason": waiver_reason if delivery_waived else None,
+            "remoteOperationsPerformed": current["remoteOperationsPerformed"],
+        }
+        normalized["readyForApproval"] = self._delivery_ready_for_approval(normalized)
+        return normalized
+
+    def _delivery_status_value(self, requested: str | None, current: str, allowed: set[str], field_name: str) -> str:
+        value = requested.strip().lower() if isinstance(requested, str) and requested.strip() else current
+        if value not in allowed:
+            raise ValueError(f"{field_name} must be one of: {', '.join(sorted(allowed))}.")
+        return value
+
+    def _delivery_ready_for_approval(self, payload: dict) -> bool:
+        waiver_ready = payload.get("deliveryWaived") is True and bool(payload.get("deliveryWaiverReason"))
+        remote_delivery_ready = (
+            payload.get("pullRequestStatus") in {"recorded", "ready"}
+            and payload.get("ciStatus") == "passed"
+            and payload.get("mergeStatus") in {"ready", "merged"}
+        )
+        return waiver_ready or remote_delivery_ready
+
+    def _recipe_delivery_review_error(self, item: WorkItem) -> str | None:
+        recipe = self._execution_recipe_for_item(item)
+        payload = self._recipe_delivery_gate_payload(item, recipe)
+        if self._delivery_ready_for_approval(payload):
+            return None
+        return "Recipe review approval requires delivery readiness evidence or an explicit delivery waiver."
+
+    def _recipe_gate_audit_view(
+        self,
+        item: WorkItem,
+        recipe: ExecutionRecipe,
+        events: list[WorkflowEvent],
+    ) -> WorkItemRecipeGateAuditView:
+        entries = [self._recipe_gate_audit_entry(item, recipe, gate, events) for gate in recipe.policy_gates]
+        passed_count = sum(1 for entry in entries if entry.status == "passed")
+        blocked_count = sum(1 for entry in entries if entry.status == "blocked")
+        pending_count = sum(1 for entry in entries if entry.status == "pending")
+        status = "blocked" if blocked_count else "passed" if passed_count == len(entries) else "pending"
+        return WorkItemRecipeGateAuditView(
+            recipeId=recipe.id,
+            status=status,
+            passedCount=passed_count,
+            blockedCount=blocked_count,
+            pendingCount=pending_count,
+            gates=entries,
+            nextManagedAction=self._next_managed_action_view(item, recipe, entries),
+        )
+
+    def _next_managed_action_view(
+        self,
+        item: WorkItem,
+        recipe: ExecutionRecipe,
+        entries: list[WorkItemRecipeGateAuditEntryView],
+    ) -> WorkItemManagedActionView:
+        gate_status = {entry.gateId: entry.status for entry in entries}
+        blocked_gate = next((entry for entry in entries if entry.status == "blocked"), None)
+        if blocked_gate:
+            return WorkItemManagedActionView(
+                actionId="resolve_blocked_gate",
+                label="Resolve blocked policy gate",
+                status="blocked",
+                reason=blocked_gate.reason or f"{blocked_gate.label} is blocked.",
+                requiredGate=blocked_gate.gateId,
+                operatorCheckpoint="blocked-gate-resolution",
+                allowedActor="operator",
+            )
+
+        state = WorkflowState(item.state)
+        if state in {WorkflowState.QUEUED, WorkflowState.TRIAGED}:
+            return WorkItemManagedActionView(
+                actionId="supervisor_triage",
+                label="Let supervisor finish recipe triage",
+                status="available",
+                reason="The supervisor can advance intake through recipe scope validation.",
+                requiredGate="scope",
+                operatorCheckpoint="scope-reviewed",
+                allowedActor="supervisor",
+            )
+        if state == WorkflowState.READY:
+            branch_status = gate_status.get("branch-ownership")
+            return WorkItemManagedActionView(
+                actionId="prepare_recipe_branch" if branch_status != "passed" else "run_recipe_implementation",
+                label="Prepare execution branch" if branch_status != "passed" else "Run constrained implementation",
+                status="available",
+                reason=(
+                    "Record or prepare the approved recipe branch before implementation starts."
+                    if branch_status != "passed"
+                    else "The supervisor may run the recipe implementation commands with remote operations blocked."
+                ),
+                requiredGate="branch-ownership" if branch_status != "passed" else "implementation-automation",
+                operatorCheckpoint="branch-preparation" if branch_status != "passed" else "implementation-command-run",
+                allowedActor="operator" if branch_status != "passed" else "supervisor",
+            )
+        if state == WorkflowState.IMPLEMENTING:
+            return WorkItemManagedActionView(
+                actionId=WorkflowAction.SUBMIT_FOR_VALIDATION.value,
+                label="Submit for validation",
+                status="available",
+                reason="Operator checkpoint note is required before recipe verification runs.",
+                requiredGate="path-scope",
+                operatorCheckpoint="path-scope-check",
+                allowedActor="operator",
+            )
+        if state == WorkflowState.VALIDATING:
+            return WorkItemManagedActionView(
+                actionId=WorkflowAction.VALIDATION_PASSED.value,
+                label="Record validation review",
+                status="available" if gate_status.get("verification") == "passed" else "waiting",
+                reason=(
+                    "Verification evidence is recorded; operator can move the recipe into review."
+                    if gate_status.get("verification") == "passed"
+                    else "Waiting for recipe verification evidence."
+                ),
+                requiredGate="verification",
+                operatorCheckpoint="review-entry",
+                allowedActor="operator",
+            )
+        if state == WorkflowState.REVIEWING:
+            delivery_payload = self._recipe_delivery_gate_payload(item, recipe)
+            delivery_ready = delivery_payload["readyForApproval"]
+            remote_ready, remote_reason = self._remote_delivery_preflight_status()
+            if self._remote_delivery_enabled() and not delivery_payload["remoteOperationsPerformed"]:
+                return WorkItemManagedActionView(
+                    actionId="execute_remote_delivery",
+                    label="Execute remote delivery",
+                    status="available" if remote_ready else "blocked",
+                    reason=(
+                        "Remote delivery is approved by the policy ledger and can now create, check, and merge the pull request."
+                        if remote_ready
+                        else f"Remote delivery is approved by the policy ledger, but the live target is not ready: {remote_reason}"
+                    ),
+                    requiredGate="delivery-readiness",
+                    operatorCheckpoint="remote-delivery" if remote_ready else "remote-delivery-preflight",
+                    allowedActor="supervisor",
+                    remoteOperation=True,
+                )
+            return WorkItemManagedActionView(
+                actionId=WorkflowAction.APPROVE_REVIEW.value if delivery_ready else "record_delivery_readiness",
+                label="Approve recipe output" if delivery_ready else "Record delivery readiness",
+                status="available",
+                reason=(
+                    "Delivery readiness is satisfied by local package evidence, remote readiness evidence, or waiver; final operator approval can complete the recipe."
+                    if delivery_ready
+                    else "A safe local delivery package, PR/CI/merge readiness evidence, or an explicit waiver is required before approval."
+                ),
+                requiredGate="review" if delivery_ready else "delivery-readiness",
+                operatorCheckpoint="operator-review" if delivery_ready else "delivery-readiness-update",
+                allowedActor="operator",
+            )
+        if state == WorkflowState.NEEDS_REWORK:
+            return WorkItemManagedActionView(
+                actionId=WorkflowAction.RESTART_IMPLEMENTATION.value,
+                label="Restart implementation after rework",
+                status="available",
+                reason="Corrective-loop evidence is required before the supervisor can retry the constrained recipe.",
+                requiredGate="implementation-automation",
+                operatorCheckpoint="rework-review",
+                allowedActor="operator",
+            )
+        if state == WorkflowState.BLOCKED:
+            return WorkItemManagedActionView(
+                actionId="resolve_blocked_work_item",
+                label="Resolve blocked work item",
+                status="blocked",
+                reason=item.blocked_reason or "Work item is blocked before the supervisor can continue.",
+                requiredGate=None,
+                operatorCheckpoint="blocked-work-item-resolution",
+                allowedActor="operator",
+            )
+        if state == WorkflowState.DONE:
+            return WorkItemManagedActionView(
+                actionId="complete",
+                label="Recipe complete",
+                status="complete",
+                reason="All supervisor-managed recipe gates are complete.",
+                requiredGate="review",
+                operatorCheckpoint="operator-review",
+                allowedActor="supervisor",
+            )
+        return WorkItemManagedActionView(
+            actionId="operator_review_required",
+            label="Operator review required",
+            status="waiting",
+            reason=f"State {item.state} does not have an automatic recipe action.",
+            requiredGate=None,
+            operatorCheckpoint="operator-review",
+            allowedActor="operator",
+        )
+
+    def _recipe_gate_audit_entry(
+        self,
+        item: WorkItem,
+        recipe: ExecutionRecipe,
+        gate,
+        events: list[WorkflowEvent],
+    ) -> WorkItemRecipeGateAuditEntryView:
+        gate_events = [
+            event
+            for event in events
+            if isinstance(event.payload, dict) and event.payload.get("policyGate") == gate.id
+        ]
+        passed_by_group_event = next(
+            (
+                event
+                for event in events
+                if isinstance(event.payload, dict)
+                and isinstance(event.payload.get("passedPolicyGates"), list)
+                and gate.id in event.payload["passedPolicyGates"]
+            ),
+            None,
+        )
+        latest_event = gate_events[0] if gate_events else None
+        failed_event = next(
+            (
+                event
+                for event in gate_events
+                if event.event_type.endswith("_failed")
+                or event.event_type.endswith("_blocked")
+                or event.event_type in {"recipe.blocked", "repo.blocked"}
+            ),
+            None,
+        )
+
+        status = "pending"
+        reason = None
+        if failed_event:
+            status = "blocked"
+            reason = failed_event.payload.get("reason") if isinstance(failed_event.payload, dict) else failed_event.summary
+        elif gate.id == "delivery-readiness":
+            delivery_payload = self._recipe_delivery_gate_payload(item, recipe)
+            status = "passed" if delivery_payload["readyForApproval"] else "pending"
+            reason = None if status == "passed" else "Delivery readiness evidence or waiver is still required."
+        elif gate.id == "review":
+            status = "passed" if item.state == WorkflowState.DONE.value else "pending"
+        elif gate_events or passed_by_group_event:
+            status = "passed"
+
+        return WorkItemRecipeGateAuditEntryView(
+            gateId=gate.id,
+            label=gate.label,
+            requiredBefore=gate.required_before,
+            status=status,
+            summary=gate.summary,
+            evidence=list(gate.evidence),
+            latestEventType=(latest_event or passed_by_group_event).event_type if latest_event or passed_by_group_event else None,
+            latestEventAt=self._normalize_timestamp((latest_event or passed_by_group_event).created_at) if latest_event or passed_by_group_event else None,
+            reason=reason,
+        )
+
+    def _recipe_policy_payload(
+        self,
+        recipe: ExecutionRecipe | None,
+        gate_id: str,
+        checkpoint_id: str,
+        extra: dict | None = None,
+    ) -> dict:
+        payload = dict(extra or {})
+        if not recipe:
+            return payload
+
+        gate = next((candidate for candidate in recipe.policy_gates if candidate.id == gate_id), None)
+        payload.update(
+            {
+                "recipeId": recipe.id,
+                "policyGate": gate_id,
+                "operatorCheckpoint": checkpoint_id,
+            }
+        )
+        if gate:
+            payload.update(
+                {
+                    "policyGateLabel": gate.label,
+                    "policyGateRequiredBefore": gate.required_before,
+                    "policyGateEvidence": list(gate.evidence),
+                }
+            )
+        return payload
+
+    def _to_policy_gate_view(self, gate) -> WorkItemPolicyGateView:
+        return WorkItemPolicyGateView(
+            id=gate.id,
+            label=gate.label,
+            requiredBefore=gate.required_before,
+            summary=gate.summary,
+            evidence=list(gate.evidence),
+        )
+
+    def _to_remote_automation_policy_view(self, recipe: ExecutionRecipe) -> WorkItemRemoteAutomationPolicyView:
+        return self._remote_delivery_policy_view(recipe)
 
     def _to_execution_recipe_view(self, recipe: ExecutionRecipe) -> WorkItemExecutionRecipeView:
         return WorkItemExecutionRecipeView(
@@ -840,8 +2504,28 @@ class SupervisorService:
             summary=recipe.summary,
             branchPrefix=recipe.branch_prefix,
             allowedPaths=list(recipe.allowed_paths),
-            verificationCommands=list(recipe.verification_commands),
+            implementationCommands=[command.display for command in recipe.implementation_commands],
+            verificationCommands=[command.display for command in recipe.verification_commands],
+            policyGates=[self._to_policy_gate_view(gate) for gate in recipe.policy_gates],
+            operatorCheckpoints=list(recipe.operator_checkpoints),
             autonomyNotes=list(recipe.autonomy_notes),
+            remoteAutomationPolicy=self._to_remote_automation_policy_view(recipe),
+        )
+
+    def _to_delivery_readiness_view(self, item: WorkItem, recipe: ExecutionRecipe | None) -> WorkItemDeliveryReadinessView | None:
+        if not recipe:
+            return None
+        payload = self._recipe_delivery_gate_payload(item, recipe)
+        return WorkItemDeliveryReadinessView(
+            pullRequestStatus=payload["pullRequestStatus"],
+            pullRequestUrl=payload["pullRequestUrl"],
+            ciStatus=payload["ciStatus"],
+            mergeStatus=payload["mergeStatus"],
+            deliveryWaived=payload["deliveryWaived"],
+            deliveryWaiverReason=payload["deliveryWaiverReason"],
+            remoteOperationsPerformed=payload["remoteOperationsPerformed"],
+            remoteOperationsPolicy=payload["remoteOperationsPolicy"],
+            readyForApproval=payload["readyForApproval"],
         )
 
     def _origin_for_item(self, item: WorkItem) -> str:
@@ -904,6 +2588,7 @@ class SupervisorService:
             selfDetectedIssue=self_detected_issue_category is not None,
             selfDetectedIssueCategory=self_detected_issue_category,
             executionRecipe=self._to_execution_recipe_view(recipe) if recipe else None,
+            deliveryReadiness=self._to_delivery_readiness_view(item, recipe),
             createdAt=self._normalize_timestamp(item.created_at),
             updatedAt=self._normalize_timestamp(item.updated_at),
             lastEventAt=self._normalize_timestamp(item.last_event_at),
