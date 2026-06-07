@@ -37,8 +37,8 @@ def _create_remote_delivery_repo(tmp_path: Path, branch_name: str) -> tuple[Path
     _run_git(repo_root, "add", "README.md")
     _run_git(repo_root, "commit", "-m", "Prepare remote delivery branch")
 
-    gh_shim = shim_dir / "gh.cmd"
-    gh_shim.write_text(
+    gh_cmd_shim = shim_dir / "gh.cmd"
+    gh_cmd_shim.write_text(
         "\n".join(
             [
                 "@echo off",
@@ -77,6 +77,50 @@ def _create_remote_delivery_repo(tmp_path: Path, branch_name: str) -> tuple[Path
         ),
         encoding="utf-8",
     )
+
+    gh_shim = shim_dir / "gh"
+    gh_shim.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env sh",
+                'GH_LOG="${GH_SHIM_LOG_PATH:-}"',
+                'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then',
+                "  echo https://github.com/example/repo/pull/789",
+                '  [ -n "$GH_LOG" ] && echo create >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then',
+                "  echo github.com",
+                "  echo '  Logged in to github.com account slawdawg (keyring)'",
+                '  [ -n "$GH_LOG" ] && echo auth >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then',
+                "  echo https://github.com/example/repo/pull/789",
+                '  [ -n "$GH_LOG" ] && echo view >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                'if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then',
+                "  echo checks passed",
+                '  [ -n "$GH_LOG" ] && echo checks >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                'if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then',
+                "  echo merged",
+                '  [ -n "$GH_LOG" ] && echo merge >> "$GH_LOG"',
+                "  exit 0",
+                "fi",
+                "echo unexpected gh command",
+                '  [ -n "$GH_LOG" ] && echo unexpected >> "$GH_LOG"',
+                "exit 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gh_shim.chmod(0o755)
+
+    if os.name == "nt":
+        gh_shim = gh_cmd_shim
 
     return repo_root, remote_root, gh_shim
 
