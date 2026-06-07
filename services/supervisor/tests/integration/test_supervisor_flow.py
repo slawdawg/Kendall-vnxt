@@ -49,6 +49,12 @@ def _create_remote_delivery_repo(tmp_path: Path, branch_name: str) -> tuple[Path
                 "  if not \"!GH_LOG!\"==\"\" echo create>>\"!GH_LOG!\"",
                 "  exit /b 0",
                 ")",
+                "if /I \"%1\"==\"auth\" if /I \"%2\"==\"status\" (",
+                "  echo github.com",
+                "  echo   ✓ Logged in to github.com account slawdawg (keyring)",
+                "  if not \"!GH_LOG!\"==\"\" echo auth>>\"!GH_LOG!\"",
+                "  exit /b 0",
+                ")",
                 "if /I \"%1\"==\"pr\" if /I \"%2\"==\"view\" (",
                 "  echo https://github.com/example/repo/pull/789",
                 "  if not \"!GH_LOG!\"==\"\" echo view>>\"!GH_LOG!\"",
@@ -1380,7 +1386,17 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
             ).returncode
             == 0
         )
-        assert gh_log_path.read_text(encoding="utf-8").splitlines() == ["create", "checks", "merge"]
+        gh_log_entries = gh_log_path.read_text(encoding="utf-8").splitlines()
+        assert "auth" in gh_log_entries
+
+        remote_event = next(event for event in events_response.json()["data"] if event["eventType"] == "recipe.remote_delivery_executed")
+        remote_commands = remote_event["payload"]["commands"]
+        assert [command["command"] for command in remote_commands[:4]] == [
+            "git push -u origin e2e-remote-delivery-enabled",
+            "gh pr create --base main --head e2e-remote-delivery-enabled --title Remote delivery enabled --body Prove the supervisor can execute remote delivery when policy allows it.",
+            "gh pr checks --watch --fail-fast",
+            "gh pr merge --squash --delete-branch",
+        ]
         assert delivery["remoteOperationsPerformed"] is True
         assert delivery["pullRequestStatus"] == "recorded"
         assert delivery["ciStatus"] == "passed"
@@ -1389,6 +1405,95 @@ def test_recipe_review_can_execute_remote_delivery_when_enabled(tmp_path, monkey
         assert "recipe.remote_delivery_executed" in event_types
         assert after_action["actionId"] == "approve_review"
         assert after_action["remoteOperation"] is False
+
+
+def test_recipe_review_blocks_remote_delivery_until_live_target_is_ready(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-remote-delivery-preflight.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_REMOTE_DELIVERY", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_branch_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "expectedBranch": "e2e-remote-delivery-preflight",
+            "currentBranch": "e2e-remote-delivery-preflight",
+            "baseBranch": "main",
+            "baseRevision": "base-revision",
+            "currentBaseRevision": "base-revision",
+        },
+    )
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": [],
+        },
+    )
+    service._recipe_changed_paths = lambda item: ["tests/e2e/dashboard.spec.ts"]  # type: ignore[method-assign]
+    service._git_output = lambda args: (True, " tests/e2e/dashboard.spec.ts | 12 ++++++++++++")  # type: ignore[method-assign]
+    service._run_recipe_implementation_commands = lambda recipe, item: [  # type: ignore[method-assign]
+        {"command": "node scripts/dashboard-test-coverage-recipe.mjs", "exitCode": 0, "stdout": "updated", "stderr": ""},
+        {"command": "pnpm run lint:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+    service._run_recipe_verification_commands = lambda recipe: [  # type: ignore[method-assign]
+        {"command": "pnpm run test:e2e:dashboard", "exitCode": 0, "stdout": "ok", "stderr": ""},
+        {"command": "pnpm run check", "exitCode": 0, "stdout": "ok", "stderr": ""},
+    ]
+
+    def fake_run_remote_command(args, timeout=600):  # type: ignore[no-untyped-def]
+        if args == ["git", "remote", "get-url", "origin"]:
+            return {"command": "git remote get-url origin", "exitCode": 0, "stdout": "https://github.com/example/repo.git", "stderr": ""}
+        if args == ["gh", "auth", "status"]:
+            return {"command": "gh auth status", "exitCode": 1, "stdout": "", "stderr": "not logged in"}
+        raise AssertionError(f"unexpected remote command: {args}")
+
+    service._run_remote_command = fake_run_remote_command  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Remote delivery preflight",
+                "requestedOutcome": "Prove the supervisor blocks remote delivery until the live target is ready.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-remote-delivery-preflight",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        for _ in range(3):
+            asyncio.run(process_once_for_tests())
+
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "submit_for_validation", "note": "Recipe checks are ready."},
+        ).status_code == 200
+        assert client.post(
+            f"/work-items/{work_item_id}/actions",
+            json={"action": "validation_passed", "note": "Verification evidence is recorded."},
+        ).status_code == 200
+
+        audit_before_remote = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        remote_action = audit_before_remote.json()["data"]["nextManagedAction"]
+
+        assert remote_action["actionId"] == "execute_remote_delivery"
+        assert remote_action["status"] == "blocked"
+        assert remote_action["remoteOperation"] is True
+        assert "GitHub CLI authentication is not available" in remote_action["reason"]
 
 
 def test_recipe_review_blocks_when_local_delivery_package_has_out_of_scope_paths(tmp_path, monkeypatch) -> None:

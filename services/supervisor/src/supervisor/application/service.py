@@ -1692,6 +1692,7 @@ class SupervisorService:
 
     def _remote_delivery_policy_view(self, recipe: ExecutionRecipe) -> WorkItemRemoteAutomationPolicyView:
         policy = recipe.remote_automation_policy
+        remote_ready, remote_reason = self._remote_delivery_preflight_status()
         if not self._remote_delivery_enabled():
             return WorkItemRemoteAutomationPolicyView(
                 status=policy.status,
@@ -1701,14 +1702,29 @@ class SupervisorService:
                 approvalRequirements=list(policy.approval_requirements),
             )
         return WorkItemRemoteAutomationPolicyView(
-            status="available",
-            summary="Remote delivery automation is enabled for approved recipe work.",
+            status="available" if remote_ready else "blocked",
+            summary=(
+                "Remote delivery automation is enabled for approved recipe work and the live delivery target is ready."
+                if remote_ready
+                else f"Remote delivery automation is enabled but the live delivery target is not ready: {remote_reason}"
+            ),
             allowedOperations=["git push", "pull request creation", "CI wait", "merge"],
             blockedOperations=["release", "deployment"],
-            approvalRequirements=list(policy.approval_requirements),
+            approvalRequirements=list(policy.approval_requirements)
+            + ["GitHub auth and an origin remote must be available before live delivery can run."],
         )
 
     def _remote_delivery_commands(self, item: WorkItem) -> list[dict]:
+        remote_ready, remote_reason = self._remote_delivery_preflight_status()
+        if not remote_ready:
+            return [
+                {
+                    "command": "remote-delivery-preflight",
+                    "exitCode": 1,
+                    "stdout": "",
+                    "stderr": remote_reason,
+                }
+            ]
         metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
         execution_branch = metadata.get("executionBranch")
         base_branch = metadata.get("baseBranch") if isinstance(metadata.get("baseBranch"), str) and metadata.get("baseBranch").strip() else "main"
@@ -1774,6 +1790,15 @@ class SupervisorService:
             }
         )
         return commands
+
+    def _remote_delivery_preflight_status(self) -> tuple[bool, str]:
+        origin_result = self._run_remote_command(["git", "remote", "get-url", "origin"], timeout=30)
+        if origin_result["exitCode"] != 0:
+            return False, "Git origin remote is missing or inaccessible."
+        auth_result = self._run_remote_command(["gh", "auth", "status"], timeout=30)
+        if auth_result["exitCode"] != 0:
+            return False, "GitHub CLI authentication is not available."
+        return True, ""
 
     def _extract_pull_request_url(self, stdout: str) -> str | None:
         for line in stdout.splitlines():
@@ -2302,14 +2327,19 @@ class SupervisorService:
         if state == WorkflowState.REVIEWING:
             delivery_payload = self._recipe_delivery_gate_payload(item, recipe)
             delivery_ready = delivery_payload["readyForApproval"]
+            remote_ready, remote_reason = self._remote_delivery_preflight_status()
             if self._remote_delivery_enabled() and not delivery_payload["remoteOperationsPerformed"]:
                 return WorkItemManagedActionView(
                     actionId="execute_remote_delivery",
                     label="Execute remote delivery",
-                    status="available",
-                    reason="Remote delivery is approved by the policy ledger and can now create, check, and merge the pull request.",
+                    status="available" if remote_ready else "blocked",
+                    reason=(
+                        "Remote delivery is approved by the policy ledger and can now create, check, and merge the pull request."
+                        if remote_ready
+                        else f"Remote delivery is approved by the policy ledger, but the live target is not ready: {remote_reason}"
+                    ),
                     requiredGate="delivery-readiness",
-                    operatorCheckpoint="remote-delivery",
+                    operatorCheckpoint="remote-delivery" if remote_ready else "remote-delivery-preflight",
                     allowedActor="supervisor",
                     remoteOperation=True,
                 )
