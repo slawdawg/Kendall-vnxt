@@ -4,7 +4,7 @@ baseline_commit: 7c23d74
 
 # Story 1.11: Guarded Utility Worker Adapter Contract
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -25,21 +25,21 @@ so that dynamic routing gains real execution evidence without opening arbitrary 
 
 ## Tasks / Subtasks
 
-- [ ] Add utility worker domain contract. (AC: 1, 2, 3, 7)
-  - [ ] Define immutable task and result dataclasses.
-  - [ ] Add an allowlist-backed adapter that validates deterministic internal function ids.
-  - [ ] Return structured rejection results instead of raising for policy denial.
-- [ ] Route the existing guarded `supervisor_triage` authorization through the utility worker adapter. (AC: 4, 5, 6)
-  - [ ] Preserve existing routing authorization event.
-  - [ ] Record utility worker attempt evidence before the managed action advances workflow state.
-  - [ ] Keep execution limited to existing supervisor-owned behavior.
-- [ ] Add focused integration tests. (AC: 3, 4, 5, 6, 8)
-  - [ ] Assert `supervisor_triage` records `worker.utility_attempt_recorded`.
-  - [ ] Assert non-allowlisted utility work is rejected with structured failure evidence.
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused supervisor tests.
-  - [ ] Run broader workspace verification.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add utility worker domain contract. (AC: 1, 2, 3, 7)
+  - [x] Define immutable task and result dataclasses.
+  - [x] Add an allowlist-backed adapter that validates deterministic internal function ids.
+  - [x] Return structured rejection results instead of raising for policy denial.
+- [x] Route the existing guarded `supervisor_triage` authorization through the utility worker adapter. (AC: 4, 5, 6)
+  - [x] Preserve existing routing authorization event.
+  - [x] Record utility worker attempt evidence before the managed action advances workflow state.
+  - [x] Keep execution limited to existing supervisor-owned behavior.
+- [x] Add focused integration tests. (AC: 3, 4, 5, 6, 8)
+  - [x] Assert `supervisor_triage` records `worker.utility_attempt_recorded`.
+  - [x] Assert non-allowlisted utility work is rejected with structured failure evidence.
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused supervisor tests.
+  - [x] Run broader workspace verification.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -83,17 +83,27 @@ Recommended design:
 
 ### Debug Log References
 
-- Pending.
+- Focused: `uv run --directory services/supervisor pytest tests/integration/test_supervisor_flow.py -q -k "managed_next_action_executes_only_current_recipe_step or managed_next_action_records_rejected_utility_worker_attempt"` passed, 2 tests, 1 aiosqlite warning.
+- Supervisor integration: `uv run --directory services/supervisor pytest tests/integration/test_supervisor_flow.py tests/integration/test_routing_preview.py -q` passed, 57 tests.
+- Workspace check: `pnpm run check` passed; dashboard build succeeded and supervisor tests passed, 57 tests, with existing aiosqlite thread warnings.
 
 ### Completion Notes List
 
-- Pending.
+- Added a provider-neutral internal utility worker contract with immutable task and result dataclasses.
+- Added an allowlist-backed `utility.internal` adapter that accepts only `supervisor_triage` by default and returns structured rejection results for non-allowlisted function ids.
+- Routed guarded `supervisor_triage` through the utility adapter while preserving the existing `routing.utility_execution_authorized` event and workflow behavior.
+- Added `worker.utility_attempt_recorded` evidence for successful and rejected guarded utility attempts.
 
 ### File List
 
-- Pending.
+- `docs/stories/1-11-guarded-utility-worker-adapter-contract.md`
+- `_bmad-output/implementation-artifacts/1-11-guarded-utility-worker-adapter-contract.md`
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/src/supervisor/domain/utility_worker.py`
+- `services/supervisor/tests/integration/test_supervisor_flow.py`
 
 ## Change Log
 
 - 2026-06-08: Created story from routing follow-on roadmap.
+- 2026-06-08: Implemented guarded utility worker adapter contract; status moved to done.
 

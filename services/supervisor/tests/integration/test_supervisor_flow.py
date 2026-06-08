@@ -989,6 +989,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
 
         events = events_response.json()["data"]
         routing_event = next(event for event in events if event["eventType"] == "routing.utility_execution_authorized")
+        utility_event = next(event for event in events if event["eventType"] == "worker.utility_attempt_recorded")
         branch_event = next(event for event in events if event["eventType"] == "recipe.branch_prepared")
         implementation_event = next(event for event in events if event["eventType"] == "recipe.implementation_passed")
         audit = audit_response.json()["data"]
@@ -1004,12 +1005,94 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         assert routing_event["payload"]["rejectedLanes"]
         assert routing_event["payload"]["escalationPath"]
         assert routing_event["payload"]["permissionSummary"].startswith("Guarded utility execution allowed")
+        assert utility_event["actorType"] == "supervisor"
+        assert utility_event["actorLabel"] == "Primary operator"
+        assert utility_event["payload"]["workerId"] == "utility.internal"
+        assert utility_event["payload"]["functionId"] == "supervisor_triage"
+        assert utility_event["payload"]["stepId"] == "scope"
+        assert utility_event["payload"]["taskKind"] == "path_scope_check"
+        assert "tests/e2e" in utility_event["payload"]["allowedPaths"]
+        assert "apps/dashboard" in utility_event["payload"]["allowedPaths"]
+        assert utility_event["payload"]["timeoutSeconds"] == 30
+        assert utility_event["payload"]["status"] == "succeeded"
+        assert utility_event["payload"]["failureReason"] is None
         assert branch_event["actorLabel"] == "Primary operator"
         assert branch_event["payload"]["operatorCheckpoint"] == "branch-preparation"
         assert implementation_event["payload"]["operatorCheckpoint"] == "implementation-command-run"
         assert audit["nextManagedAction"]["actionId"] == "submit_for_validation"
 
 
+
+def test_managed_next_action_records_rejected_utility_worker_attempt(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "recipe-managed-utility-rejection.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._recipe_path_scope_policy = lambda item, recipe: (  # type: ignore[method-assign]
+        None,
+        {
+            "allowedPaths": ["tests/e2e", "apps/dashboard"],
+            "changedPaths": ["tests/e2e/dashboard.spec.ts"],
+            "outOfScopePaths": [],
+        },
+    )
+    service.utility_worker.allowed_function_ids = set()
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Rejected utility worker attempt",
+                "requestedOutcome": "Prove non-allowlisted utility work records structured rejection evidence.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-managed-utility-rejection",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        rejected = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={
+                "expectedActionId": "supervisor_triage",
+                "actorId": "operator:managed-action-test",
+                "actorLabel": "Primary operator",
+            },
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        item_response = client.get(f"/work-items/{work_item_id}")
+
+        assert rejected.status_code == 409
+        assert "Guarded utility worker rejected supervisor_triage" in rejected.json()["detail"]["error"]["message"]
+        assert events_response.status_code == 200
+        assert item_response.status_code == 200
+        assert item_response.json()["data"]["state"] == "queued"
+
+        events = events_response.json()["data"]
+        utility_event = next(event for event in events if event["eventType"] == "worker.utility_attempt_recorded")
+
+        assert utility_event["actorType"] == "supervisor"
+        assert utility_event["actorLabel"] == "Primary operator"
+        assert utility_event["payload"]["workerId"] == "utility.internal"
+        assert utility_event["payload"]["functionId"] == "supervisor_triage"
+        assert utility_event["payload"]["stepId"] == "scope"
+        assert utility_event["payload"]["taskKind"] == "path_scope_check"
+        assert "tests/e2e" in utility_event["payload"]["allowedPaths"]
+        assert "apps/dashboard" in utility_event["payload"]["allowedPaths"]
+        assert utility_event["payload"]["timeoutSeconds"] == 30
+        assert utility_event["payload"]["status"] == "rejected"
+        assert utility_event["payload"]["failureReason"] == "utility.function_not_allowlisted"
 def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "recipe-checkpoints.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

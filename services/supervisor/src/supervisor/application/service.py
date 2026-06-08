@@ -56,6 +56,7 @@ from supervisor.domain.routing import (
 )
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
 from supervisor.domain.types import AuditMode, BmadLane, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
+from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.infrastructure.db.models import AuditEvent, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
 from supervisor.infrastructure.streaming.bus import EventBus
 
@@ -85,6 +86,7 @@ class SupervisorService:
         self.settings = settings
         self.bus = bus
         self._loop_lock = asyncio.Lock()
+        self.utility_worker = UtilityWorkerAdapter()
 
     async def ensure_control(self, session: AsyncSession) -> SupervisorControl:
         control = await session.get(SupervisorControl, 1)
@@ -621,6 +623,52 @@ class SupervisorService:
         )
         return decision
 
+    async def _run_guarded_utility_worker(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        profile: RoutingProfile,
+        function_id: str,
+        actor_id: str | None,
+        actor_label: str | None,
+    ) -> UtilityWorkerResult:
+        task = UtilityWorkerTask(
+            work_item_id=item.id,
+            step_id=profile.step_id,
+            task_kind=profile.task_kind.value,
+            function_id=function_id,
+            allowed_paths=profile.allowed_paths,
+            timeout_seconds=30,
+        )
+        result = self.utility_worker.run(task)
+        await self._record_event(
+            session,
+            item,
+            "worker.utility_attempt_recorded",
+            f"Utility worker {result.status.value} for {function_id}.",
+            self._utility_worker_attempt_payload(task, result),
+            actor_type="supervisor",
+            actor_id=actor_id,
+            actor_label=actor_label,
+        )
+        return result
+
+    def _utility_worker_attempt_payload(
+        self,
+        task: UtilityWorkerTask,
+        result: UtilityWorkerResult,
+    ) -> dict:
+        return {
+            "workerId": result.worker_id,
+            "functionId": task.function_id,
+            "stepId": task.step_id,
+            "taskKind": task.task_kind,
+            "allowedPaths": list(task.allowed_paths),
+            "timeoutSeconds": task.timeout_seconds,
+            "status": result.status.value,
+            "failureReason": result.failure_reason,
+        }
+
     async def _routing_profile_for_item(self, session: AsyncSession, item: WorkItem) -> RoutingProfile:
         recipe = self._execution_recipe_for_item(item)
         if recipe:
@@ -1049,7 +1097,7 @@ class SupervisorService:
             await self._publish_item(item)
             return item
         if next_action.actionId == "supervisor_triage":
-            await self._record_guarded_utility_routing_event(
+            decision = await self._record_guarded_utility_routing_event(
                 session,
                 item,
                 recipe,
@@ -1057,6 +1105,18 @@ class SupervisorService:
                 payload.actorId,
                 payload.actorLabel,
             )
+            if decision:
+                utility_result = await self._run_guarded_utility_worker(
+                    session,
+                    item,
+                    decision.profile_snapshot,
+                    next_action.actionId,
+                    payload.actorId,
+                    payload.actorLabel,
+                )
+                if utility_result.status != UtilityWorkerStatus.SUCCEEDED:
+                    await session.commit()
+                    raise ValueError(f"Guarded utility worker rejected {next_action.actionId}: {utility_result.failure_reason}")
         if next_action.actionId == "prepare_recipe_branch":
             return await self.prepare_recipe_branch(
                 session,
