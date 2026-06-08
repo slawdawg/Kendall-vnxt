@@ -375,6 +375,31 @@ export interface WorkerRegistryEntryView {
   maxParallelJobs: number;
   disabledReason?: string | null;
 }
+
+export interface ExecutionConfigurationCheckView {
+  checkId: string;
+  label: string;
+  status: string;
+  enabled: boolean;
+  disabledReason?: string | null;
+  affectedWorkers: string[];
+  evidence: string[];
+  processLaunchAllowed: boolean;
+  providerCallsAllowed: boolean;
+  modelCallsAllowed: boolean;
+  premiumExecutionAllowed: boolean;
+  commandExecutionAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  networkAllowed: boolean;
+  credentialAccessAllowed: boolean;
+}
+
+export interface ExecutionConfigurationChecksView {
+  summary: string;
+  allDisabled: boolean;
+  generatedAt: string;
+  checks: ExecutionConfigurationCheckView[];
+}
 export interface RoutingOverrideView {
   overrideId: string;
   workItemId: string;

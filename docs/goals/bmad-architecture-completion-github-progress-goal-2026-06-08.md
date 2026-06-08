@@ -36,11 +36,12 @@ Completed foundation:
 - Execution attempt approval binding and stale/mismatched decision rejection.
 - Execution attempt workspace isolation plan contract.
 - Dashboard execution attempt evidence panel.
+- Disabled execution configuration checks.
 
 Current local checkpoint:
 
 - See `git log --oneline -5` for the latest local checkpoint.
-- Latest completed architecture story trail: `docs/stories/2-5-dashboard-attempt-evidence-panel.md`.
+- Latest completed architecture story trail: `docs/stories/2-6-disabled-execution-configuration-checks.md`.
 
 Known GitHub sync issue:
 
@@ -53,7 +54,6 @@ Known GitHub sync issue:
 The architecture is considered complete for this BMad goal only when all of the following are true:
 
 1. Execution authority expansion slices are implemented or explicitly deferred with decision records:
-   - disabled execution configuration checks,
    - runtime evidence/export strategy,
    - threat boundary for commands, prompts, credentials, and local provider endpoints.
 2. Supervisor behavior remains disabled-by-default for real subscription-agent launch, local provider/model calls, premium execution, arbitrary shell execution, source mutation, and background assistant behavior until later explicit approval.
@@ -198,6 +198,8 @@ Key acceptance:
 
 ### Story 2.6: Disabled Execution Configuration Checks
 
+Status: completed locally; pending GitHub sync.
+
 Goal: expose configuration evidence that subscription launch, local provider calls, and premium execution remain disabled by default.
 
 Key acceptance:
@@ -276,4 +278,4 @@ Pause implementation and create a decision record if any story requires:
 
 Restore or confirm GitHub authentication, then push the local `main` checkpoints shown by `git log --oneline -5` to `origin/main`.
 
-After Story 2.5 is committed and GitHub progress is current, begin Story 2.6: Disabled Execution Configuration Checks.
+After Story 2.6 is committed and GitHub progress is current, begin Story 2.7: Runtime Evidence Export Strategy.

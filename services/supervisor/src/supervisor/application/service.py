@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
     AuditEventView,
+    ExecutionConfigurationCheckView,
+    ExecutionConfigurationChecksView,
     ExecutionAttemptView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
@@ -253,6 +255,154 @@ class SupervisorService:
 
     def list_worker_registry(self) -> list[WorkerRegistryEntryView]:
         return [self._to_worker_registry_entry_view(worker) for worker in self.worker_registry.list_workers()]
+
+    def get_execution_configuration_checks(self) -> ExecutionConfigurationChecksView:
+        workers = self.worker_registry.list_workers()
+
+        def affected_by_adapter(adapter_type: str) -> list[str]:
+            return [worker.worker_id for worker in workers if worker.adapter_type.value == adapter_type]
+
+        checks = [
+            self._execution_configuration_check(
+                check_id="subscription-agent-launch",
+                label="Subscription agent launch",
+                enabled=self.settings.allow_subscription_agent_launch,
+                disabled_reason="subscription_agent_process_launch_not_enabled",
+                affected_workers=affected_by_adapter("subscription_agent"),
+                evidence=[
+                    "Subscription launch stubs can create instructions only.",
+                    "No Codex, Claude, Gemini, Antigravity, or subscription CLI process launch is enabled.",
+                ],
+                process_launch_allowed=self.settings.allow_subscription_agent_launch,
+            ),
+            self._execution_configuration_check(
+                check_id="local-provider-calls",
+                label="Local provider calls",
+                enabled=self.settings.allow_local_provider_calls,
+                disabled_reason="local_provider_http_calls_not_enabled",
+                affected_workers=[
+                    worker.worker_id
+                    for worker in workers
+                    if worker.adapter_type.value == "local_openai_compatible" and worker.disabled_reason
+                ],
+                evidence=[
+                    "Ollama, LM Studio, vLLM, and llama.cpp registry entries remain disabled.",
+                    "Mock local read-only evidence does not call provider HTTP endpoints or model APIs.",
+                ],
+                provider_calls_allowed=self.settings.allow_local_provider_calls,
+                model_calls_allowed=self.settings.allow_local_provider_calls,
+            ),
+            self._execution_configuration_check(
+                check_id="premium-execution",
+                label="Premium execution",
+                enabled=self.settings.allow_premium_execution,
+                disabled_reason="premium_execution_not_enabled",
+                affected_workers=affected_by_adapter("premium_approval"),
+                evidence=[
+                    "Premium approval artifacts remain review packages only.",
+                    "No premium model invocation is enabled by approval artifacts.",
+                ],
+                premium_execution_allowed=self.settings.allow_premium_execution,
+                provider_calls_allowed=self.settings.allow_premium_execution,
+                model_calls_allowed=self.settings.allow_premium_execution,
+            ),
+            self._execution_configuration_check(
+                check_id="arbitrary-shell-execution",
+                label="Arbitrary shell execution",
+                enabled=self.settings.allow_arbitrary_shell_execution,
+                disabled_reason="arbitrary_shell_execution_not_enabled",
+                affected_workers=[worker.worker_id for worker in workers],
+                evidence=[
+                    "Execution attempts and local read-only packets keep commands disabled.",
+                    "Guarded utility behavior remains limited to supervisor-owned internal functions.",
+                ],
+                command_execution_allowed=self.settings.allow_arbitrary_shell_execution,
+            ),
+            self._execution_configuration_check(
+                check_id="worker-source-mutation",
+                label="Worker source mutation",
+                enabled=self.settings.allow_worker_source_mutation,
+                disabled_reason="worker_source_mutation_not_enabled",
+                affected_workers=[worker.worker_id for worker in workers],
+                evidence=[
+                    "Execution attempt workspace isolation plans keep write roots empty.",
+                    "Source mutation remains deferred until isolated workspace execution is approved.",
+                ],
+                source_mutation_allowed=self.settings.allow_worker_source_mutation,
+            ),
+            self._execution_configuration_check(
+                check_id="worker-network",
+                label="Worker network access",
+                enabled=self.settings.allow_worker_network,
+                disabled_reason="worker_network_access_not_enabled",
+                affected_workers=[worker.worker_id for worker in workers],
+                evidence=[
+                    "Worker attempts do not receive network permission in this phase.",
+                    "Provider endpoints remain denied unless later policy approves them.",
+                ],
+                network_allowed=self.settings.allow_worker_network,
+            ),
+            self._execution_configuration_check(
+                check_id="worker-credential-access",
+                label="Worker credential access",
+                enabled=self.settings.allow_worker_credentials,
+                disabled_reason="worker_credential_access_not_enabled",
+                affected_workers=[worker.worker_id for worker in workers],
+                evidence=[
+                    "Workspace isolation plans forbid credential access.",
+                    "Prompt/evidence packets must not include secrets, tokens, or raw environment values.",
+                ],
+                credential_access_allowed=self.settings.allow_worker_credentials,
+            ),
+        ]
+        all_disabled = all(not check.enabled for check in checks)
+        summary = (
+            "Real worker execution remains disabled by configuration."
+            if all_disabled
+            else "One or more execution authority gates are enabled; review policy before allowing real worker execution."
+        )
+        return ExecutionConfigurationChecksView(
+            summary=summary,
+            allDisabled=all_disabled,
+            generatedAt=datetime.now(timezone.utc),
+            checks=checks,
+        )
+
+    def _execution_configuration_check(
+        self,
+        *,
+        check_id: str,
+        label: str,
+        enabled: bool,
+        disabled_reason: str,
+        affected_workers: list[str],
+        evidence: list[str],
+        process_launch_allowed: bool = False,
+        provider_calls_allowed: bool = False,
+        model_calls_allowed: bool = False,
+        premium_execution_allowed: bool = False,
+        command_execution_allowed: bool = False,
+        source_mutation_allowed: bool = False,
+        network_allowed: bool = False,
+        credential_access_allowed: bool = False,
+    ) -> ExecutionConfigurationCheckView:
+        return ExecutionConfigurationCheckView(
+            checkId=check_id,
+            label=label,
+            status="enabled" if enabled else "disabled",
+            enabled=enabled,
+            disabledReason=None if enabled else disabled_reason,
+            affectedWorkers=affected_workers,
+            evidence=evidence,
+            processLaunchAllowed=process_launch_allowed,
+            providerCallsAllowed=provider_calls_allowed,
+            modelCallsAllowed=model_calls_allowed,
+            premiumExecutionAllowed=premium_execution_allowed,
+            commandExecutionAllowed=command_execution_allowed,
+            sourceMutationAllowed=source_mutation_allowed,
+            networkAllowed=network_allowed,
+            credentialAccessAllowed=credential_access_allowed,
+        )
 
     def _to_worker_registry_entry_view(self, worker: WorkerRegistryEntry) -> WorkerRegistryEntryView:
         return WorkerRegistryEntryView(

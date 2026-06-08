@@ -592,6 +592,54 @@ def test_worker_registry_lists_static_workers_without_mutating_events(tmp_path, 
     assert premium["disabledReason"] == "premium_execution_requires_operator_approval_flow"
 
 
+def test_execution_configuration_checks_report_disabled_defaults_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-configuration-checks.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/execution-configuration-checks")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    checks_view = response.json()["data"]
+    assert checks_view["allDisabled"] is True
+    assert checks_view["summary"] == "Real worker execution remains disabled by configuration."
+    assert before_events == after_events
+
+    checks = {check["checkId"]: check for check in checks_view["checks"]}
+    assert checks["subscription-agent-launch"]["disabledReason"] == "subscription_agent_process_launch_not_enabled"
+    assert checks["subscription-agent-launch"]["affectedWorkers"] == ["subscription.agent.disabled"]
+    assert checks["local-provider-calls"]["disabledReason"] == "local_provider_http_calls_not_enabled"
+    assert set(checks["local-provider-calls"]["affectedWorkers"]) == {
+        "local.ollama.disabled",
+        "local.lmstudio.disabled",
+        "local.vllm.disabled",
+        "local.llamacpp.disabled",
+    }
+    assert checks["premium-execution"]["disabledReason"] == "premium_execution_not_enabled"
+    assert checks["premium-execution"]["affectedWorkers"] == ["premium.approval"]
+
+    for check in checks.values():
+        assert check["enabled"] is False
+        assert check["status"] == "disabled"
+        assert check["processLaunchAllowed"] is False
+        assert check["providerCallsAllowed"] is False
+        assert check["modelCallsAllowed"] is False
+        assert check["premiumExecutionAllowed"] is False
+        assert check["commandExecutionAllowed"] is False
+        assert check["sourceMutationAllowed"] is False
+        assert check["networkAllowed"] is False
+        assert check["credentialAccessAllowed"] is False
+        assert check["evidence"]
+
+
 def test_local_evidence_packet_preview_is_non_mutating_and_bounded(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "local-evidence-packet.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

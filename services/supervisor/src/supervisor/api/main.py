@@ -441,6 +441,11 @@ async def get_status(session: AsyncSession = Depends(get_session)):
     return ApiEnvelope(data=await service.get_status(session))
 
 
+@app.get("/supervisor/execution-configuration-checks", response_model=ApiEnvelope)
+async def get_execution_configuration_checks():
+    return ApiEnvelope(data=service.get_execution_configuration_checks())
+
+
 async def _set_mode(mode: RunMode, session: AsyncSession) -> ApiEnvelope:
     control = await service.set_mode(session, mode)
     status = await service.get_status(session)

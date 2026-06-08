@@ -428,6 +428,32 @@ class WorkerRegistryEntryView(BaseModel):
     maxParallelJobs: int
     disabledReason: str | None = None
 
+
+class ExecutionConfigurationCheckView(BaseModel):
+    checkId: str
+    label: str
+    status: str
+    enabled: bool
+    disabledReason: str | None = None
+    affectedWorkers: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    processLaunchAllowed: bool = False
+    providerCallsAllowed: bool = False
+    modelCallsAllowed: bool = False
+    premiumExecutionAllowed: bool = False
+    commandExecutionAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    networkAllowed: bool = False
+    credentialAccessAllowed: bool = False
+
+
+class ExecutionConfigurationChecksView(BaseModel):
+    summary: str
+    allDisabled: bool
+    generatedAt: datetime
+    checks: list[ExecutionConfigurationCheckView]
+
+
 class RoutingOverrideView(BaseModel):
     overrideId: str
     workItemId: str
