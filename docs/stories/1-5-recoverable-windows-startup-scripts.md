@@ -40,13 +40,14 @@ GPT-5 Codex
 
 ### Debug Log References
 
-- PowerShell parser validation passed for the tracked `.ps1` startup scripts.
+- PowerShell parser validation passed for the tracked `.ps1` startup scripts after the portability hardening.
 - `pnpm run check` passed after the portability updates.
 - `git diff --check` passed.
 
 ### Completion Notes List
 
 - Removed hardcoded absolute repo paths from the Windows launcher chain and made `RepoRoot` derive from script location when omitted.
+- Replaced user-specific `pnpm` and `uv` executable paths with portable command resolution, including `corepack` fallback for dashboard startup.
 - Kept the existing startup behavior and logging shape while making the scripts recoverable from a fresh checkout path.
 - Tracked the startup helpers in Git so the README and recovery boundary docs now point at real committed assets.
 
@@ -63,3 +64,4 @@ GPT-5 Codex
 
 - 2026-06-08: Story created for Windows startup script recoverability.
 - 2026-06-08: Implemented repo-relative startup scripts and tracked them as recoverable assets; status moved to done.
+- 2026-06-08: Hardened startup scripts to resolve `pnpm`, `uv`, and `corepack` portably instead of relying on user-specific tool paths.
