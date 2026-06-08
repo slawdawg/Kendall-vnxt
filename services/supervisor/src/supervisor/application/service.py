@@ -37,7 +37,14 @@ from supervisor.api.schemas import (
 )
 from supervisor.config.settings import Settings
 from supervisor.domain.recipes import EXECUTION_RECIPES, ExecutionRecipe, RecipeCommand
-from supervisor.domain.routing import RoutingDecision, RoutingPreviewService, RoutingProfile, TaskKind
+from supervisor.domain.routing import (
+    ExecutionLane,
+    RoutingAuthorityMode,
+    RoutingDecision,
+    RoutingPreviewService,
+    RoutingProfile,
+    TaskKind,
+)
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
 from supervisor.domain.types import AuditMode, BmadLane, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.infrastructure.db.models import AuditEvent, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
@@ -224,30 +231,87 @@ class SupervisorService:
             },
         )
 
+    async def _record_guarded_utility_routing_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        recipe: ExecutionRecipe,
+        action: WorkItemManagedActionView,
+        actor_id: str | None,
+        actor_label: str | None,
+    ) -> RoutingDecision | None:
+        profile = self._routing_profile_for_managed_action(item, recipe, action)
+        decision = RoutingPreviewService().preview(
+            profile,
+            created_at=datetime.now(timezone.utc),
+            allow_guarded_utility=True,
+        )
+        if decision.selected_lane != ExecutionLane.UTILITY:
+            return None
+        if decision.authority_mode != RoutingAuthorityMode.GUARDED:
+            raise ValueError("Utility-routed managed actions require guarded routing authority.")
+        await self._record_event(
+            session,
+            item,
+            "routing.utility_execution_authorized",
+            f"Routing authorized guarded utility execution for {action.actionId}.",
+            {
+                "actionId": action.actionId,
+                "stepId": profile.step_id,
+                "taskKind": profile.task_kind.value,
+                "selectedLane": decision.selected_lane.value,
+                "authorityMode": decision.authority_mode.value,
+                "confidenceScore": decision.confidence_score,
+                "confidenceBand": decision.confidence_band.value,
+                "reasonCodes": list(decision.reason_codes),
+                "rejectedLanes": [
+                    {
+                        "lane": rejected.lane.value,
+                        "rejectionCodes": list(rejected.rejection_codes),
+                    }
+                    for rejected in decision.rejected_lanes
+                ],
+                "escalationPath": [lane.value for lane in decision.escalation_path],
+                "permissionSummary": decision.permission_summary,
+                "routeAffectsExecution": True,
+            },
+            actor_type="supervisor",
+            actor_id=actor_id,
+            actor_label=actor_label,
+        )
+        return decision
+
     async def _routing_profile_for_item(self, session: AsyncSession, item: WorkItem) -> RoutingProfile:
         recipe = self._execution_recipe_for_item(item)
         if recipe:
             events = await self.list_work_item_events(session, item.id)
             audit = self._recipe_gate_audit_view(item, recipe, events, preview_only=True)
-            next_action = audit.nextManagedAction
-            task_kind = self._task_kind_for_managed_action(next_action.actionId, next_action.requiredGate)
-            return RoutingProfile(
-                work_item_id=item.id,
-                step_id=next_action.requiredGate or next_action.actionId,
-                task_kind=task_kind,
-                phase=item.state,
-                risk_level=item.risk_level,
-                write_scope="none",
-                allowed_paths=tuple(recipe.allowed_paths),
-                validation_expectations=tuple(command.display for command in recipe.verification_commands),
-                escalation_triggers=("preview_rejected", "validation_failed", "operator_requested"),
-            )
+            return self._routing_profile_for_managed_action(item, recipe, audit.nextManagedAction)
         return RoutingProfile(
             work_item_id=item.id,
             step_id=item.state,
             task_kind=TaskKind.TASK_CLASSIFICATION,
             phase=item.state,
             risk_level=item.risk_level,
+        )
+
+    def _routing_profile_for_managed_action(
+        self,
+        item: WorkItem,
+        recipe: ExecutionRecipe,
+        action: WorkItemManagedActionView,
+    ) -> RoutingProfile:
+        task_kind = self._task_kind_for_managed_action(action.actionId, action.requiredGate)
+        return RoutingProfile(
+            work_item_id=item.id,
+            step_id=action.requiredGate or action.actionId,
+            task_kind=task_kind,
+            phase=item.state,
+            risk_level=item.risk_level,
+            write_scope="none",
+            allowed_paths=tuple(recipe.allowed_paths),
+            validation_expectations=tuple(command.display for command in recipe.verification_commands),
+            escalation_triggers=("preview_rejected", "validation_failed", "operator_requested"),
         )
 
     def _task_kind_for_managed_action(self, action_id: str, required_gate: str | None) -> TaskKind:
@@ -644,6 +708,15 @@ class SupervisorService:
             await session.refresh(item)
             await self._publish_item(item)
             return item
+        if next_action.actionId == "supervisor_triage":
+            await self._record_guarded_utility_routing_event(
+                session,
+                item,
+                recipe,
+                next_action,
+                payload.actorId,
+                payload.actorLabel,
+            )
         if next_action.actionId == "prepare_recipe_branch":
             return await self.prepare_recipe_branch(
                 session,

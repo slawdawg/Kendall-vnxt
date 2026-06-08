@@ -988,10 +988,22 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         assert audit_response.status_code == 200
 
         events = events_response.json()["data"]
+        routing_event = next(event for event in events if event["eventType"] == "routing.utility_execution_authorized")
         branch_event = next(event for event in events if event["eventType"] == "recipe.branch_prepared")
         implementation_event = next(event for event in events if event["eventType"] == "recipe.implementation_passed")
         audit = audit_response.json()["data"]
 
+        assert routing_event["actorType"] == "supervisor"
+        assert routing_event["actorLabel"] == "Primary operator"
+        assert routing_event["payload"]["actionId"] == "supervisor_triage"
+        assert routing_event["payload"]["taskKind"] == "path_scope_check"
+        assert routing_event["payload"]["selectedLane"] == "utility"
+        assert routing_event["payload"]["authorityMode"] == "guarded"
+        assert routing_event["payload"]["routeAffectsExecution"] is True
+        assert "authority.guarded_utility_allowed" in routing_event["payload"]["reasonCodes"]
+        assert routing_event["payload"]["rejectedLanes"]
+        assert routing_event["payload"]["escalationPath"]
+        assert routing_event["payload"]["permissionSummary"].startswith("Guarded utility execution allowed")
         assert branch_event["actorLabel"] == "Primary operator"
         assert branch_event["payload"]["operatorCheckpoint"] == "branch-preparation"
         assert implementation_event["payload"]["operatorCheckpoint"] == "implementation-command-run"

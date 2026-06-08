@@ -31,6 +31,26 @@ def test_routing_preview_selects_utility_for_deterministic_checks() -> None:
     assert any(rejected.lane == "local_sandbox_execute" and "policy.disabled_for_mvp" in rejected.rejection_codes for rejected in first.rejected_lanes)
 
 
+def test_routing_preview_can_authorize_guarded_utility_without_changing_default_preview() -> None:
+    from supervisor.domain.routing import RoutingPreviewService, RoutingProfile, TaskKind
+
+    profile = RoutingProfile(
+        work_item_id="work-item-guarded-utility",
+        step_id="path-scope",
+        task_kind=TaskKind.PATH_SCOPE_CHECK,
+    )
+
+    service = RoutingPreviewService()
+    default_decision = service.preview(profile)
+    guarded_decision = service.preview(profile, allow_guarded_utility=True)
+
+    assert default_decision.selected_lane == "utility"
+    assert default_decision.authority_mode == "record_only"
+    assert "authority.guarded_utility_allowed" not in default_decision.reason_codes
+    assert guarded_decision.selected_lane == "utility"
+    assert guarded_decision.authority_mode == "guarded"
+    assert "authority.guarded_utility_allowed" in guarded_decision.reason_codes
+    assert guarded_decision.permission_summary.startswith("Guarded utility execution allowed")
 def test_routing_preview_selects_local_readonly_for_evidence_summary() -> None:
     from supervisor.domain.routing import RoutingPreviewService, RoutingProfile, TaskKind
 

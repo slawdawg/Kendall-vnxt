@@ -101,8 +101,20 @@ class RoutingPreviewService:
         ExecutionLane.PREMIUM_APPROVAL,
     }
 
-    def preview(self, profile: RoutingProfile, created_at: datetime | None = None) -> RoutingDecision:
+    def preview(
+        self,
+        profile: RoutingProfile,
+        created_at: datetime | None = None,
+        allow_guarded_utility: bool = False,
+    ) -> RoutingDecision:
         selected_lane, authority_mode, confidence_band, confidence_score, reason_codes, explanation = self._select(profile)
+        if allow_guarded_utility and selected_lane == ExecutionLane.UTILITY:
+            authority_mode = RoutingAuthorityMode.GUARDED
+            reason_codes = reason_codes + ("authority.guarded_utility_allowed",)
+            explanation = (
+                "This deterministic supervisor utility action is eligible for guarded routing authority, "
+                "so the supervisor may execute the existing utility check after recording the route."
+            )
         if selected_lane in profile.forbidden_lanes:
             selected_lane = self._fallback_lane(profile)
             authority_mode = RoutingAuthorityMode.ADVISORY
@@ -121,7 +133,7 @@ class RoutingPreviewService:
             confidence_score=confidence_score,
             reason_codes=reason_codes,
             rejected_lanes=self._rejected_lanes(selected_lane, profile),
-            permission_summary=self._permission_summary(selected_lane),
+            permission_summary=self._permission_summary(selected_lane, authority_mode),
             escalation_path=self._escalation_path(selected_lane, profile),
             human_explanation=explanation,
             created_at=created_at or _DEFAULT_DECISION_TIMESTAMP,
@@ -246,7 +258,9 @@ class RoutingPreviewService:
                 rejected.append(RejectedLane(lane, ("policy.not_selected",), "Another lane was a better fit for this preview decision."))
         return tuple(rejected)
 
-    def _permission_summary(self, selected_lane: ExecutionLane) -> str:
+    def _permission_summary(self, selected_lane: ExecutionLane, authority_mode: RoutingAuthorityMode) -> str:
+        if selected_lane == ExecutionLane.UTILITY and authority_mode == RoutingAuthorityMode.GUARDED:
+            return "Guarded utility execution allowed for this deterministic supervisor action after route recording."
         if selected_lane == ExecutionLane.UTILITY:
             return "Preview only. Deterministic utility lane selected without command execution in MVP 1."
         if selected_lane == ExecutionLane.LOCAL_READONLY:
