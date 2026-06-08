@@ -39,6 +39,7 @@ $script:failures = New-Object System.Collections.Generic.List[string]
 $script:warnings = New-Object System.Collections.Generic.List[string]
 $script:actions = New-Object System.Collections.Generic.List[string]
 $script:commands = New-Object System.Collections.Generic.List[object]
+$script:platform = [ordered]@{}
 $script:readiness = "not-ready"
 
 function Write-Step($Message) {
@@ -57,7 +58,7 @@ function Add-Warning($Message) {
 
 function Add-Failure($Message) {
   $script:failures.Add($Message) | Out-Null
-  Write-Error $Message -ErrorAction Continue
+  Write-Host "FAIL: $Message"
 }
 
 function Get-CommandPath($Name) {
@@ -161,10 +162,20 @@ function Ensure-Tool($Command, $WingetId, $Name, $VersionArgs = @("--version")) 
 function Get-MachineSummary {
   $osCaption = $null
   $osVersion = $null
+  $manufacturer = $null
+  $model = $null
+  $memoryGb = $null
+  $systemDriveFreeGb = $null
   try {
     $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
     $osCaption = $os.Caption
     $osVersion = $os.Version
+    $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+    $manufacturer = $computer.Manufacturer
+    $model = $computer.Model
+    $memoryGb = [math]::Round(($computer.TotalPhysicalMemory / 1GB), 1)
+    $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction Stop
+    $systemDriveFreeGb = [math]::Round(($drive.FreeSpace / 1GB), 1)
   } catch {
     $osCaption = [Environment]::OSVersion.Platform.ToString()
     $osVersion = [Environment]::OSVersion.Version.ToString()
@@ -173,10 +184,14 @@ function Get-MachineSummary {
   return [ordered]@{
     os = $osCaption
     osVersion = $osVersion
+    manufacturer = $manufacturer
+    model = $model
     user = [Environment]::UserName
     computerName = [Environment]::MachineName
     processorArchitecture = $env:PROCESSOR_ARCHITECTURE
     processArchitecture = if ([Environment]::Is64BitProcess) { "x64" } else { "x86" }
+    memoryGb = $memoryGb
+    systemDriveFreeGb = $systemDriveFreeGb
     powershellVersion = $PSVersionTable.PSVersion.ToString()
     executionPolicy = (Get-ExecutionPolicy)
   }
@@ -188,6 +203,84 @@ function Write-EnvironmentSummary {
   foreach ($key in $summary.Keys) {
     Write-Host "${key}: $($summary[$key])"
   }
+}
+
+function Get-RegistryValue($Path, $Name) {
+  try {
+    $item = Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop
+    return $item.$Name
+  } catch {
+    return $null
+  }
+}
+
+function Test-PlatformPosture {
+  Write-Step "Check Windows and VMware posture"
+  $summary = Get-MachineSummary
+
+  if ($summary.os -notmatch "Windows 11") {
+    Add-Warning "This bootstrap is tuned for Windows 11. Detected: $($summary.os) $($summary.osVersion)."
+  }
+
+  if ($summary.processArchitecture -ne "x64") {
+    Add-Failure "Bootstrap must run in a 64-bit PowerShell process. Detected $($summary.processArchitecture)."
+  }
+
+  if ($summary.memoryGb -ne $null) {
+    if ($summary.memoryGb -lt 8) {
+      Add-Warning "VM memory is $($summary.memoryGb) GB. Builds/tests may be unstable below 8 GB; 16 GB+ is preferred."
+    } elseif ($summary.memoryGb -lt 16) {
+      Add-Warning "VM memory is $($summary.memoryGb) GB. 16 GB+ is preferred for comfortable Next.js and pytest runs."
+    } else {
+      Write-Ok "VM memory looks healthy: $($summary.memoryGb) GB."
+    }
+  }
+
+  if ($summary.systemDriveFreeGb -ne $null) {
+    if ($summary.systemDriveFreeGb -lt 10) {
+      Add-Failure "System drive free space is only $($summary.systemDriveFreeGb) GB. Free at least 10 GB before bootstrapping."
+    } elseif ($summary.systemDriveFreeGb -lt 25) {
+      Add-Warning "System drive free space is $($summary.systemDriveFreeGb) GB. 25 GB+ is preferred for dependency installs and build artifacts."
+    } else {
+      Write-Ok "System drive free space looks healthy: $($summary.systemDriveFreeGb) GB."
+    }
+  }
+
+  $isVmware = "$($summary.manufacturer) $($summary.model)" -match "VMware"
+  if ($isVmware) {
+    Write-Ok "VMware virtual machine detected: $($summary.manufacturer) $($summary.model)."
+    $vmTools = Get-Service -Name "VMTools" -ErrorAction SilentlyContinue
+    if ($vmTools -and $vmTools.Status -eq "Running") {
+      Write-Ok "VMware Tools service is running."
+      $script:platform.vmwareTools = "running"
+    } elseif ($vmTools) {
+      Add-Warning "VMware Tools service exists but is $($vmTools.Status). Start VMware Tools before relying on clipboard/time/display integration."
+      $script:platform.vmwareTools = $vmTools.Status.ToString()
+    } else {
+      Add-Warning "VMware VM detected but VMware Tools service was not found. Install VMware Tools before trusting this VM as a stable work environment."
+      $script:platform.vmwareTools = "missing"
+    }
+  } else {
+    Add-Warning "VMware virtual machine was not detected from manufacturer/model. Detected: $($summary.manufacturer) $($summary.model)."
+    $script:platform.vmwareTools = "not-detected"
+  }
+
+  $longPaths = Get-RegistryValue "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" "LongPathsEnabled"
+  if ($longPaths -eq 1) {
+    Write-Ok "Windows long paths are enabled."
+  } else {
+    Add-Warning "Windows long paths are not enabled. Node workspaces can hit path-length issues on fresh Windows installs."
+  }
+
+  $developerMode = Get-RegistryValue "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" "AllowDevelopmentWithoutDevLicense"
+  if ($developerMode -eq 1) {
+    Write-Ok "Windows Developer Mode is enabled."
+  } else {
+    Add-Warning "Windows Developer Mode is not enabled. Some developer tooling may have reduced symlink support."
+  }
+
+  $script:platform.windowsLongPathsEnabled = $longPaths
+  $script:platform.developerModeEnabled = $developerMode
 }
 
 function Test-SupportedNode {
@@ -202,6 +295,35 @@ function Test-SupportedNode {
   }
 }
 
+function Test-GitPosture {
+  if (-not (Get-CommandPath "git")) {
+    return
+  }
+
+  Write-Step "Check Git posture"
+  $userName = Get-FirstLine "git" @("config", "--get", "user.name")
+  $userEmail = Get-FirstLine "git" @("config", "--get", "user.email")
+  $longPaths = Get-FirstLine "git" @("config", "--get", "core.longpaths")
+
+  if ($userName) {
+    Write-Ok "Git user.name is configured."
+  } else {
+    Add-Warning "Git user.name is not configured. Commits may fail or use an unexpected identity."
+  }
+
+  if ($userEmail) {
+    Write-Ok "Git user.email is configured."
+  } else {
+    Add-Warning "Git user.email is not configured. Commits may fail or use an unexpected identity."
+  }
+
+  if ($longPaths -eq "true") {
+    Write-Ok "Git core.longpaths is enabled."
+  } else {
+    Add-Warning "Git core.longpaths is not enabled. Run with -ConfigureGit to set it for this user."
+  }
+}
+
 function Test-PythonEnvironment {
   if (-not (Get-CommandPath "uv")) {
     return
@@ -213,6 +335,55 @@ function Test-PythonEnvironment {
   Add-CommandRecord "Check supervisor Python runtime" "uv" @("run", "--directory", "services/supervisor", "python", "--version") $exitCode
   if ($exitCode -ne 0) {
     throw "Supervisor Python runtime check failed with exit code $exitCode. Run `uv sync --directory services/supervisor`, then retry."
+  }
+}
+
+function Test-GhPosture {
+  $ghPath = Get-CommandPath "gh"
+  if (-not $ghPath) {
+    return
+  }
+
+  Write-Step "Check GitHub CLI posture"
+  & cmd /c "gh auth status >nul 2>nul"
+  $exitCode = if ($LASTEXITCODE -eq $null) { 0 } else { $LASTEXITCODE }
+  Add-CommandRecord "Check GitHub CLI auth status" "gh" @("auth", "status") $exitCode
+  if ($exitCode -eq 0) {
+    Add-Warning "GitHub CLI auth is present. This is optional for Kendall_Nxt; avoid persistent insecure-storage tokens."
+  } else {
+    Write-Ok "GitHub CLI is not authenticated; connector-backed Codex workflows can still use the GitHub app."
+  }
+
+  $hostsPath = Join-Path $env:APPDATA "GitHub CLI\hosts.yml"
+  if (Test-Path -LiteralPath $hostsPath) {
+    $hostsItem = Get-Item -LiteralPath $hostsPath
+    if ($hostsItem.Length -gt 100) {
+      Add-Warning "GitHub CLI hosts.yml exists and is non-empty. Treat it as sensitive if gh auth is configured."
+    } else {
+      Write-Ok "GitHub CLI hosts.yml is absent or metadata-only."
+    }
+  }
+}
+
+function Test-NetworkPosture {
+  Write-Step "Check network posture for GitHub"
+
+  try {
+    $dns = Resolve-DnsName github.com -ErrorAction Stop | Select-Object -First 1
+    if ($dns) {
+      Write-Ok "DNS resolves github.com."
+    }
+  } catch {
+    Add-Warning "DNS could not resolve github.com before remote checks: $($_.Exception.Message)"
+  }
+
+  if (Get-CommandPath "Test-NetConnection") {
+    $test = Test-NetConnection github.com -Port 443 -InformationLevel Quiet
+    if ($test) {
+      Write-Ok "TCP 443 connectivity to github.com is available."
+    } else {
+      Add-Warning "TCP 443 connectivity to github.com failed. Remote checks may fail for network reasons."
+    }
   }
 }
 
@@ -290,6 +461,7 @@ function Write-ReadinessReport {
     readiness = $script:readiness
     mode = if ($Full) { "full" } elseif ($LocalOnly) { "local-only" } else { "diagnostic/custom" }
     machine = Get-MachineSummary
+    platform = $script:platform
     toolVersions = $toolVersions
     actions = $script:actions
     warnings = $script:warnings
@@ -327,6 +499,7 @@ try {
   Write-Host "GitHub CLI auth is optional. This bootstrap does not create a gh token."
 
   Write-EnvironmentSummary
+  Test-PlatformPosture
 
   Write-Step "Check required tools"
   $gitOk = Ensure-Tool "git" "Git.Git" "Git"
@@ -364,10 +537,30 @@ try {
 
   if ($ConfigureGit -and $gitOk) {
     Write-Step "Configure secure Git credential defaults"
-    Invoke-Checked "git" @("config", "--global", "credential.helper", "manager") "Set Git Credential Manager helper"
-    Invoke-Checked "git" @("config", "--global", "credential.credentialStore", "dpapi") "Set GCM credentialStore to dpapi"
+    $helpers = @(& git config --get-all credential.helper 2>$null)
+    if ($helpers -match "^manager$") {
+      Write-Ok "Git Credential Manager helper is already configured."
+    } else {
+      Invoke-Checked "git" @("config", "--global", "credential.helper", "manager") "Set Git Credential Manager helper"
+    }
+
+    $credentialStore = Get-FirstLine "git" @("config", "--global", "--get", "credential.credentialStore")
+    if ($credentialStore -eq "dpapi") {
+      Write-Ok "GCM credentialStore is already dpapi."
+    } else {
+      Invoke-Checked "git" @("config", "--global", "credential.credentialStore", "dpapi") "Set GCM credentialStore to dpapi"
+    }
+
+    $gitLongPaths = Get-FirstLine "git" @("config", "--global", "--get", "core.longpaths")
+    if ($gitLongPaths -eq "true") {
+      Write-Ok "Git long path support is already enabled."
+    } else {
+      Invoke-Checked "git" @("config", "--global", "core.longpaths", "true") "Set Git long path support"
+    }
     $script:actions.Add("Configured Git Credential Manager with Windows DPAPI.") | Out-Null
   }
+
+  Test-GitPosture
 
   if ($gitOk) {
     Write-Step "Check repository and branch"
@@ -388,6 +581,7 @@ try {
   }
 
   Test-PythonEnvironment
+  Test-GhPosture
 
   Write-Step "Run local preflight"
   Invoke-Checked "pnpm" @("run", "preflight") "Run workspace preflight"
@@ -395,6 +589,7 @@ try {
 
   Write-Step "Run GitHub sync doctor"
   if ($VerifyRemote -and -not $SkipRemote) {
+    Test-NetworkPosture
     if ($env:OS -eq "Windows_NT" -and $gitOk) {
       Invoke-Checked "git" @("credential-manager", "diagnose") "Verify Git Credential Manager before live remote checks" "Run from a visible interactive Windows session after signing into the VM if DPAPI reports Access is denied."
     }

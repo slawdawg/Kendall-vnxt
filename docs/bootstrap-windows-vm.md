@@ -46,10 +46,14 @@ pnpm run bootstrap:windows -- -VerifyRemote
 
 - checks Git, Node.js, pnpm/Corepack, and uv,
 - prints OS, PowerShell, architecture, execution policy, and tool versions,
+- reports VMware Workstation posture, VMware Tools status, memory, free disk, Windows long-path support, and Developer Mode posture,
 - verifies the BMAD method runtime files and required BMAD/KNX modules are installed from the repo,
 - optionally installs missing required tools with winget when `-InstallMissing` or `-Full` is used,
 - refreshes PATH after winget/Corepack setup attempts,
 - configures Git Credential Manager with Windows DPAPI when `-ConfigureGit` or `-Full` is used,
+- configures Git `core.longpaths=true` when `-ConfigureGit` or `-Full` is used,
+- warns when Git commit identity is not configured,
+- checks GitHub CLI posture without requiring local `gh` auth,
 - installs JavaScript dependencies and syncs the supervisor Python virtualenv when `-SetupDeps` or `-Full` is used,
 - verifies the supervisor Python runtime through uv,
 - runs `pnpm run preflight`,
@@ -68,6 +72,22 @@ Readiness levels:
 - `local-ready`: dependencies and local checks passed, but live Git remote checks were not proven.
 - `remote-ready`: local checks and live Git/GCM remote checks passed.
 - `not-ready`: bootstrap stopped before local readiness.
+
+## VMware And Windows Posture
+
+The bootstrap is designed for a Windows 11 guest under VMware Workstation. It reports, and may warn on:
+
+- non-Windows-11 OS version,
+- 32-bit PowerShell process,
+- low VM memory,
+- low system-drive free space,
+- VMware Tools missing or stopped,
+- Windows long paths disabled,
+- Developer Mode disabled,
+- missing Git user identity,
+- Git `core.longpaths` disabled.
+
+Low disk space below 10 GB and 32-bit PowerShell are hard failures. The other findings are warnings because they may not block immediate local work, but they are signals that the VM is not fully comfortable or reproducible yet.
 
 ## Required BMAD And KNX Modules
 
@@ -129,3 +149,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 ```
 
 Do not work around this by keeping a persistent `gh auth login --insecure-storage` token. The preferred fix is a healthy Windows user session with Git Credential Manager using DPAPI.
+
+## GitHub CLI
+
+Local `gh` auth is optional. Bootstrap checks the GitHub CLI posture but does not require login. If `gh` auth is present, the bootstrap warns so the operator remembers that any file-backed GitHub CLI token is sensitive and should not be kept as a workaround for GCM/DPAPI problems.
