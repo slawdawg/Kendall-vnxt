@@ -225,6 +225,7 @@ class ExecutionAttemptView(BaseModel):
     artifactRefs: list[dict[str, Any]] = Field(default_factory=list)
     eventRefs: list[dict[str, Any]] = Field(default_factory=list)
 
+
 class RoutingProfileView(BaseModel):
     workItemId: str
     stepId: str
@@ -562,6 +563,36 @@ class WorkflowEventView(BaseModel):
     summary: str
     payload: dict[str, Any]
     createdAt: datetime
+
+
+class RuntimeEvidenceExportBoundaryView(BaseModel):
+    localRuntimeState: list[str]
+    gitBackedEvidence: list[str]
+    excludedState: list[str]
+
+
+class RuntimeEvidenceExportSafetyView(BaseModel):
+    exportOnly: bool = True
+    processLaunchAllowed: bool = False
+    providerCallsAllowed: bool = False
+    modelCallsAllowed: bool = False
+    premiumExecutionAllowed: bool = False
+    commandExecutionAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    networkAllowed: bool = False
+    credentialAccessAllowed: bool = False
+
+
+class RuntimeEvidenceExportView(BaseModel):
+    exportId: str
+    format: str
+    version: str
+    generatedAt: datetime
+    workItem: WorkItemView
+    executionAttempts: list[ExecutionAttemptView]
+    workflowEvents: list[WorkflowEventView]
+    boundary: RuntimeEvidenceExportBoundaryView
+    safety: RuntimeEvidenceExportSafetyView
 
 
 class WorkItemAssignmentRequest(BaseModel):

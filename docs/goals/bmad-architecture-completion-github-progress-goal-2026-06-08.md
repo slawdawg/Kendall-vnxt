@@ -37,11 +37,12 @@ Completed foundation:
 - Execution attempt workspace isolation plan contract.
 - Dashboard execution attempt evidence panel.
 - Disabled execution configuration checks.
+- Runtime evidence export strategy.
 
 Current local checkpoint:
 
 - See `git log --oneline -5` for the latest local checkpoint.
-- Latest completed architecture story trail: `docs/stories/2-6-disabled-execution-configuration-checks.md`.
+- Latest completed architecture story trail: `docs/stories/2-7-runtime-evidence-export-strategy.md`.
 
 Known GitHub sync issue:
 
@@ -54,7 +55,6 @@ Known GitHub sync issue:
 The architecture is considered complete for this BMad goal only when all of the following are true:
 
 1. Execution authority expansion slices are implemented or explicitly deferred with decision records:
-   - runtime evidence/export strategy,
    - threat boundary for commands, prompts, credentials, and local provider endpoints.
 2. Supervisor behavior remains disabled-by-default for real subscription-agent launch, local provider/model calls, premium execution, arbitrary shell execution, source mutation, and background assistant behavior until later explicit approval.
 3. Dashboard surfaces the operator evidence needed to understand route, worker, attempt, lifecycle, cancellation, disabled-state, and approval status.
@@ -209,6 +209,8 @@ Key acceptance:
 
 ### Story 2.7: Runtime Evidence Export Strategy
 
+Status: completed locally; pending GitHub sync.
+
 Goal: define and implement the first durable export path for operational attempt/event evidence.
 
 Key acceptance:
@@ -278,4 +280,4 @@ Pause implementation and create a decision record if any story requires:
 
 Restore or confirm GitHub authentication, then push the local `main` checkpoints shown by `git log --oneline -5` to `origin/main`.
 
-After Story 2.6 is committed and GitHub progress is current, begin Story 2.7: Runtime Evidence Export Strategy.
+After Story 2.7 is committed and GitHub progress is current, begin Story 2.8: Threat Boundary For Commands, Prompts, Providers, And Secrets.

@@ -24,6 +24,9 @@ from supervisor.api.schemas import (
     OperatorViewResponse,
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
+    RuntimeEvidenceExportBoundaryView,
+    RuntimeEvidenceExportSafetyView,
+    RuntimeEvidenceExportView,
     RoutingDecisionView,
     RoutingLaneEvidenceProfileView,
     RoutingOverrideView,
@@ -432,6 +435,47 @@ class SupervisorService:
             .order_by(ExecutionAttempt.created_at.desc())
         )
         return [self._to_execution_attempt_view(attempt) for attempt in result.scalars()]
+
+    async def get_runtime_evidence_export(self, session: AsyncSession, work_item_id: str) -> RuntimeEvidenceExportView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+
+        attempts = await self.list_execution_attempts(session, work_item_id)
+        events = [self.to_event_view(event) for event in await self.list_work_item_events(session, work_item_id)]
+        return RuntimeEvidenceExportView(
+            exportId=f"runtime-evidence-export-{work_item_id}",
+            format="application/json",
+            version="1.0",
+            generatedAt=datetime.now(timezone.utc),
+            workItem=self.to_work_item_view(item),
+            executionAttempts=attempts,
+            workflowEvents=events,
+            boundary=RuntimeEvidenceExportBoundaryView(
+                localRuntimeState=[
+                    "supervisor_database.work_items",
+                    "supervisor_database.workflow_events",
+                    "supervisor_database.execution_attempts",
+                    "runtime-generated export timestamps and identifiers",
+                ],
+                gitBackedEvidence=[
+                    "docs/goals/bmad-architecture-completion-github-progress-goal-2026-06-08.md",
+                    "docs/stories/2-7-runtime-evidence-export-strategy.md",
+                    "docs/prds/supervisor-execution-authority-expansion.md",
+                    "services/supervisor/src/supervisor/api/main.py",
+                    "services/supervisor/src/supervisor/application/service.py",
+                    "packages/contracts/src/api.ts",
+                ],
+                excludedState=[
+                    "environment variables and credential stores",
+                    "provider HTTP request/response bodies",
+                    "model prompts or completions from external providers",
+                    "filesystem snapshots outside recorded artifact references",
+                    "background process output not recorded as workflow events",
+                ],
+            ),
+            safety=RuntimeEvidenceExportSafetyView(),
+        )
 
     async def create_execution_attempt(
         self,

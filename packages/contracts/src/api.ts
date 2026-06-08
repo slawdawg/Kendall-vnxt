@@ -475,6 +475,36 @@ export interface WorkflowEventView {
   createdAt: string;
 }
 
+export interface RuntimeEvidenceExportBoundaryView {
+  localRuntimeState: string[];
+  gitBackedEvidence: string[];
+  excludedState: string[];
+}
+
+export interface RuntimeEvidenceExportSafetyView {
+  exportOnly: boolean;
+  processLaunchAllowed: boolean;
+  providerCallsAllowed: boolean;
+  modelCallsAllowed: boolean;
+  premiumExecutionAllowed: boolean;
+  commandExecutionAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  networkAllowed: boolean;
+  credentialAccessAllowed: boolean;
+}
+
+export interface RuntimeEvidenceExportView {
+  exportId: string;
+  format: "application/json";
+  version: string;
+  generatedAt: string;
+  workItem: WorkItemView;
+  executionAttempts: ExecutionAttemptView[];
+  workflowEvents: WorkflowEventView[];
+  boundary: RuntimeEvidenceExportBoundaryView;
+  safety: RuntimeEvidenceExportSafetyView;
+}
+
 export interface OperatorProfile {
   actorId: string;
   actorLabel: string;

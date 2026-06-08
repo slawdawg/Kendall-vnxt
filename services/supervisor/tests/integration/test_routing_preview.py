@@ -1247,6 +1247,73 @@ def test_execution_attempt_plans_utility_attempt_and_records_history(tmp_path, m
     assert attempt_event["payload"]["sourceMutationAllowed"] is False
 
 
+def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "runtime-evidence-export.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Export runtime evidence",
+                "requestedOutcome": "Back up attempt and event evidence in a reviewable format.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        before_events_response = client.get(f"/work-items/{work_item_id}/events")
+        export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
+        after_events_response = client.get(f"/work-items/{work_item_id}/events")
+        missing_response = client.get("/work-items/missing/runtime-evidence-export")
+
+    assert attempt_response.status_code == 200
+    attempt = attempt_response.json()["data"]
+    assert export_response.status_code == 200
+    export = export_response.json()["data"]
+
+    assert export["exportId"] == f"runtime-evidence-export-{work_item_id}"
+    assert export["format"] == "application/json"
+    assert export["version"] == "1.0"
+    assert export["workItem"]["id"] == work_item_id
+    assert [entry["attemptId"] for entry in export["executionAttempts"]] == [attempt["attemptId"]]
+    assert export["executionAttempts"][0]["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
+
+    event_types = [event["eventType"] for event in export["workflowEvents"]]
+    assert "execution_attempt.planned" in event_types
+    assert "work_item.queued" in event_types
+    assert export["boundary"]["localRuntimeState"] == [
+        "supervisor_database.work_items",
+        "supervisor_database.workflow_events",
+        "supervisor_database.execution_attempts",
+        "runtime-generated export timestamps and identifiers",
+    ]
+    assert "docs/stories/2-7-runtime-evidence-export-strategy.md" in export["boundary"]["gitBackedEvidence"]
+    assert "environment variables and credential stores" in export["boundary"]["excludedState"]
+    assert export["safety"]["exportOnly"] is True
+    assert export["safety"]["processLaunchAllowed"] is False
+    assert export["safety"]["providerCallsAllowed"] is False
+    assert export["safety"]["modelCallsAllowed"] is False
+    assert export["safety"]["premiumExecutionAllowed"] is False
+    assert export["safety"]["commandExecutionAllowed"] is False
+    assert export["safety"]["sourceMutationAllowed"] is False
+    assert export["safety"]["networkAllowed"] is False
+    assert export["safety"]["credentialAccessAllowed"] is False
+    assert before_events_response.json()["data"] == after_events_response.json()["data"]
+    assert missing_response.status_code == 404
+
+
 def test_execution_attempt_rejects_local_readonly_without_provider_calls(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "execution-attempt-local-readonly.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
