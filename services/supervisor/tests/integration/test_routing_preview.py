@@ -395,6 +395,98 @@ def test_routing_preview_post_can_record_workflow_event(tmp_path, monkeypatch) -
     assert payload["permissionSummary"]
 
 
+def test_subscription_handoff_package_generation_is_non_mutating(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-handoff-package.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-handoff-package",
+            json={"stepId": "architecture", "taskKind": "architecture_review"},
+        )
+
+        after_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    package = response.json()["data"]
+    assert package["packageId"].startswith("handoff-route-")
+    assert package["workItemId"] == work_item_id
+    assert package["taskKind"] == "architecture_review"
+    assert package["stepId"] == "architecture"
+    assert package["route"]["selectedLane"] == "subscription_handoff"
+    assert package["launchAllowed"] is False
+    assert package["context"]
+    assert any("Do not launch" in constraint for constraint in package["constraints"])
+    assert package["operatorInstructions"]
+    assert before_item == after_item
+    assert before_events == after_events
+
+
+def test_subscription_handoff_package_can_record_workflow_event(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-handoff-package-event.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-handoff-package",
+            json={"taskKind": "security_review", "recordEvent": True},
+        )
+
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert len(after_events) == len(before_events) + 1
+    event = after_events[0]
+    assert event["eventType"] == "routing.subscription_handoff_packaged"
+    assert event["payload"]["taskKind"] == "security_review"
+    assert event["payload"]["selectedLane"] == "subscription_handoff"
+    assert event["payload"]["launchAllowed"] is False
+    assert event["payload"]["reasonCodes"] == ["task.security_review", "quality.subscription_handoff_preferred"]
+
+
+def test_subscription_handoff_package_rejects_non_handoff_route(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-handoff-package-reject.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-handoff-package",
+            json={"taskKind": "path_scope_check", "recordEvent": True},
+        )
+
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "invalid_subscription_handoff_package"
+    assert "subscription_handoff" in response.json()["detail"]["error"]["message"]
+    assert before_events == after_events
+
 def test_routing_preview_post_rejects_unknown_task_kind(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "routing-preview-invalid-task.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

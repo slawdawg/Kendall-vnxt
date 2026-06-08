@@ -21,6 +21,7 @@ from supervisor.api.schemas import (
     WorkItemEscalationRequest,
     WorkItemManagedActionRequest,
     WorkItemRoutingPreviewRequest,
+    WorkItemSubscriptionHandoffRequest,
 )
 from supervisor.application.service import SupervisorService
 from supervisor.config.settings import get_settings
@@ -146,6 +147,23 @@ async def create_work_item_routing_preview(
         raise HTTPException(status_code=404, detail=error_response("Routing preview not found.", "routing_preview_not_found").model_dump())
     return ApiEnvelope(data=preview)
 
+
+@app.post("/work-items/{work_item_id}/subscription-handoff-package", response_model=ApiEnvelope)
+async def create_work_item_subscription_handoff_package(
+    work_item_id: str,
+    payload: WorkItemSubscriptionHandoffRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        package = await service.get_subscription_handoff_package(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_subscription_handoff_package").model_dump()) from exc
+    if not package:
+        raise HTTPException(status_code=404, detail=error_response("Subscription handoff package not found.", "subscription_handoff_package_not_found").model_dump())
+    return ApiEnvelope(data=package)
 
 @app.post("/work-items/{work_item_id}/prepare-branch", response_model=ApiEnvelope)
 async def prepare_work_item_branch(

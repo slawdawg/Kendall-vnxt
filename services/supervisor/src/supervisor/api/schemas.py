@@ -130,6 +130,12 @@ class WorkItemRoutingPreviewRequest(BaseModel):
     recordEvent: bool = False
 
 
+class WorkItemSubscriptionHandoffRequest(BaseModel):
+    stepId: str | None = None
+    taskKind: str | None = None
+    recordEvent: bool = False
+
+
 class RoutingProfileView(BaseModel):
     workItemId: str
     stepId: str
@@ -176,6 +182,31 @@ class RoutingDecisionView(BaseModel):
 class RoutingPreviewView(BaseModel):
     profile: RoutingProfileView
     decision: RoutingDecisionView
+
+
+class SubscriptionHandoffEvidenceView(BaseModel):
+    eventType: str
+    summary: str
+    createdAt: datetime
+
+
+class SubscriptionHandoffPackageView(BaseModel):
+    packageId: str
+    workItemId: str
+    title: str
+    requestedOutcome: str
+    taskKind: str
+    stepId: str
+    createdAt: datetime
+    route: RoutingDecisionView
+    summary: str
+    context: list[str]
+    constraints: list[str]
+    allowedPaths: list[str]
+    validationCommands: list[str]
+    recentEvidence: list[SubscriptionHandoffEvidenceView]
+    operatorInstructions: list[str]
+    launchAllowed: bool = False
 
 
 class WorkItemExecutionRecipeView(BaseModel):

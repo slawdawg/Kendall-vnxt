@@ -147,6 +147,31 @@ export interface RoutingPreviewView {
   decision: RoutingDecisionView;
 }
 
+export interface SubscriptionHandoffEvidenceView {
+  eventType: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface SubscriptionHandoffPackageView {
+  packageId: string;
+  workItemId: string;
+  title: string;
+  requestedOutcome: string;
+  taskKind: string;
+  stepId: string;
+  createdAt: string;
+  route: RoutingDecisionView;
+  summary: string;
+  context: string[];
+  constraints: string[];
+  allowedPaths: string[];
+  validationCommands: string[];
+  recentEvidence: SubscriptionHandoffEvidenceView[];
+  operatorInstructions: string[];
+  launchAllowed: boolean;
+}
+
 export interface WorkItemView extends WorkItemPayload {
   id: string;
   origin: "operator" | "supervisor";

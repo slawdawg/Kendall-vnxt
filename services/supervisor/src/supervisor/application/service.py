@@ -17,6 +17,8 @@ from supervisor.api.schemas import (
     RoutingDecisionView,
     RoutingPreviewView,
     RoutingProfileView,
+    SubscriptionHandoffEvidenceView,
+    SubscriptionHandoffPackageView,
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
@@ -26,6 +28,7 @@ from supervisor.api.schemas import (
     WorkItemExecutionRecipeView,
     WorkItemManagedActionRequest,
     WorkItemRoutingPreviewRequest,
+    WorkItemSubscriptionHandoffRequest,
     WorkItemManagedActionView,
     WorkItemPolicyGateView,
     WorkItemRecipeGateAuditEntryView,
@@ -181,6 +184,59 @@ class SupervisorService:
             await session.refresh(item)
         return preview
 
+    async def get_subscription_handoff_package(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemSubscriptionHandoffRequest,
+    ) -> SubscriptionHandoffPackageView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        preview_payload = WorkItemRoutingPreviewRequest(
+            stepId=payload.stepId,
+            taskKind=payload.taskKind,
+            recordEvent=False,
+        )
+        preview = await self.get_routing_preview(session, work_item_id, preview_payload)
+        if not preview:
+            return None
+        if preview.decision.selectedLane != ExecutionLane.SUBSCRIPTION_HANDOFF.value:
+            raise ValueError(f"Route selected {preview.decision.selectedLane}; subscription handoff package requires subscription_handoff.")
+
+        events = await self.list_work_item_events(session, work_item_id)
+        recipe = self._execution_recipe_for_item(item)
+        package = SubscriptionHandoffPackageView(
+            packageId=f"handoff-{preview.decision.decisionId}",
+            workItemId=item.id,
+            title=item.title,
+            requestedOutcome=item.requested_outcome,
+            taskKind=preview.profile.taskKind,
+            stepId=preview.profile.stepId,
+            createdAt=datetime.now(timezone.utc),
+            route=preview.decision,
+            summary=self._subscription_handoff_summary(item, preview),
+            context=self._subscription_handoff_context(item, preview),
+            constraints=self._subscription_handoff_constraints(item, recipe),
+            allowedPaths=list(preview.profile.allowedPaths),
+            validationCommands=list(preview.profile.validationExpectations),
+            recentEvidence=[
+                SubscriptionHandoffEvidenceView(
+                    eventType=event.event_type,
+                    summary=event.summary,
+                    createdAt=self._normalize_timestamp(event.created_at),
+                )
+                for event in events[:8]
+            ],
+            operatorInstructions=self._subscription_handoff_operator_instructions(),
+            launchAllowed=False,
+        )
+        if payload.recordEvent:
+            await self._record_subscription_handoff_package_event(session, item, package)
+            await session.commit()
+            await session.refresh(item)
+        return package
+
     def _apply_routing_preview_request(
         self,
         profile: RoutingProfile,
@@ -228,6 +284,70 @@ class SupervisorService:
                 ],
                 "escalationPath": list(decision.escalationPath),
                 "permissionSummary": decision.permissionSummary,
+            },
+        )
+
+    def _subscription_handoff_summary(self, item: WorkItem, preview: RoutingPreviewView) -> str:
+        return f"{item.title}: {preview.decision.humanExplanation}"
+
+    def _subscription_handoff_context(self, item: WorkItem, preview: RoutingPreviewView) -> list[str]:
+        context = [
+            f"Requested outcome: {item.requested_outcome}",
+            f"Current workflow state: {item.state}",
+            f"Risk level: {item.risk_level}",
+            f"Route confidence: {preview.decision.confidenceBand} ({preview.decision.confidenceScore:.2f})",
+        ]
+        if item.details:
+            context.append(f"Details: {item.details}")
+        return context
+
+    def _subscription_handoff_constraints(self, item: WorkItem, recipe: ExecutionRecipe | None) -> list[str]:
+        constraints = [
+            "Do not launch a subscription agent from this package; launchAllowed is false.",
+            "Preserve the work item state unless an operator explicitly approves the next workflow action.",
+            "Keep secrets and local-only environment details out of any external prompt.",
+        ]
+        if recipe:
+            constraints.extend(
+                [
+                    f"Stay within recipe allowed paths: {', '.join(recipe.allowed_paths)}.",
+                    "Remote operations remain governed by the recipe remote automation policy.",
+                ]
+            )
+        if item.blocked_reason:
+            constraints.append(f"Current blocked reason must be resolved first: {item.blocked_reason}")
+        return constraints
+
+    def _subscription_handoff_operator_instructions(self) -> list[str]:
+        return [
+            "Review the route decision and rejected lanes before using this package.",
+            "Use the summary, constraints, allowed paths, and validation commands as the handoff boundary.",
+            "Paste only the needed package sections into a subscription agent; do not include secrets or unrelated local files.",
+            "Return any generated patch or recommendation through the existing supervisor review and validation flow.",
+        ]
+
+    async def _record_subscription_handoff_package_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        package: SubscriptionHandoffPackageView,
+    ) -> None:
+        await self._record_event(
+            session,
+            item,
+            "routing.subscription_handoff_packaged",
+            f"Subscription handoff package created for {package.taskKind}.",
+            {
+                "packageId": package.packageId,
+                "stepId": package.stepId,
+                "taskKind": package.taskKind,
+                "selectedLane": package.route.selectedLane,
+                "authorityMode": package.route.authorityMode,
+                "confidenceBand": package.route.confidenceBand,
+                "reasonCodes": list(package.route.reasonCodes),
+                "allowedPaths": list(package.allowedPaths),
+                "validationCommands": list(package.validationCommands),
+                "launchAllowed": package.launchAllowed,
             },
         )
 
