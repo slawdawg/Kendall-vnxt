@@ -4,7 +4,7 @@ baseline_commit: 0b7c2c2
 
 # Story 1.20: Disabled Subscription-Agent Launch Stub
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -24,17 +24,17 @@ so that future Codex/Claude/Gemini launch work has an auditable contract before 
 
 ## Tasks / Subtasks
 
-- [ ] Add disabled subscription-agent registry entry. (AC: 1)
-- [ ] Add launch-stub request/view contract. (AC: 2, 3, 4)
-- [ ] Add supervisor service/API support. (AC: 2, 3, 4, 5, 6)
-  - [ ] Estimate without launching.
-  - [ ] Produce launch instructions and approval gates.
-  - [ ] Support explicit event recording only.
-- [ ] Add focused tests. (AC: 1, 4, 5, 6, 7)
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused tests.
-  - [ ] Run broader workspace verification.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add disabled subscription-agent registry entry. (AC: 1)
+- [x] Add launch-stub request/view contract. (AC: 2, 3, 4)
+- [x] Add supervisor service/API support. (AC: 2, 3, 4, 5, 6)
+  - [x] Estimate without launching.
+  - [x] Produce launch instructions and approval gates.
+  - [x] Support explicit event recording only.
+- [x] Add focused tests. (AC: 1, 4, 5, 6, 7)
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused tests.
+  - [x] Run broader workspace verification.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -70,16 +70,31 @@ Recommended design:
 
 ### Debug Log References
 
-- Pending.
+- `uv run --directory C:\Users\slaw_dawg\Kendall_Nxt\services\supervisor pytest tests/integration/test_routing_preview.py -q -k "subscription_agent_launch_stub or worker_registry"` - passed, 4 selected, 1 existing aiosqlite warning.
+- `uv run --directory C:\Users\slaw_dawg\Kendall_Nxt\services\supervisor pytest tests/integration/test_routing_preview.py -q` - passed, 34 tests, 1 existing aiosqlite warning.
+- `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt --filter @kendall/dashboard build` - passed.
+- `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt run check` - passed, dashboard build plus 67 supervisor tests.
 
 ### Completion Notes List
 
-- Pending.
+- Added disabled `subscription.agent.disabled` registry entry under the `subscription_agent` lane.
+- Added subscription-agent launch-stub schemas and shared TypeScript contract type.
+- Added `POST /work-items/{work_item_id}/subscription-agent-launch-stub` for deterministic estimates, launch instructions, required approvals, and hard disabled flags.
+- Added optional `routing.subscription_agent_launch_stub_created` event recording only when requested.
+- Added focused integration coverage for registry entry, non-mutating stub generation, optional event recording, and invalid non-handoff route rejection.
 
 ### File List
 
-- Pending.
+- `services/supervisor/src/supervisor/domain/worker_registry.py`
+- `services/supervisor/src/supervisor/api/main.py`
+- `services/supervisor/src/supervisor/api/schemas.py`
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/tests/integration/test_routing_preview.py`
+- `packages/contracts/src/api.ts`
+- `docs/stories/1-20-disabled-subscription-agent-launch-stub.md`
+- `_bmad-output/implementation-artifacts/1-20-disabled-subscription-agent-launch-stub.md`
 
 ## Change Log
 
 - 2026-06-08: Created story from routing follow-on roadmap after compact routing fleet panel.
+- 2026-06-08: Completed disabled subscription-agent launch stub implementation and verification.

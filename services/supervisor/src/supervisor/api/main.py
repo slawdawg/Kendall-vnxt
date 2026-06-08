@@ -24,6 +24,7 @@ from supervisor.api.schemas import (
     WorkItemPremiumApprovalRequest,
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
+    WorkItemSubscriptionAgentLaunchStubRequest,
     WorkItemSubscriptionHandoffRequest,
 )
 from supervisor.application.service import SupervisorService
@@ -244,6 +245,23 @@ async def create_work_item_premium_approval_request(
     if not request:
         raise HTTPException(status_code=404, detail=error_response("Premium approval request not found.", "premium_approval_request_not_found").model_dump())
     return ApiEnvelope(data=request)
+
+@app.post("/work-items/{work_item_id}/subscription-agent-launch-stub", response_model=ApiEnvelope)
+async def create_work_item_subscription_agent_launch_stub(
+    work_item_id: str,
+    payload: WorkItemSubscriptionAgentLaunchStubRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        stub = await service.get_subscription_agent_launch_stub(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_subscription_agent_launch_stub").model_dump()) from exc
+    if not stub:
+        raise HTTPException(status_code=404, detail=error_response("Subscription agent launch stub not found.", "subscription_agent_launch_stub_not_found").model_dump())
+    return ApiEnvelope(data=stub)
 
 @app.post("/work-items/{work_item_id}/prepare-branch", response_model=ApiEnvelope)
 async def prepare_work_item_branch(

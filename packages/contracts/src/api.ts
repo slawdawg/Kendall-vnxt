@@ -197,6 +197,25 @@ export interface PremiumApprovalRequestView {
   executionAllowed: boolean;
 }
 
+export interface SubscriptionAgentLaunchStubView {
+  launchStubId: string;
+  workItemId: string;
+  title: string;
+  requestedOutcome: string;
+  taskKind: string;
+  stepId: string;
+  createdAt: string;
+  workerId: string;
+  requestedAgent: string;
+  route: RoutingDecisionView;
+  estimate: Record<string, string>;
+  launchInstructions: string[];
+  requiredApprovals: string[];
+  disabledReason: string;
+  processLaunchAllowed: boolean;
+  executionAllowed: boolean;
+}
+
 export interface LocalEvidencePacketItemView {
   eventType: string;
   summary: string;

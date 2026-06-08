@@ -546,6 +546,7 @@ def test_worker_registry_lists_static_workers_without_mutating_events(tmp_path, 
     utility = workers["utility.internal"]
     local = workers["local.readonly.mock"]
     handoff = workers["subscription.handoff"]
+    agent = workers["subscription.agent.disabled"]
     premium = workers["premium.approval"]
 
     assert utility["lane"] == "utility"
@@ -579,6 +580,12 @@ def test_worker_registry_lists_static_workers_without_mutating_events(tmp_path, 
     assert handoff["lane"] == "subscription_handoff"
     assert handoff["health"] == "disabled"
     assert handoff["disabledReason"] == "direct_subscription_launch_not_enabled"
+
+    assert agent["lane"] == "subscription_agent"
+    assert agent["adapterType"] == "subscription_agent"
+    assert agent["health"] == "disabled"
+    assert agent["disabledReason"] == "subscription_agent_process_launch_not_enabled"
+    assert "no_process_launch" in agent["permissions"]
 
     assert premium["lane"] == "premium_approval"
     assert premium["health"] == "disabled"
@@ -856,6 +863,101 @@ def test_premium_approval_request_rejects_ineligible_task_kind(tmp_path, monkeyp
     assert response.status_code == 409
     assert response.json()["detail"]["error"]["code"] == "invalid_premium_approval_request"
     assert "not eligible" in response.json()["detail"]["error"]["message"]
+    assert before_events == after_events
+
+def test_subscription_agent_launch_stub_generation_is_non_mutating(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-stub.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"stepId": "implementation", "taskKind": "bounded_recipe_implementation", "requestedAgent": "codex"},
+        )
+
+        after_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    stub = response.json()["data"]
+    assert stub["launchStubId"].startswith("subscription-agent-stub-route-")
+    assert stub["workerId"] == "subscription.agent.disabled"
+    assert stub["requestedAgent"] == "codex"
+    assert stub["route"]["selectedLane"] == "subscription_handoff"
+    assert stub["disabledReason"] == "subscription_agent_process_launch_not_enabled"
+    assert stub["processLaunchAllowed"] is False
+    assert stub["executionAllowed"] is False
+    assert stub["estimate"]["cost"] == "subscription_plan_usage_only"
+    assert any("Do not include secrets" in instruction for instruction in stub["launchInstructions"])
+    assert any("Operator approval" in approval for approval in stub["requiredApprovals"])
+    assert before_item == after_item
+    assert before_events == after_events
+
+
+def test_subscription_agent_launch_stub_can_record_workflow_event(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-stub-event.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "claude", "recordEvent": True},
+        )
+
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert len(after_events) == len(before_events) + 1
+    event = after_events[0]
+    assert event["eventType"] == "routing.subscription_agent_launch_stub_created"
+    assert event["payload"]["selectedLane"] == "subscription_agent"
+    assert event["payload"]["sourceRouteLane"] == "subscription_handoff"
+    assert event["payload"]["workerId"] == "subscription.agent.disabled"
+    assert event["payload"]["requestedAgent"] == "claude"
+    assert event["payload"]["processLaunchAllowed"] is False
+    assert event["payload"]["executionAllowed"] is False
+
+
+def test_subscription_agent_launch_stub_rejects_non_handoff_route(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-stub-reject.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "path_scope_check", "recordEvent": True},
+        )
+
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "invalid_subscription_agent_launch_stub"
+    assert "subscription_handoff" in response.json()["detail"]["error"]["message"]
     assert before_events == after_events
 
 def test_subscription_handoff_package_generation_is_non_mutating(tmp_path, monkeypatch) -> None:

@@ -143,6 +143,13 @@ class WorkItemPremiumApprovalRequest(BaseModel):
     recordEvent: bool = False
 
 
+class WorkItemSubscriptionAgentLaunchStubRequest(BaseModel):
+    stepId: str | None = None
+    taskKind: str | None = None
+    requestedAgent: str | None = None
+    recordEvent: bool = False
+
+
 class WorkItemLocalEvidenceExplanationRequest(BaseModel):
     stepId: str | None = None
     taskKind: str | None = None
@@ -252,6 +259,25 @@ class PremiumApprovalRequestView(BaseModel):
     riskControls: list[str]
     recentEvidence: list[PremiumApprovalEvidenceView]
     approvalReason: str | None = None
+    executionAllowed: bool = False
+
+
+class SubscriptionAgentLaunchStubView(BaseModel):
+    launchStubId: str
+    workItemId: str
+    title: str
+    requestedOutcome: str
+    taskKind: str
+    stepId: str
+    createdAt: datetime
+    workerId: str
+    requestedAgent: str
+    route: RoutingDecisionView
+    estimate: dict[str, str]
+    launchInstructions: list[str]
+    requiredApprovals: list[str]
+    disabledReason: str
+    processLaunchAllowed: bool = False
     executionAllowed: bool = False
 
 

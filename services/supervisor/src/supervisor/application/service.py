@@ -26,6 +26,7 @@ from supervisor.api.schemas import (
     RoutingOverrideView,
     RoutingPreviewView,
     RoutingProfileView,
+    SubscriptionAgentLaunchStubView,
     SubscriptionHandoffEvidenceView,
     SubscriptionHandoffPackageView,
     RejectedRoutingLaneView,
@@ -40,6 +41,7 @@ from supervisor.api.schemas import (
     WorkItemManagedActionRequest,
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
+    WorkItemSubscriptionAgentLaunchStubRequest,
     WorkItemSubscriptionHandoffRequest,
     WorkItemManagedActionView,
     WorkItemPolicyGateView,
@@ -89,6 +91,7 @@ class SupervisorService:
         "routing.preview_recorded",
         "routing.utility_execution_authorized",
         "routing.subscription_handoff_packaged",
+        "routing.subscription_agent_launch_stub_created",
         "routing.premium_approval_requested",
         "routing.local_evidence_explained",
         "routing.outcome_recorded",
@@ -99,6 +102,14 @@ class SupervisorService:
         TaskKind.FINAL_VALIDATION_REVIEW.value,
         TaskKind.BOUNDED_RECIPE_IMPLEMENTATION.value,
         TaskKind.MULTI_FILE_IMPLEMENTATION.value,
+    }
+    _SUBSCRIPTION_AGENT_STUB_TASK_KINDS = {
+        TaskKind.ARCHITECTURE_REVIEW.value,
+        TaskKind.SECURITY_REVIEW.value,
+        TaskKind.BOUNDED_RECIPE_IMPLEMENTATION.value,
+        TaskKind.MULTI_FILE_IMPLEMENTATION.value,
+        TaskKind.SIMPLE_PATCH_DRAFT.value,
+        TaskKind.SUBSCRIPTION_HANDOFF_PACKAGE.value,
     }
 
     def __init__(self, settings: Settings, bus: EventBus) -> None:
@@ -410,6 +421,56 @@ class SupervisorService:
             await session.refresh(item)
         return request
 
+    async def get_subscription_agent_launch_stub(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemSubscriptionAgentLaunchStubRequest,
+    ) -> SubscriptionAgentLaunchStubView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        preview_payload = WorkItemRoutingPreviewRequest(
+            stepId=payload.stepId,
+            taskKind=payload.taskKind,
+            recordEvent=False,
+        )
+        preview = await self.get_routing_preview(session, work_item_id, preview_payload)
+        if not preview:
+            return None
+        if preview.decision.selectedLane != ExecutionLane.SUBSCRIPTION_HANDOFF.value:
+            raise ValueError(
+                f"Route selected {preview.decision.selectedLane}; subscription agent launch stub requires subscription_handoff."
+            )
+        if preview.profile.taskKind not in self._SUBSCRIPTION_AGENT_STUB_TASK_KINDS:
+            raise ValueError(
+                f"Task kind {preview.profile.taskKind} is not eligible for subscription agent launch stubs."
+            )
+
+        stub = SubscriptionAgentLaunchStubView(
+            launchStubId=f"subscription-agent-stub-{preview.decision.decisionId}",
+            workItemId=item.id,
+            title=item.title,
+            requestedOutcome=item.requested_outcome,
+            taskKind=preview.profile.taskKind,
+            stepId=preview.profile.stepId,
+            createdAt=datetime.now(timezone.utc),
+            workerId="subscription.agent.disabled",
+            requestedAgent=payload.requestedAgent or "subscription-agent-unspecified",
+            route=preview.decision,
+            estimate=self._subscription_agent_stub_estimate(preview),
+            launchInstructions=self._subscription_agent_stub_instructions(preview),
+            requiredApprovals=self._subscription_agent_stub_required_approvals(),
+            disabledReason="subscription_agent_process_launch_not_enabled",
+            processLaunchAllowed=False,
+            executionAllowed=False,
+        )
+        if payload.recordEvent:
+            await self._record_subscription_agent_launch_stub_event(session, item, stub)
+            await session.commit()
+            await session.refresh(item)
+        return stub
+
 
     async def get_local_evidence_packet(
         self,
@@ -696,6 +757,33 @@ class SupervisorService:
                 "commandsAllowed": explanation.commandsAllowed,
             },
         )
+    def _subscription_agent_stub_estimate(self, preview: RoutingPreviewView) -> dict[str, str]:
+        runtime_band = "medium" if preview.profile.taskKind in {TaskKind.ARCHITECTURE_REVIEW.value, TaskKind.SECURITY_REVIEW.value} else "long"
+        return {
+            "expectedRuntimeBand": runtime_band,
+            "contextFit": preview.profile.contextNeed,
+            "confidence": preview.decision.confidenceBand,
+            "cost": "subscription_plan_usage_only",
+        }
+
+    def _subscription_agent_stub_instructions(self, preview: RoutingPreviewView) -> list[str]:
+        return [
+            "Review the subscription handoff package before any manual agent launch.",
+            "Create an isolated workspace or branch before invoking a subscription CLI agent.",
+            "Pass only approved paths, validation expectations, and necessary evidence.",
+            "Do not include secrets, credentials, tokens, private keys, or raw environment values.",
+            "Record operator approval, command line, workspace path, and cancellation plan before launch.",
+            f"Expected agent output should match the route task kind: {preview.profile.taskKind}.",
+        ]
+
+    def _subscription_agent_stub_required_approvals(self) -> list[str]:
+        return [
+            "Operator approval for process launch.",
+            "Workspace isolation and rollback plan approved.",
+            "Credential and secret redaction confirmed.",
+            "Cancellation and log capture plan approved.",
+        ]
+
     def _premium_approval_justification(
         self,
         item: WorkItem,
@@ -817,6 +905,34 @@ class SupervisorService:
         if task_kind in {TaskKind.BOUNDED_RECIPE_IMPLEMENTATION.value, TaskKind.MULTI_FILE_IMPLEMENTATION.value, TaskKind.SIMPLE_PATCH_DRAFT.value}:
             return "bounded patch plan with files, tests, rollback notes, and explicit stop conditions."
         return "concise findings, assumptions, recommended next action, and stop conditions."
+
+    async def _record_subscription_agent_launch_stub_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        stub: SubscriptionAgentLaunchStubView,
+    ) -> None:
+        await self._record_event(
+            session,
+            item,
+            "routing.subscription_agent_launch_stub_created",
+            f"Disabled subscription-agent launch stub created for {stub.taskKind}.",
+            {
+                "launchStubId": stub.launchStubId,
+                "stepId": stub.stepId,
+                "taskKind": stub.taskKind,
+                "selectedLane": ExecutionLane.SUBSCRIPTION_AGENT.value,
+                "sourceRouteLane": stub.route.selectedLane,
+                "workerId": stub.workerId,
+                "requestedAgent": stub.requestedAgent,
+                "authorityMode": stub.route.authorityMode,
+                "confidenceBand": stub.route.confidenceBand,
+                "reasonCodes": stub.route.reasonCodes,
+                "processLaunchAllowed": stub.processLaunchAllowed,
+                "executionAllowed": stub.executionAllowed,
+                "disabledReason": stub.disabledReason,
+            },
+        )
 
     async def _record_premium_approval_request_event(
         self,

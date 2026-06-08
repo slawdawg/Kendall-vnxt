@@ -8,6 +8,7 @@ class WorkerAdapterType(StrEnum):
     INTERNAL_UTILITY = "internal_utility"
     LOCAL_OPENAI_COMPATIBLE = "local_openai_compatible"
     SUBSCRIPTION_HANDOFF = "subscription_handoff"
+    SUBSCRIPTION_AGENT = "subscription_agent"
     PREMIUM_APPROVAL = "premium_approval"
 
 
@@ -101,6 +102,16 @@ class StaticWorkerRegistry:
                 permissions=("package_only", "no_agent_launch"),
                 health=WorkerHealthStatus.DISABLED,
                 disabled_reason="direct_subscription_launch_not_enabled",
+            ),
+            WorkerRegistryEntry(
+                worker_id="subscription.agent.disabled",
+                display_name="Disabled subscription agent launch stub",
+                lane=ExecutionLane.SUBSCRIPTION_AGENT,
+                adapter_type=WorkerAdapterType.SUBSCRIPTION_AGENT,
+                capabilities=("launch_estimate", "launch_instructions", "approval_requirements"),
+                permissions=("stub_only", "no_process_launch", "no_cli_agent_calls"),
+                health=WorkerHealthStatus.DISABLED,
+                disabled_reason="subscription_agent_process_launch_not_enabled",
             ),
             WorkerRegistryEntry(
                 worker_id="premium.approval",
