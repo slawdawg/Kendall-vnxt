@@ -1,5 +1,9 @@
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import StrEnum
+
+
+_DEFAULT_DECISION_TIMESTAMP = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 class ExecutionLane(StrEnum):
@@ -84,6 +88,7 @@ class RoutingDecision:
     permission_summary: str
     escalation_path: tuple[ExecutionLane, ...]
     human_explanation: str
+    created_at: datetime = _DEFAULT_DECISION_TIMESTAMP
     selected_worker_id: str | None = None
     rejected_workers: tuple[str, ...] = field(default_factory=tuple)
 
@@ -96,7 +101,7 @@ class RoutingPreviewService:
         ExecutionLane.PREMIUM_APPROVAL,
     }
 
-    def preview(self, profile: RoutingProfile) -> RoutingDecision:
+    def preview(self, profile: RoutingProfile, created_at: datetime | None = None) -> RoutingDecision:
         selected_lane, authority_mode, confidence_band, confidence_score, reason_codes, explanation = self._select(profile)
         if selected_lane in profile.forbidden_lanes:
             selected_lane = self._fallback_lane(profile)
@@ -119,6 +124,7 @@ class RoutingPreviewService:
             permission_summary=self._permission_summary(selected_lane),
             escalation_path=self._escalation_path(selected_lane, profile),
             human_explanation=explanation,
+            created_at=created_at or _DEFAULT_DECISION_TIMESTAMP,
         )
 
     def _select(
@@ -143,6 +149,15 @@ class RoutingPreviewService:
                 ("task.delivery_package_check", "permissions.no_worker_execution_required"),
                 "Delivery readiness is a deterministic evidence check, so the utility lane is the safest preview route.",
             )
+        if profile.task_kind == TaskKind.ROUTING_PREVIEW:
+            return (
+                ExecutionLane.LOCAL_READONLY,
+                RoutingAuthorityMode.ADVISORY,
+                ConfidenceBand.MEDIUM,
+                0.8,
+                ("task.routing_preview", "permissions.read_only_required"),
+                "Route inspection is read-only policy analysis, so the safest preview route is local read-only reasoning.",
+            )
         if profile.task_kind in {
             TaskKind.EVIDENCE_SUMMARY,
             TaskKind.VALIDATION_FAILURE_ANALYSIS,
@@ -157,11 +172,37 @@ class RoutingPreviewService:
                 ("privacy.local_preferred", "permissions.read_only_required"),
                 "This step can be explained from local read-only context without granting execution or write permission.",
             )
+        if profile.task_kind == TaskKind.ARCHITECTURE_REVIEW:
+            return (
+                ExecutionLane.SUBSCRIPTION_HANDOFF,
+                RoutingAuthorityMode.ADVISORY,
+                ConfidenceBand.MEDIUM,
+                0.8,
+                ("task.architecture_review", "quality.subscription_handoff_preferred"),
+                "Architecture review benefits from a higher-quality handoff route, so MVP 1 previews a subscription handoff package instead of a local execution lane.",
+            )
+        if profile.task_kind == TaskKind.SECURITY_REVIEW:
+            return (
+                ExecutionLane.SUBSCRIPTION_HANDOFF,
+                RoutingAuthorityMode.ADVISORY,
+                ConfidenceBand.MEDIUM,
+                0.82,
+                ("task.security_review", "quality.subscription_handoff_preferred"),
+                "Security review should preserve careful human scrutiny, so MVP 1 previews a subscription handoff route rather than local execution.",
+            )
+        if profile.task_kind == TaskKind.SUBSCRIPTION_HANDOFF_PACKAGE:
+            return (
+                ExecutionLane.SUBSCRIPTION_HANDOFF,
+                RoutingAuthorityMode.ADVISORY,
+                ConfidenceBand.MEDIUM,
+                0.78,
+                ("task.subscription_handoff_package", "permissions.execution_not_granted"),
+                "This task is already a handoff package, so the safe MVP route is to keep it in the subscription handoff lane without launching an agent.",
+            )
         if profile.task_kind in {
             TaskKind.BOUNDED_RECIPE_IMPLEMENTATION,
             TaskKind.MULTI_FILE_IMPLEMENTATION,
             TaskKind.SIMPLE_PATCH_DRAFT,
-            TaskKind.SUBSCRIPTION_HANDOFF_PACKAGE,
         }:
             return (
                 ExecutionLane.SUBSCRIPTION_HANDOFF,

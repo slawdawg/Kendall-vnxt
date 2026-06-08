@@ -158,6 +158,7 @@ class RoutingDecisionView(BaseModel):
     decisionId: str
     workItemId: str
     stepId: str
+    createdAt: datetime
     profileSnapshot: RoutingProfileView
     selectedLane: str
     selectedWorkerId: str | None = None

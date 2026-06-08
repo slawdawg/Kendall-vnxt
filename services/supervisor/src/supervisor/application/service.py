@@ -163,7 +163,7 @@ class SupervisorService:
         profile = await self._routing_profile_for_item(session, item)
         if payload:
             profile = self._apply_routing_preview_request(profile, payload)
-        decision = RoutingPreviewService().preview(profile)
+        decision = RoutingPreviewService().preview(profile, created_at=self._normalize_timestamp(item.updated_at))
         preview = RoutingPreviewView(
             profile=self._to_routing_profile_view(profile),
             decision=self._to_routing_decision_view(decision),
@@ -287,6 +287,7 @@ class SupervisorService:
             decisionId=decision.decision_id,
             workItemId=decision.work_item_id,
             stepId=decision.step_id,
+            createdAt=self._normalize_timestamp(decision.created_at),
             profileSnapshot=self._to_routing_profile_view(decision.profile_snapshot),
             selectedLane=decision.selected_lane.value,
             selectedWorkerId=decision.selected_worker_id,

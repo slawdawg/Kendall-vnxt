@@ -65,6 +65,50 @@ def test_routing_preview_selects_subscription_handoff_for_bounded_implementation
     assert any(rejected.lane == "premium_approval" and "policy.disabled_for_mvp" in rejected.rejection_codes for rejected in decision.rejected_lanes)
 
 
+def test_routing_preview_explicitly_handles_additional_prd_task_kinds() -> None:
+    from supervisor.domain.routing import RoutingPreviewService, RoutingProfile, TaskKind
+
+    service = RoutingPreviewService()
+    routing_preview = service.preview(
+        RoutingProfile(
+            work_item_id="work-item-routing-preview",
+            step_id="routing-preview",
+            task_kind=TaskKind.ROUTING_PREVIEW,
+        )
+    )
+    architecture = service.preview(
+        RoutingProfile(
+            work_item_id="work-item-architecture",
+            step_id="architecture",
+            task_kind=TaskKind.ARCHITECTURE_REVIEW,
+        )
+    )
+    security = service.preview(
+        RoutingProfile(
+            work_item_id="work-item-security",
+            step_id="security",
+            task_kind=TaskKind.SECURITY_REVIEW,
+        )
+    )
+    handoff = service.preview(
+        RoutingProfile(
+            work_item_id="work-item-handoff",
+            step_id="handoff-package",
+            task_kind=TaskKind.SUBSCRIPTION_HANDOFF_PACKAGE,
+        )
+    )
+
+    assert routing_preview.selected_lane == "local_readonly"
+    assert routing_preview.authority_mode == "advisory"
+    assert routing_preview.reason_codes == ("task.routing_preview", "permissions.read_only_required")
+    assert architecture.selected_lane == "subscription_handoff"
+    assert architecture.reason_codes == ("task.architecture_review", "quality.subscription_handoff_preferred")
+    assert security.selected_lane == "subscription_handoff"
+    assert security.reason_codes == ("task.security_review", "quality.subscription_handoff_preferred")
+    assert handoff.selected_lane == "subscription_handoff"
+    assert handoff.reason_codes == ("task.subscription_handoff_package", "permissions.execution_not_granted")
+
+
 def test_supervisor_routing_preview_derives_from_next_managed_action_without_mutation(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "routing-preview.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -103,6 +147,7 @@ def test_supervisor_routing_preview_derives_from_next_managed_action_without_mut
     assert preview["profile"]["taskKind"] == "path_scope_check"
     assert preview["decision"]["selectedLane"] == "utility"
     assert preview["decision"]["authorityMode"] == "record_only"
+    assert preview["decision"]["createdAt"] == before_item["updatedAt"]
     assert "task.deterministic_check" in preview["decision"]["reasonCodes"]
     assert before_item == after_item
     assert before_events == after_events
@@ -232,6 +277,7 @@ def test_routing_preview_missing_work_item_uses_work_item_not_found(tmp_path, mo
     assert response.status_code == 404
     assert response.json()["detail"]["error"]["code"] == "work_item_not_found"
 
+
 def _create_routing_work_item(client: TestClient) -> str:
     created = client.post(
         "/work-items",
@@ -274,6 +320,7 @@ def test_routing_preview_post_without_record_event_is_non_mutating(tmp_path, mon
     assert preview["profile"]["stepId"] == "manual-evidence"
     assert preview["profile"]["taskKind"] == "evidence_summary"
     assert preview["decision"]["selectedLane"] == "local_readonly"
+    assert preview["decision"]["createdAt"] == before_item["updatedAt"]
     assert before_item == after_item
     assert before_events == after_events
 
