@@ -118,6 +118,41 @@ export interface ExecutionAttemptCreateRequest {
   actorLabel?: string | null;
 }
 
+export interface ExecutionAttemptTransitionRequest {
+  status: ExecutionAttemptStatus;
+  reason?: string | null;
+  routeDecisionId?: string | null;
+  workerId?: string | null;
+  lane?: string | null;
+  authorityMode?: string | null;
+  actorId?: string | null;
+  actorLabel?: string | null;
+}
+
+export interface WorkspaceIsolationPlanView {
+  planId: string;
+  sourceSnapshotStrategy: string;
+  branchStrategy: string;
+  readRoots: string[];
+  writeRoots: string[];
+  artifactRoot: string;
+  forbiddenPaths: string[];
+  cleanupRule: string;
+  rollbackRule: string;
+  diffCaptureRule: string;
+  writesAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  commandsAllowed: boolean;
+  networkAllowed: boolean;
+  credentialAccessAllowed: boolean;
+  redactionBoundary: string[];
+  allowedCommandClasses: string[];
+  blockedCommandClasses: string[];
+  providerEndpointPolicy: string;
+  promptConstructionPolicy: string;
+  boundaryRejectionReason: string;
+}
+
 export interface ExecutionAttemptView {
   attemptId: string;
   workItemId: string;
@@ -138,6 +173,7 @@ export interface ExecutionAttemptView {
   cancelReason?: string | null;
   rejectionReason?: string | null;
   failureReason?: string | null;
+  workspaceIsolationPlan: WorkspaceIsolationPlanView;
   artifactRefs: Record<string, unknown>[];
   eventRefs: Record<string, unknown>[];
 }
@@ -345,6 +381,63 @@ export interface WorkerRegistryEntryView {
   maxParallelJobs: number;
   disabledReason?: string | null;
 }
+
+export interface ExecutionConfigurationCheckView {
+  checkId: string;
+  label: string;
+  status: string;
+  enabled: boolean;
+  disabledReason?: string | null;
+  affectedWorkers: string[];
+  evidence: string[];
+  processLaunchAllowed: boolean;
+  providerCallsAllowed: boolean;
+  modelCallsAllowed: boolean;
+  premiumExecutionAllowed: boolean;
+  commandExecutionAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  networkAllowed: boolean;
+  credentialAccessAllowed: boolean;
+}
+
+export interface ExecutionConfigurationChecksView {
+  summary: string;
+  allDisabled: boolean;
+  generatedAt: string;
+  checks: ExecutionConfigurationCheckView[];
+}
+
+export interface ThreatBoundaryRuleView {
+  ruleId: string;
+  label: string;
+  status: string;
+  summary: string;
+  blockedReason: string;
+  evidence: string[];
+}
+
+export interface ThreatBoundaryView {
+  boundaryId: string;
+  status: string;
+  generatedAt: string;
+  summary: string;
+  redactionBoundary: string[];
+  promptConstructionSources: string[];
+  allowedCommandClasses: string[];
+  blockedCommandClasses: string[];
+  providerEndpointPolicy: string;
+  credentialPolicy: string;
+  artifactPolicy: string;
+  rules: ThreatBoundaryRuleView[];
+  processLaunchAllowed: boolean;
+  providerCallsAllowed: boolean;
+  modelCallsAllowed: boolean;
+  premiumExecutionAllowed: boolean;
+  commandExecutionAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  networkAllowed: boolean;
+  credentialAccessAllowed: boolean;
+}
 export interface RoutingOverrideView {
   overrideId: string;
   workItemId: string;
@@ -418,6 +511,36 @@ export interface WorkflowEventView {
   summary: string;
   payload: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface RuntimeEvidenceExportBoundaryView {
+  localRuntimeState: string[];
+  gitBackedEvidence: string[];
+  excludedState: string[];
+}
+
+export interface RuntimeEvidenceExportSafetyView {
+  exportOnly: boolean;
+  processLaunchAllowed: boolean;
+  providerCallsAllowed: boolean;
+  modelCallsAllowed: boolean;
+  premiumExecutionAllowed: boolean;
+  commandExecutionAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  networkAllowed: boolean;
+  credentialAccessAllowed: boolean;
+}
+
+export interface RuntimeEvidenceExportView {
+  exportId: string;
+  format: "application/json";
+  version: string;
+  generatedAt: string;
+  workItem: WorkItemView;
+  executionAttempts: ExecutionAttemptView[];
+  workflowEvents: WorkflowEventView[];
+  boundary: RuntimeEvidenceExportBoundaryView;
+  safety: RuntimeEvidenceExportSafetyView;
 }
 
 export interface OperatorProfile {

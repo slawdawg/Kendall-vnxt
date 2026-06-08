@@ -172,6 +172,41 @@ class WorkItemExecutionAttemptCreateRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkItemExecutionAttemptTransitionRequest(BaseModel):
+    status: ExecutionAttemptStatus
+    reason: str | None = None
+    routeDecisionId: str | None = None
+    workerId: str | None = None
+    lane: str | None = None
+    authorityMode: str | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
+class WorkspaceIsolationPlanView(BaseModel):
+    planId: str
+    sourceSnapshotStrategy: str
+    branchStrategy: str
+    readRoots: list[str]
+    writeRoots: list[str]
+    artifactRoot: str
+    forbiddenPaths: list[str]
+    cleanupRule: str
+    rollbackRule: str
+    diffCaptureRule: str
+    writesAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    commandsAllowed: bool = False
+    networkAllowed: bool = False
+    credentialAccessAllowed: bool = False
+    redactionBoundary: list[str] = Field(default_factory=list)
+    allowedCommandClasses: list[str] = Field(default_factory=list)
+    blockedCommandClasses: list[str] = Field(default_factory=list)
+    providerEndpointPolicy: str = "provider_endpoints_denied"
+    promptConstructionPolicy: str = "approved_evidence_only"
+    boundaryRejectionReason: str = "worker_execution_safety_boundary_not_satisfied"
+
+
 class ExecutionAttemptView(BaseModel):
     attemptId: str
     workItemId: str
@@ -192,8 +227,10 @@ class ExecutionAttemptView(BaseModel):
     cancelReason: str | None = None
     rejectionReason: str | None = None
     failureReason: str | None = None
+    workspaceIsolationPlan: WorkspaceIsolationPlanView
     artifactRefs: list[dict[str, Any]] = Field(default_factory=list)
     eventRefs: list[dict[str, Any]] = Field(default_factory=list)
+
 
 class RoutingProfileView(BaseModel):
     workItemId: str
@@ -398,6 +435,64 @@ class WorkerRegistryEntryView(BaseModel):
     maxParallelJobs: int
     disabledReason: str | None = None
 
+
+class ExecutionConfigurationCheckView(BaseModel):
+    checkId: str
+    label: str
+    status: str
+    enabled: bool
+    disabledReason: str | None = None
+    affectedWorkers: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    processLaunchAllowed: bool = False
+    providerCallsAllowed: bool = False
+    modelCallsAllowed: bool = False
+    premiumExecutionAllowed: bool = False
+    commandExecutionAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    networkAllowed: bool = False
+    credentialAccessAllowed: bool = False
+
+
+class ExecutionConfigurationChecksView(BaseModel):
+    summary: str
+    allDisabled: bool
+    generatedAt: datetime
+    checks: list[ExecutionConfigurationCheckView]
+
+
+class ThreatBoundaryRuleView(BaseModel):
+    ruleId: str
+    label: str
+    status: str
+    summary: str
+    blockedReason: str
+    evidence: list[str] = Field(default_factory=list)
+
+
+class ThreatBoundaryView(BaseModel):
+    boundaryId: str
+    status: str
+    generatedAt: datetime
+    summary: str
+    redactionBoundary: list[str]
+    promptConstructionSources: list[str]
+    allowedCommandClasses: list[str]
+    blockedCommandClasses: list[str]
+    providerEndpointPolicy: str
+    credentialPolicy: str
+    artifactPolicy: str
+    rules: list[ThreatBoundaryRuleView]
+    processLaunchAllowed: bool = False
+    providerCallsAllowed: bool = False
+    modelCallsAllowed: bool = False
+    premiumExecutionAllowed: bool = False
+    commandExecutionAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    networkAllowed: bool = False
+    credentialAccessAllowed: bool = False
+
+
 class RoutingOverrideView(BaseModel):
     overrideId: str
     workItemId: str
@@ -506,6 +601,36 @@ class WorkflowEventView(BaseModel):
     summary: str
     payload: dict[str, Any]
     createdAt: datetime
+
+
+class RuntimeEvidenceExportBoundaryView(BaseModel):
+    localRuntimeState: list[str]
+    gitBackedEvidence: list[str]
+    excludedState: list[str]
+
+
+class RuntimeEvidenceExportSafetyView(BaseModel):
+    exportOnly: bool = True
+    processLaunchAllowed: bool = False
+    providerCallsAllowed: bool = False
+    modelCallsAllowed: bool = False
+    premiumExecutionAllowed: bool = False
+    commandExecutionAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    networkAllowed: bool = False
+    credentialAccessAllowed: bool = False
+
+
+class RuntimeEvidenceExportView(BaseModel):
+    exportId: str
+    format: str
+    version: str
+    generatedAt: datetime
+    workItem: WorkItemView
+    executionAttempts: list[ExecutionAttemptView]
+    workflowEvents: list[WorkflowEventView]
+    boundary: RuntimeEvidenceExportBoundaryView
+    safety: RuntimeEvidenceExportSafetyView
 
 
 class WorkItemAssignmentRequest(BaseModel):

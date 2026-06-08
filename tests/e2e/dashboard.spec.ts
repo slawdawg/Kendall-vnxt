@@ -92,6 +92,19 @@ async function escalateWorkItem(request: APIRequestContext, workItemId: string, 
   expect(response.ok()).toBeTruthy();
 }
 
+async function createExecutionAttempt(request: APIRequestContext, workItemId: string) {
+  const response = await request.post(`${supervisorUrl}/work-items/${workItemId}/execution-attempts`, {
+    data: {
+      actorId: "playwright",
+      actorLabel: "Playwright",
+    },
+  });
+
+  expect(response.ok()).toBeTruthy();
+  const body = (await response.json()) as { data: { attemptId: string } };
+  return body.data.attemptId;
+}
+
 function gitOutput(args: string[]) {
   return execFileSync("git", args, { cwd: process.cwd(), encoding: "utf8" }).trim();
 }
@@ -317,6 +330,40 @@ test.describe("dashboard workflow coverage", () => {
     await expect(routingPanel.getByText("Task Deterministic Check")).toBeVisible();
     await expect(routingPanel.getByText("Local read-only").first()).toBeVisible();
     await expect(routingPanel.getByText("Permission summary")).toBeVisible();
+  });
+
+  test("shows execution attempt evidence and disabled workspace boundaries on work item detail", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Execution attempt evidence panel",
+      requestedOutcome: "Verify attempt status, route binding, and workspace isolation are visible.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+      },
+    });
+    await createExecutionAttempt(request, workItemId);
+
+    await page.goto(`/work-items/${workItemId}`);
+
+    await page.getByRole("link", { name: "Attempts" }).click();
+    await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#execution-attempts$`));
+
+    const attemptPanel = page.locator("#execution-attempts");
+    await expect(attemptPanel).toBeInViewport();
+    await expect(attemptPanel.getByText("Attempt evidence")).toBeVisible();
+    await expect(attemptPanel.getByText("1 recorded")).toBeVisible();
+    await expect(attemptPanel.getByText("Latest status")).toBeVisible();
+    await expect(attemptPanel.getByText("Planned").first()).toBeVisible();
+    await expect(attemptPanel.getByText("utility.internal").first()).toBeVisible();
+    await expect(attemptPanel.getByText("Workspace isolation")).toBeVisible();
+    await expect(attemptPanel.getByText("Write roots")).toBeVisible();
+    await expect(attemptPanel.getByText("None", { exact: true }).first()).toBeVisible();
+    await expect(attemptPanel.getByText("Source mutation: disabled")).toBeVisible();
+    await expect(attemptPanel.getByText("Commands: disabled")).toBeVisible();
+    await expect(attemptPanel.getByText("Credentials: disabled")).toBeVisible();
+    await expect(attemptPanel.getByText("_bmad-output/execution-attempts")).toBeVisible();
   });
 
   test("shows delivery readiness controls for managed recipe work", async ({ page, request }) => {

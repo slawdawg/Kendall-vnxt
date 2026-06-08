@@ -592,6 +592,98 @@ def test_worker_registry_lists_static_workers_without_mutating_events(tmp_path, 
     assert premium["disabledReason"] == "premium_execution_requires_operator_approval_flow"
 
 
+def test_execution_configuration_checks_report_disabled_defaults_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-configuration-checks.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/execution-configuration-checks")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    checks_view = response.json()["data"]
+    assert checks_view["allDisabled"] is True
+    assert checks_view["summary"] == "Real worker execution remains disabled by configuration."
+    assert before_events == after_events
+
+    checks = {check["checkId"]: check for check in checks_view["checks"]}
+    assert checks["subscription-agent-launch"]["disabledReason"] == "subscription_agent_process_launch_not_enabled"
+    assert checks["subscription-agent-launch"]["affectedWorkers"] == ["subscription.agent.disabled"]
+    assert checks["local-provider-calls"]["disabledReason"] == "local_provider_http_calls_not_enabled"
+    assert set(checks["local-provider-calls"]["affectedWorkers"]) == {
+        "local.ollama.disabled",
+        "local.lmstudio.disabled",
+        "local.vllm.disabled",
+        "local.llamacpp.disabled",
+    }
+    assert checks["premium-execution"]["disabledReason"] == "premium_execution_not_enabled"
+    assert checks["premium-execution"]["affectedWorkers"] == ["premium.approval"]
+
+    for check in checks.values():
+        assert check["enabled"] is False
+        assert check["status"] == "disabled"
+        assert check["processLaunchAllowed"] is False
+        assert check["providerCallsAllowed"] is False
+        assert check["modelCallsAllowed"] is False
+        assert check["premiumExecutionAllowed"] is False
+        assert check["commandExecutionAllowed"] is False
+        assert check["sourceMutationAllowed"] is False
+        assert check["networkAllowed"] is False
+        assert check["credentialAccessAllowed"] is False
+        assert check["evidence"]
+
+
+def test_threat_boundary_reports_redaction_command_provider_and_secret_denials_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "threat-boundary.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/threat-boundary")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    boundary = response.json()["data"]
+    assert boundary["boundaryId"] == "supervisor-worker-threat-boundary-v1"
+    assert boundary["status"] == "blocked_by_default"
+    assert "Do not include secrets" in boundary["redactionBoundary"][1]
+    assert "workflow_event_summaries" in boundary["promptConstructionSources"]
+    assert "supervisor_internal_utility_functions" in boundary["allowedCommandClasses"]
+    assert "arbitrary_shell_commands" in boundary["blockedCommandClasses"]
+    assert boundary["providerEndpointPolicy"].startswith("deny_all")
+    assert boundary["credentialPolicy"].startswith("forbid_worker_access")
+    assert boundary["artifactPolicy"].startswith("record_artifact_references")
+    assert {rule["ruleId"] for rule in boundary["rules"]} == {
+        "prompt-redaction-boundary",
+        "command-allowlist",
+        "provider-network-deny",
+        "credential-deny",
+        "artifact-boundary",
+    }
+    assert boundary["processLaunchAllowed"] is False
+    assert boundary["providerCallsAllowed"] is False
+    assert boundary["modelCallsAllowed"] is False
+    assert boundary["premiumExecutionAllowed"] is False
+    assert boundary["commandExecutionAllowed"] is False
+    assert boundary["sourceMutationAllowed"] is False
+    assert boundary["networkAllowed"] is False
+    assert boundary["credentialAccessAllowed"] is False
+    assert before_events == after_events
+
+
 def test_local_evidence_packet_preview_is_non_mutating_and_bounded(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "local-evidence-packet.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -630,6 +722,8 @@ def test_local_evidence_packet_preview_is_non_mutating_and_bounded(tmp_path, mon
     assert all("eventType" in evidence for evidence in packet["evidence"])
     assert any("Do not include secrets" in note for note in packet["redactionNotes"])
     assert any("file writes are not allowed" in boundary for boundary in packet["boundaries"])
+    assert any("Provider endpoints policy: deny_all" in boundary for boundary in packet["boundaries"])
+    assert any("Credential policy: forbid_worker_access" in boundary for boundary in packet["boundaries"])
 
 
 def test_mock_local_readonly_worker_preview_is_deterministic_and_non_mutating(tmp_path, monkeypatch) -> None:
@@ -1164,6 +1258,22 @@ def test_execution_attempt_plans_utility_attempt_and_records_history(tmp_path, m
     assert attempt["workerId"] == "utility.internal"
     assert attempt["routeDecisionId"].startswith(f"route-{work_item_id}")
     assert attempt["rejectionReason"] is None
+    assert attempt["workspaceIsolationPlan"]["planId"] == f"workspace-plan-{attempt['attemptId']}"
+    assert "apps/dashboard" in attempt["workspaceIsolationPlan"]["readRoots"]
+    assert "packages/contracts" in attempt["workspaceIsolationPlan"]["readRoots"]
+    assert "services/supervisor" in attempt["workspaceIsolationPlan"]["readRoots"]
+    assert attempt["workspaceIsolationPlan"]["writeRoots"] == []
+    assert attempt["workspaceIsolationPlan"]["artifactRoot"] == f"_bmad-output/execution-attempts/{attempt['attemptId']}"
+    assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
+    assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is False
+    assert attempt["workspaceIsolationPlan"]["networkAllowed"] is False
+    assert attempt["workspaceIsolationPlan"]["credentialAccessAllowed"] is False
+    assert "Do not include secrets" in attempt["workspaceIsolationPlan"]["redactionBoundary"][1]
+    assert "supervisor_internal_utility_functions" in attempt["workspaceIsolationPlan"]["allowedCommandClasses"]
+    assert "arbitrary_shell_commands" in attempt["workspaceIsolationPlan"]["blockedCommandClasses"]
+    assert attempt["workspaceIsolationPlan"]["providerEndpointPolicy"].startswith("deny_all")
+    assert attempt["workspaceIsolationPlan"]["promptConstructionPolicy"] == "approved_evidence_only"
+    assert attempt["workspaceIsolationPlan"]["boundaryRejectionReason"] == "worker_execution_safety_boundary_not_satisfied"
     assert attempt["eventRefs"][0]["eventType"] == "execution_attempt.planned"
     assert before_item == after_item
 
@@ -1181,10 +1291,85 @@ def test_execution_attempt_plans_utility_attempt_and_records_history(tmp_path, m
     assert attempt_event["payload"]["attemptId"] == attempt["attemptId"]
     assert attempt_event["payload"]["routeDecisionId"] == attempt["routeDecisionId"]
     assert attempt_event["payload"]["workerId"] == "utility.internal"
+    assert attempt_event["payload"]["workspaceIsolationPlan"]["planId"] == attempt["workspaceIsolationPlan"]["planId"]
+    assert attempt_event["payload"]["workspaceIsolationPlan"]["writeRoots"] == []
     assert attempt_event["payload"]["executionAllowed"] is False
     assert attempt_event["payload"]["processLaunchAllowed"] is False
     assert attempt_event["payload"]["providerCallsAllowed"] is False
+    assert attempt_event["payload"]["modelCallsAllowed"] is False
+    assert attempt_event["payload"]["commandExecutionAllowed"] is False
     assert attempt_event["payload"]["sourceMutationAllowed"] is False
+    assert attempt_event["payload"]["networkAllowed"] is False
+    assert attempt_event["payload"]["credentialAccessAllowed"] is False
+    assert attempt_event["payload"]["boundaryId"] == "supervisor-worker-threat-boundary-v1"
+    assert attempt_event["payload"]["boundaryRejectionReason"] == "worker_execution_safety_boundary_not_satisfied"
+
+
+def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "runtime-evidence-export.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Export runtime evidence",
+                "requestedOutcome": "Back up attempt and event evidence in a reviewable format.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        before_events_response = client.get(f"/work-items/{work_item_id}/events")
+        export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
+        after_events_response = client.get(f"/work-items/{work_item_id}/events")
+        missing_response = client.get("/work-items/missing/runtime-evidence-export")
+
+    assert attempt_response.status_code == 200
+    attempt = attempt_response.json()["data"]
+    assert export_response.status_code == 200
+    export = export_response.json()["data"]
+
+    assert export["exportId"] == f"runtime-evidence-export-{work_item_id}"
+    assert export["format"] == "application/json"
+    assert export["version"] == "1.0"
+    assert export["workItem"]["id"] == work_item_id
+    assert [entry["attemptId"] for entry in export["executionAttempts"]] == [attempt["attemptId"]]
+    assert export["executionAttempts"][0]["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
+
+    event_types = [event["eventType"] for event in export["workflowEvents"]]
+    assert "execution_attempt.planned" in event_types
+    assert "work_item.queued" in event_types
+    assert export["boundary"]["localRuntimeState"] == [
+        "supervisor_database.work_items",
+        "supervisor_database.workflow_events",
+        "supervisor_database.execution_attempts",
+        "runtime-generated export timestamps and identifiers",
+    ]
+    assert "docs/stories/2-7-runtime-evidence-export-strategy.md" in export["boundary"]["gitBackedEvidence"]
+    assert "environment variables and credential stores" in export["boundary"]["excludedState"]
+    assert export["safety"]["exportOnly"] is True
+    assert export["safety"]["processLaunchAllowed"] is False
+    assert export["safety"]["providerCallsAllowed"] is False
+    assert export["safety"]["modelCallsAllowed"] is False
+    assert export["safety"]["premiumExecutionAllowed"] is False
+    assert export["safety"]["commandExecutionAllowed"] is False
+    assert export["safety"]["sourceMutationAllowed"] is False
+    assert export["safety"]["networkAllowed"] is False
+    assert export["safety"]["credentialAccessAllowed"] is False
+    assert before_events_response.json()["data"] == after_events_response.json()["data"]
+    assert missing_response.status_code == 404
 
 
 def test_execution_attempt_rejects_local_readonly_without_provider_calls(tmp_path, monkeypatch) -> None:
@@ -1223,12 +1408,23 @@ def test_execution_attempt_rejects_local_readonly_without_provider_calls(tmp_pat
     assert attempt["lane"] == "local_readonly"
     assert attempt["workerId"] == "local.readonly.mock"
     assert attempt["rejectionReason"] == "execution_authority_not_enabled_for_local_readonly"
+    assert attempt["workspaceIsolationPlan"]["readRoots"] == ["."]
+    assert attempt["workspaceIsolationPlan"]["writeRoots"] == []
+    assert ".env" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
+    assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
     assert before_item == after_item
 
     event = next(event for event in events_response.json()["data"] if event["eventType"] == "execution_attempt.rejected")
     assert event["payload"]["attemptId"] == attempt["attemptId"]
+    assert event["payload"]["workspaceIsolationPlan"]["artifactRoot"] == attempt["workspaceIsolationPlan"]["artifactRoot"]
     assert event["payload"]["providerCallsAllowed"] is False
+    assert event["payload"]["modelCallsAllowed"] is False
+    assert event["payload"]["commandExecutionAllowed"] is False
     assert event["payload"]["sourceMutationAllowed"] is False
+    assert event["payload"]["networkAllowed"] is False
+    assert event["payload"]["credentialAccessAllowed"] is False
+    assert event["payload"]["boundaryId"] == "supervisor-worker-threat-boundary-v1"
+    assert event["payload"]["boundaryRejectionReason"] == "execution_authority_not_enabled_for_local_readonly"
 
 
 def test_execution_attempt_rejects_disabled_subscription_handoff_and_missing_work_item(tmp_path, monkeypatch) -> None:
@@ -1267,3 +1463,307 @@ def test_execution_attempt_rejects_disabled_subscription_handoff_and_missing_wor
     assert attempt["workerId"] == "subscription.handoff"
     assert attempt["rejectionReason"] == "direct_subscription_launch_not_enabled"
     assert history_response.json()["data"][0]["attemptId"] == attempt["attemptId"]
+
+
+def test_execution_attempt_lifecycle_records_cancel_history_without_execution(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-lifecycle-cancel.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cancel planned execution attempt",
+                "requestedOutcome": "Record a non-executing cancellation lifecycle.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts",
+            json={"actorId": "operator-1", "actorLabel": "Primary operator"},
+        )
+        attempt = attempt_response.json()["data"]
+
+        cancel_requested_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "cancel_requested",
+                "reason": "operator paused the route",
+                "actorId": "operator-1",
+                "actorLabel": "Primary operator",
+            },
+        )
+        cancelled_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "cancelled",
+                "reason": "operator confirmed cancellation",
+                "actorId": "operator-1",
+                "actorLabel": "Primary operator",
+            },
+        )
+        terminal_transition_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={"status": "completed"},
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert cancel_requested_response.status_code == 200
+    cancel_requested = cancel_requested_response.json()["data"]
+    assert cancel_requested["status"] == "cancel_requested"
+    assert cancel_requested["cancelReason"] == "operator paused the route"
+    assert cancel_requested["cancelRequestedAt"] is not None
+
+    assert cancelled_response.status_code == 200
+    cancelled = cancelled_response.json()["data"]
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["cancelReason"] == "operator confirmed cancellation"
+    assert cancelled["completedAt"] is not None
+    assert [event_ref["eventType"] for event_ref in cancelled["eventRefs"]] == [
+        "execution_attempt.planned",
+        "execution_attempt.cancel_requested",
+        "execution_attempt.cancelled",
+    ]
+
+    assert terminal_transition_response.status_code == 409
+    assert terminal_transition_response.json()["detail"]["error"]["code"] == "invalid_execution_attempt_transition"
+
+    events = events_response.json()["data"]
+    cancel_event = next(event for event in events if event["eventType"] == "execution_attempt.cancel_requested")
+    assert cancel_event["actorType"] == "operator"
+    assert cancel_event["payload"]["previousStatus"] == "planned"
+    assert cancel_event["payload"]["status"] == "cancel_requested"
+    assert cancel_event["payload"]["executionAllowed"] is False
+    assert cancel_event["payload"]["processLaunchAllowed"] is False
+    assert cancel_event["payload"]["providerCallsAllowed"] is False
+    assert cancel_event["payload"]["sourceMutationAllowed"] is False
+
+    history = history_response.json()["data"]
+    assert history[0]["attemptId"] == attempt["attemptId"]
+    assert history[0]["status"] == "cancelled"
+
+
+def test_execution_attempt_lifecycle_records_completion_and_rejects_invalid_transition(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-lifecycle-complete.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Complete planned execution attempt",
+                "requestedOutcome": "Record non-executing completion lifecycle metadata.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        attempt = attempt_response.json()["data"]
+        completed_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={"status": "completed", "reason": "mock lifecycle finished"},
+        )
+        second_attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+
+        rejected_work_item = client.post(
+            "/work-items",
+            json={
+                "title": "Reject invalid lifecycle transition",
+                "requestedOutcome": "Record disabled execution authority for local read-only.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "low",
+            },
+        )
+        rejected_work_item_id = rejected_work_item.json()["data"]["id"]
+        rejected_attempt_response = client.post(
+            f"/work-items/{rejected_work_item_id}/execution-attempts",
+            json={"taskKind": "evidence_summary", "stepId": "evidence-summary"},
+        )
+        rejected_attempt = rejected_attempt_response.json()["data"]
+        invalid_transition_response = client.post(
+            f"/work-items/{rejected_work_item_id}/execution-attempts/{rejected_attempt['attemptId']}/lifecycle",
+            json={"status": "cancel_requested", "reason": "cannot cancel rejected attempt"},
+        )
+        missing_attempt_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/missing/lifecycle",
+            json={"status": "completed"},
+        )
+
+    assert completed_response.status_code == 200
+    completed = completed_response.json()["data"]
+    assert completed["status"] == "completed"
+    assert completed["completedAt"] is not None
+    assert completed["eventRefs"][-1]["eventType"] == "execution_attempt.completed"
+
+    assert second_attempt_response.status_code == 200
+    assert second_attempt_response.json()["data"]["status"] == "planned"
+
+    assert invalid_transition_response.status_code == 409
+    assert "terminal with status rejected" in invalid_transition_response.json()["detail"]["error"]["message"]
+    assert missing_attempt_response.status_code == 404
+
+
+def test_execution_attempt_approval_requires_route_worker_lane_and_authority_binding(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-approval-binding.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Approve route-bound execution attempt",
+                "requestedOutcome": "Record an approval only when it binds to the current attempt route.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        attempt = attempt_response.json()["data"]
+        missing_binding_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={"status": "approved", "reason": "operator approves this attempt"},
+        )
+        approved_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "route-bound operator approval",
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+                "actorId": "operator-1",
+                "actorLabel": "Primary operator",
+            },
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert missing_binding_response.status_code == 409
+    assert missing_binding_response.json()["detail"]["error"]["code"] == "invalid_execution_attempt_transition"
+    assert "routeDecisionId" in missing_binding_response.json()["detail"]["error"]["message"]
+
+    assert approved_response.status_code == 200
+    approved = approved_response.json()["data"]
+    assert approved["status"] == "approved"
+    assert approved["eventRefs"][-1]["eventType"] == "execution_attempt.approved"
+
+    approved_event = next(event for event in events_response.json()["data"] if event["eventType"] == "execution_attempt.approved")
+    assert approved_event["actorType"] == "operator"
+    assert approved_event["actorLabel"] == "Primary operator"
+    assert approved_event["payload"]["previousStatus"] == "planned"
+    assert approved_event["payload"]["approvalBinding"] == {
+        "routeDecisionId": attempt["routeDecisionId"],
+        "attemptId": attempt["attemptId"],
+        "workerId": attempt["workerId"],
+        "selectedLane": attempt["lane"],
+        "authorityMode": attempt["authorityMode"],
+    }
+    assert "process_launch" in approved_event["payload"]["remainingDisabled"]
+    assert "model_api_calls" in approved_event["payload"]["remainingDisabled"]
+    assert approved_event["payload"]["executionAllowed"] is False
+    assert approved_event["payload"]["providerCallsAllowed"] is False
+    assert approved_event["payload"]["sourceMutationAllowed"] is False
+
+    history = history_response.json()["data"]
+    assert history[0]["attemptId"] == attempt["attemptId"]
+    assert history[0]["status"] == "approved"
+
+
+def test_execution_attempt_approval_rejects_stale_or_mismatched_binding_without_event(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-approval-mismatch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Reject stale route-bound approval",
+                "requestedOutcome": "Reject approval when route, worker, lane, or authority does not match.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        attempt = attempt_response.json()["data"]
+        stale_route_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "stale route approval",
+                "routeDecisionId": "route-stale",
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+            },
+        )
+        worker_mismatch_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "wrong worker approval",
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": "subscription.handoff",
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+            },
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert stale_route_response.status_code == 409
+    assert "routeDecisionId" in stale_route_response.json()["detail"]["error"]["message"]
+    assert worker_mismatch_response.status_code == 409
+    assert "workerId" in worker_mismatch_response.json()["detail"]["error"]["message"]
+
+    events = events_response.json()["data"]
+    assert [event["eventType"] for event in events if event["eventType"] == "execution_attempt.approved"] == []
+    history = history_response.json()["data"]
+    assert history[0]["attemptId"] == attempt["attemptId"]
+    assert history[0]["status"] == "planned"

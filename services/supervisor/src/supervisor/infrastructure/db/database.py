@@ -28,6 +28,7 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalation_reason TEXT"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_by_id VARCHAR(100)"))
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_by_label VARCHAR(120)"))
+            await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS workspace_isolation_plan_json JSON"))
         elif dialect == "sqlite":
             result = await connection.execute(text("PRAGMA table_info(workflow_events)"))
             column_names = {row[1] for row in result.fetchall()}
@@ -47,6 +48,10 @@ async def init_db() -> None:
                 await connection.execute(text("ALTER TABLE work_items ADD COLUMN escalated_by_id VARCHAR(100)"))
             if "escalated_by_label" not in item_columns:
                 await connection.execute(text("ALTER TABLE work_items ADD COLUMN escalated_by_label VARCHAR(120)"))
+            result = await connection.execute(text("PRAGMA table_info(execution_attempts)"))
+            attempt_columns = {row[1] for row in result.fetchall()}
+            if "workspace_isolation_plan_json" not in attempt_columns:
+                await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN workspace_isolation_plan_json JSON"))
 
 
 async def get_session() -> AsyncSession:

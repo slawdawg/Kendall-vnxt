@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     )
     allow_dirty_repo: bool = Field(default=False, alias="SUPERVISOR_ALLOW_DIRTY_REPO")
     allow_remote_delivery: bool = Field(default=False, alias="SUPERVISOR_ALLOW_REMOTE_DELIVERY")
+    allow_subscription_agent_launch: bool = Field(default=False, alias="SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH")
+    allow_local_provider_calls: bool = Field(default=False, alias="SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS")
+    allow_premium_execution: bool = Field(default=False, alias="SUPERVISOR_ALLOW_PREMIUM_EXECUTION")
+    allow_arbitrary_shell_execution: bool = Field(default=False, alias="SUPERVISOR_ALLOW_ARBITRARY_SHELL_EXECUTION")
+    allow_worker_source_mutation: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_SOURCE_MUTATION")
+    allow_worker_network: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_NETWORK")
+    allow_worker_credentials: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_CREDENTIALS")
     lease_ttl_seconds: int = 30
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

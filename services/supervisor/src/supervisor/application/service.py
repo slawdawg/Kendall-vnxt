@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
     AuditEventView,
+    ExecutionConfigurationCheckView,
+    ExecutionConfigurationChecksView,
     ExecutionAttemptView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
@@ -22,6 +24,9 @@ from supervisor.api.schemas import (
     OperatorViewResponse,
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
+    RuntimeEvidenceExportBoundaryView,
+    RuntimeEvidenceExportSafetyView,
+    RuntimeEvidenceExportView,
     RoutingDecisionView,
     RoutingLaneEvidenceProfileView,
     RoutingOverrideView,
@@ -30,10 +35,13 @@ from supervisor.api.schemas import (
     SubscriptionAgentLaunchStubView,
     SubscriptionHandoffEvidenceView,
     SubscriptionHandoffPackageView,
+    ThreatBoundaryRuleView,
+    ThreatBoundaryView,
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
     WorkItemExecutionAttemptCreateRequest,
+    WorkItemExecutionAttemptTransitionRequest,
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemPremiumApprovalRequest,
     WorkItemBranchPreparationRequest,
@@ -87,6 +95,56 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
     ExecutionAttemptStatus.STARTING.value,
     ExecutionAttemptStatus.RUNNING.value,
     ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+}
+
+TERMINAL_EXECUTION_ATTEMPT_STATUSES = {
+    ExecutionAttemptStatus.CANCELLED.value,
+    ExecutionAttemptStatus.TIMED_OUT.value,
+    ExecutionAttemptStatus.FAILED.value,
+    ExecutionAttemptStatus.COMPLETED.value,
+    ExecutionAttemptStatus.REJECTED.value,
+}
+
+EXECUTION_ATTEMPT_TRANSITIONS = {
+    ExecutionAttemptStatus.PLANNED.value: {
+        ExecutionAttemptStatus.APPROVED.value,
+        ExecutionAttemptStatus.STARTING.value,
+        ExecutionAttemptStatus.RUNNING.value,
+        ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+        ExecutionAttemptStatus.COMPLETED.value,
+    },
+    ExecutionAttemptStatus.APPROVED.value: {
+        ExecutionAttemptStatus.STARTING.value,
+        ExecutionAttemptStatus.RUNNING.value,
+        ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+        ExecutionAttemptStatus.COMPLETED.value,
+    },
+    ExecutionAttemptStatus.STARTING.value: {
+        ExecutionAttemptStatus.RUNNING.value,
+        ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+        ExecutionAttemptStatus.COMPLETED.value,
+    },
+    ExecutionAttemptStatus.RUNNING.value: {
+        ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+        ExecutionAttemptStatus.COMPLETED.value,
+    },
+    ExecutionAttemptStatus.CANCEL_REQUESTED.value: {
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+    },
 }
 
 _LANE_UNSET = object()
@@ -203,6 +261,254 @@ class SupervisorService:
     def list_worker_registry(self) -> list[WorkerRegistryEntryView]:
         return [self._to_worker_registry_entry_view(worker) for worker in self.worker_registry.list_workers()]
 
+    def get_execution_configuration_checks(self) -> ExecutionConfigurationChecksView:
+        workers = self.worker_registry.list_workers()
+
+        def affected_by_adapter(adapter_type: str) -> list[str]:
+            return [worker.worker_id for worker in workers if worker.adapter_type.value == adapter_type]
+
+        checks = [
+            self._execution_configuration_check(
+                check_id="subscription-agent-launch",
+                label="Subscription agent launch",
+                enabled=self.settings.allow_subscription_agent_launch,
+                disabled_reason="subscription_agent_process_launch_not_enabled",
+                affected_workers=affected_by_adapter("subscription_agent"),
+                evidence=[
+                    "Subscription launch stubs can create instructions only.",
+                    "No Codex, Claude, Gemini, Antigravity, or subscription CLI process launch is enabled.",
+                ],
+                process_launch_allowed=self.settings.allow_subscription_agent_launch,
+            ),
+            self._execution_configuration_check(
+                check_id="local-provider-calls",
+                label="Local provider calls",
+                enabled=self.settings.allow_local_provider_calls,
+                disabled_reason="local_provider_http_calls_not_enabled",
+                affected_workers=[
+                    worker.worker_id
+                    for worker in workers
+                    if worker.adapter_type.value == "local_openai_compatible" and worker.disabled_reason
+                ],
+                evidence=[
+                    "Ollama, LM Studio, vLLM, and llama.cpp registry entries remain disabled.",
+                    "Mock local read-only evidence does not call provider HTTP endpoints or model APIs.",
+                ],
+                provider_calls_allowed=self.settings.allow_local_provider_calls,
+                model_calls_allowed=self.settings.allow_local_provider_calls,
+            ),
+            self._execution_configuration_check(
+                check_id="premium-execution",
+                label="Premium execution",
+                enabled=self.settings.allow_premium_execution,
+                disabled_reason="premium_execution_not_enabled",
+                affected_workers=affected_by_adapter("premium_approval"),
+                evidence=[
+                    "Premium approval artifacts remain review packages only.",
+                    "No premium model invocation is enabled by approval artifacts.",
+                ],
+                premium_execution_allowed=self.settings.allow_premium_execution,
+                provider_calls_allowed=self.settings.allow_premium_execution,
+                model_calls_allowed=self.settings.allow_premium_execution,
+            ),
+            self._execution_configuration_check(
+                check_id="arbitrary-shell-execution",
+                label="Arbitrary shell execution",
+                enabled=self.settings.allow_arbitrary_shell_execution,
+                disabled_reason="arbitrary_shell_execution_not_enabled",
+                affected_workers=[worker.worker_id for worker in workers],
+                evidence=[
+                    "Execution attempts and local read-only packets keep commands disabled.",
+                    "Guarded utility behavior remains limited to supervisor-owned internal functions.",
+                ],
+                command_execution_allowed=self.settings.allow_arbitrary_shell_execution,
+            ),
+            self._execution_configuration_check(
+                check_id="worker-source-mutation",
+                label="Worker source mutation",
+                enabled=self.settings.allow_worker_source_mutation,
+                disabled_reason="worker_source_mutation_not_enabled",
+                affected_workers=[worker.worker_id for worker in workers],
+                evidence=[
+                    "Execution attempt workspace isolation plans keep write roots empty.",
+                    "Source mutation remains deferred until isolated workspace execution is approved.",
+                ],
+                source_mutation_allowed=self.settings.allow_worker_source_mutation,
+            ),
+            self._execution_configuration_check(
+                check_id="worker-network",
+                label="Worker network access",
+                enabled=self.settings.allow_worker_network,
+                disabled_reason="worker_network_access_not_enabled",
+                affected_workers=[worker.worker_id for worker in workers],
+                evidence=[
+                    "Worker attempts do not receive network permission in this phase.",
+                    "Provider endpoints remain denied unless later policy approves them.",
+                ],
+                network_allowed=self.settings.allow_worker_network,
+            ),
+            self._execution_configuration_check(
+                check_id="worker-credential-access",
+                label="Worker credential access",
+                enabled=self.settings.allow_worker_credentials,
+                disabled_reason="worker_credential_access_not_enabled",
+                affected_workers=[worker.worker_id for worker in workers],
+                evidence=[
+                    "Workspace isolation plans forbid credential access.",
+                    "Prompt/evidence packets must not include secrets, tokens, or raw environment values.",
+                ],
+                credential_access_allowed=self.settings.allow_worker_credentials,
+            ),
+        ]
+        all_disabled = all(not check.enabled for check in checks)
+        summary = (
+            "Real worker execution remains disabled by configuration."
+            if all_disabled
+            else "One or more execution authority gates are enabled; review policy before allowing real worker execution."
+        )
+        return ExecutionConfigurationChecksView(
+            summary=summary,
+            allDisabled=all_disabled,
+            generatedAt=datetime.now(timezone.utc),
+            checks=checks,
+        )
+
+    def get_threat_boundary(self) -> ThreatBoundaryView:
+        redaction_boundary = [
+            "Use workflow event summaries, work item metadata, route decisions, attempt metadata, and approved recipe metadata only.",
+            "Do not include secrets, credentials, tokens, environment variables, local secret files, raw provider payloads, or unrelated local files.",
+            "Do not include external provider prompts or completions unless a later provider-specific policy explicitly approves retention.",
+            "Reference artifact paths and summaries instead of embedding filesystem snapshots.",
+        ]
+        allowed_command_classes = [
+            "supervisor_internal_utility_functions",
+            "configured_recipe_commands_after_recipe_gates",
+            "git_metadata_reads_for_policy_checks",
+        ]
+        blocked_command_classes = [
+            "subscription_agent_process_launch",
+            "local_provider_http_calls",
+            "premium_provider_execution",
+            "arbitrary_shell_commands",
+            "worker_source_mutation_commands",
+            "network_commands",
+            "credential_or_secret_reads",
+        ]
+        rules = [
+            ThreatBoundaryRuleView(
+                ruleId="prompt-redaction-boundary",
+                label="Prompt and evidence redaction",
+                status="active",
+                summary="Future prompt construction is limited to approved evidence summaries and metadata.",
+                blockedReason="prompt_redaction_boundary_required",
+                evidence=[
+                    "Local evidence packets carry redaction notes.",
+                    "Runtime evidence exports exclude credentials and provider payloads.",
+                ],
+            ),
+            ThreatBoundaryRuleView(
+                ruleId="command-allowlist",
+                label="Command allowlist",
+                status="blocked_by_default",
+                summary="Worker command execution is denied except existing supervisor-owned internal utility behavior and gated recipe automation.",
+                blockedReason="command_execution_not_allowlisted",
+                evidence=[
+                    "Execution attempts set commandsAllowed=false.",
+                    "Arbitrary shell execution is disabled by configuration.",
+                ],
+            ),
+            ThreatBoundaryRuleView(
+                ruleId="provider-network-deny",
+                label="Provider and network deny",
+                status="blocked_by_default",
+                summary="Local provider endpoints, model APIs, and worker network access remain denied.",
+                blockedReason="provider_network_access_not_enabled",
+                evidence=[
+                    "Local provider registry entries remain disabled.",
+                    "Execution configuration checks deny provider/model/network access.",
+                ],
+            ),
+            ThreatBoundaryRuleView(
+                ruleId="credential-deny",
+                label="Credential deny",
+                status="blocked_by_default",
+                summary="Worker credential, token, environment secret, and account access remain forbidden.",
+                blockedReason="credential_access_forbidden",
+                evidence=[
+                    "Workspace isolation plans forbid credential access.",
+                    "Runtime evidence exports exclude environment variables and credential stores.",
+                ],
+            ),
+            ThreatBoundaryRuleView(
+                ruleId="artifact-boundary",
+                label="Artifact boundary",
+                status="active",
+                summary="Artifacts are referenced by path and summary until a later policy approves broader snapshot export.",
+                blockedReason="artifact_snapshot_export_not_enabled",
+                evidence=[
+                    "Attempt artifacts use artifactRefs metadata.",
+                    "Runtime evidence exports exclude filesystem snapshots outside recorded artifact references.",
+                ],
+            ),
+        ]
+        return ThreatBoundaryView(
+            boundaryId="supervisor-worker-threat-boundary-v1",
+            status="blocked_by_default",
+            generatedAt=datetime.now(timezone.utc),
+            summary="Real worker/provider execution remains denied until prompt, command, provider, network, credential, and artifact boundaries are explicitly approved by later policy.",
+            redactionBoundary=redaction_boundary,
+            promptConstructionSources=[
+                "work_item_metadata",
+                "workflow_event_summaries",
+                "routing_decision_metadata",
+                "execution_attempt_metadata",
+                "approved_recipe_metadata",
+                "reviewed_artifact_references",
+            ],
+            allowedCommandClasses=allowed_command_classes,
+            blockedCommandClasses=blocked_command_classes,
+            providerEndpointPolicy="deny_all_local_and_remote_provider_endpoints_until_provider_specific_policy_approval",
+            credentialPolicy="forbid_worker_access_to_credentials_tokens_environment_secrets_and_account_security_state",
+            artifactPolicy="record_artifact_references_and_summaries_only_until_snapshot_export_is_approved",
+            rules=rules,
+        )
+
+    def _execution_configuration_check(
+        self,
+        *,
+        check_id: str,
+        label: str,
+        enabled: bool,
+        disabled_reason: str,
+        affected_workers: list[str],
+        evidence: list[str],
+        process_launch_allowed: bool = False,
+        provider_calls_allowed: bool = False,
+        model_calls_allowed: bool = False,
+        premium_execution_allowed: bool = False,
+        command_execution_allowed: bool = False,
+        source_mutation_allowed: bool = False,
+        network_allowed: bool = False,
+        credential_access_allowed: bool = False,
+    ) -> ExecutionConfigurationCheckView:
+        return ExecutionConfigurationCheckView(
+            checkId=check_id,
+            label=label,
+            status="enabled" if enabled else "disabled",
+            enabled=enabled,
+            disabledReason=None if enabled else disabled_reason,
+            affectedWorkers=affected_workers,
+            evidence=evidence,
+            processLaunchAllowed=process_launch_allowed,
+            providerCallsAllowed=provider_calls_allowed,
+            modelCallsAllowed=model_calls_allowed,
+            premiumExecutionAllowed=premium_execution_allowed,
+            commandExecutionAllowed=command_execution_allowed,
+            sourceMutationAllowed=source_mutation_allowed,
+            networkAllowed=network_allowed,
+            credentialAccessAllowed=credential_access_allowed,
+        )
+
     def _to_worker_registry_entry_view(self, worker: WorkerRegistryEntry) -> WorkerRegistryEntryView:
         return WorkerRegistryEntryView(
             workerId=worker.worker_id,
@@ -232,6 +538,48 @@ class SupervisorService:
         )
         return [self._to_execution_attempt_view(attempt) for attempt in result.scalars()]
 
+    async def get_runtime_evidence_export(self, session: AsyncSession, work_item_id: str) -> RuntimeEvidenceExportView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+
+        attempts = await self.list_execution_attempts(session, work_item_id)
+        events = [self.to_event_view(event) for event in await self.list_work_item_events(session, work_item_id)]
+        return RuntimeEvidenceExportView(
+            exportId=f"runtime-evidence-export-{work_item_id}",
+            format="application/json",
+            version="1.0",
+            generatedAt=datetime.now(timezone.utc),
+            workItem=self.to_work_item_view(item),
+            executionAttempts=attempts,
+            workflowEvents=events,
+            boundary=RuntimeEvidenceExportBoundaryView(
+                localRuntimeState=[
+                    "supervisor_database.work_items",
+                    "supervisor_database.workflow_events",
+                    "supervisor_database.execution_attempts",
+                    "runtime-generated export timestamps and identifiers",
+                ],
+                gitBackedEvidence=[
+                    "docs/goals/bmad-architecture-completion-github-progress-goal-2026-06-08.md",
+                    "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
+                    "docs/stories/2-7-runtime-evidence-export-strategy.md",
+                    "docs/prds/supervisor-execution-authority-expansion.md",
+                    "services/supervisor/src/supervisor/api/main.py",
+                    "services/supervisor/src/supervisor/application/service.py",
+                    "packages/contracts/src/api.ts",
+                ],
+                excludedState=[
+                    "environment variables and credential stores",
+                    "provider HTTP request/response bodies",
+                    "model prompts or completions from external providers",
+                    "filesystem snapshots outside recorded artifact references",
+                    "background process output not recorded as workflow events",
+                ],
+            ),
+            safety=RuntimeEvidenceExportSafetyView(),
+        )
+
     async def create_execution_attempt(
         self,
         session: AsyncSession,
@@ -255,7 +603,10 @@ class SupervisorService:
         worker = self._worker_for_execution_attempt(preview)
         status, rejection_reason = self._execution_attempt_initial_status(preview, worker)
         now = datetime.now(timezone.utc)
+        attempt_id = str(uuid.uuid4())
+        workspace_isolation_plan = self._workspace_isolation_plan(attempt_id, preview)
         attempt = ExecutionAttempt(
+            id=attempt_id,
             work_item_id=item.id,
             route_decision_id=preview.decision.decisionId,
             worker_id=worker.worker_id,
@@ -265,6 +616,7 @@ class SupervisorService:
             requested_by_id=payload.actorId,
             requested_by_label=payload.actorLabel,
             rejection_reason=rejection_reason,
+            workspace_isolation_plan_json=workspace_isolation_plan,
             artifact_refs_json=[],
             event_refs_json=[],
             created_at=now,
@@ -285,6 +637,100 @@ class SupervisorService:
         await session.refresh(attempt)
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)
+
+    async def transition_execution_attempt(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        attempt_id: str,
+        payload: WorkItemExecutionAttemptTransitionRequest,
+    ) -> ExecutionAttemptView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        attempt = await session.get(ExecutionAttempt, attempt_id)
+        if not attempt or attempt.work_item_id != work_item_id:
+            return None
+
+        current_status = attempt.status
+        requested_status = payload.status.value
+        if current_status in TERMINAL_EXECUTION_ATTEMPT_STATUSES:
+            raise ValueError(f"Execution attempt {attempt.id} is terminal with status {current_status}.")
+        allowed = EXECUTION_ATTEMPT_TRANSITIONS.get(current_status, set())
+        if requested_status not in allowed:
+            raise ValueError(f"Invalid execution attempt transition from {current_status} to {requested_status}.")
+        if requested_status == ExecutionAttemptStatus.APPROVED.value:
+            self._validate_execution_attempt_approval_binding(attempt, payload)
+
+        now = datetime.now(timezone.utc)
+        attempt.status = requested_status
+        attempt.updated_at = now
+        if requested_status in {ExecutionAttemptStatus.STARTING.value, ExecutionAttemptStatus.RUNNING.value} and not attempt.started_at:
+            attempt.started_at = now
+        if requested_status == ExecutionAttemptStatus.RUNNING.value:
+            attempt.heartbeat_at = now
+        if requested_status == ExecutionAttemptStatus.CANCEL_REQUESTED.value:
+            attempt.cancel_requested_at = now
+            attempt.cancel_reason = payload.reason
+        if requested_status == ExecutionAttemptStatus.CANCELLED.value:
+            attempt.cancel_requested_at = attempt.cancel_requested_at or now
+            attempt.completed_at = now
+            if payload.reason:
+                attempt.cancel_reason = payload.reason
+        if requested_status == ExecutionAttemptStatus.TIMED_OUT.value:
+            attempt.timeout_at = now
+            attempt.completed_at = now
+            if payload.reason:
+                attempt.failure_reason = payload.reason
+        if requested_status == ExecutionAttemptStatus.FAILED.value:
+            attempt.completed_at = now
+            attempt.failure_reason = payload.reason
+        if requested_status == ExecutionAttemptStatus.COMPLETED.value:
+            attempt.completed_at = now
+
+        event = await self._record_execution_attempt_transition_event(
+            session,
+            item,
+            attempt,
+            previous_status=current_status,
+            reason=payload.reason,
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
+        )
+        event_refs = list(attempt.event_refs_json or [])
+        event_refs.append({"eventId": event.id, "eventType": event.event_type})
+        attempt.event_refs_json = event_refs
+        await session.commit()
+        await session.refresh(attempt)
+        await session.refresh(item)
+        return self._to_execution_attempt_view(attempt)
+
+    def _validate_execution_attempt_approval_binding(
+        self,
+        attempt: ExecutionAttempt,
+        payload: WorkItemExecutionAttemptTransitionRequest,
+    ) -> None:
+        required = {
+            "routeDecisionId": payload.routeDecisionId,
+            "workerId": payload.workerId,
+            "lane": payload.lane,
+            "authorityMode": payload.authorityMode,
+        }
+        missing = [field for field, value in required.items() if not value]
+        if missing:
+            raise ValueError(f"Execution attempt approval requires binding fields: {', '.join(missing)}.")
+
+        mismatches = []
+        if payload.routeDecisionId != attempt.route_decision_id:
+            mismatches.append("routeDecisionId")
+        if payload.workerId != attempt.worker_id:
+            mismatches.append("workerId")
+        if payload.lane != attempt.lane:
+            mismatches.append("lane")
+        if payload.authorityMode != attempt.authority_mode:
+            mismatches.append("authorityMode")
+        if mismatches:
+            raise ValueError(f"Execution attempt approval binding mismatch: {', '.join(mismatches)}.")
 
     async def _active_execution_attempt(self, session: AsyncSession, work_item_id: str) -> ExecutionAttempt | None:
         result = await session.execute(
@@ -320,6 +766,46 @@ class SupervisorService:
             return ExecutionAttemptStatus.REJECTED, worker.disabled_reason
         return ExecutionAttemptStatus.REJECTED, f"execution_authority_not_enabled_for_{preview.decision.selectedLane}"
 
+    def _workspace_isolation_plan(self, attempt_id: str, preview: RoutingPreviewView) -> dict:
+        read_roots = list(preview.profile.allowedPaths) or ["."]
+        threat_boundary = self.get_threat_boundary()
+        forbidden_paths = sorted(
+            {
+                ".env",
+                ".env.*",
+                ".git",
+                ".ssh",
+                "node_modules",
+                "services/supervisor/.venv",
+                "**/*secret*",
+                "**/*credential*",
+                "**/*token*",
+            }
+        )
+        return {
+            "planId": f"workspace-plan-{attempt_id}",
+            "sourceSnapshotStrategy": "record_current_route_and_attempt_metadata_only",
+            "branchStrategy": "none_non_executing_attempt",
+            "readRoots": read_roots,
+            "writeRoots": [],
+            "artifactRoot": f"_bmad-output/execution-attempts/{attempt_id}",
+            "forbiddenPaths": forbidden_paths,
+            "cleanupRule": "no_workspace_created_no_cleanup_required",
+            "rollbackRule": "source_mutation_disabled_no_rollback_required",
+            "diffCaptureRule": "capture_diff_metadata_only_after_future_isolated_execution_is_enabled",
+            "writesAllowed": False,
+            "sourceMutationAllowed": False,
+            "commandsAllowed": False,
+            "networkAllowed": False,
+            "credentialAccessAllowed": False,
+            "redactionBoundary": threat_boundary.redactionBoundary,
+            "allowedCommandClasses": threat_boundary.allowedCommandClasses,
+            "blockedCommandClasses": threat_boundary.blockedCommandClasses,
+            "providerEndpointPolicy": threat_boundary.providerEndpointPolicy,
+            "promptConstructionPolicy": "approved_evidence_only",
+            "boundaryRejectionReason": "worker_execution_safety_boundary_not_satisfied",
+        }
+
     async def _record_execution_attempt_event(
         self,
         session: AsyncSession,
@@ -352,10 +838,85 @@ class SupervisorService:
                 "taskKind": preview.profile.taskKind,
                 "stepId": preview.profile.stepId,
                 "rejectionReason": attempt.rejection_reason,
+                "workspaceIsolationPlan": dict(attempt.workspace_isolation_plan_json or {}),
                 "executionAllowed": False,
                 "processLaunchAllowed": False,
                 "providerCallsAllowed": False,
+                "modelCallsAllowed": False,
+                "commandExecutionAllowed": False,
                 "sourceMutationAllowed": False,
+                "networkAllowed": False,
+                "credentialAccessAllowed": False,
+                "boundaryId": "supervisor-worker-threat-boundary-v1",
+                "boundaryRejectionReason": attempt.rejection_reason or "worker_execution_safety_boundary_not_satisfied",
+            },
+            actor_type="operator" if actor_id or actor_label else "supervisor",
+            actor_id=actor_id,
+            actor_label=actor_label,
+        )
+
+    async def _record_execution_attempt_transition_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        previous_status: str,
+        reason: str | None,
+        actor_id: str | None,
+        actor_label: str | None,
+    ) -> WorkflowEvent:
+        event_type = f"execution_attempt.{attempt.status}"
+        return await self._record_event(
+            session,
+            item,
+            event_type,
+            f"Execution attempt moved from {previous_status} to {attempt.status}.",
+            {
+                "attemptId": attempt.id,
+                "workItemId": item.id,
+                "routeDecisionId": attempt.route_decision_id,
+                "workerId": attempt.worker_id,
+                "selectedLane": attempt.lane,
+                "authorityMode": attempt.authority_mode,
+                "previousStatus": previous_status,
+                "status": attempt.status,
+                "reason": reason,
+                "workspaceIsolationPlan": dict(attempt.workspace_isolation_plan_json or {}),
+                "approvalBinding": (
+                    {
+                        "routeDecisionId": attempt.route_decision_id,
+                        "attemptId": attempt.id,
+                        "workerId": attempt.worker_id,
+                        "selectedLane": attempt.lane,
+                        "authorityMode": attempt.authority_mode,
+                    }
+                    if attempt.status == ExecutionAttemptStatus.APPROVED.value
+                    else None
+                ),
+                "remainingDisabled": (
+                    [
+                        "process_launch",
+                        "provider_http_calls",
+                        "model_api_calls",
+                        "premium_execution",
+                        "source_mutation",
+                        "arbitrary_shell_execution",
+                        "worker_network_access",
+                        "credential_access",
+                    ]
+                    if attempt.status == ExecutionAttemptStatus.APPROVED.value
+                    else []
+                ),
+                "executionAllowed": False,
+                "processLaunchAllowed": False,
+                "providerCallsAllowed": False,
+                "modelCallsAllowed": False,
+                "commandExecutionAllowed": False,
+                "sourceMutationAllowed": False,
+                "networkAllowed": False,
+                "credentialAccessAllowed": False,
+                "boundaryId": "supervisor-worker-threat-boundary-v1",
+                "boundaryRejectionReason": "worker_execution_safety_boundary_not_satisfied",
             },
             actor_type="operator" if actor_id or actor_label else "supervisor",
             actor_id=actor_id,
@@ -630,6 +1191,7 @@ class SupervisorService:
             return None
         events = await self.list_work_item_events(session, work_item_id)
         recipe = self._execution_recipe_for_item(item)
+        created_at = self._normalize_timestamp(item.updated_at)
         profile = RoutingProfile(
             work_item_id=item.id,
             step_id="evidence-packet",
@@ -640,7 +1202,7 @@ class SupervisorService:
             allowed_paths=tuple(recipe.allowed_paths) if recipe else (),
             validation_expectations=tuple(command.display for command in recipe.verification_commands) if recipe else (),
         )
-        decision = RoutingPreviewService().preview(profile, created_at=datetime.now(timezone.utc))
+        decision = RoutingPreviewService().preview(profile, created_at=created_at)
         preview = RoutingPreviewView(
             profile=self._to_routing_profile_view(profile),
             decision=self._to_routing_decision_view(decision),
@@ -653,6 +1215,7 @@ class SupervisorService:
             )
             for event in events[:8]
         ]
+        threat_boundary = self.get_threat_boundary()
         return LocalEvidencePacketView(
             packetId=f"local-evidence-packet-{decision.decision_id}",
             workItemId=item.id,
@@ -660,16 +1223,19 @@ class SupervisorService:
             requestedOutcome=item.requested_outcome,
             taskKind=profile.task_kind.value,
             stepId=profile.step_id,
-            createdAt=datetime.now(timezone.utc),
+            createdAt=created_at,
             route=preview.decision,
             summary=self._local_evidence_summary(item, preview, events),
             evidence=evidence,
-            boundaries=self._local_evidence_boundaries(item),
+            boundaries=self._local_evidence_boundaries(item)
+            + [
+                f"Provider endpoints policy: {threat_boundary.providerEndpointPolicy}.",
+                f"Credential policy: {threat_boundary.credentialPolicy}.",
+            ],
             allowedPaths=list(recipe.allowed_paths) if recipe else [],
             validationCommands=[command.display for command in recipe.verification_commands] if recipe else [],
-            redactionNotes=[
-                "Use workflow event summaries and approved recipe metadata only.",
-                "Do not include secrets, raw prompts, credentials, or unrelated local files.",
+            redactionNotes=threat_boundary.redactionBoundary
+            + [
                 "Do not grant the local worker direct repo, shell, or write access from this packet.",
             ],
             writesAllowed=False,
@@ -723,6 +1289,7 @@ class SupervisorService:
             raise ValueError(f"Route selected {preview.decision.selectedLane}; local evidence explanation requires local_readonly.")
 
         events = await self.list_work_item_events(session, work_item_id)
+        threat_boundary = self.get_threat_boundary()
         explanation = LocalEvidenceExplanationView(
             explanationId=f"local-evidence-{preview.decision.decisionId}",
             workItemId=item.id,
@@ -741,7 +1308,11 @@ class SupervisorService:
                 )
                 for event in events[:8]
             ],
-            boundaries=self._local_evidence_boundaries(item),
+            boundaries=self._local_evidence_boundaries(item)
+            + [
+                f"Provider endpoints policy: {threat_boundary.providerEndpointPolicy}.",
+                f"Credential policy: {threat_boundary.credentialPolicy}.",
+            ],
             nextStepSuggestions=self._local_evidence_next_steps(preview),
             writesAllowed=False,
             commandsAllowed=False,
@@ -3941,9 +4512,29 @@ class SupervisorService:
             cancelReason=attempt.cancel_reason,
             rejectionReason=attempt.rejection_reason,
             failureReason=attempt.failure_reason,
+            workspaceIsolationPlan=attempt.workspace_isolation_plan_json or self._legacy_workspace_isolation_plan(attempt),
             artifactRefs=list(attempt.artifact_refs_json or []),
             eventRefs=list(attempt.event_refs_json or []),
         )
+
+    def _legacy_workspace_isolation_plan(self, attempt: ExecutionAttempt) -> dict:
+        return {
+            "planId": f"workspace-plan-{attempt.id}",
+            "sourceSnapshotStrategy": "legacy_attempt_metadata_only",
+            "branchStrategy": "none_non_executing_attempt",
+            "readRoots": ["."],
+            "writeRoots": [],
+            "artifactRoot": f"_bmad-output/execution-attempts/{attempt.id}",
+            "forbiddenPaths": [".env", ".git", ".ssh", "node_modules", "services/supervisor/.venv"],
+            "cleanupRule": "no_workspace_created_no_cleanup_required",
+            "rollbackRule": "source_mutation_disabled_no_rollback_required",
+            "diffCaptureRule": "capture_diff_metadata_only_after_future_isolated_execution_is_enabled",
+            "writesAllowed": False,
+            "sourceMutationAllowed": False,
+            "commandsAllowed": False,
+            "networkAllowed": False,
+            "credentialAccessAllowed": False,
+        }
 
     def to_event_view(self, event: WorkflowEvent) -> WorkflowEventView:
         return WorkflowEventView(
