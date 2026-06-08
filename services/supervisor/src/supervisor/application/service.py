@@ -306,7 +306,10 @@ class SupervisorService:
         worker = self._worker_for_execution_attempt(preview)
         status, rejection_reason = self._execution_attempt_initial_status(preview, worker)
         now = datetime.now(timezone.utc)
+        attempt_id = str(uuid.uuid4())
+        workspace_isolation_plan = self._workspace_isolation_plan(attempt_id, preview)
         attempt = ExecutionAttempt(
+            id=attempt_id,
             work_item_id=item.id,
             route_decision_id=preview.decision.decisionId,
             worker_id=worker.worker_id,
@@ -316,6 +319,7 @@ class SupervisorService:
             requested_by_id=payload.actorId,
             requested_by_label=payload.actorLabel,
             rejection_reason=rejection_reason,
+            workspace_isolation_plan_json=workspace_isolation_plan,
             artifact_refs_json=[],
             event_refs_json=[],
             created_at=now,
@@ -465,6 +469,39 @@ class SupervisorService:
             return ExecutionAttemptStatus.REJECTED, worker.disabled_reason
         return ExecutionAttemptStatus.REJECTED, f"execution_authority_not_enabled_for_{preview.decision.selectedLane}"
 
+    def _workspace_isolation_plan(self, attempt_id: str, preview: RoutingPreviewView) -> dict:
+        read_roots = list(preview.profile.allowedPaths) or ["."]
+        forbidden_paths = sorted(
+            {
+                ".env",
+                ".env.*",
+                ".git",
+                ".ssh",
+                "node_modules",
+                "services/supervisor/.venv",
+                "**/*secret*",
+                "**/*credential*",
+                "**/*token*",
+            }
+        )
+        return {
+            "planId": f"workspace-plan-{attempt_id}",
+            "sourceSnapshotStrategy": "record_current_route_and_attempt_metadata_only",
+            "branchStrategy": "none_non_executing_attempt",
+            "readRoots": read_roots,
+            "writeRoots": [],
+            "artifactRoot": f"_bmad-output/execution-attempts/{attempt_id}",
+            "forbiddenPaths": forbidden_paths,
+            "cleanupRule": "no_workspace_created_no_cleanup_required",
+            "rollbackRule": "source_mutation_disabled_no_rollback_required",
+            "diffCaptureRule": "capture_diff_metadata_only_after_future_isolated_execution_is_enabled",
+            "writesAllowed": False,
+            "sourceMutationAllowed": False,
+            "commandsAllowed": False,
+            "networkAllowed": False,
+            "credentialAccessAllowed": False,
+        }
+
     async def _record_execution_attempt_event(
         self,
         session: AsyncSession,
@@ -497,6 +534,7 @@ class SupervisorService:
                 "taskKind": preview.profile.taskKind,
                 "stepId": preview.profile.stepId,
                 "rejectionReason": attempt.rejection_reason,
+                "workspaceIsolationPlan": dict(attempt.workspace_isolation_plan_json or {}),
                 "executionAllowed": False,
                 "processLaunchAllowed": False,
                 "providerCallsAllowed": False,
@@ -533,6 +571,7 @@ class SupervisorService:
                 "previousStatus": previous_status,
                 "status": attempt.status,
                 "reason": reason,
+                "workspaceIsolationPlan": dict(attempt.workspace_isolation_plan_json or {}),
                 "approvalBinding": (
                     {
                         "routeDecisionId": attempt.route_decision_id,
@@ -834,6 +873,7 @@ class SupervisorService:
             return None
         events = await self.list_work_item_events(session, work_item_id)
         recipe = self._execution_recipe_for_item(item)
+        created_at = self._normalize_timestamp(item.updated_at)
         profile = RoutingProfile(
             work_item_id=item.id,
             step_id="evidence-packet",
@@ -844,7 +884,7 @@ class SupervisorService:
             allowed_paths=tuple(recipe.allowed_paths) if recipe else (),
             validation_expectations=tuple(command.display for command in recipe.verification_commands) if recipe else (),
         )
-        decision = RoutingPreviewService().preview(profile, created_at=datetime.now(timezone.utc))
+        decision = RoutingPreviewService().preview(profile, created_at=created_at)
         preview = RoutingPreviewView(
             profile=self._to_routing_profile_view(profile),
             decision=self._to_routing_decision_view(decision),
@@ -864,7 +904,7 @@ class SupervisorService:
             requestedOutcome=item.requested_outcome,
             taskKind=profile.task_kind.value,
             stepId=profile.step_id,
-            createdAt=datetime.now(timezone.utc),
+            createdAt=created_at,
             route=preview.decision,
             summary=self._local_evidence_summary(item, preview, events),
             evidence=evidence,
@@ -4145,9 +4185,29 @@ class SupervisorService:
             cancelReason=attempt.cancel_reason,
             rejectionReason=attempt.rejection_reason,
             failureReason=attempt.failure_reason,
+            workspaceIsolationPlan=attempt.workspace_isolation_plan_json or self._legacy_workspace_isolation_plan(attempt),
             artifactRefs=list(attempt.artifact_refs_json or []),
             eventRefs=list(attempt.event_refs_json or []),
         )
+
+    def _legacy_workspace_isolation_plan(self, attempt: ExecutionAttempt) -> dict:
+        return {
+            "planId": f"workspace-plan-{attempt.id}",
+            "sourceSnapshotStrategy": "legacy_attempt_metadata_only",
+            "branchStrategy": "none_non_executing_attempt",
+            "readRoots": ["."],
+            "writeRoots": [],
+            "artifactRoot": f"_bmad-output/execution-attempts/{attempt.id}",
+            "forbiddenPaths": [".env", ".git", ".ssh", "node_modules", "services/supervisor/.venv"],
+            "cleanupRule": "no_workspace_created_no_cleanup_required",
+            "rollbackRule": "source_mutation_disabled_no_rollback_required",
+            "diffCaptureRule": "capture_diff_metadata_only_after_future_isolated_execution_is_enabled",
+            "writesAllowed": False,
+            "sourceMutationAllowed": False,
+            "commandsAllowed": False,
+            "networkAllowed": False,
+            "credentialAccessAllowed": False,
+        }
 
     def to_event_view(self, event: WorkflowEvent) -> WorkflowEventView:
         return WorkflowEventView(

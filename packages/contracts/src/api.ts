@@ -129,6 +129,24 @@ export interface ExecutionAttemptTransitionRequest {
   actorLabel?: string | null;
 }
 
+export interface WorkspaceIsolationPlanView {
+  planId: string;
+  sourceSnapshotStrategy: string;
+  branchStrategy: string;
+  readRoots: string[];
+  writeRoots: string[];
+  artifactRoot: string;
+  forbiddenPaths: string[];
+  cleanupRule: string;
+  rollbackRule: string;
+  diffCaptureRule: string;
+  writesAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  commandsAllowed: boolean;
+  networkAllowed: boolean;
+  credentialAccessAllowed: boolean;
+}
+
 export interface ExecutionAttemptView {
   attemptId: string;
   workItemId: string;
@@ -149,6 +167,7 @@ export interface ExecutionAttemptView {
   cancelReason?: string | null;
   rejectionReason?: string | null;
   failureReason?: string | null;
+  workspaceIsolationPlan: WorkspaceIsolationPlanView;
   artifactRefs: Record<string, unknown>[];
   eventRefs: Record<string, unknown>[];
 }

@@ -76,6 +76,7 @@ class ExecutionAttempt(Base):
     requested_by_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    workspace_isolation_plan_json: Mapped[dict] = mapped_column(JSON, default=dict)
     artifact_refs_json: Mapped[list] = mapped_column(JSON, default=list)
     event_refs_json: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

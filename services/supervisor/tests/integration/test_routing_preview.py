@@ -1164,6 +1164,16 @@ def test_execution_attempt_plans_utility_attempt_and_records_history(tmp_path, m
     assert attempt["workerId"] == "utility.internal"
     assert attempt["routeDecisionId"].startswith(f"route-{work_item_id}")
     assert attempt["rejectionReason"] is None
+    assert attempt["workspaceIsolationPlan"]["planId"] == f"workspace-plan-{attempt['attemptId']}"
+    assert "apps/dashboard" in attempt["workspaceIsolationPlan"]["readRoots"]
+    assert "packages/contracts" in attempt["workspaceIsolationPlan"]["readRoots"]
+    assert "services/supervisor" in attempt["workspaceIsolationPlan"]["readRoots"]
+    assert attempt["workspaceIsolationPlan"]["writeRoots"] == []
+    assert attempt["workspaceIsolationPlan"]["artifactRoot"] == f"_bmad-output/execution-attempts/{attempt['attemptId']}"
+    assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
+    assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is False
+    assert attempt["workspaceIsolationPlan"]["networkAllowed"] is False
+    assert attempt["workspaceIsolationPlan"]["credentialAccessAllowed"] is False
     assert attempt["eventRefs"][0]["eventType"] == "execution_attempt.planned"
     assert before_item == after_item
 
@@ -1181,6 +1191,8 @@ def test_execution_attempt_plans_utility_attempt_and_records_history(tmp_path, m
     assert attempt_event["payload"]["attemptId"] == attempt["attemptId"]
     assert attempt_event["payload"]["routeDecisionId"] == attempt["routeDecisionId"]
     assert attempt_event["payload"]["workerId"] == "utility.internal"
+    assert attempt_event["payload"]["workspaceIsolationPlan"]["planId"] == attempt["workspaceIsolationPlan"]["planId"]
+    assert attempt_event["payload"]["workspaceIsolationPlan"]["writeRoots"] == []
     assert attempt_event["payload"]["executionAllowed"] is False
     assert attempt_event["payload"]["processLaunchAllowed"] is False
     assert attempt_event["payload"]["providerCallsAllowed"] is False
@@ -1223,10 +1235,15 @@ def test_execution_attempt_rejects_local_readonly_without_provider_calls(tmp_pat
     assert attempt["lane"] == "local_readonly"
     assert attempt["workerId"] == "local.readonly.mock"
     assert attempt["rejectionReason"] == "execution_authority_not_enabled_for_local_readonly"
+    assert attempt["workspaceIsolationPlan"]["readRoots"] == ["."]
+    assert attempt["workspaceIsolationPlan"]["writeRoots"] == []
+    assert ".env" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
+    assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
     assert before_item == after_item
 
     event = next(event for event in events_response.json()["data"] if event["eventType"] == "execution_attempt.rejected")
     assert event["payload"]["attemptId"] == attempt["attemptId"]
+    assert event["payload"]["workspaceIsolationPlan"]["artifactRoot"] == attempt["workspaceIsolationPlan"]["artifactRoot"]
     assert event["payload"]["providerCallsAllowed"] is False
     assert event["payload"]["sourceMutationAllowed"] is False
 

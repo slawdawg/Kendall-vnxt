@@ -183,6 +183,24 @@ class WorkItemExecutionAttemptTransitionRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkspaceIsolationPlanView(BaseModel):
+    planId: str
+    sourceSnapshotStrategy: str
+    branchStrategy: str
+    readRoots: list[str]
+    writeRoots: list[str]
+    artifactRoot: str
+    forbiddenPaths: list[str]
+    cleanupRule: str
+    rollbackRule: str
+    diffCaptureRule: str
+    writesAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    commandsAllowed: bool = False
+    networkAllowed: bool = False
+    credentialAccessAllowed: bool = False
+
+
 class ExecutionAttemptView(BaseModel):
     attemptId: str
     workItemId: str
@@ -203,6 +221,7 @@ class ExecutionAttemptView(BaseModel):
     cancelReason: str | None = None
     rejectionReason: str | None = None
     failureReason: str | None = None
+    workspaceIsolationPlan: WorkspaceIsolationPlanView
     artifactRefs: list[dict[str, Any]] = Field(default_factory=list)
     eventRefs: list[dict[str, Any]] = Field(default_factory=list)
 

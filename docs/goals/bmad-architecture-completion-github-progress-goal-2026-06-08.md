@@ -34,11 +34,12 @@ Completed foundation:
 - Execution attempt contract and state model.
 - Execution attempt lifecycle events and history API.
 - Execution attempt approval binding and stale/mismatched decision rejection.
+- Execution attempt workspace isolation plan contract.
 
 Current local checkpoint:
 
 - See `git log --oneline -5` for the latest local checkpoint.
-- Latest completed architecture story trail: `docs/stories/2-3-approval-binding-and-stale-decision-rejection.md`.
+- Latest completed architecture story trail: `docs/stories/2-4-workspace-isolation-plan-contract.md`.
 
 Known GitHub sync issue:
 
@@ -51,7 +52,6 @@ Known GitHub sync issue:
 The architecture is considered complete for this BMad goal only when all of the following are true:
 
 1. Execution authority expansion slices are implemented or explicitly deferred with decision records:
-   - workspace isolation plan contract,
    - dashboard attempt evidence panel,
    - disabled execution configuration checks,
    - runtime evidence/export strategy,
@@ -174,6 +174,8 @@ Key acceptance:
 
 ### Story 2.4: Workspace Isolation Plan Contract
 
+Status: completed locally; pending GitHub sync.
+
 Goal: attach a non-executing workspace isolation plan to execution attempts before mutation is ever allowed.
 
 Key acceptance:
@@ -270,6 +272,6 @@ Pause implementation and create a decision record if any story requires:
 
 ## Immediate Next Step
 
-Restore or confirm GitHub authentication, then push local checkpoint `801bc0a` to `origin/main`.
+Restore or confirm GitHub authentication, then push the local `main` checkpoints shown by `git log --oneline -5` to `origin/main`.
 
-After Story 2.3 is committed and GitHub progress is current, begin Story 2.4: Workspace Isolation Plan Contract.
+After Story 2.4 is committed and GitHub progress is current, begin Story 2.5: Dashboard Attempt Evidence Panel.
