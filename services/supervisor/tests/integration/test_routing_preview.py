@@ -395,6 +395,51 @@ def test_routing_preview_post_can_record_workflow_event(tmp_path, monkeypatch) -
     assert payload["permissionSummary"]
 
 
+def test_routing_lane_profiles_aggregate_recorded_routing_events(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "routing-lane-profiles.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        utility = client.post(
+            f"/work-items/{work_item_id}/routing-preview",
+            json={"taskKind": "validation_execution", "recordEvent": True},
+        )
+        local = client.post(
+            f"/work-items/{work_item_id}/local-evidence-explanation",
+            json={"taskKind": "evidence_summary", "recordEvent": True},
+        )
+        handoff = client.post(
+            f"/work-items/{work_item_id}/subscription-handoff-package",
+            json={"taskKind": "architecture_review", "recordEvent": True},
+        )
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        profiles_response = client.get("/routing/lane-profiles")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert utility.status_code == 200
+    assert local.status_code == 200
+    assert handoff.status_code == 200
+    assert profiles_response.status_code == 200
+    profiles = {profile["lane"]: profile for profile in profiles_response.json()["data"]}
+    assert profiles["utility"]["decisionCount"] == 1
+    assert profiles["utility"]["previewCount"] == 1
+    assert profiles["utility"]["guardedExecutionCount"] == 0
+    assert "task.deterministic_check" in profiles["utility"]["recentReasonCodes"]
+    assert profiles["local_readonly"]["decisionCount"] == 1
+    assert profiles["local_readonly"]["localExplanationCount"] == 1
+    assert "privacy.local_preferred" in profiles["local_readonly"]["recentReasonCodes"]
+    assert profiles["subscription_handoff"]["decisionCount"] == 1
+    assert profiles["subscription_handoff"]["handoffPackageCount"] == 1
+    assert "task.architecture_review" in profiles["subscription_handoff"]["recentReasonCodes"]
+    assert all(profile["latestEventAt"] for profile in profiles.values())
+    assert before_events == after_events
+
 def test_local_evidence_explanation_generation_is_non_mutating(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "local-evidence-explanation.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

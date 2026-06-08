@@ -195,6 +195,17 @@ export interface LocalEvidenceExplanationView {
   commandsAllowed: boolean;
 }
 
+export interface RoutingLaneEvidenceProfileView {
+  lane: string;
+  decisionCount: number;
+  previewCount: number;
+  guardedExecutionCount: number;
+  handoffPackageCount: number;
+  localExplanationCount: number;
+  recentReasonCodes: string[];
+  latestEventAt?: string | null;
+}
+
 export interface WorkItemView extends WorkItemPayload {
   id: string;
   origin: "operator" | "supervisor";

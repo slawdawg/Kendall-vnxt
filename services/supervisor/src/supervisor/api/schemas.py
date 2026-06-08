@@ -238,6 +238,17 @@ class LocalEvidenceExplanationView(BaseModel):
     commandsAllowed: bool = False
 
 
+class RoutingLaneEvidenceProfileView(BaseModel):
+    lane: str
+    decisionCount: int
+    previewCount: int
+    guardedExecutionCount: int
+    handoffPackageCount: int
+    localExplanationCount: int
+    recentReasonCodes: list[str]
+    latestEventAt: datetime | None = None
+
+
 class WorkItemExecutionRecipeView(BaseModel):
     id: str
     label: str

@@ -17,6 +17,7 @@ from supervisor.api.schemas import (
     OperatorViewCreate,
     OperatorViewResponse,
     RoutingDecisionView,
+    RoutingLaneEvidenceProfileView,
     RoutingPreviewView,
     RoutingProfileView,
     SubscriptionHandoffEvidenceView,
@@ -72,6 +73,12 @@ MERGE_STATUSES = {"not_recorded", "ready", "merged", "blocked", "waived"}
 
 
 class SupervisorService:
+    _ROUTING_PROFILE_EVENT_TYPES = {
+        "routing.preview_recorded",
+        "routing.utility_execution_authorized",
+        "routing.subscription_handoff_packaged",
+        "routing.local_evidence_explained",
+    }
     def __init__(self, settings: Settings, bus: EventBus) -> None:
         self.settings = settings
         self.bus = bus
@@ -153,6 +160,61 @@ class SupervisorService:
             .order_by(WorkflowEvent.created_at.desc())
         )
         return list(result.scalars())
+
+    async def list_routing_lane_profiles(self, session: AsyncSession) -> list[RoutingLaneEvidenceProfileView]:
+        result = await session.execute(
+            select(WorkflowEvent)
+            .where(WorkflowEvent.event_type.in_(self._ROUTING_PROFILE_EVENT_TYPES))
+            .order_by(WorkflowEvent.created_at.desc())
+        )
+        events = list(result.scalars())
+        profiles: dict[str, dict] = {}
+        for event in events:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            lane = payload.get("selectedLane")
+            if not isinstance(lane, str) or not lane.strip():
+                continue
+            profile = profiles.setdefault(
+                lane,
+                {
+                    "decisionCount": 0,
+                    "previewCount": 0,
+                    "guardedExecutionCount": 0,
+                    "handoffPackageCount": 0,
+                    "localExplanationCount": 0,
+                    "recentReasonCodes": [],
+                    "latestEventAt": None,
+                },
+            )
+            profile["decisionCount"] += 1
+            if event.event_type == "routing.preview_recorded":
+                profile["previewCount"] += 1
+            elif event.event_type == "routing.utility_execution_authorized":
+                profile["guardedExecutionCount"] += 1
+            elif event.event_type == "routing.subscription_handoff_packaged":
+                profile["handoffPackageCount"] += 1
+            elif event.event_type == "routing.local_evidence_explained":
+                profile["localExplanationCount"] += 1
+            if profile["latestEventAt"] is None:
+                profile["latestEventAt"] = self._normalize_timestamp(event.created_at)
+            reason_codes = payload.get("reasonCodes")
+            if isinstance(reason_codes, list):
+                for code in reason_codes:
+                    if isinstance(code, str) and code not in profile["recentReasonCodes"]:
+                        profile["recentReasonCodes"].append(code)
+        return [
+            RoutingLaneEvidenceProfileView(
+                lane=lane,
+                decisionCount=profile["decisionCount"],
+                previewCount=profile["previewCount"],
+                guardedExecutionCount=profile["guardedExecutionCount"],
+                handoffPackageCount=profile["handoffPackageCount"],
+                localExplanationCount=profile["localExplanationCount"],
+                recentReasonCodes=profile["recentReasonCodes"][:8],
+                latestEventAt=profile["latestEventAt"],
+            )
+            for lane, profile in sorted(profiles.items())
+        ]
 
     async def get_recipe_gate_audit(self, session: AsyncSession, work_item_id: str) -> WorkItemRecipeGateAuditView | None:
         item = await session.get(WorkItem, work_item_id)
