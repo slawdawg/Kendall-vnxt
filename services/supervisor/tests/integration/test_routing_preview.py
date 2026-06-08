@@ -640,6 +640,50 @@ def test_execution_configuration_checks_report_disabled_defaults_without_mutatio
         assert check["evidence"]
 
 
+def test_threat_boundary_reports_redaction_command_provider_and_secret_denials_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "threat-boundary.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/threat-boundary")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    boundary = response.json()["data"]
+    assert boundary["boundaryId"] == "supervisor-worker-threat-boundary-v1"
+    assert boundary["status"] == "blocked_by_default"
+    assert "Do not include secrets" in boundary["redactionBoundary"][1]
+    assert "workflow_event_summaries" in boundary["promptConstructionSources"]
+    assert "supervisor_internal_utility_functions" in boundary["allowedCommandClasses"]
+    assert "arbitrary_shell_commands" in boundary["blockedCommandClasses"]
+    assert boundary["providerEndpointPolicy"].startswith("deny_all")
+    assert boundary["credentialPolicy"].startswith("forbid_worker_access")
+    assert boundary["artifactPolicy"].startswith("record_artifact_references")
+    assert {rule["ruleId"] for rule in boundary["rules"]} == {
+        "prompt-redaction-boundary",
+        "command-allowlist",
+        "provider-network-deny",
+        "credential-deny",
+        "artifact-boundary",
+    }
+    assert boundary["processLaunchAllowed"] is False
+    assert boundary["providerCallsAllowed"] is False
+    assert boundary["modelCallsAllowed"] is False
+    assert boundary["premiumExecutionAllowed"] is False
+    assert boundary["commandExecutionAllowed"] is False
+    assert boundary["sourceMutationAllowed"] is False
+    assert boundary["networkAllowed"] is False
+    assert boundary["credentialAccessAllowed"] is False
+    assert before_events == after_events
+
+
 def test_local_evidence_packet_preview_is_non_mutating_and_bounded(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "local-evidence-packet.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -678,6 +722,8 @@ def test_local_evidence_packet_preview_is_non_mutating_and_bounded(tmp_path, mon
     assert all("eventType" in evidence for evidence in packet["evidence"])
     assert any("Do not include secrets" in note for note in packet["redactionNotes"])
     assert any("file writes are not allowed" in boundary for boundary in packet["boundaries"])
+    assert any("Provider endpoints policy: deny_all" in boundary for boundary in packet["boundaries"])
+    assert any("Credential policy: forbid_worker_access" in boundary for boundary in packet["boundaries"])
 
 
 def test_mock_local_readonly_worker_preview_is_deterministic_and_non_mutating(tmp_path, monkeypatch) -> None:
@@ -1222,6 +1268,12 @@ def test_execution_attempt_plans_utility_attempt_and_records_history(tmp_path, m
     assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is False
     assert attempt["workspaceIsolationPlan"]["networkAllowed"] is False
     assert attempt["workspaceIsolationPlan"]["credentialAccessAllowed"] is False
+    assert "Do not include secrets" in attempt["workspaceIsolationPlan"]["redactionBoundary"][1]
+    assert "supervisor_internal_utility_functions" in attempt["workspaceIsolationPlan"]["allowedCommandClasses"]
+    assert "arbitrary_shell_commands" in attempt["workspaceIsolationPlan"]["blockedCommandClasses"]
+    assert attempt["workspaceIsolationPlan"]["providerEndpointPolicy"].startswith("deny_all")
+    assert attempt["workspaceIsolationPlan"]["promptConstructionPolicy"] == "approved_evidence_only"
+    assert attempt["workspaceIsolationPlan"]["boundaryRejectionReason"] == "worker_execution_safety_boundary_not_satisfied"
     assert attempt["eventRefs"][0]["eventType"] == "execution_attempt.planned"
     assert before_item == after_item
 
@@ -1244,7 +1296,13 @@ def test_execution_attempt_plans_utility_attempt_and_records_history(tmp_path, m
     assert attempt_event["payload"]["executionAllowed"] is False
     assert attempt_event["payload"]["processLaunchAllowed"] is False
     assert attempt_event["payload"]["providerCallsAllowed"] is False
+    assert attempt_event["payload"]["modelCallsAllowed"] is False
+    assert attempt_event["payload"]["commandExecutionAllowed"] is False
     assert attempt_event["payload"]["sourceMutationAllowed"] is False
+    assert attempt_event["payload"]["networkAllowed"] is False
+    assert attempt_event["payload"]["credentialAccessAllowed"] is False
+    assert attempt_event["payload"]["boundaryId"] == "supervisor-worker-threat-boundary-v1"
+    assert attempt_event["payload"]["boundaryRejectionReason"] == "worker_execution_safety_boundary_not_satisfied"
 
 
 def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_mutation(tmp_path, monkeypatch) -> None:
@@ -1360,7 +1418,13 @@ def test_execution_attempt_rejects_local_readonly_without_provider_calls(tmp_pat
     assert event["payload"]["attemptId"] == attempt["attemptId"]
     assert event["payload"]["workspaceIsolationPlan"]["artifactRoot"] == attempt["workspaceIsolationPlan"]["artifactRoot"]
     assert event["payload"]["providerCallsAllowed"] is False
+    assert event["payload"]["modelCallsAllowed"] is False
+    assert event["payload"]["commandExecutionAllowed"] is False
     assert event["payload"]["sourceMutationAllowed"] is False
+    assert event["payload"]["networkAllowed"] is False
+    assert event["payload"]["credentialAccessAllowed"] is False
+    assert event["payload"]["boundaryId"] == "supervisor-worker-threat-boundary-v1"
+    assert event["payload"]["boundaryRejectionReason"] == "execution_authority_not_enabled_for_local_readonly"
 
 
 def test_execution_attempt_rejects_disabled_subscription_handoff_and_missing_work_item(tmp_path, monkeypatch) -> None:

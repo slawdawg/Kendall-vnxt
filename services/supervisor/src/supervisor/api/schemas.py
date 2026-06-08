@@ -199,6 +199,12 @@ class WorkspaceIsolationPlanView(BaseModel):
     commandsAllowed: bool = False
     networkAllowed: bool = False
     credentialAccessAllowed: bool = False
+    redactionBoundary: list[str] = Field(default_factory=list)
+    allowedCommandClasses: list[str] = Field(default_factory=list)
+    blockedCommandClasses: list[str] = Field(default_factory=list)
+    providerEndpointPolicy: str = "provider_endpoints_denied"
+    promptConstructionPolicy: str = "approved_evidence_only"
+    boundaryRejectionReason: str = "worker_execution_safety_boundary_not_satisfied"
 
 
 class ExecutionAttemptView(BaseModel):
@@ -453,6 +459,38 @@ class ExecutionConfigurationChecksView(BaseModel):
     allDisabled: bool
     generatedAt: datetime
     checks: list[ExecutionConfigurationCheckView]
+
+
+class ThreatBoundaryRuleView(BaseModel):
+    ruleId: str
+    label: str
+    status: str
+    summary: str
+    blockedReason: str
+    evidence: list[str] = Field(default_factory=list)
+
+
+class ThreatBoundaryView(BaseModel):
+    boundaryId: str
+    status: str
+    generatedAt: datetime
+    summary: str
+    redactionBoundary: list[str]
+    promptConstructionSources: list[str]
+    allowedCommandClasses: list[str]
+    blockedCommandClasses: list[str]
+    providerEndpointPolicy: str
+    credentialPolicy: str
+    artifactPolicy: str
+    rules: list[ThreatBoundaryRuleView]
+    processLaunchAllowed: bool = False
+    providerCallsAllowed: bool = False
+    modelCallsAllowed: bool = False
+    premiumExecutionAllowed: bool = False
+    commandExecutionAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    networkAllowed: bool = False
+    credentialAccessAllowed: bool = False
 
 
 class RoutingOverrideView(BaseModel):

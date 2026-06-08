@@ -35,6 +35,8 @@ from supervisor.api.schemas import (
     SubscriptionAgentLaunchStubView,
     SubscriptionHandoffEvidenceView,
     SubscriptionHandoffPackageView,
+    ThreatBoundaryRuleView,
+    ThreatBoundaryView,
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
@@ -371,6 +373,106 @@ class SupervisorService:
             checks=checks,
         )
 
+    def get_threat_boundary(self) -> ThreatBoundaryView:
+        redaction_boundary = [
+            "Use workflow event summaries, work item metadata, route decisions, attempt metadata, and approved recipe metadata only.",
+            "Do not include secrets, credentials, tokens, environment variables, local secret files, raw provider payloads, or unrelated local files.",
+            "Do not include external provider prompts or completions unless a later provider-specific policy explicitly approves retention.",
+            "Reference artifact paths and summaries instead of embedding filesystem snapshots.",
+        ]
+        allowed_command_classes = [
+            "supervisor_internal_utility_functions",
+            "configured_recipe_commands_after_recipe_gates",
+            "git_metadata_reads_for_policy_checks",
+        ]
+        blocked_command_classes = [
+            "subscription_agent_process_launch",
+            "local_provider_http_calls",
+            "premium_provider_execution",
+            "arbitrary_shell_commands",
+            "worker_source_mutation_commands",
+            "network_commands",
+            "credential_or_secret_reads",
+        ]
+        rules = [
+            ThreatBoundaryRuleView(
+                ruleId="prompt-redaction-boundary",
+                label="Prompt and evidence redaction",
+                status="active",
+                summary="Future prompt construction is limited to approved evidence summaries and metadata.",
+                blockedReason="prompt_redaction_boundary_required",
+                evidence=[
+                    "Local evidence packets carry redaction notes.",
+                    "Runtime evidence exports exclude credentials and provider payloads.",
+                ],
+            ),
+            ThreatBoundaryRuleView(
+                ruleId="command-allowlist",
+                label="Command allowlist",
+                status="blocked_by_default",
+                summary="Worker command execution is denied except existing supervisor-owned internal utility behavior and gated recipe automation.",
+                blockedReason="command_execution_not_allowlisted",
+                evidence=[
+                    "Execution attempts set commandsAllowed=false.",
+                    "Arbitrary shell execution is disabled by configuration.",
+                ],
+            ),
+            ThreatBoundaryRuleView(
+                ruleId="provider-network-deny",
+                label="Provider and network deny",
+                status="blocked_by_default",
+                summary="Local provider endpoints, model APIs, and worker network access remain denied.",
+                blockedReason="provider_network_access_not_enabled",
+                evidence=[
+                    "Local provider registry entries remain disabled.",
+                    "Execution configuration checks deny provider/model/network access.",
+                ],
+            ),
+            ThreatBoundaryRuleView(
+                ruleId="credential-deny",
+                label="Credential deny",
+                status="blocked_by_default",
+                summary="Worker credential, token, environment secret, and account access remain forbidden.",
+                blockedReason="credential_access_forbidden",
+                evidence=[
+                    "Workspace isolation plans forbid credential access.",
+                    "Runtime evidence exports exclude environment variables and credential stores.",
+                ],
+            ),
+            ThreatBoundaryRuleView(
+                ruleId="artifact-boundary",
+                label="Artifact boundary",
+                status="active",
+                summary="Artifacts are referenced by path and summary until a later policy approves broader snapshot export.",
+                blockedReason="artifact_snapshot_export_not_enabled",
+                evidence=[
+                    "Attempt artifacts use artifactRefs metadata.",
+                    "Runtime evidence exports exclude filesystem snapshots outside recorded artifact references.",
+                ],
+            ),
+        ]
+        return ThreatBoundaryView(
+            boundaryId="supervisor-worker-threat-boundary-v1",
+            status="blocked_by_default",
+            generatedAt=datetime.now(timezone.utc),
+            summary="Real worker/provider execution remains denied until prompt, command, provider, network, credential, and artifact boundaries are explicitly approved by later policy.",
+            redactionBoundary=redaction_boundary,
+            promptConstructionSources=[
+                "work_item_metadata",
+                "workflow_event_summaries",
+                "routing_decision_metadata",
+                "execution_attempt_metadata",
+                "approved_recipe_metadata",
+                "reviewed_artifact_references",
+            ],
+            allowedCommandClasses=allowed_command_classes,
+            blockedCommandClasses=blocked_command_classes,
+            providerEndpointPolicy="deny_all_local_and_remote_provider_endpoints_until_provider_specific_policy_approval",
+            credentialPolicy="forbid_worker_access_to_credentials_tokens_environment_secrets_and_account_security_state",
+            artifactPolicy="record_artifact_references_and_summaries_only_until_snapshot_export_is_approved",
+            rules=rules,
+        )
+
     def _execution_configuration_check(
         self,
         *,
@@ -460,6 +562,7 @@ class SupervisorService:
                 ],
                 gitBackedEvidence=[
                     "docs/goals/bmad-architecture-completion-github-progress-goal-2026-06-08.md",
+                    "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
                     "docs/stories/2-7-runtime-evidence-export-strategy.md",
                     "docs/prds/supervisor-execution-authority-expansion.md",
                     "services/supervisor/src/supervisor/api/main.py",
@@ -665,6 +768,7 @@ class SupervisorService:
 
     def _workspace_isolation_plan(self, attempt_id: str, preview: RoutingPreviewView) -> dict:
         read_roots = list(preview.profile.allowedPaths) or ["."]
+        threat_boundary = self.get_threat_boundary()
         forbidden_paths = sorted(
             {
                 ".env",
@@ -694,6 +798,12 @@ class SupervisorService:
             "commandsAllowed": False,
             "networkAllowed": False,
             "credentialAccessAllowed": False,
+            "redactionBoundary": threat_boundary.redactionBoundary,
+            "allowedCommandClasses": threat_boundary.allowedCommandClasses,
+            "blockedCommandClasses": threat_boundary.blockedCommandClasses,
+            "providerEndpointPolicy": threat_boundary.providerEndpointPolicy,
+            "promptConstructionPolicy": "approved_evidence_only",
+            "boundaryRejectionReason": "worker_execution_safety_boundary_not_satisfied",
         }
 
     async def _record_execution_attempt_event(
@@ -732,7 +842,13 @@ class SupervisorService:
                 "executionAllowed": False,
                 "processLaunchAllowed": False,
                 "providerCallsAllowed": False,
+                "modelCallsAllowed": False,
+                "commandExecutionAllowed": False,
                 "sourceMutationAllowed": False,
+                "networkAllowed": False,
+                "credentialAccessAllowed": False,
+                "boundaryId": "supervisor-worker-threat-boundary-v1",
+                "boundaryRejectionReason": attempt.rejection_reason or "worker_execution_safety_boundary_not_satisfied",
             },
             actor_type="operator" if actor_id or actor_label else "supervisor",
             actor_id=actor_id,
@@ -785,6 +901,8 @@ class SupervisorService:
                         "premium_execution",
                         "source_mutation",
                         "arbitrary_shell_execution",
+                        "worker_network_access",
+                        "credential_access",
                     ]
                     if attempt.status == ExecutionAttemptStatus.APPROVED.value
                     else []
@@ -792,7 +910,13 @@ class SupervisorService:
                 "executionAllowed": False,
                 "processLaunchAllowed": False,
                 "providerCallsAllowed": False,
+                "modelCallsAllowed": False,
+                "commandExecutionAllowed": False,
                 "sourceMutationAllowed": False,
+                "networkAllowed": False,
+                "credentialAccessAllowed": False,
+                "boundaryId": "supervisor-worker-threat-boundary-v1",
+                "boundaryRejectionReason": "worker_execution_safety_boundary_not_satisfied",
             },
             actor_type="operator" if actor_id or actor_label else "supervisor",
             actor_id=actor_id,
@@ -1091,6 +1215,7 @@ class SupervisorService:
             )
             for event in events[:8]
         ]
+        threat_boundary = self.get_threat_boundary()
         return LocalEvidencePacketView(
             packetId=f"local-evidence-packet-{decision.decision_id}",
             workItemId=item.id,
@@ -1102,12 +1227,15 @@ class SupervisorService:
             route=preview.decision,
             summary=self._local_evidence_summary(item, preview, events),
             evidence=evidence,
-            boundaries=self._local_evidence_boundaries(item),
+            boundaries=self._local_evidence_boundaries(item)
+            + [
+                f"Provider endpoints policy: {threat_boundary.providerEndpointPolicy}.",
+                f"Credential policy: {threat_boundary.credentialPolicy}.",
+            ],
             allowedPaths=list(recipe.allowed_paths) if recipe else [],
             validationCommands=[command.display for command in recipe.verification_commands] if recipe else [],
-            redactionNotes=[
-                "Use workflow event summaries and approved recipe metadata only.",
-                "Do not include secrets, raw prompts, credentials, or unrelated local files.",
+            redactionNotes=threat_boundary.redactionBoundary
+            + [
                 "Do not grant the local worker direct repo, shell, or write access from this packet.",
             ],
             writesAllowed=False,
@@ -1161,6 +1289,7 @@ class SupervisorService:
             raise ValueError(f"Route selected {preview.decision.selectedLane}; local evidence explanation requires local_readonly.")
 
         events = await self.list_work_item_events(session, work_item_id)
+        threat_boundary = self.get_threat_boundary()
         explanation = LocalEvidenceExplanationView(
             explanationId=f"local-evidence-{preview.decision.decisionId}",
             workItemId=item.id,
@@ -1179,7 +1308,11 @@ class SupervisorService:
                 )
                 for event in events[:8]
             ],
-            boundaries=self._local_evidence_boundaries(item),
+            boundaries=self._local_evidence_boundaries(item)
+            + [
+                f"Provider endpoints policy: {threat_boundary.providerEndpointPolicy}.",
+                f"Credential policy: {threat_boundary.credentialPolicy}.",
+            ],
             nextStepSuggestions=self._local_evidence_next_steps(preview),
             writesAllowed=False,
             commandsAllowed=False,

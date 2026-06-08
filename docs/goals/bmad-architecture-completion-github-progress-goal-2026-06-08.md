@@ -38,11 +38,12 @@ Completed foundation:
 - Dashboard execution attempt evidence panel.
 - Disabled execution configuration checks.
 - Runtime evidence export strategy.
+- Threat boundary for commands, prompts, providers, and secrets.
 
 Current local checkpoint:
 
 - See `git log --oneline -5` for the latest local checkpoint.
-- Latest completed architecture story trail: `docs/stories/2-7-runtime-evidence-export-strategy.md`.
+- Latest completed architecture story trail: `docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md`.
 
 Known GitHub sync issue:
 
@@ -54,8 +55,7 @@ Known GitHub sync issue:
 
 The architecture is considered complete for this BMad goal only when all of the following are true:
 
-1. Execution authority expansion slices are implemented or explicitly deferred with decision records:
-   - threat boundary for commands, prompts, credentials, and local provider endpoints.
+1. Execution authority expansion slices are implemented or explicitly deferred with decision records.
 2. Supervisor behavior remains disabled-by-default for real subscription-agent launch, local provider/model calls, premium execution, arbitrary shell execution, source mutation, and background assistant behavior until later explicit approval.
 3. Dashboard surfaces the operator evidence needed to understand route, worker, attempt, lifecycle, cancellation, disabled-state, and approval status.
 4. Integration tests prove no provider/process/model/source-mutation side effects occur in disabled or mock phases.
@@ -220,6 +220,8 @@ Key acceptance:
 
 ### Story 2.8: Threat Boundary For Commands, Prompts, Providers, And Secrets
 
+Status: completed locally; pending GitHub sync.
+
 Goal: formalize the safety boundary before any future real worker/provider execution.
 
 Key acceptance:
@@ -280,4 +282,4 @@ Pause implementation and create a decision record if any story requires:
 
 Restore or confirm GitHub authentication, then push the local `main` checkpoints shown by `git log --oneline -5` to `origin/main`.
 
-After Story 2.7 is committed and GitHub progress is current, begin Story 2.8: Threat Boundary For Commands, Prompts, Providers, And Secrets.
+After Story 2.8 is committed, run the completion audit against the full definition. The remaining known gap is GitHub progress sync until authentication and remote/default-branch approval are restored.

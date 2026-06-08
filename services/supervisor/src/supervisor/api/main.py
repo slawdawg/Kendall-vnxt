@@ -454,6 +454,11 @@ async def get_execution_configuration_checks():
     return ApiEnvelope(data=service.get_execution_configuration_checks())
 
 
+@app.get("/supervisor/threat-boundary", response_model=ApiEnvelope)
+async def get_threat_boundary():
+    return ApiEnvelope(data=service.get_threat_boundary())
+
+
 async def _set_mode(mode: RunMode, session: AsyncSession) -> ApiEnvelope:
     control = await service.set_mode(session, mode)
     status = await service.get_status(session)

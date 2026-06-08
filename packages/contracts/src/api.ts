@@ -145,6 +145,12 @@ export interface WorkspaceIsolationPlanView {
   commandsAllowed: boolean;
   networkAllowed: boolean;
   credentialAccessAllowed: boolean;
+  redactionBoundary: string[];
+  allowedCommandClasses: string[];
+  blockedCommandClasses: string[];
+  providerEndpointPolicy: string;
+  promptConstructionPolicy: string;
+  boundaryRejectionReason: string;
 }
 
 export interface ExecutionAttemptView {
@@ -399,6 +405,38 @@ export interface ExecutionConfigurationChecksView {
   allDisabled: boolean;
   generatedAt: string;
   checks: ExecutionConfigurationCheckView[];
+}
+
+export interface ThreatBoundaryRuleView {
+  ruleId: string;
+  label: string;
+  status: string;
+  summary: string;
+  blockedReason: string;
+  evidence: string[];
+}
+
+export interface ThreatBoundaryView {
+  boundaryId: string;
+  status: string;
+  generatedAt: string;
+  summary: string;
+  redactionBoundary: string[];
+  promptConstructionSources: string[];
+  allowedCommandClasses: string[];
+  blockedCommandClasses: string[];
+  providerEndpointPolicy: string;
+  credentialPolicy: string;
+  artifactPolicy: string;
+  rules: ThreatBoundaryRuleView[];
+  processLaunchAllowed: boolean;
+  providerCallsAllowed: boolean;
+  modelCallsAllowed: boolean;
+  premiumExecutionAllowed: boolean;
+  commandExecutionAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  networkAllowed: boolean;
+  credentialAccessAllowed: boolean;
 }
 export interface RoutingOverrideView {
   overrideId: string;
