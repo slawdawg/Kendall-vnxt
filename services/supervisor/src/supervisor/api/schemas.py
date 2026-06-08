@@ -253,6 +253,7 @@ class RoutingLaneEvidenceProfileView(BaseModel):
     guardedExecutionCount: int
     handoffPackageCount: int
     localExplanationCount: int
+    outcomeCount: int
     recentReasonCodes: list[str]
     latestEventAt: datetime | None = None
 

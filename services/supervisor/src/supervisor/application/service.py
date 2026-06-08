@@ -83,6 +83,7 @@ class SupervisorService:
         "routing.utility_execution_authorized",
         "routing.subscription_handoff_packaged",
         "routing.local_evidence_explained",
+        "routing.outcome_recorded",
     }
     def __init__(self, settings: Settings, bus: EventBus) -> None:
         self.settings = settings
@@ -206,6 +207,7 @@ class SupervisorService:
                     "guardedExecutionCount": 0,
                     "handoffPackageCount": 0,
                     "localExplanationCount": 0,
+                    "outcomeCount": 0,
                     "recentReasonCodes": [],
                     "latestEventAt": None,
                 },
@@ -234,6 +236,7 @@ class SupervisorService:
                 guardedExecutionCount=profile["guardedExecutionCount"],
                 handoffPackageCount=profile["handoffPackageCount"],
                 localExplanationCount=profile["localExplanationCount"],
+                outcomeCount=profile["outcomeCount"],
                 recentReasonCodes=profile["recentReasonCodes"][:8],
                 latestEventAt=profile["latestEventAt"],
             )
@@ -689,6 +692,46 @@ class SupervisorService:
             "failureReason": result.failure_reason,
         }
 
+
+    async def _record_routing_outcome_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        decision: RoutingDecision,
+        result: UtilityWorkerResult,
+        function_id: str,
+        actor_id: str | None,
+        actor_label: str | None,
+    ) -> None:
+        failure_reason = result.failure_reason
+        await self._record_event(
+            session,
+            item,
+            "routing.outcome_recorded",
+            f"Routing outcome recorded for {decision.selected_lane.value} via {result.worker_id}.",
+            {
+                "decisionId": decision.decision_id,
+                "selectedLane": decision.selected_lane.value,
+                "authorityMode": decision.authority_mode.value,
+                "workerId": result.worker_id,
+                "functionId": function_id,
+                "taskKind": decision.profile_snapshot.task_kind.value,
+                "stepId": decision.profile_snapshot.step_id,
+                "attemptStatus": result.status.value,
+                "validationStatus": "not_run",
+                "escalationReason": failure_reason,
+                "avoidanceNote": self._routing_outcome_avoidance_note(result),
+                "reasonCodes": list(decision.reason_codes),
+            },
+            actor_type="supervisor",
+            actor_id=actor_id,
+            actor_label=actor_label,
+        )
+
+    def _routing_outcome_avoidance_note(self, result: UtilityWorkerResult) -> str | None:
+        if result.failure_reason == "utility.function_not_allowlisted":
+            return "Add a narrowly reviewed allowlist entry only if this deterministic function should be routable."
+        return None
     async def _routing_profile_for_item(self, session: AsyncSession, item: WorkItem) -> RoutingProfile:
         recipe = self._execution_recipe_for_item(item)
         if recipe:
@@ -1130,6 +1173,15 @@ class SupervisorService:
                     session,
                     item,
                     decision.profile_snapshot,
+                    next_action.actionId,
+                    payload.actorId,
+                    payload.actorLabel,
+                )
+                await self._record_routing_outcome_event(
+                    session,
+                    item,
+                    decision,
+                    utility_result,
                     next_action.actionId,
                     payload.actorId,
                     payload.actorLabel,

@@ -787,6 +787,7 @@ def test_recipe_branch_preparation_creates_recorded_branch(tmp_path, monkeypatch
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        profiles_response = client.get("/routing/lane-profiles")
 
         assert audit_before_response.status_code == 200
         before_action = audit_before_response.json()["data"]["nextManagedAction"]
@@ -866,9 +867,11 @@ def test_recipe_branch_preparation_blocks_when_repo_is_dirty(tmp_path, monkeypat
         response = client.post(f"/work-items/{work_item_id}/prepare-branch", json={})
         events_response = client.get(f"/work-items/{work_item_id}/events")
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        profiles_response = client.get("/routing/lane-profiles")
 
         assert response.status_code == 200
         assert audit_response.status_code == 200
+        assert profiles_response.status_code == 200
         item = response.json()["data"]
         assert item["state"] == "blocked"
         assert item["blockedReason"] == "Repository is dirty. Clean the working tree before preparing a recipe branch."
@@ -975,6 +978,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        profiles_response = client.get("/routing/lane-profiles")
 
         assert triaged.status_code == 200
         assert triaged.json()["data"]["state"] == "ready"
@@ -986,6 +990,7 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         assert implemented.json()["data"]["state"] == "implementing"
         assert events_response.status_code == 200
         assert audit_response.status_code == 200
+        assert profiles_response.status_code == 200
 
         events = events_response.json()["data"]
         routing_event = next(event for event in events if event["eventType"] == "routing.utility_execution_authorized")
@@ -1020,7 +1025,6 @@ def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeyp
         assert branch_event["payload"]["operatorCheckpoint"] == "branch-preparation"
         assert implementation_event["payload"]["operatorCheckpoint"] == "implementation-command-run"
         assert audit["nextManagedAction"]["actionId"] == "submit_for_validation"
-
 
 
 def test_managed_next_action_records_rejected_utility_worker_attempt(tmp_path, monkeypatch) -> None:
@@ -1081,6 +1085,7 @@ def test_managed_next_action_records_rejected_utility_worker_attempt(tmp_path, m
 
         events = events_response.json()["data"]
         utility_event = next(event for event in events if event["eventType"] == "worker.utility_attempt_recorded")
+        outcome_event = next(event for event in events if event["eventType"] == "routing.outcome_recorded")
 
         assert utility_event["actorType"] == "supervisor"
         assert utility_event["actorLabel"] == "Primary operator"
@@ -1093,6 +1098,18 @@ def test_managed_next_action_records_rejected_utility_worker_attempt(tmp_path, m
         assert utility_event["payload"]["timeoutSeconds"] == 30
         assert utility_event["payload"]["status"] == "rejected"
         assert utility_event["payload"]["failureReason"] == "utility.function_not_allowlisted"
+        assert outcome_event["payload"]["selectedLane"] == "utility"
+        assert outcome_event["payload"]["authorityMode"] == "guarded"
+        assert outcome_event["payload"]["workerId"] == "utility.internal"
+        assert outcome_event["payload"]["functionId"] == "supervisor_triage"
+        assert outcome_event["payload"]["taskKind"] == "path_scope_check"
+        assert outcome_event["payload"]["stepId"] == "scope"
+        assert outcome_event["payload"]["attemptStatus"] == "rejected"
+        assert outcome_event["payload"]["validationStatus"] == "not_run"
+        assert outcome_event["payload"]["escalationReason"] == "utility.function_not_allowlisted"
+        assert outcome_event["payload"]["avoidanceNote"] == "Add a narrowly reviewed allowlist entry only if this deterministic function should be routable."
+
+
 def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "recipe-checkpoints.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -1189,6 +1206,7 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        profiles_response = client.get("/routing/lane-profiles")
 
         assert missing_validation_note.status_code == 409
         assert validation_note.status_code == 200
@@ -1200,6 +1218,7 @@ def test_recipe_work_requires_operator_checkpoint_notes(tmp_path, monkeypatch) -
         assert approval_note.status_code == 200
         assert events_response.status_code == 200
         assert audit_response.status_code == 200
+        assert profiles_response.status_code == 200
 
         events = events_response.json()["data"]
         audit = audit_response.json()["data"]
@@ -1693,12 +1712,14 @@ def test_recipe_gate_audit_reports_recovery_metadata_for_branch_block(tmp_path, 
             asyncio.run(process_once_for_tests())
 
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        profiles_response = client.get("/routing/lane-profiles")
         blocked_action = client.post(
             f"/work-items/{work_item_id}/managed-next-action",
             json={"expectedActionId": "resolve_blocked_gate", "note": "Try to resolve automatically."},
         )
 
         assert audit_response.status_code == 200
+        assert profiles_response.status_code == 200
         assert blocked_action.status_code == 409
 
         next_action = audit_response.json()["data"]["nextManagedAction"]
@@ -1767,8 +1788,10 @@ def test_recipe_gate_audit_reports_human_only_recovery_for_path_scope_block(tmp_
             asyncio.run(process_once_for_tests())
 
         audit_response = client.get(f"/work-items/{work_item_id}/recipe-gate-audit")
+        profiles_response = client.get("/routing/lane-profiles")
 
         assert audit_response.status_code == 200
+        assert profiles_response.status_code == 200
 
         next_action = audit_response.json()["data"]["nextManagedAction"]
         assert next_action["actionId"] == "resolve_blocked_gate"

@@ -202,6 +202,7 @@ export interface RoutingLaneEvidenceProfileView {
   guardedExecutionCount: number;
   handoffPackageCount: number;
   localExplanationCount: number;
+  outcomeCount: number;
   recentReasonCodes: string[];
   latestEventAt?: string | null;
 }
