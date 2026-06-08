@@ -216,6 +216,56 @@ function Test-PythonEnvironment {
   }
 }
 
+function Test-RequiredPath($RelativePath, $Label) {
+  $path = Join-Path $repoRoot $RelativePath
+  if (Test-Path -LiteralPath $path) {
+    Write-Ok "$Label found: $RelativePath"
+    return
+  }
+
+  Add-Failure "$Label is missing: $RelativePath"
+}
+
+function Test-BmadMethod {
+  Write-Step "Check BMAD method and required modules"
+
+  $requiredPaths = @(
+    @{ path = "_bmad\config.yaml"; label = "BMAD project config" },
+    @{ path = "_bmad\config.user.yaml"; label = "BMAD user config" },
+    @{ path = "_bmad\core"; label = "BMAD core module" },
+    @{ path = "_bmad\bmb"; label = "BMAD module-builder runtime module" },
+    @{ path = "_bmad\bmm"; label = "BMAD method manager runtime module" },
+    @{ path = "_bmad\tea"; label = "BMAD TEA runtime module" },
+    @{ path = "_bmad\module-help.csv"; label = "BMAD module help registry" },
+    @{ path = ".agents\skills\bmad-brainstorming\SKILL.md"; label = "BMAD brainstorming skill" },
+    @{ path = ".agents\skills\bmad-create-story\SKILL.md"; label = "BMAD create-story skill" },
+    @{ path = ".agents\skills\bmad-dev-story\SKILL.md"; label = "BMAD dev-story skill" },
+    @{ path = ".agents\skills\bmad-module-builder\SKILL.md"; label = "BMAD module-builder skill" },
+    @{ path = ".agents\skills\bmad-agent-analyst\SKILL.md"; label = "BMAD analyst agent skill" },
+    @{ path = ".agents\skills\bmad-agent-architect\SKILL.md"; label = "BMAD architect agent skill" },
+    @{ path = ".agents\skills\bmad-agent-dev\SKILL.md"; label = "BMAD dev agent skill" },
+    @{ path = ".agents\skills\bmad-agent-pm\SKILL.md"; label = "BMAD PM agent skill" },
+    @{ path = ".agents\skills\knx-setup\SKILL.md"; label = "KNX setup module" },
+    @{ path = ".agents\skills\knx-agent-governance-coordinator\SKILL.md"; label = "KNX governance coordinator" },
+    @{ path = ".agents\skills\knx-data-boundary-plan\SKILL.md"; label = "KNX data-boundary module" },
+    @{ path = ".agents\skills\knx-execution-policy\SKILL.md"; label = "KNX execution-policy module" },
+    @{ path = ".agents\skills\knx-mature-tool-review\SKILL.md"; label = "KNX mature-tool module" },
+    @{ path = ".agents\skills\knx-module-strategy\SKILL.md"; label = "KNX module-strategy module" },
+    @{ path = ".agents\skills\knx-profile-setup\SKILL.md"; label = "KNX profile-setup module" },
+    @{ path = ".agents\skills\knx-safety-validation-review\SKILL.md"; label = "KNX safety-validation module" },
+    @{ path = ".agents\skills\knx-source-evidence-contract\SKILL.md"; label = "KNX source-evidence contract module" },
+    @{ path = ".agents\skills\knx-source-evidence-validator\SKILL.md"; label = "KNX source-evidence validator module" }
+  )
+
+  foreach ($entry in $requiredPaths) {
+    Test-RequiredPath $entry.path $entry.label
+  }
+
+  if ($script:failures.Count -eq 0) {
+    $script:actions.Add("Verified BMAD method and required KNX modules are installed.") | Out-Null
+  }
+}
+
 function Write-ReadinessReport {
   if (-not $WriteReport) {
     return
@@ -245,6 +295,23 @@ function Write-ReadinessReport {
     warnings = $script:warnings
     failures = $script:failures
     commands = $script:commands
+    requiredModules = @(
+      "bmad-method",
+      "bmad-brainstorming",
+      "bmad-create-story",
+      "bmad-dev-story",
+      "bmad-module-builder",
+      "knx-setup",
+      "knx-agent-governance-coordinator",
+      "knx-data-boundary-plan",
+      "knx-execution-policy",
+      "knx-mature-tool-review",
+      "knx-module-strategy",
+      "knx-profile-setup",
+      "knx-safety-validation-review",
+      "knx-source-evidence-contract",
+      "knx-source-evidence-validator"
+    )
     authPolicy = "Git Credential Manager with DPAPI for Git remotes; GitHub connector/app for Codex PR automation; local gh auth optional only for workflows that shell out to gh."
   }
 
@@ -306,6 +373,11 @@ try {
     Write-Step "Check repository and branch"
     Invoke-Checked "git" @("rev-parse", "--is-inside-work-tree") "Verify Git work tree"
     git status --short --branch
+  }
+
+  Test-BmadMethod
+  if ($script:failures.Count -gt 0) {
+    throw "BMAD method/module requirement check failed. Restore tracked BMAD and KNX module files, then rerun bootstrap."
   }
 
   if ($SetupDeps) {

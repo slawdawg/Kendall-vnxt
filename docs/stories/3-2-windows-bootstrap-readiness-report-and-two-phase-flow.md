@@ -18,13 +18,15 @@ so that a fresh or suspect Windows 11 VM can be trusted without relying on plain
 4. `-VerifyRemote` checks Git Credential Manager before live remote checks and gives an interactive-session recovery hint for DPAPI failures.
 5. Bootstrap refreshes PATH after winget or Corepack setup attempts.
 6. Bootstrap supports local-only verification when live remote proof is intentionally skipped.
-7. The full workspace check remains green.
+7. Bootstrap requires the tracked BMAD method runtime files and required BMAD/KNX modules before declaring local readiness.
+8. The full workspace check remains green.
 
 ## Implementation Notes
 
 - Added `-LocalOnly`, `-WriteReport`, and `-ReportPath` to `scripts/bootstrap-windows.ps1`.
 - Added machine and tool version summaries to bootstrap output.
 - Added supervisor Python runtime verification through `uv`.
+- Added required BMAD method and BMAD/KNX module checks.
 - Added redacted JSON readiness reports under `.data/bootstrap/`.
 - Kept GitHub CLI auth optional and avoided any token creation or token-file reads.
 - Updated `docs/bootstrap-windows-vm.md` with two-phase setup and report guidance.

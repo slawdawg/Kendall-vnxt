@@ -46,6 +46,7 @@ pnpm run bootstrap:windows -- -VerifyRemote
 
 - checks Git, Node.js, pnpm/Corepack, and uv,
 - prints OS, PowerShell, architecture, execution policy, and tool versions,
+- verifies the BMAD method runtime files and required BMAD/KNX modules are installed from the repo,
 - optionally installs missing required tools with winget when `-InstallMissing` or `-Full` is used,
 - refreshes PATH after winget/Corepack setup attempts,
 - configures Git Credential Manager with Windows DPAPI when `-ConfigureGit` or `-Full` is used,
@@ -67,6 +68,38 @@ Readiness levels:
 - `local-ready`: dependencies and local checks passed, but live Git remote checks were not proven.
 - `remote-ready`: local checks and live Git/GCM remote checks passed.
 - `not-ready`: bootstrap stopped before local readiness.
+
+## Required BMAD And KNX Modules
+
+Fresh VM readiness requires the tracked BMAD method files and required local modules to be present. The bootstrap fails before dependency setup if these are missing or partial.
+
+Required BMAD surface:
+
+- `_bmad/config.yaml`
+- `_bmad/config.user.yaml`
+- `_bmad/core`
+- `_bmad/bmb`
+- `_bmad/bmm`
+- `_bmad/tea`
+- `_bmad/module-help.csv`
+- `bmad-brainstorming`
+- `bmad-create-story`
+- `bmad-dev-story`
+- `bmad-module-builder`
+- core BMAD agent skills for analyst, architect, dev, and PM
+
+Required KNX surface:
+
+- `knx-setup`
+- `knx-agent-governance-coordinator`
+- `knx-data-boundary-plan`
+- `knx-execution-policy`
+- `knx-mature-tool-review`
+- `knx-module-strategy`
+- `knx-profile-setup`
+- `knx-safety-validation-review`
+- `knx-source-evidence-contract`
+- `knx-source-evidence-validator`
 
 ## Auth Policy
 
