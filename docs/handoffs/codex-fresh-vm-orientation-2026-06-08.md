@@ -10,7 +10,7 @@ Expected branch after bootstrap: `main`
 In a fresh Windows 11 VM, after cloning the repo and installing Codex, start Codex from the repo root and say:
 
 ```text
-Read docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md and continue from it. Use the repo state as source of truth.
+Read docs/handoffs/current.md and continue from it. Use the repo state as source of truth.
 ```
 
 If the terminal is not already in the repo:
@@ -48,6 +48,7 @@ As of this handoff, `main` is synced to `origin/main`.
 
 Latest relevant commits:
 
+- `ed08099 Add fresh VM Codex orientation handoff`
 - `eaa03ac Harden bootstrap platform readiness checks`
 - `9c7b3a6 Require BMAD modules in Windows bootstrap`
 - `bc3f139 Harden Windows bootstrap readiness flow`
@@ -61,6 +62,7 @@ Current checkpoint:
 - Story 3.1 GitHub sync doctor is merged.
 - Story 3.2 Windows bootstrap readiness report and two-phase flow is implemented and pushed.
 - Fresh VM bootstrap now checks VMware, Windows, Git, GCM, GitHub CLI posture, BMAD method files, KNX modules, Node/pnpm, uv/Python, and project preflight.
+- Fresh VM acceptance should be tracked against `docs/fresh-vm-acceptance-checklist.md`.
 
 ## Auth Policy
 

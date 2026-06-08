@@ -632,7 +632,8 @@ try {
   } else {
     Write-Host "Bootstrap complete. This VM is ready for local Kendall_Nxt work. Live Git remote checks were not proven in this run."
   }
-  Write-Host "Codex orientation handoff: docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md"
+  Write-Host "Codex orientation handoff: docs/handoffs/current.md"
+  Write-Host "Fresh VM acceptance checklist: docs/fresh-vm-acceptance-checklist.md"
 } catch {
   Add-Failure $_.Exception.Message
   Write-Host ""

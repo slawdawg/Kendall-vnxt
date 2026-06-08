@@ -27,7 +27,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 5. Start Codex from the repo root and orient it with:
 
 ```text
-Read docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md and continue from it. Use the repo state as source of truth.
+Read docs/handoffs/current.md and continue from it. Use the repo state as source of truth.
 ```
 
 If required tools are already installed and you only want to verify the machine:
@@ -150,10 +150,18 @@ git status --short --branch
 Fresh Codex sessions should read:
 
 ```text
-docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md
+docs/handoffs/current.md
 ```
 
-That handoff summarizes current commits, auth policy, BMAD/KNX requirements, safety gates, verification commands, and the connector-backed GitHub workflow expectation.
+The current handoff points at the active date-specific orientation file. It summarizes current commits, auth policy, BMAD/KNX requirements, safety gates, verification commands, and the connector-backed GitHub workflow expectation.
+
+## Acceptance Checklist
+
+Before doing product work on a fresh VM, complete:
+
+```text
+docs/fresh-vm-acceptance-checklist.md
+```
 
 ## DPAPI Or Credential Store Failure
 
