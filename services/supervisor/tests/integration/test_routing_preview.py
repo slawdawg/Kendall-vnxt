@@ -1429,3 +1429,145 @@ def test_execution_attempt_lifecycle_records_completion_and_rejects_invalid_tran
     assert invalid_transition_response.status_code == 409
     assert "terminal with status rejected" in invalid_transition_response.json()["detail"]["error"]["message"]
     assert missing_attempt_response.status_code == 404
+
+
+def test_execution_attempt_approval_requires_route_worker_lane_and_authority_binding(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-approval-binding.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Approve route-bound execution attempt",
+                "requestedOutcome": "Record an approval only when it binds to the current attempt route.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        attempt = attempt_response.json()["data"]
+        missing_binding_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={"status": "approved", "reason": "operator approves this attempt"},
+        )
+        approved_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "route-bound operator approval",
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+                "actorId": "operator-1",
+                "actorLabel": "Primary operator",
+            },
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert missing_binding_response.status_code == 409
+    assert missing_binding_response.json()["detail"]["error"]["code"] == "invalid_execution_attempt_transition"
+    assert "routeDecisionId" in missing_binding_response.json()["detail"]["error"]["message"]
+
+    assert approved_response.status_code == 200
+    approved = approved_response.json()["data"]
+    assert approved["status"] == "approved"
+    assert approved["eventRefs"][-1]["eventType"] == "execution_attempt.approved"
+
+    approved_event = next(event for event in events_response.json()["data"] if event["eventType"] == "execution_attempt.approved")
+    assert approved_event["actorType"] == "operator"
+    assert approved_event["actorLabel"] == "Primary operator"
+    assert approved_event["payload"]["previousStatus"] == "planned"
+    assert approved_event["payload"]["approvalBinding"] == {
+        "routeDecisionId": attempt["routeDecisionId"],
+        "attemptId": attempt["attemptId"],
+        "workerId": attempt["workerId"],
+        "selectedLane": attempt["lane"],
+        "authorityMode": attempt["authorityMode"],
+    }
+    assert "process_launch" in approved_event["payload"]["remainingDisabled"]
+    assert "model_api_calls" in approved_event["payload"]["remainingDisabled"]
+    assert approved_event["payload"]["executionAllowed"] is False
+    assert approved_event["payload"]["providerCallsAllowed"] is False
+    assert approved_event["payload"]["sourceMutationAllowed"] is False
+
+    history = history_response.json()["data"]
+    assert history[0]["attemptId"] == attempt["attemptId"]
+    assert history[0]["status"] == "approved"
+
+
+def test_execution_attempt_approval_rejects_stale_or_mismatched_binding_without_event(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-approval-mismatch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Reject stale route-bound approval",
+                "requestedOutcome": "Reject approval when route, worker, lane, or authority does not match.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        attempt = attempt_response.json()["data"]
+        stale_route_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "stale route approval",
+                "routeDecisionId": "route-stale",
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+            },
+        )
+        worker_mismatch_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "wrong worker approval",
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": "subscription.handoff",
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+            },
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert stale_route_response.status_code == 409
+    assert "routeDecisionId" in stale_route_response.json()["detail"]["error"]["message"]
+    assert worker_mismatch_response.status_code == 409
+    assert "workerId" in worker_mismatch_response.json()["detail"]["error"]["message"]
+
+    events = events_response.json()["data"]
+    assert [event["eventType"] for event in events if event["eventType"] == "execution_attempt.approved"] == []
+    history = history_response.json()["data"]
+    assert history[0]["attemptId"] == attempt["attemptId"]
+    assert history[0]["status"] == "planned"

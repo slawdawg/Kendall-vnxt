@@ -175,6 +175,10 @@ class WorkItemExecutionAttemptCreateRequest(BaseModel):
 class WorkItemExecutionAttemptTransitionRequest(BaseModel):
     status: ExecutionAttemptStatus
     reason: str | None = None
+    routeDecisionId: str | None = None
+    workerId: str | None = None
+    lane: str | None = None
+    authorityMode: str | None = None
     actorId: str | None = None
     actorLabel: str | None = None
 

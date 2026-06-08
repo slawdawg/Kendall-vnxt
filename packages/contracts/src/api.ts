@@ -121,6 +121,10 @@ export interface ExecutionAttemptCreateRequest {
 export interface ExecutionAttemptTransitionRequest {
   status: ExecutionAttemptStatus;
   reason?: string | null;
+  routeDecisionId?: string | null;
+  workerId?: string | null;
+  lane?: string | null;
+  authorityMode?: string | null;
   actorId?: string | null;
   actorLabel?: string | null;
 }

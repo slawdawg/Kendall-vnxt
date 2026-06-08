@@ -358,6 +358,8 @@ class SupervisorService:
         allowed = EXECUTION_ATTEMPT_TRANSITIONS.get(current_status, set())
         if requested_status not in allowed:
             raise ValueError(f"Invalid execution attempt transition from {current_status} to {requested_status}.")
+        if requested_status == ExecutionAttemptStatus.APPROVED.value:
+            self._validate_execution_attempt_approval_binding(attempt, payload)
 
         now = datetime.now(timezone.utc)
         attempt.status = requested_status
@@ -401,6 +403,33 @@ class SupervisorService:
         await session.refresh(attempt)
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)
+
+    def _validate_execution_attempt_approval_binding(
+        self,
+        attempt: ExecutionAttempt,
+        payload: WorkItemExecutionAttemptTransitionRequest,
+    ) -> None:
+        required = {
+            "routeDecisionId": payload.routeDecisionId,
+            "workerId": payload.workerId,
+            "lane": payload.lane,
+            "authorityMode": payload.authorityMode,
+        }
+        missing = [field for field, value in required.items() if not value]
+        if missing:
+            raise ValueError(f"Execution attempt approval requires binding fields: {', '.join(missing)}.")
+
+        mismatches = []
+        if payload.routeDecisionId != attempt.route_decision_id:
+            mismatches.append("routeDecisionId")
+        if payload.workerId != attempt.worker_id:
+            mismatches.append("workerId")
+        if payload.lane != attempt.lane:
+            mismatches.append("lane")
+        if payload.authorityMode != attempt.authority_mode:
+            mismatches.append("authorityMode")
+        if mismatches:
+            raise ValueError(f"Execution attempt approval binding mismatch: {', '.join(mismatches)}.")
 
     async def _active_execution_attempt(self, session: AsyncSession, work_item_id: str) -> ExecutionAttempt | None:
         result = await session.execute(
@@ -504,6 +533,29 @@ class SupervisorService:
                 "previousStatus": previous_status,
                 "status": attempt.status,
                 "reason": reason,
+                "approvalBinding": (
+                    {
+                        "routeDecisionId": attempt.route_decision_id,
+                        "attemptId": attempt.id,
+                        "workerId": attempt.worker_id,
+                        "selectedLane": attempt.lane,
+                        "authorityMode": attempt.authority_mode,
+                    }
+                    if attempt.status == ExecutionAttemptStatus.APPROVED.value
+                    else None
+                ),
+                "remainingDisabled": (
+                    [
+                        "process_launch",
+                        "provider_http_calls",
+                        "model_api_calls",
+                        "premium_execution",
+                        "source_mutation",
+                        "arbitrary_shell_execution",
+                    ]
+                    if attempt.status == ExecutionAttemptStatus.APPROVED.value
+                    else []
+                ),
                 "executionAllowed": False,
                 "processLaunchAllowed": False,
                 "providerCallsAllowed": False,

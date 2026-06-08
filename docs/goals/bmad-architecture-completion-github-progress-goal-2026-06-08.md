@@ -33,10 +33,12 @@ Completed foundation:
 - Subscription handoff, premium approval, local read-only evidence, and disabled launch artifacts.
 - Execution attempt contract and state model.
 - Execution attempt lifecycle events and history API.
+- Execution attempt approval binding and stale/mismatched decision rejection.
 
 Current local checkpoint:
 
-- `801bc0a Add execution attempt lifecycle events`
+- See `git log --oneline -5` for the latest local checkpoint.
+- Latest completed architecture story trail: `docs/stories/2-3-approval-binding-and-stale-decision-rejection.md`.
 
 Known GitHub sync issue:
 
@@ -49,7 +51,6 @@ Known GitHub sync issue:
 The architecture is considered complete for this BMad goal only when all of the following are true:
 
 1. Execution authority expansion slices are implemented or explicitly deferred with decision records:
-   - approval binding and stale route-decision rejection,
    - workspace isolation plan contract,
    - dashboard attempt evidence panel,
    - disabled execution configuration checks,
@@ -160,6 +161,8 @@ After each clean local checkpoint:
 
 ### Story 2.3: Approval Binding And Stale Decision Rejection
 
+Status: completed locally; pending GitHub sync.
+
 Goal: require attempt-related approvals to bind to the current `routeDecisionId`, attempt ID where applicable, lane, worker, and authority mode.
 
 Key acceptance:
@@ -269,4 +272,4 @@ Pause implementation and create a decision record if any story requires:
 
 Restore or confirm GitHub authentication, then push local checkpoint `801bc0a` to `origin/main`.
 
-After remote progress is current, begin Story 2.3: Approval Binding And Stale Decision Rejection.
+After Story 2.3 is committed and GitHub progress is current, begin Story 2.4: Workspace Isolation Plan Contract.
