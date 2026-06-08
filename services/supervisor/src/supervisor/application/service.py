@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import os
 import shutil
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
     AuditEventView,
+    ExecutionAttemptView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
@@ -32,6 +33,7 @@ from supervisor.api.schemas import (
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
+    WorkItemExecutionAttemptCreateRequest,
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemPremiumApprovalRequest,
     WorkItemBranchPreparationRequest,
@@ -65,10 +67,10 @@ from supervisor.domain.routing import (
     TaskKind,
 )
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
-from supervisor.domain.types import AuditMode, BmadLane, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
+from supervisor.domain.types import AuditMode, BmadLane, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerRegistryEntry
-from supervisor.infrastructure.db.models import AuditEvent, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
+from supervisor.infrastructure.db.models import AuditEvent, ExecutionAttempt, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
 from supervisor.infrastructure.streaming.bus import EventBus
 
 
@@ -77,6 +79,14 @@ ACTIVE_STATES = {
     WorkflowState.VALIDATING.value,
     WorkflowState.REVIEWING.value,
     WorkflowState.AWAITING_AUDIT.value,
+}
+
+ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
+    ExecutionAttemptStatus.PLANNED.value,
+    ExecutionAttemptStatus.APPROVED.value,
+    ExecutionAttemptStatus.STARTING.value,
+    ExecutionAttemptStatus.RUNNING.value,
+    ExecutionAttemptStatus.CANCEL_REQUESTED.value,
 }
 
 _LANE_UNSET = object()
@@ -213,6 +223,144 @@ class SupervisorService:
             .order_by(WorkflowEvent.created_at.desc())
         )
         return list(result.scalars())
+
+    async def list_execution_attempts(self, session: AsyncSession, work_item_id: str) -> list[ExecutionAttemptView]:
+        result = await session.execute(
+            select(ExecutionAttempt)
+            .where(ExecutionAttempt.work_item_id == work_item_id)
+            .order_by(ExecutionAttempt.created_at.desc())
+        )
+        return [self._to_execution_attempt_view(attempt) for attempt in result.scalars()]
+
+    async def create_execution_attempt(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemExecutionAttemptCreateRequest,
+    ) -> ExecutionAttemptView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        active_attempt = await self._active_execution_attempt(session, work_item_id)
+        if active_attempt:
+            raise ValueError(f"Work item already has active execution attempt {active_attempt.id}.")
+        preview_payload = WorkItemRoutingPreviewRequest(
+            stepId=payload.stepId,
+            taskKind=payload.taskKind,
+            recordEvent=False,
+        )
+        preview = await self.get_routing_preview(session, work_item_id, preview_payload)
+        if not preview:
+            return None
+        worker = self._worker_for_execution_attempt(preview)
+        status, rejection_reason = self._execution_attempt_initial_status(preview, worker)
+        now = datetime.now(timezone.utc)
+        attempt = ExecutionAttempt(
+            work_item_id=item.id,
+            route_decision_id=preview.decision.decisionId,
+            worker_id=worker.worker_id,
+            lane=preview.decision.selectedLane,
+            authority_mode=preview.decision.authorityMode,
+            status=status.value,
+            requested_by_id=payload.actorId,
+            requested_by_label=payload.actorLabel,
+            rejection_reason=rejection_reason,
+            artifact_refs_json=[],
+            event_refs_json=[],
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(attempt)
+        await session.flush()
+        event = await self._record_execution_attempt_event(
+            session,
+            item,
+            attempt,
+            preview,
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
+        )
+        attempt.event_refs_json = [{"eventId": event.id, "eventType": event.event_type}]
+        await session.commit()
+        await session.refresh(attempt)
+        await session.refresh(item)
+        return self._to_execution_attempt_view(attempt)
+
+    async def _active_execution_attempt(self, session: AsyncSession, work_item_id: str) -> ExecutionAttempt | None:
+        result = await session.execute(
+            select(ExecutionAttempt)
+            .where(
+                ExecutionAttempt.work_item_id == work_item_id,
+                ExecutionAttempt.status.in_(ACTIVE_EXECUTION_ATTEMPT_STATUSES),
+            )
+            .order_by(ExecutionAttempt.created_at.desc())
+        )
+        return result.scalars().first()
+
+    def _worker_for_execution_attempt(self, preview: RoutingPreviewView) -> WorkerRegistryEntry:
+        selected_worker_id = preview.decision.selectedWorkerId
+        workers = self.worker_registry.list_workers()
+        if selected_worker_id:
+            for worker in workers:
+                if worker.worker_id == selected_worker_id:
+                    return worker
+        for worker in workers:
+            if worker.lane.value == preview.decision.selectedLane:
+                return worker
+        raise ValueError(f"No worker registry entry found for lane {preview.decision.selectedLane}.")
+
+    def _execution_attempt_initial_status(
+        self,
+        preview: RoutingPreviewView,
+        worker: WorkerRegistryEntry,
+    ) -> tuple[ExecutionAttemptStatus, str | None]:
+        if preview.decision.selectedLane == ExecutionLane.UTILITY.value and worker.worker_id == "utility.internal":
+            return ExecutionAttemptStatus.PLANNED, None
+        if worker.disabled_reason:
+            return ExecutionAttemptStatus.REJECTED, worker.disabled_reason
+        return ExecutionAttemptStatus.REJECTED, f"execution_authority_not_enabled_for_{preview.decision.selectedLane}"
+
+    async def _record_execution_attempt_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        preview: RoutingPreviewView,
+        actor_id: str | None,
+        actor_label: str | None,
+    ) -> WorkflowEvent:
+        planned = attempt.status == ExecutionAttemptStatus.PLANNED.value
+        event_type = "execution_attempt.planned" if planned else "execution_attempt.rejected"
+        summary = (
+            f"Execution attempt planned for {attempt.lane} via {attempt.worker_id}."
+            if planned
+            else f"Execution attempt rejected for {attempt.lane} via {attempt.worker_id}."
+        )
+        return await self._record_event(
+            session,
+            item,
+            event_type,
+            summary,
+            {
+                "attemptId": attempt.id,
+                "workItemId": item.id,
+                "routeDecisionId": attempt.route_decision_id,
+                "workerId": attempt.worker_id,
+                "selectedLane": attempt.lane,
+                "authorityMode": attempt.authority_mode,
+                "status": attempt.status,
+                "taskKind": preview.profile.taskKind,
+                "stepId": preview.profile.stepId,
+                "rejectionReason": attempt.rejection_reason,
+                "executionAllowed": False,
+                "processLaunchAllowed": False,
+                "providerCallsAllowed": False,
+                "sourceMutationAllowed": False,
+            },
+            actor_type="operator" if actor_id or actor_label else "supervisor",
+            actor_id=actor_id,
+            actor_label=actor_label,
+        )
 
     async def list_routing_lane_profiles(self, session: AsyncSession) -> list[RoutingLaneEvidenceProfileView]:
         result = await session.execute(
@@ -2562,7 +2710,7 @@ class SupervisorService:
         actor_type: str = "system",
         actor_id: str | None = None,
         actor_label: str | None = None,
-    ) -> None:
+    ) -> WorkflowEvent:
         correlation_id = str(uuid.uuid4())
         event = WorkflowEvent(
             work_item_id=item.id,
@@ -2586,6 +2734,7 @@ class SupervisorService:
                 actor_label=actor_label,
             )
         )
+        return event
 
     async def _publish_item(self, item: WorkItem) -> None:
         needs_attention, attention_reason = self._derive_attention(item)
@@ -3769,6 +3918,31 @@ class SupervisorService:
             mode=audit.mode,
             outcome=audit.outcome,
             createdAt=self._normalize_timestamp(audit.created_at),
+        )
+
+    def _to_execution_attempt_view(self, attempt: ExecutionAttempt) -> ExecutionAttemptView:
+        return ExecutionAttemptView(
+            attemptId=attempt.id,
+            workItemId=attempt.work_item_id,
+            routeDecisionId=attempt.route_decision_id,
+            workerId=attempt.worker_id,
+            lane=attempt.lane,
+            authorityMode=attempt.authority_mode,
+            status=ExecutionAttemptStatus(attempt.status),
+            requestedById=attempt.requested_by_id,
+            requestedByLabel=attempt.requested_by_label,
+            createdAt=self._normalize_timestamp(attempt.created_at),
+            updatedAt=self._normalize_timestamp(attempt.updated_at),
+            startedAt=self._normalize_timestamp(attempt.started_at) if attempt.started_at else None,
+            completedAt=self._normalize_timestamp(attempt.completed_at) if attempt.completed_at else None,
+            heartbeatAt=self._normalize_timestamp(attempt.heartbeat_at) if attempt.heartbeat_at else None,
+            timeoutAt=self._normalize_timestamp(attempt.timeout_at) if attempt.timeout_at else None,
+            cancelRequestedAt=self._normalize_timestamp(attempt.cancel_requested_at) if attempt.cancel_requested_at else None,
+            cancelReason=attempt.cancel_reason,
+            rejectionReason=attempt.rejection_reason,
+            failureReason=attempt.failure_reason,
+            artifactRefs=list(attempt.artifact_refs_json or []),
+            eventRefs=list(attempt.event_refs_json or []),
         )
 
     def to_event_view(self, event: WorkflowEvent) -> WorkflowEventView:

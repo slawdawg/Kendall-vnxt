@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from supervisor.domain.types import (
     AuditMode,
     BmadLane,
+    ExecutionAttemptStatus,
     ErrorCategory,
     RiskLevel,
     RunMode,
@@ -163,6 +164,36 @@ class WorkItemRoutingOverrideRequest(BaseModel):
     actorId: str | None = None
     actorLabel: str | None = None
 
+
+class WorkItemExecutionAttemptCreateRequest(BaseModel):
+    stepId: str | None = None
+    taskKind: str | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
+class ExecutionAttemptView(BaseModel):
+    attemptId: str
+    workItemId: str
+    routeDecisionId: str
+    workerId: str
+    lane: str
+    authorityMode: str
+    status: ExecutionAttemptStatus
+    requestedById: str | None = None
+    requestedByLabel: str | None = None
+    createdAt: datetime
+    updatedAt: datetime
+    startedAt: datetime | None = None
+    completedAt: datetime | None = None
+    heartbeatAt: datetime | None = None
+    timeoutAt: datetime | None = None
+    cancelRequestedAt: datetime | None = None
+    cancelReason: str | None = None
+    rejectionReason: str | None = None
+    failureReason: str | None = None
+    artifactRefs: list[dict[str, Any]] = Field(default_factory=list)
+    eventRefs: list[dict[str, Any]] = Field(default_factory=list)
 
 class RoutingProfileView(BaseModel):
     workItemId: str

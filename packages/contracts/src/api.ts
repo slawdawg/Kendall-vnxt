@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   AuditFilterMode,
   BmadLane,
   RiskLevel,
@@ -97,6 +97,49 @@ export interface WorkItemRecipeGateAuditView {
   pendingCount: number;
   gates: WorkItemRecipeGateAuditEntryView[];
   nextManagedAction: WorkItemManagedActionView;
+}
+
+export type ExecutionAttemptStatus =
+  | "planned"
+  | "approved"
+  | "starting"
+  | "running"
+  | "cancel_requested"
+  | "cancelled"
+  | "timed_out"
+  | "failed"
+  | "completed"
+  | "rejected";
+
+export interface ExecutionAttemptCreateRequest {
+  stepId?: string | null;
+  taskKind?: string | null;
+  actorId?: string | null;
+  actorLabel?: string | null;
+}
+
+export interface ExecutionAttemptView {
+  attemptId: string;
+  workItemId: string;
+  routeDecisionId: string;
+  workerId: string;
+  lane: string;
+  authorityMode: string;
+  status: ExecutionAttemptStatus;
+  requestedById?: string | null;
+  requestedByLabel?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  heartbeatAt?: string | null;
+  timeoutAt?: string | null;
+  cancelRequestedAt?: string | null;
+  cancelReason?: string | null;
+  rejectionReason?: string | null;
+  failureReason?: string | null;
+  artifactRefs: Record<string, unknown>[];
+  eventRefs: Record<string, unknown>[];
 }
 
 export interface RoutingProfileView {

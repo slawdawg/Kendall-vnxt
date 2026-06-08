@@ -1,4 +1,4 @@
-from enum import StrEnum
+﻿from enum import StrEnum
 
 
 class WorkflowState(StrEnum):
@@ -58,6 +58,18 @@ class WorkflowAction(StrEnum):
     RESTART_IMPLEMENTATION = "restart_implementation"
     RETURN_TO_READY = "return_to_ready"
 
+
+class ExecutionAttemptStatus(StrEnum):
+    PLANNED = "planned"
+    APPROVED = "approved"
+    STARTING = "starting"
+    RUNNING = "running"
+    CANCEL_REQUESTED = "cancel_requested"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
+    FAILED = "failed"
+    COMPLETED = "completed"
+    REJECTED = "rejected"
 
 class ErrorCategory(StrEnum):
     TRANSIENT = "transient"

@@ -1,10 +1,10 @@
 ﻿---
-baseline_commit: a396f40
+baseline_commit: 129c9f0
 ---
 
 # Story 2.1: Execution Attempt Contract And State Model
 
-Status: draft
+Status: done
 
 ## Story
 
@@ -27,40 +27,40 @@ so that future worker execution can be planned, rejected, audited, and correlate
 
 ## Tasks / Subtasks
 
-- [ ] Add shared execution attempt contract types. (AC: 1, 3)
-  - [ ] Add status vocabulary for `planned`, `approved`, `starting`, `running`, `cancel_requested`, `cancelled`, `timed_out`, `failed`, `completed`, and `rejected`.
-  - [ ] Add `ExecutionAttemptView` and creation payload types in `packages/contracts/src/api.ts`.
-  - [ ] Mirror the API vocabulary in supervisor schemas.
-- [ ] Add supervisor persistence for execution attempts. (AC: 2, 3, 6)
-  - [ ] Add `ExecutionAttempt` to `services/supervisor/src/supervisor/infrastructure/db/models.py`.
-  - [ ] Relate attempts to `WorkItem` without overloading `QueueLease`.
-  - [ ] Store JSON-compatible artifact/event references for later export.
-- [ ] Add supervisor service behavior. (AC: 4, 5, 6, 7, 8)
-  - [ ] Create attempts from current routing preview data.
-  - [ ] Select the worker from the current routing decision or registry-backed lane default.
-  - [ ] Reject disabled execution lanes/workers as `rejected`, not as launched work.
-  - [ ] Enforce one active attempt per work item.
-  - [ ] Expose attempt history ordered by creation time.
-- [ ] Add supervisor API endpoints. (AC: 1, 4, 5, 8)
-  - [ ] Add a non-executing attempt creation endpoint under the work-item route namespace.
-  - [ ] Add a work-item attempt history endpoint.
-  - [ ] Return existing envelope/error patterns.
-- [ ] Add workflow events. (AC: 7)
-  - [ ] Record `execution_attempt.planned` for planned non-executing attempts.
-  - [ ] Record `execution_attempt.rejected` when policy disables the selected worker/lane.
-  - [ ] Include attempt, route, worker, lane, and authority identifiers in event payloads.
-- [ ] Add focused tests. (AC: 4, 5, 6, 7, 8, 9, 10)
-  - [ ] Planned-attempt happy path for the current safe eligible lane.
-  - [ ] Rejected attempt for disabled subscription/local/premium execution lanes.
-  - [ ] Missing work item and no-route/mismatched route behavior.
-  - [ ] One-active-attempt invariant.
-  - [ ] History endpoint returns planned/rejected attempts.
-  - [ ] Existing routing suites still pass.
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused supervisor tests.
-  - [ ] Run the routing preview suite.
-  - [ ] Run the appropriate broader workspace verification command.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add shared execution attempt contract types. (AC: 1, 3)
+  - [x] Add status vocabulary for `planned`, `approved`, `starting`, `running`, `cancel_requested`, `cancelled`, `timed_out`, `failed`, `completed`, and `rejected`.
+  - [x] Add `ExecutionAttemptView` and creation payload types in `packages/contracts/src/api.ts`.
+  - [x] Mirror the API vocabulary in supervisor schemas.
+- [x] Add supervisor persistence for execution attempts. (AC: 2, 3, 6)
+  - [x] Add `ExecutionAttempt` to `services/supervisor/src/supervisor/infrastructure/db/models.py`.
+  - [x] Relate attempts to `WorkItem` without overloading `QueueLease`.
+  - [x] Store JSON-compatible artifact/event references for later export.
+- [x] Add supervisor service behavior. (AC: 4, 5, 6, 7, 8)
+  - [x] Create attempts from current routing preview data.
+  - [x] Select the worker from the current routing decision or registry-backed lane default.
+  - [x] Reject disabled execution lanes/workers as `rejected`, not as launched work.
+  - [x] Enforce one active attempt per work item.
+  - [x] Expose attempt history ordered by creation time.
+- [x] Add supervisor API endpoints. (AC: 1, 4, 5, 8)
+  - [x] Add a non-executing attempt creation endpoint under the work-item route namespace.
+  - [x] Add a work-item attempt history endpoint.
+  - [x] Return existing envelope/error patterns.
+- [x] Add workflow events. (AC: 7)
+  - [x] Record `execution_attempt.planned` for planned non-executing attempts.
+  - [x] Record `execution_attempt.rejected` when policy disables the selected worker/lane.
+  - [x] Include attempt, route, worker, lane, and authority identifiers in event payloads.
+- [x] Add focused tests. (AC: 4, 5, 6, 7, 8, 9, 10)
+  - [x] Planned-attempt happy path for the current safe eligible lane.
+  - [x] Rejected attempt for disabled subscription/local/premium execution lanes.
+  - [x] Missing work item and no-route/mismatched route behavior.
+  - [x] One-active-attempt invariant.
+  - [x] History endpoint returns planned/rejected attempts.
+  - [x] Existing routing suites still pass.
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused supervisor tests.
+  - [x] Run the routing preview suite.
+  - [x] Run the appropriate broader workspace verification command.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -125,20 +125,44 @@ Testing notes:
 
 ### Implementation Plan
 
-- Pending implementation.
+- Add execution attempt status and shared API contract vocabulary.
+- Add supervisor persistence separate from queue leases.
+- Add non-executing attempt creation/history service and API paths.
+- Record planned/rejected execution attempt events with route and worker evidence.
+- Add focused integration coverage and run broader verification.
 
 ### Debug Log References
 
-- Pending implementation.
+- `uv run --directory services/supervisor python -m compileall src/supervisor` - passed.
+- `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q -k "execution_attempt"` - passed, 3 selected / 34 deselected, 1 existing aiosqlite warning.
+- `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q` - passed, 37 tests.
+- `uv run --directory services/supervisor pytest tests/integration/test_supervisor_flow.py -q -k "managed_next_action or routing_outcome"` - passed, 2 selected / 31 deselected, 1 existing aiosqlite warning.
+- First `pnpm run check` run: dashboard build passed and 69/70 supervisor tests passed; one local-readonly deterministic preview assertion failed, then passed immediately when rerun in isolation.
+- `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q -k "mock_local_readonly_worker_preview" -vv` - passed, 1 selected / 36 deselected.
+- Final `pnpm run check` - passed, dashboard build plus 70 supervisor tests.
 
 ### Completion Notes List
 
-- Pending implementation.
+- Added first-class execution attempt status vocabulary and shared request/view contracts.
+- Added an `ExecutionAttempt` persistence model linked to work items and separate from `QueueLease`.
+- Added non-executing `POST /work-items/{work_item_id}/execution-attempts` and `GET /work-items/{work_item_id}/execution-attempts` endpoints.
+- Planned attempts are allowed only for the current safe `utility.internal` lane; local read-only, subscription handoff, subscription agent, and premium-style routes are persisted as rejected attempts with evidence instead of launching anything.
+- Added one-active-attempt-per-work-item enforcement for active statuses.
+- Added `execution_attempt.planned` and `execution_attempt.rejected` workflow events with attempt, route, worker, lane, authority, and disabled-execution flags.
+- Added focused tests proving planned/rejected behavior, history, missing work item handling, active-attempt rejection, event evidence, and no execution/provider/source mutation flags.
 
 ### File List
 
-- Pending implementation.
+- `packages/contracts/src/api.ts`
+- `services/supervisor/src/supervisor/api/main.py`
+- `services/supervisor/src/supervisor/api/schemas.py`
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/src/supervisor/domain/types.py`
+- `services/supervisor/src/supervisor/infrastructure/db/models.py`
+- `services/supervisor/tests/integration/test_routing_preview.py`
+- `docs/stories/2-1-execution-attempt-contract-and-state-model.md`
 
 ## Change Log
 
 - 2026-06-08: Created story from Execution Authority Expansion PRD and current architecture gap review.
+- 2026-06-08: Implemented execution attempt contract, persistence, non-executing create/history API, events, tests, and verification; status moved to done.

@@ -1,10 +1,10 @@
-import uuid
+﻿import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from supervisor.domain.types import AuditMode, BmadLane, RiskLevel, RunMode, WorkflowState
+from supervisor.domain.types import AuditMode, BmadLane, ExecutionAttemptStatus, RiskLevel, RunMode, WorkflowState
 from supervisor.infrastructure.db.database import Base
 
 
@@ -41,6 +41,7 @@ class WorkItem(Base):
 
     events: Mapped[list["WorkflowEvent"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
     leases: Mapped[list["QueueLease"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
+    execution_attempts: Mapped[list["ExecutionAttempt"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
     audits: Mapped[list["AuditEvent"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
 
 
@@ -60,6 +61,33 @@ class WorkflowEvent(Base):
 
     work_item: Mapped[WorkItem] = relationship(back_populates="events")
 
+
+class ExecutionAttempt(Base):
+    __tablename__ = "execution_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    work_item_id: Mapped[str] = mapped_column(ForeignKey("work_items.id"))
+    route_decision_id: Mapped[str] = mapped_column(String(255))
+    worker_id: Mapped[str] = mapped_column(String(120))
+    lane: Mapped[str] = mapped_column(String(64))
+    authority_mode: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default=ExecutionAttemptStatus.PLANNED.value)
+    requested_by_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    requested_by_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_refs_json: Mapped[list] = mapped_column(JSON, default=list)
+    event_refs_json: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    timeout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    work_item: Mapped[WorkItem] = relationship(back_populates="execution_attempts")
 
 class QueueLease(Base):
     __tablename__ = "queue_leases"

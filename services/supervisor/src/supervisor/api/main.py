@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -18,6 +18,7 @@ from supervisor.api.schemas import (
     WorkItemBranchPreparationRequest,
     WorkItemCreate,
     WorkItemDeliveryReadinessRequest,
+    WorkItemExecutionAttemptCreateRequest,
     WorkItemEscalationRequest,
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemManagedActionRequest,
@@ -123,6 +124,33 @@ async def get_work_item_events(work_item_id: str, session: AsyncSession = Depend
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     events = await service.list_work_item_events(session, work_item_id)
     return ApiEnvelope(data=[service.to_event_view(event) for event in events])
+
+
+@app.get("/work-items/{work_item_id}/execution-attempts", response_model=ApiEnvelope)
+async def get_work_item_execution_attempts(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    attempts = await service.list_execution_attempts(session, work_item_id)
+    return ApiEnvelope(data=attempts)
+
+
+@app.post("/work-items/{work_item_id}/execution-attempts", response_model=ApiEnvelope)
+async def create_work_item_execution_attempt(
+    work_item_id: str,
+    payload: WorkItemExecutionAttemptCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        attempt = await service.create_execution_attempt(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_execution_attempt").model_dump()) from exc
+    if not attempt:
+        raise HTTPException(status_code=404, detail=error_response("Execution attempt not found.", "execution_attempt_not_found").model_dump())
+    return ApiEnvelope(data=attempt)
 
 
 @app.get("/work-items/{work_item_id}/recipe-gate-audit", response_model=ApiEnvelope)

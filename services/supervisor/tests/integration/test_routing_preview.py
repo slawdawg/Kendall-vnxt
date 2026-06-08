@@ -1120,3 +1120,150 @@ def test_routing_preview_post_missing_work_item_uses_work_item_not_found(tmp_pat
 
     assert response.status_code == 404
     assert response.json()["detail"]["error"]["code"] == "work_item_not_found"
+
+
+def test_execution_attempt_plans_utility_attempt_and_records_history(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-utility.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Plan utility execution attempt",
+                "requestedOutcome": "Record a non-executing attempt for the safest deterministic route.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        attempt_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts",
+            json={"actorId": "operator-1", "actorLabel": "Primary operator"},
+        )
+        after_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        duplicate_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+
+    assert attempt_response.status_code == 200
+    attempt = attempt_response.json()["data"]
+    assert attempt["status"] == "planned"
+    assert attempt["lane"] == "utility"
+    assert attempt["workerId"] == "utility.internal"
+    assert attempt["routeDecisionId"].startswith(f"route-{work_item_id}")
+    assert attempt["rejectionReason"] is None
+    assert attempt["eventRefs"][0]["eventType"] == "execution_attempt.planned"
+    assert before_item == after_item
+
+    assert history_response.status_code == 200
+    history = history_response.json()["data"]
+    assert [entry["attemptId"] for entry in history] == [attempt["attemptId"]]
+
+    assert duplicate_response.status_code == 409
+    assert "already has active execution attempt" in duplicate_response.json()["detail"]["error"]["message"]
+
+    events = events_response.json()["data"]
+    attempt_event = next(event for event in events if event["eventType"] == "execution_attempt.planned")
+    assert attempt_event["actorType"] == "operator"
+    assert attempt_event["actorLabel"] == "Primary operator"
+    assert attempt_event["payload"]["attemptId"] == attempt["attemptId"]
+    assert attempt_event["payload"]["routeDecisionId"] == attempt["routeDecisionId"]
+    assert attempt_event["payload"]["workerId"] == "utility.internal"
+    assert attempt_event["payload"]["executionAllowed"] is False
+    assert attempt_event["payload"]["processLaunchAllowed"] is False
+    assert attempt_event["payload"]["providerCallsAllowed"] is False
+    assert attempt_event["payload"]["sourceMutationAllowed"] is False
+
+
+def test_execution_attempt_rejects_local_readonly_without_provider_calls(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-local-readonly.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Reject local read-only attempt",
+                "requestedOutcome": "Record disabled execution authority for a local read-only route.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "low",
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        attempt_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts",
+            json={"taskKind": "evidence_summary", "stepId": "evidence-summary"},
+        )
+        after_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+    assert attempt_response.status_code == 200
+    attempt = attempt_response.json()["data"]
+    assert attempt["status"] == "rejected"
+    assert attempt["lane"] == "local_readonly"
+    assert attempt["workerId"] == "local.readonly.mock"
+    assert attempt["rejectionReason"] == "execution_authority_not_enabled_for_local_readonly"
+    assert before_item == after_item
+
+    event = next(event for event in events_response.json()["data"] if event["eventType"] == "execution_attempt.rejected")
+    assert event["payload"]["attemptId"] == attempt["attemptId"]
+    assert event["payload"]["providerCallsAllowed"] is False
+    assert event["payload"]["sourceMutationAllowed"] is False
+
+
+def test_execution_attempt_rejects_disabled_subscription_handoff_and_missing_work_item(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-subscription.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        missing_response = client.get("/work-items/missing/execution-attempts")
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Reject subscription handoff attempt",
+                "requestedOutcome": "Record disabled execution authority for subscription-routed work.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "high",
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+        attempt_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts",
+            json={"taskKind": "bounded_recipe_implementation", "stepId": "implementation"},
+        )
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert missing_response.status_code == 404
+    assert attempt_response.status_code == 200
+    attempt = attempt_response.json()["data"]
+    assert attempt["status"] == "rejected"
+    assert attempt["lane"] == "subscription_handoff"
+    assert attempt["workerId"] == "subscription.handoff"
+    assert attempt["rejectionReason"] == "direct_subscription_launch_not_enabled"
+    assert history_response.json()["data"][0]["attemptId"] == attempt["attemptId"]
