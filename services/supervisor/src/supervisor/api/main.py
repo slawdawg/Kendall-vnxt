@@ -177,6 +177,14 @@ async def record_work_item_routing_override(
         raise HTTPException(status_code=404, detail=error_response("Routing override not found.", "routing_override_not_found").model_dump())
     return ApiEnvelope(data=override)
 
+
+@app.get("/work-items/{work_item_id}/local-evidence-packet", response_model=ApiEnvelope)
+async def get_work_item_local_evidence_packet(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    packet = await service.get_local_evidence_packet(session, work_item_id)
+    if not packet:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=packet)
+
 @app.post("/work-items/{work_item_id}/local-evidence-explanation", response_model=ApiEnvelope)
 async def create_work_item_local_evidence_explanation(
     work_item_id: str,

@@ -14,6 +14,8 @@ from supervisor.api.schemas import (
     AuditEventView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
+    LocalEvidencePacketItemView,
+    LocalEvidencePacketView,
     OperatorViewCreate,
     OperatorViewResponse,
     RoutingDecisionView,
@@ -329,6 +331,62 @@ class SupervisorService:
             await session.refresh(item)
         return package
 
+
+    async def get_local_evidence_packet(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+    ) -> LocalEvidencePacketView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        events = await self.list_work_item_events(session, work_item_id)
+        recipe = self._execution_recipe_for_item(item)
+        profile = RoutingProfile(
+            work_item_id=item.id,
+            step_id="evidence-packet",
+            task_kind=TaskKind.EVIDENCE_SUMMARY,
+            phase=item.state,
+            risk_level=item.risk_level,
+            write_scope="none",
+            allowed_paths=tuple(recipe.allowed_paths) if recipe else (),
+            validation_expectations=tuple(command.display for command in recipe.verification_commands) if recipe else (),
+        )
+        decision = RoutingPreviewService().preview(profile, created_at=datetime.now(timezone.utc))
+        preview = RoutingPreviewView(
+            profile=self._to_routing_profile_view(profile),
+            decision=self._to_routing_decision_view(decision),
+        )
+        evidence = [
+            LocalEvidencePacketItemView(
+                eventType=event.event_type,
+                summary=event.summary,
+                createdAt=event.created_at,
+            )
+            for event in events[:8]
+        ]
+        return LocalEvidencePacketView(
+            packetId=f"local-evidence-packet-{decision.decision_id}",
+            workItemId=item.id,
+            title=item.title,
+            requestedOutcome=item.requested_outcome,
+            taskKind=profile.task_kind.value,
+            stepId=profile.step_id,
+            createdAt=datetime.now(timezone.utc),
+            route=preview.decision,
+            summary=self._local_evidence_summary(item, preview, events),
+            evidence=evidence,
+            boundaries=self._local_evidence_boundaries(item),
+            allowedPaths=list(recipe.allowed_paths) if recipe else [],
+            validationCommands=[command.display for command in recipe.verification_commands] if recipe else [],
+            redactionNotes=[
+                "Use workflow event summaries and approved recipe metadata only.",
+                "Do not include secrets, raw prompts, credentials, or unrelated local files.",
+                "Do not grant the local worker direct repo, shell, or write access from this packet.",
+            ],
+            writesAllowed=False,
+            commandsAllowed=False,
+        )
     async def get_local_evidence_explanation(
         self,
         session: AsyncSession,

@@ -172,6 +172,31 @@ export interface SubscriptionHandoffPackageView {
   launchAllowed: boolean;
 }
 
+
+export interface LocalEvidencePacketItemView {
+  eventType: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface LocalEvidencePacketView {
+  packetId: string;
+  workItemId: string;
+  title: string;
+  requestedOutcome: string;
+  taskKind: string;
+  stepId: string;
+  createdAt: string;
+  route: RoutingDecisionView;
+  summary: string;
+  evidence: LocalEvidencePacketItemView[];
+  boundaries: string[];
+  allowedPaths: string[];
+  validationCommands: string[];
+  redactionNotes: string[];
+  writesAllowed: boolean;
+  commandsAllowed: boolean;
+}
 export interface LocalEvidenceItemView {
   eventType: string;
   summary: string;

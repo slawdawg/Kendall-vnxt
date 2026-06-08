@@ -4,7 +4,7 @@ baseline_commit: 5d7cf2e
 
 # Story 1.14: Local Read-Only Evidence Packet Contract
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -24,20 +24,20 @@ so that future local model adapters can receive bounded evidence without direct 
 
 ## Tasks / Subtasks
 
-- [ ] Add evidence packet API contract. (AC: 1, 5, 6)
-  - [ ] Define evidence packet and item view schemas.
-  - [ ] Export shared TypeScript contracts.
-- [ ] Add read-only packet generation. (AC: 2, 3, 4)
-  - [ ] Generate packets from existing item, recipe, route, and events.
-  - [ ] Include local-read-only boundaries and redaction notes.
-  - [ ] Avoid model calls, commands, event recording, and workflow mutation.
-- [ ] Add focused tests. (AC: 3, 7)
-  - [ ] Assert packet shape for a recipe work item.
-  - [ ] Assert repeated preview does not mutate item/events.
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused tests.
-  - [ ] Run broader workspace verification.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add evidence packet API contract. (AC: 1, 5, 6)
+  - [x] Define evidence packet and item view schemas.
+  - [x] Export shared TypeScript contracts.
+- [x] Add read-only packet generation. (AC: 2, 3, 4)
+  - [x] Generate packets from existing item, recipe, route, and events.
+  - [x] Include local-read-only boundaries and redaction notes.
+  - [x] Avoid model calls, commands, event recording, and workflow mutation.
+- [x] Add focused tests. (AC: 3, 7)
+  - [x] Assert packet shape for a recipe work item.
+  - [x] Assert repeated preview does not mutate item/events.
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused tests.
+  - [x] Run broader workspace verification.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -72,17 +72,29 @@ Recommended design:
 
 ### Debug Log References
 
-- Pending.
+- Focused: `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q -k "local_evidence_packet"` passed, 1 test.
+- Routing integration: `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q` passed, 26 tests.
+- Workspace check: `pnpm run check` passed; dashboard build succeeded and supervisor tests passed, 59 tests, 1 aiosqlite warning.
 
 ### Completion Notes List
 
-- Pending.
+- Added `LocalEvidencePacketView` and evidence packet item contracts in Python and TypeScript.
+- Added read-only `GET /work-items/{work_item_id}/local-evidence-packet` endpoint.
+- Generated packets from work item metadata, recipe allowed paths/validation commands, route preview, and existing workflow event summaries only.
+- Included local-read-only boundaries, redaction notes, and explicit no-write/no-command flags for future local AI adapter use.
 
 ### File List
 
-- Pending.
+- `docs/stories/1-14-local-readonly-evidence-packet-contract.md`
+- `_bmad-output/implementation-artifacts/1-14-local-readonly-evidence-packet-contract.md`
+- `packages/contracts/src/api.ts`
+- `services/supervisor/src/supervisor/api/main.py`
+- `services/supervisor/src/supervisor/api/schemas.py`
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/tests/integration/test_routing_preview.py`
 
 ## Change Log
 
 - 2026-06-08: Created story from routing follow-on roadmap after Story 1.13 completion.
+- 2026-06-08: Implemented local read-only evidence packet contract; status moved to done.
 

@@ -223,6 +223,31 @@ class SubscriptionHandoffPackageView(BaseModel):
     launchAllowed: bool = False
 
 
+
+class LocalEvidencePacketItemView(BaseModel):
+    eventType: str
+    summary: str
+    createdAt: datetime
+
+
+class LocalEvidencePacketView(BaseModel):
+    packetId: str
+    workItemId: str
+    title: str
+    requestedOutcome: str
+    taskKind: str
+    stepId: str
+    createdAt: datetime
+    route: RoutingDecisionView
+    summary: str
+    evidence: list[LocalEvidencePacketItemView]
+    boundaries: list[str]
+    allowedPaths: list[str]
+    validationCommands: list[str]
+    redactionNotes: list[str]
+    writesAllowed: bool = False
+    commandsAllowed: bool = False
+
 class LocalEvidenceItemView(BaseModel):
     eventType: str
     summary: str

@@ -561,6 +561,46 @@ def test_worker_registry_lists_static_workers_without_mutating_events(tmp_path, 
     assert premium["health"] == "disabled"
     assert premium["disabledReason"] == "premium_execution_requires_operator_approval_flow"
 
+
+def test_local_evidence_packet_preview_is_non_mutating_and_bounded(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "local-evidence-packet.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        first_response = client.get(f"/work-items/{work_item_id}/local-evidence-packet")
+        second_response = client.get(f"/work-items/{work_item_id}/local-evidence-packet")
+        after_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert before_item == after_item
+    assert before_events == after_events
+
+    packet = first_response.json()["data"]
+    assert packet["packetId"].startswith("local-evidence-packet-route-")
+    assert packet["workItemId"] == work_item_id
+    assert packet["taskKind"] == "evidence_summary"
+    assert packet["stepId"] == "evidence-packet"
+    assert packet["route"]["selectedLane"] == "local_readonly"
+    assert packet["route"]["authorityMode"] == "advisory"
+    assert packet["writesAllowed"] is False
+    assert packet["commandsAllowed"] is False
+    assert "apps/dashboard" in packet["allowedPaths"]
+    assert "pnpm run check" in packet["validationCommands"]
+    assert packet["evidence"]
+    assert all("eventType" in evidence for evidence in packet["evidence"])
+    assert any("Do not include secrets" in note for note in packet["redactionNotes"])
+    assert any("file writes are not allowed" in boundary for boundary in packet["boundaries"])
+
 def test_local_evidence_explanation_generation_is_non_mutating(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "local-evidence-explanation.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
