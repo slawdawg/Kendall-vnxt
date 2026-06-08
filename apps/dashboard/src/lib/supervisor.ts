@@ -1,5 +1,6 @@
 import type {
   ApiEnvelope,
+  ExecutionAttemptView,
   RoutingLaneEvidenceProfileView,
   RoutingPreviewView,
   RunStatusView,
@@ -55,6 +56,10 @@ export async function getWorkItem(id: string): Promise<WorkItemView> {
 
 export async function getWorkItemEvents(id: string): Promise<WorkflowEventView[]> {
   return requestJson<WorkflowEventView[]>(`/work-items/${id}/events`);
+}
+
+export async function getExecutionAttempts(workItemId: string): Promise<ExecutionAttemptView[]> {
+  return requestJson<ExecutionAttemptView[]>(`/work-items/${workItemId}/execution-attempts`);
 }
 
 export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView[]> {

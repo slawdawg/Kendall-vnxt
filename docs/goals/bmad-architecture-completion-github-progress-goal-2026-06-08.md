@@ -35,11 +35,12 @@ Completed foundation:
 - Execution attempt lifecycle events and history API.
 - Execution attempt approval binding and stale/mismatched decision rejection.
 - Execution attempt workspace isolation plan contract.
+- Dashboard execution attempt evidence panel.
 
 Current local checkpoint:
 
 - See `git log --oneline -5` for the latest local checkpoint.
-- Latest completed architecture story trail: `docs/stories/2-4-workspace-isolation-plan-contract.md`.
+- Latest completed architecture story trail: `docs/stories/2-5-dashboard-attempt-evidence-panel.md`.
 
 Known GitHub sync issue:
 
@@ -52,7 +53,6 @@ Known GitHub sync issue:
 The architecture is considered complete for this BMad goal only when all of the following are true:
 
 1. Execution authority expansion slices are implemented or explicitly deferred with decision records:
-   - dashboard attempt evidence panel,
    - disabled execution configuration checks,
    - runtime evidence/export strategy,
    - threat boundary for commands, prompts, credentials, and local provider endpoints.
@@ -186,6 +186,8 @@ Key acceptance:
 
 ### Story 2.5: Dashboard Attempt Evidence Panel
 
+Status: completed locally; pending GitHub sync.
+
 Goal: make attempt state visible on the operator work-item surface.
 
 Key acceptance:
@@ -274,4 +276,4 @@ Pause implementation and create a decision record if any story requires:
 
 Restore or confirm GitHub authentication, then push the local `main` checkpoints shown by `git log --oneline -5` to `origin/main`.
 
-After Story 2.4 is committed and GitHub progress is current, begin Story 2.5: Dashboard Attempt Evidence Panel.
+After Story 2.5 is committed and GitHub progress is current, begin Story 2.6: Disabled Execution Configuration Checks.
