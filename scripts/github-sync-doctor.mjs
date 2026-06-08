@@ -140,7 +140,7 @@ function verifyGhStatus() {
     return;
   }
 
-  warn("GitHub CLI auth is not available. This is acceptable for normal Git pushes if Git Credential Manager works, but supervisor remote delivery still expects gh auth before live PR automation.");
+  warn("GitHub CLI auth is not available. This is acceptable for normal Git pushes when Git Credential Manager works and for Codex connector-backed PR automation. It is only required for workflows that explicitly shell out to gh.");
 }
 
 function verifyRemoteConnectivity() {
