@@ -12,16 +12,28 @@ git clone https://github.com/slawdawg/Kendall-vnxt.git C:\Users\slaw_dawg\Kendal
 cd C:\Users\slaw_dawg\Kendall_Nxt
 ```
 
-3. Run the bootstrap:
+3. Run local setup first:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Full
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -InstallMissing -ConfigureGit -SetupDeps -WriteReport
+```
+
+4. Prove live Git remote readiness from a visible interactive PowerShell session:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -VerifyRemote -RunCheck -WriteReport
 ```
 
 If required tools are already installed and you only want to verify the machine:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -VerifyRemote
+```
+
+`-Full` is available as a one-shot setup when VM credentials are already healthy:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Full
 ```
 
 On an already bootstrapped machine, the pnpm alias is also available:
@@ -33,12 +45,28 @@ pnpm run bootstrap:windows -- -VerifyRemote
 ## What The Bootstrap Does
 
 - checks Git, Node.js, pnpm/Corepack, and uv,
+- prints OS, PowerShell, architecture, execution policy, and tool versions,
 - optionally installs missing required tools with winget when `-InstallMissing` or `-Full` is used,
+- refreshes PATH after winget/Corepack setup attempts,
 - configures Git Credential Manager with Windows DPAPI when `-ConfigureGit` or `-Full` is used,
 - installs JavaScript dependencies and syncs the supervisor Python virtualenv when `-SetupDeps` or `-Full` is used,
+- verifies the supervisor Python runtime through uv,
 - runs `pnpm run preflight`,
 - runs `pnpm run doctor:github`, with live remote checks when `-VerifyRemote` or `-Full` is used,
-- optionally runs `pnpm run check` when `-RunCheck` or `-Full` is used.
+- optionally runs `pnpm run check` when `-RunCheck` or `-Full` is used,
+- writes a redacted readiness report under `.data/bootstrap/` when `-WriteReport` or `-Full` is used.
+
+## Readiness Reports
+
+Use `-WriteReport` when preparing a new VM or debugging a suspect one. Reports are written under `.data/bootstrap/` and include machine metadata, tool versions, readiness level, command labels, exit codes, warnings, and failures.
+
+The report intentionally excludes GitHub tokens, credential values, environment variable values, and command output that could contain secrets.
+
+Readiness levels:
+
+- `local-ready`: dependencies and local checks passed, but live Git remote checks were not proven.
+- `remote-ready`: local checks and live Git/GCM remote checks passed.
+- `not-ready`: bootstrap stopped before local readiness.
 
 ## Auth Policy
 
