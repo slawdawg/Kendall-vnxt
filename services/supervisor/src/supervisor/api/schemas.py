@@ -124,6 +124,59 @@ class WorkItemRecipeGateAuditView(BaseModel):
     nextManagedAction: WorkItemManagedActionView
 
 
+class WorkItemRoutingPreviewRequest(BaseModel):
+    stepId: str | None = None
+    taskKind: str | None = None
+    recordEvent: bool = False
+
+
+class RoutingProfileView(BaseModel):
+    workItemId: str
+    stepId: str
+    taskKind: str
+    phase: str | None = None
+    riskLevel: str
+    privacyLevel: str
+    writeScope: str
+    allowedPaths: list[str]
+    contextNeed: str
+    reasoningNeed: str
+    determinismNeed: str
+    validationExpectations: list[str]
+    preferredLanes: list[str]
+    forbiddenLanes: list[str]
+    escalationTriggers: list[str]
+
+
+class RejectedRoutingLaneView(BaseModel):
+    lane: str
+    rejectionCodes: list[str]
+    explanation: str
+
+
+class RoutingDecisionView(BaseModel):
+    decisionId: str
+    workItemId: str
+    stepId: str
+    profileSnapshot: RoutingProfileView
+    selectedLane: str
+    selectedWorkerId: str | None = None
+    authorityMode: str
+    confidenceScore: float
+    confidenceBand: str
+    reasonCodes: list[str]
+    rejectedLanes: list[RejectedRoutingLaneView]
+    rejectedWorkers: list[str]
+    permissionSummary: str
+    escalationPath: list[str]
+    humanExplanation: str
+
+
+class RoutingPreviewView(BaseModel):
+    profile: RoutingProfileView
+    decision: RoutingDecisionView
+
+
 class WorkItemExecutionRecipeView(BaseModel):
     id: str
     label: str

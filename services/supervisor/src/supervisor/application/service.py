@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -13,6 +14,10 @@ from supervisor.api.schemas import (
     AuditEventView,
     OperatorViewCreate,
     OperatorViewResponse,
+    RoutingDecisionView,
+    RoutingPreviewView,
+    RoutingProfileView,
+    RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
     WorkItemBranchPreparationRequest,
@@ -20,6 +25,7 @@ from supervisor.api.schemas import (
     WorkItemDeliveryReadinessView,
     WorkItemExecutionRecipeView,
     WorkItemManagedActionRequest,
+    WorkItemRoutingPreviewRequest,
     WorkItemManagedActionView,
     WorkItemPolicyGateView,
     WorkItemRecipeGateAuditEntryView,
@@ -31,6 +37,7 @@ from supervisor.api.schemas import (
 )
 from supervisor.config.settings import Settings
 from supervisor.domain.recipes import EXECUTION_RECIPES, ExecutionRecipe, RecipeCommand
+from supervisor.domain.routing import RoutingDecision, RoutingPreviewService, RoutingProfile, TaskKind
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
 from supervisor.domain.types import AuditMode, BmadLane, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.infrastructure.db.models import AuditEvent, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
@@ -143,6 +150,163 @@ class SupervisorService:
             return None
         events = await self.list_work_item_events(session, work_item_id)
         return self._recipe_gate_audit_view(item, recipe, events)
+
+    async def get_routing_preview(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemRoutingPreviewRequest | None = None,
+    ) -> RoutingPreviewView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        profile = await self._routing_profile_for_item(session, item)
+        if payload:
+            profile = self._apply_routing_preview_request(profile, payload)
+        decision = RoutingPreviewService().preview(profile)
+        preview = RoutingPreviewView(
+            profile=self._to_routing_profile_view(profile),
+            decision=self._to_routing_decision_view(decision),
+        )
+        if payload and payload.recordEvent:
+            await self._record_routing_preview_event(session, item, preview)
+            await session.commit()
+            await session.refresh(item)
+        return preview
+
+    def _apply_routing_preview_request(
+        self,
+        profile: RoutingProfile,
+        payload: WorkItemRoutingPreviewRequest,
+    ) -> RoutingProfile:
+        task_kind = profile.task_kind
+        if payload.taskKind:
+            try:
+                task_kind = TaskKind(payload.taskKind)
+            except ValueError as exc:
+                raise ValueError(f"Unknown routing task kind: {payload.taskKind}") from exc
+        return replace(
+            profile,
+            step_id=payload.stepId or profile.step_id,
+            task_kind=task_kind,
+        )
+
+    async def _record_routing_preview_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        preview: RoutingPreviewView,
+    ) -> None:
+        decision = preview.decision
+        profile = preview.profile
+        await self._record_event(
+            session,
+            item,
+            "routing.preview_recorded",
+            f"Routing preview selected {decision.selectedLane} in {decision.authorityMode} mode.",
+            {
+                "stepId": profile.stepId,
+                "taskKind": profile.taskKind,
+                "selectedLane": decision.selectedLane,
+                "authorityMode": decision.authorityMode,
+                "confidenceScore": decision.confidenceScore,
+                "confidenceBand": decision.confidenceBand,
+                "reasonCodes": list(decision.reasonCodes),
+                "rejectedLanes": [
+                    {
+                        "lane": rejected.lane,
+                        "rejectionCodes": list(rejected.rejectionCodes),
+                    }
+                    for rejected in decision.rejectedLanes
+                ],
+                "escalationPath": list(decision.escalationPath),
+                "permissionSummary": decision.permissionSummary,
+            },
+        )
+
+    async def _routing_profile_for_item(self, session: AsyncSession, item: WorkItem) -> RoutingProfile:
+        recipe = self._execution_recipe_for_item(item)
+        if recipe:
+            events = await self.list_work_item_events(session, item.id)
+            audit = self._recipe_gate_audit_view(item, recipe, events, preview_only=True)
+            next_action = audit.nextManagedAction
+            task_kind = self._task_kind_for_managed_action(next_action.actionId, next_action.requiredGate)
+            return RoutingProfile(
+                work_item_id=item.id,
+                step_id=next_action.requiredGate or next_action.actionId,
+                task_kind=task_kind,
+                phase=item.state,
+                risk_level=item.risk_level,
+                write_scope="none",
+                allowed_paths=tuple(recipe.allowed_paths),
+                validation_expectations=tuple(command.display for command in recipe.verification_commands),
+                escalation_triggers=("preview_rejected", "validation_failed", "operator_requested"),
+            )
+        return RoutingProfile(
+            work_item_id=item.id,
+            step_id=item.state,
+            task_kind=TaskKind.TASK_CLASSIFICATION,
+            phase=item.state,
+            risk_level=item.risk_level,
+        )
+
+    def _task_kind_for_managed_action(self, action_id: str, required_gate: str | None) -> TaskKind:
+        if required_gate in {"scope", "clean-worktree", "branch-ownership", "path-scope", "verification"}:
+            return TaskKind.PATH_SCOPE_CHECK
+        if required_gate == "delivery-readiness":
+            return TaskKind.DELIVERY_PACKAGE_CHECK
+        if action_id in {"run_recipe_implementation", "prepare_recipe_branch"}:
+            return TaskKind.BOUNDED_RECIPE_IMPLEMENTATION
+        if action_id == "record_delivery_readiness":
+            return TaskKind.DELIVERY_PACKAGE_CHECK
+        if action_id == "complete":
+            return TaskKind.FINAL_VALIDATION_REVIEW
+        return TaskKind.TASK_CLASSIFICATION
+
+    def _to_routing_profile_view(self, profile: RoutingProfile) -> RoutingProfileView:
+        return RoutingProfileView(
+            workItemId=profile.work_item_id,
+            stepId=profile.step_id,
+            taskKind=profile.task_kind.value,
+            phase=profile.phase,
+            riskLevel=profile.risk_level,
+            privacyLevel=profile.privacy_level,
+            writeScope=profile.write_scope,
+            allowedPaths=list(profile.allowed_paths),
+            contextNeed=profile.context_need,
+            reasoningNeed=profile.reasoning_need,
+            determinismNeed=profile.determinism_need,
+            validationExpectations=list(profile.validation_expectations),
+            preferredLanes=[lane.value for lane in profile.preferred_lanes],
+            forbiddenLanes=[lane.value for lane in profile.forbidden_lanes],
+            escalationTriggers=list(profile.escalation_triggers),
+        )
+
+    def _to_routing_decision_view(self, decision: RoutingDecision) -> RoutingDecisionView:
+        return RoutingDecisionView(
+            decisionId=decision.decision_id,
+            workItemId=decision.work_item_id,
+            stepId=decision.step_id,
+            profileSnapshot=self._to_routing_profile_view(decision.profile_snapshot),
+            selectedLane=decision.selected_lane.value,
+            selectedWorkerId=decision.selected_worker_id,
+            authorityMode=decision.authority_mode.value,
+            confidenceScore=decision.confidence_score,
+            confidenceBand=decision.confidence_band.value,
+            reasonCodes=list(decision.reason_codes),
+            rejectedLanes=[
+                RejectedRoutingLaneView(
+                    lane=rejected.lane.value,
+                    rejectionCodes=list(rejected.rejection_codes),
+                    explanation=rejected.explanation,
+                )
+                for rejected in decision.rejected_lanes
+            ],
+            rejectedWorkers=list(decision.rejected_workers),
+            permissionSummary=decision.permission_summary,
+            escalationPath=[lane.value for lane in decision.escalation_path],
+            humanExplanation=decision.human_explanation,
+        )
 
     async def list_operator_views(
         self,
@@ -2239,6 +2403,7 @@ class SupervisorService:
         item: WorkItem,
         recipe: ExecutionRecipe,
         events: list[WorkflowEvent],
+        preview_only: bool = False,
     ) -> WorkItemRecipeGateAuditView:
         entries = [self._recipe_gate_audit_entry(item, recipe, gate, events) for gate in recipe.policy_gates]
         passed_count = sum(1 for entry in entries if entry.status == "passed")
@@ -2252,7 +2417,7 @@ class SupervisorService:
             blockedCount=blocked_count,
             pendingCount=pending_count,
             gates=entries,
-            nextManagedAction=self._next_managed_action_view(item, recipe, entries),
+            nextManagedAction=self._next_managed_action_view(item, recipe, entries, preview_only=preview_only),
         )
 
     def _next_managed_action_view(
@@ -2260,6 +2425,7 @@ class SupervisorService:
         item: WorkItem,
         recipe: ExecutionRecipe,
         entries: list[WorkItemRecipeGateAuditEntryView],
+        preview_only: bool = False,
     ) -> WorkItemManagedActionView:
         gate_status = {entry.gateId: entry.status for entry in entries}
         blocked_gate = next((entry for entry in entries if entry.status == "blocked"), None)
@@ -2328,7 +2494,10 @@ class SupervisorService:
         if state == WorkflowState.REVIEWING:
             delivery_payload = self._recipe_delivery_gate_payload(item, recipe)
             delivery_ready = delivery_payload["readyForApproval"]
-            remote_ready, remote_reason = self._remote_delivery_preflight_status()
+            remote_ready = False
+            remote_reason = "Remote delivery preflight is skipped for routing preview." if preview_only else ""
+            if not preview_only:
+                remote_ready, remote_reason = self._remote_delivery_preflight_status()
             if self._remote_delivery_enabled() and not delivery_payload["remoteOperationsPerformed"]:
                 return WorkItemManagedActionView(
                     actionId="execute_remote_delivery",

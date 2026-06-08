@@ -20,6 +20,7 @@ from supervisor.api.schemas import (
     WorkItemDeliveryReadinessRequest,
     WorkItemEscalationRequest,
     WorkItemManagedActionRequest,
+    WorkItemRoutingPreviewRequest,
 )
 from supervisor.application.service import SupervisorService
 from supervisor.config.settings import get_settings
@@ -50,6 +51,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
+    allow_origin_regex=settings.cors_origin_pattern.pattern,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -114,6 +116,35 @@ async def get_work_item_recipe_gate_audit(work_item_id: str, session: AsyncSessi
     if not audit:
         raise HTTPException(status_code=404, detail=error_response("Recipe gate audit not found.", "recipe_gate_audit_not_found").model_dump())
     return ApiEnvelope(data=audit)
+
+
+@app.get("/work-items/{work_item_id}/routing-preview", response_model=ApiEnvelope)
+async def get_work_item_routing_preview(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    preview = await service.get_routing_preview(session, work_item_id)
+    if not preview:
+        raise HTTPException(status_code=404, detail=error_response("Routing preview not found.", "routing_preview_not_found").model_dump())
+    return ApiEnvelope(data=preview)
+
+
+@app.post("/work-items/{work_item_id}/routing-preview", response_model=ApiEnvelope)
+async def create_work_item_routing_preview(
+    work_item_id: str,
+    payload: WorkItemRoutingPreviewRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        preview = await service.get_routing_preview(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_routing_preview").model_dump()) from exc
+    if not preview:
+        raise HTTPException(status_code=404, detail=error_response("Routing preview not found.", "routing_preview_not_found").model_dump())
+    return ApiEnvelope(data=preview)
 
 
 @app.post("/work-items/{work_item_id}/prepare-branch", response_model=ApiEnvelope)

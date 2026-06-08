@@ -5,12 +5,13 @@ import { DeliveryReadinessPanel } from "../../../components/delivery-readiness-p
 import { EscalationPanel } from "../../../components/escalation-panel";
 import { ExecutionRecipePanel } from "../../../components/execution-recipe-panel";
 import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
+import { RoutingPreviewPanel } from "../../../components/routing-preview-panel";
 import { Shell } from "../../../components/shell";
 import { WorkItemActions } from "../../../components/work-item-actions";
 import { WorkItemHistory } from "../../../components/work-item-history";
 import { WorkItemRetryHistory } from "../../../components/work-item-retry-history";
 import { buildNavStats } from "../../../lib/nav-stats";
-import { getRecipeGateAudit, getWorkItem, getWorkItemEvents, getWorkItems } from "../../../lib/supervisor";
+import { getRecipeGateAudit, getRoutingPreview, getWorkItem, getWorkItemEvents, getWorkItems } from "../../../lib/supervisor";
 import { formatLane, formatWorkflowState } from "../../../lib/workflow-display";
 
 export default async function WorkItemDetailPage({
@@ -19,7 +20,12 @@ export default async function WorkItemDetailPage({
   params: Promise<{ "work-item-id": string }>;
 }) {
   const { "work-item-id": workItemId } = await params;
-  const [item, events, items] = await Promise.all([getWorkItem(workItemId), getWorkItemEvents(workItemId), getWorkItems()]);
+  const [item, events, items, routingPreview] = await Promise.all([
+    getWorkItem(workItemId),
+    getWorkItemEvents(workItemId),
+    getWorkItems(),
+    getRoutingPreview(workItemId),
+  ]);
   const recipeGateAudit = item.executionRecipe ? await getRecipeGateAudit(workItemId) : null;
   const metadata = item.metadata ?? {};
   const navStats = buildNavStats(items);
@@ -107,6 +113,12 @@ export default async function WorkItemDetailPage({
               </a>
             ) : null}
             <a
+              href="#routing-decision"
+              className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Routing
+            </a>
+            <a
               href="#workflow-history"
               className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
@@ -131,6 +143,7 @@ export default async function WorkItemDetailPage({
               <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-[var(--muted)]">{item.details}</p>
             </section>
           ) : null}
+          <RoutingPreviewPanel preview={routingPreview} />
           {item.executionRecipe ? <ExecutionRecipePanel recipe={item.executionRecipe} /> : null}
           {item.executionRecipe ? (
             <BranchPreparationPanel

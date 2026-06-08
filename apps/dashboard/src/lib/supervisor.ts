@@ -1,5 +1,6 @@
 import type {
   ApiEnvelope,
+  RoutingPreviewView,
   RunStatusView,
   SavedWorkItemView,
   SavedWorkItemViewPayload,
@@ -60,6 +61,10 @@ export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView
 
 export async function getRecipeGateAudit(workItemId: string): Promise<WorkItemRecipeGateAuditView> {
   return requestJson<WorkItemRecipeGateAuditView>(`/work-items/${workItemId}/recipe-gate-audit`);
+}
+
+export async function getRoutingPreview(workItemId: string): Promise<RoutingPreviewView> {
+  return requestJson<RoutingPreviewView>(`/work-items/${workItemId}/routing-preview`);
 }
 
 export async function getAuditEvents(): Promise<

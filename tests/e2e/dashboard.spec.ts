@@ -268,6 +268,36 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.locator("article").filter({ hasText: "Operator escalation control" })).toHaveCount(0);
   });
 
+  test("shows routing badge and route rationale on work item detail", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Routing detail explanation",
+      requestedOutcome: "Verify the dashboard explains the supervisor routing preview.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+      },
+    });
+
+    await page.goto(`/work-items/${workItemId}`);
+
+    await page.getByRole("link", { name: "Routing" }).click();
+    await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#routing-decision$`));
+
+    const routingPanel = page.locator("#routing-decision");
+    await expect(routingPanel).toBeInViewport();
+    await expect(routingPanel.getByText("Why This Route?")).toBeVisible();
+    await expect(routingPanel.getByText("Utility", { exact: true })).toBeVisible();
+    await expect(routingPanel.getByText("Record Only").first()).toBeVisible();
+    await expect(routingPanel.getByText("high", { exact: true })).toBeVisible();
+    await expect(routingPanel.getByText("Execution affected")).toBeVisible();
+    await expect(routingPanel.getByText("No", { exact: true })).toBeVisible();
+    await expect(routingPanel.getByText("Task Deterministic Check")).toBeVisible();
+    await expect(routingPanel.getByText("Local read-only").first()).toBeVisible();
+    await expect(routingPanel.getByText("Permission summary")).toBeVisible();
+  });
+
   test("shows delivery readiness controls for managed recipe work", async ({ page, request }) => {
     const workItemId = await createWorkItem(request, {
       title: "Managed delivery package review",

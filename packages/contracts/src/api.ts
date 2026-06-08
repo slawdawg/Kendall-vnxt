@@ -99,6 +99,53 @@ export interface WorkItemRecipeGateAuditView {
   nextManagedAction: WorkItemManagedActionView;
 }
 
+export interface RoutingProfileView {
+  workItemId: string;
+  stepId: string;
+  taskKind: string;
+  phase?: string | null;
+  riskLevel: string;
+  privacyLevel: string;
+  writeScope: string;
+  allowedPaths: string[];
+  contextNeed: string;
+  reasoningNeed: string;
+  determinismNeed: string;
+  validationExpectations: string[];
+  preferredLanes: string[];
+  forbiddenLanes: string[];
+  escalationTriggers: string[];
+}
+
+export interface RejectedRoutingLaneView {
+  lane: string;
+  rejectionCodes: string[];
+  explanation: string;
+}
+
+export interface RoutingDecisionView {
+  decisionId: string;
+  workItemId: string;
+  stepId: string;
+  profileSnapshot: RoutingProfileView;
+  selectedLane: string;
+  selectedWorkerId?: string | null;
+  authorityMode: string;
+  confidenceScore: number;
+  confidenceBand: string;
+  reasonCodes: string[];
+  rejectedLanes: RejectedRoutingLaneView[];
+  rejectedWorkers: string[];
+  permissionSummary: string;
+  escalationPath: string[];
+  humanExplanation: string;
+}
+
+export interface RoutingPreviewView {
+  profile: RoutingProfileView;
+  decision: RoutingDecisionView;
+}
+
 export interface WorkItemView extends WorkItemPayload {
   id: string;
   origin: "operator" | "supervisor";
