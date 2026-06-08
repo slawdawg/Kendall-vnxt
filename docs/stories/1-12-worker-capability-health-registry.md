@@ -4,7 +4,7 @@ baseline_commit: b48c523
 
 # Story 1.12: Worker Capability And Health Registry
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -25,24 +25,24 @@ so that dynamic routing can see available worker lanes before any real local mod
 
 ## Tasks / Subtasks
 
-- [ ] Add worker registry domain contract. (AC: 1, 2, 4, 5)
-  - [ ] Define worker lane, adapter type, capability, permission, and health dataclasses/enums.
-  - [ ] Add a static registry service with fake/disabled workers for future lanes.
-  - [ ] Keep `utility.internal` online and all future workers non-executing.
-- [ ] Add read-only supervisor API endpoint. (AC: 3, 6)
-  - [ ] Expose `GET /routing/worker-registry`.
-  - [ ] Use existing `ApiEnvelope` conventions.
-  - [ ] Do not mutate work items or workflow events.
-- [ ] Export shared contracts. (AC: 7)
-  - [ ] Add TypeScript worker registry view types.
-- [ ] Add focused tests. (AC: 3, 4, 5, 8)
-  - [ ] Assert registry includes `utility.internal` as online.
-  - [ ] Assert local/subscription/premium future entries are disabled or not-ready with reasons.
-  - [ ] Assert repeated reads do not create workflow events.
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused supervisor tests.
-  - [ ] Run broader workspace verification.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add worker registry domain contract. (AC: 1, 2, 4, 5)
+  - [x] Define worker lane, adapter type, capability, permission, and health dataclasses/enums.
+  - [x] Add a static registry service with fake/disabled workers for future lanes.
+  - [x] Keep `utility.internal` online and all future workers non-executing.
+- [x] Add read-only supervisor API endpoint. (AC: 3, 6)
+  - [x] Expose `GET /routing/worker-registry`.
+  - [x] Use existing `ApiEnvelope` conventions.
+  - [x] Do not mutate work items or workflow events.
+- [x] Export shared contracts. (AC: 7)
+  - [x] Add TypeScript worker registry view types.
+- [x] Add focused tests. (AC: 3, 4, 5, 8)
+  - [x] Assert registry includes `utility.internal` as online.
+  - [x] Assert local/subscription/premium future entries are disabled or not-ready with reasons.
+  - [x] Assert repeated reads do not create workflow events.
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused supervisor tests.
+  - [x] Run broader workspace verification.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -79,17 +79,30 @@ Recommended design:
 
 ### Debug Log References
 
-- Pending.
+- Focused: `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q -k "worker_registry"` passed, 1 test.
+- Routing integration: `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q` passed, 25 tests, 1 aiosqlite warning.
+- Workspace check: `pnpm run check` passed; dashboard build succeeded and supervisor tests passed, 58 tests, 1 aiosqlite warning.
 
 ### Completion Notes List
 
-- Pending.
+- Added a provider-neutral static worker registry domain model with adapter type, health, capability, permission, queue, and disabled-reason evidence.
+- Added `GET /routing/worker-registry` as a read-only supervisor endpoint using existing API envelope conventions.
+- Registered `utility.internal` as the online internal utility worker and represented future local, subscription handoff, and premium lanes as disabled/not-ready entries.
+- Exported shared TypeScript registry contracts and added integration tests proving stable shape and non-mutating reads.
 
 ### File List
 
-- Pending.
+- `docs/stories/1-12-worker-capability-health-registry.md`
+- `_bmad-output/implementation-artifacts/1-12-worker-capability-health-registry.md`
+- `packages/contracts/src/api.ts`
+- `services/supervisor/src/supervisor/api/main.py`
+- `services/supervisor/src/supervisor/api/schemas.py`
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/src/supervisor/domain/worker_registry.py`
+- `services/supervisor/tests/integration/test_routing_preview.py`
 
 ## Change Log
 
 - 2026-06-08: Created story from routing follow-on roadmap after Story 1.11 completion.
+- 2026-06-08: Implemented worker capability and health registry; status moved to done.
 

@@ -511,6 +511,56 @@ def test_routing_lane_profiles_aggregate_recorded_routing_events(tmp_path, monke
     assert all(profile["latestEventAt"] for profile in profiles.values())
     assert before_events == after_events
 
+
+def test_worker_registry_lists_static_workers_without_mutating_events(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "worker-registry.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        first_response = client.get("/routing/worker-registry")
+        second_response = client.get("/routing/worker-registry")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json() == second_response.json()
+    assert before_events == after_events
+
+    workers = {worker["workerId"]: worker for worker in first_response.json()["data"]}
+    utility = workers["utility.internal"]
+    local = workers["local.readonly.mock"]
+    handoff = workers["subscription.handoff"]
+    premium = workers["premium.approval"]
+
+    assert utility["lane"] == "utility"
+    assert utility["adapterType"] == "internal_utility"
+    assert utility["health"] == "online"
+    assert utility["queueDepth"] == 0
+    assert utility["maxParallelJobs"] == 1
+    assert utility["disabledReason"] is None
+    assert "internal_functions_only" in utility["permissions"]
+    assert "path_scope_check" in utility["capabilities"]
+
+    assert local["lane"] == "local_readonly"
+    assert local["health"] == "disabled"
+    assert local["disabledReason"] == "local_readonly_adapter_not_enabled"
+    assert "no_file_writes" in local["permissions"]
+
+    assert handoff["lane"] == "subscription_handoff"
+    assert handoff["health"] == "disabled"
+    assert handoff["disabledReason"] == "direct_subscription_launch_not_enabled"
+
+    assert premium["lane"] == "premium_approval"
+    assert premium["health"] == "disabled"
+    assert premium["disabledReason"] == "premium_execution_requires_operator_approval_flow"
+
 def test_local_evidence_explanation_generation_is_non_mutating(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "local-evidence-explanation.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

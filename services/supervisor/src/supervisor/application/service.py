@@ -41,6 +41,7 @@ from supervisor.api.schemas import (
     WorkItemRecipeGateAuditView,
     WorkItemRemoteAutomationPolicyView,
     WorkItemFilterView,
+    WorkerRegistryEntryView,
     WorkflowEventView,
     WorkItemView,
 )
@@ -57,6 +58,7 @@ from supervisor.domain.routing import (
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
 from supervisor.domain.types import AuditMode, BmadLane, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
+from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerRegistryEntry
 from supervisor.infrastructure.db.models import AuditEvent, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
 from supervisor.infrastructure.streaming.bus import EventBus
 
@@ -87,6 +89,7 @@ class SupervisorService:
         self.bus = bus
         self._loop_lock = asyncio.Lock()
         self.utility_worker = UtilityWorkerAdapter()
+        self.worker_registry = StaticWorkerRegistry()
 
     async def ensure_control(self, session: AsyncSession) -> SupervisorControl:
         control = await session.get(SupervisorControl, 1)
@@ -157,6 +160,23 @@ class SupervisorService:
         result = await session.execute(select(AuditEvent).order_by(AuditEvent.created_at.desc()))
         return list(result.scalars())
 
+
+    def list_worker_registry(self) -> list[WorkerRegistryEntryView]:
+        return [self._to_worker_registry_entry_view(worker) for worker in self.worker_registry.list_workers()]
+
+    def _to_worker_registry_entry_view(self, worker: WorkerRegistryEntry) -> WorkerRegistryEntryView:
+        return WorkerRegistryEntryView(
+            workerId=worker.worker_id,
+            displayName=worker.display_name,
+            lane=worker.lane.value,
+            adapterType=worker.adapter_type.value,
+            capabilities=list(worker.capabilities),
+            permissions=list(worker.permissions),
+            health=worker.health.value,
+            queueDepth=worker.queue_depth,
+            maxParallelJobs=worker.max_parallel_jobs,
+            disabledReason=worker.disabled_reason,
+        )
     async def list_work_item_events(self, session: AsyncSession, work_item_id: str) -> list[WorkflowEvent]:
         result = await session.execute(
             select(WorkflowEvent)

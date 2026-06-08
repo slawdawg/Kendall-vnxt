@@ -100,6 +100,11 @@ async def list_routing_lane_profiles(session: AsyncSession = Depends(get_session
     return ApiEnvelope(data=await service.list_routing_lane_profiles(session))
 
 
+
+@app.get("/routing/worker-registry", response_model=ApiEnvelope)
+async def list_worker_registry():
+    return ApiEnvelope(data=service.list_worker_registry())
+
 @app.get("/work-items/{work_item_id}", response_model=ApiEnvelope)
 async def get_work_item(work_item_id: str, session: AsyncSession = Depends(get_session)):
     items = await service.list_work_items(session)

@@ -257,6 +257,19 @@ class RoutingLaneEvidenceProfileView(BaseModel):
     latestEventAt: datetime | None = None
 
 
+
+class WorkerRegistryEntryView(BaseModel):
+    workerId: str
+    displayName: str
+    lane: str
+    adapterType: str
+    capabilities: list[str]
+    permissions: list[str]
+    health: str
+    queueDepth: int
+    maxParallelJobs: int
+    disabledReason: str | None = None
+
 class RoutingOverrideView(BaseModel):
     overrideId: str
     workItemId: str

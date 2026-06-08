@@ -206,6 +206,19 @@ export interface RoutingLaneEvidenceProfileView {
   latestEventAt?: string | null;
 }
 
+
+export interface WorkerRegistryEntryView {
+  workerId: string;
+  displayName: string;
+  lane: string;
+  adapterType: string;
+  capabilities: string[];
+  permissions: string[];
+  health: string;
+  queueDepth: number;
+  maxParallelJobs: number;
+  disabledReason?: string | null;
+}
 export interface RoutingOverrideView {
   overrideId: string;
   workItemId: string;
