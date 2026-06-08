@@ -1,12 +1,18 @@
 import { ControlPanel } from "../../components/control-panel";
 import { OperatorProfilePanel } from "../../components/operator-profile-panel";
 import { PageIntro } from "../../components/page-intro";
+import { RoutingFleetPanel } from "../../components/routing-fleet-panel";
 import { Shell } from "../../components/shell";
 import { buildNavStats } from "../../lib/nav-stats";
-import { getRunStatus, getWorkItems } from "../../lib/supervisor";
+import { getRoutingLaneProfiles, getRunStatus, getWorkerRegistry, getWorkItems } from "../../lib/supervisor";
 
 export default async function ControlsPage() {
-  const [status, items] = await Promise.all([getRunStatus(), getWorkItems()]);
+  const [status, items, workers, laneProfiles] = await Promise.all([
+    getRunStatus(),
+    getWorkItems(),
+    getWorkerRegistry(),
+    getRoutingLaneProfiles(),
+  ]);
   const navStats = buildNavStats(items);
 
   return (
@@ -24,6 +30,7 @@ export default async function ControlsPage() {
       />
       <OperatorProfilePanel />
       <ControlPanel />
+      <RoutingFleetPanel workers={workers} laneProfiles={laneProfiles} />
     </Shell>
   );
 }

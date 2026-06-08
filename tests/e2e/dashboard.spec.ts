@@ -108,6 +108,27 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText(/pnpm run test:e2e:dashboard/)).toBeVisible();
   });
 
+  test("shows compact routing fleet data on controls", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Routing fleet evidence",
+      requestedOutcome: "Record a route decision so the controls panel can show lane evidence.",
+    });
+    const routeResponse = await request.post(`${supervisorUrl}/work-items/${workItemId}/routing-preview`, {
+      data: { taskKind: "validation_execution", recordEvent: true },
+    });
+    expect(routeResponse.ok()).toBeTruthy();
+
+    await page.goto("/controls");
+
+    const fleetPanel = page.locator("#routing-fleet");
+    await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
+    await expect(fleetPanel.getByText("Internal utility worker")).toBeVisible();
+    await expect(fleetPanel.getByText("Premium approval lane")).toBeVisible();
+    await expect(fleetPanel.getByText("Workers online")).toBeVisible();
+    await expect(fleetPanel.getByText("Lane evidence")).toBeVisible();
+    await expect(fleetPanel.getByText("Decisions 1")).toBeVisible();
+    await expect(fleetPanel.getByText("Task Deterministic Check")).toBeVisible();
+  });
   test("guides a non-coder through intake templates and advanced fields", async ({ page }) => {
     await page.goto("/");
 

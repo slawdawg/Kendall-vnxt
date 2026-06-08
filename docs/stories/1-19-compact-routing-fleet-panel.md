@@ -4,7 +4,7 @@ baseline_commit: 9a185ed
 
 # Story 1.19: Compact Routing Fleet Panel
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -23,19 +23,19 @@ so that worker health and routing evidence are visible without turning the dashb
 
 ## Tasks / Subtasks
 
-- [ ] Add dashboard data fetching. (AC: 1, 5)
-  - [ ] Add supervisor client methods for worker registry and lane profiles.
-  - [ ] Fetch the data on the controls page.
-- [ ] Add compact fleet panel. (AC: 2, 3, 4)
-  - [ ] Render worker health and disabled reasons.
-  - [ ] Render lane evidence counts.
-  - [ ] Keep the panel read-only.
-- [ ] Add focused dashboard coverage. (AC: 6)
-  - [ ] Verify controls page renders Routing Fleet data.
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused dashboard/build verification.
-  - [ ] Run broader workspace verification.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add dashboard data fetching. (AC: 1, 5)
+  - [x] Add supervisor client methods for worker registry and lane profiles.
+  - [x] Fetch the data on the controls page.
+- [x] Add compact fleet panel. (AC: 2, 3, 4)
+  - [x] Render worker health and disabled reasons.
+  - [x] Render lane evidence counts.
+  - [x] Keep the panel read-only.
+- [x] Add focused dashboard coverage. (AC: 6)
+  - [x] Verify controls page renders Routing Fleet data.
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused dashboard/build verification.
+  - [x] Run broader workspace verification.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -70,16 +70,27 @@ Recommended design:
 
 ### Debug Log References
 
-- Pending.
+- `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt --filter @kendall/dashboard build` - first run failed on missing `RoutingLaneEvidenceProfileView` import; rerun passed after import fix.
+- `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt exec playwright test tests/e2e/dashboard.spec.ts -g "shows compact routing fleet data on controls"` - passed, 1 test.
+- `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt run check` - passed, dashboard build plus 64 supervisor tests, 1 existing aiosqlite warning.
 
 ### Completion Notes List
 
-- Pending.
+- Added dashboard client methods for `GET /routing/worker-registry` and `GET /routing/lane-profiles`.
+- Added a read-only `RoutingFleetPanel` on `/controls` showing worker health, disabled reasons, lane/adapter metadata, queue depth, capabilities, and lane evidence counts.
+- Added focused Playwright coverage that records route evidence and verifies the controls page renders real routing fleet data.
+- No worker launch, policy mutation, provider probe, or override control was added.
 
 ### File List
 
-- Pending.
+- `apps/dashboard/src/app/controls/page.tsx`
+- `apps/dashboard/src/components/routing-fleet-panel.tsx`
+- `apps/dashboard/src/lib/supervisor.ts`
+- `tests/e2e/dashboard.spec.ts`
+- `docs/stories/1-19-compact-routing-fleet-panel.md`
+- `_bmad-output/implementation-artifacts/1-19-compact-routing-fleet-panel.md`
 
 ## Change Log
 
 - 2026-06-08: Created story from routing follow-on roadmap after premium approval request artifacts.
+- 2026-06-08: Completed compact routing fleet panel implementation and verification.

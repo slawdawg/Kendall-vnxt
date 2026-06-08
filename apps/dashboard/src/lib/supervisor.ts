@@ -1,5 +1,6 @@
 import type {
   ApiEnvelope,
+  RoutingLaneEvidenceProfileView,
   RoutingPreviewView,
   RunStatusView,
   SavedWorkItemView,
@@ -12,6 +13,7 @@ import type {
   WorkItemRecipeGateAuditView,
   WorkflowEventView,
   WorkItemView,
+  WorkerRegistryEntryView,
 } from "@kendall/contracts";
 
 const configuredPublicBaseUrl = process.env.NEXT_PUBLIC_SUPERVISOR_URL;
@@ -65,6 +67,14 @@ export async function getRecipeGateAudit(workItemId: string): Promise<WorkItemRe
 
 export async function getRoutingPreview(workItemId: string): Promise<RoutingPreviewView> {
   return requestJson<RoutingPreviewView>(`/work-items/${workItemId}/routing-preview`);
+}
+
+export async function getRoutingLaneProfiles(): Promise<RoutingLaneEvidenceProfileView[]> {
+  return requestJson<RoutingLaneEvidenceProfileView[]>("/routing/lane-profiles");
+}
+
+export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {
+  return requestJson<WorkerRegistryEntryView[]>("/routing/worker-registry");
 }
 
 export async function getAuditEvents(): Promise<
