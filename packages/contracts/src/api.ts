@@ -206,6 +206,19 @@ export interface RoutingLaneEvidenceProfileView {
   latestEventAt?: string | null;
 }
 
+export interface RoutingOverrideView {
+  overrideId: string;
+  workItemId: string;
+  createdAt: string;
+  currentRoute: RoutingDecisionView;
+  proposedLane: string;
+  reason: string;
+  note?: string | null;
+  actorId?: string | null;
+  actorLabel?: string | null;
+  executionAffected: boolean;
+}
+
 export interface WorkItemView extends WorkItemPayload {
   id: string;
   origin: "operator" | "supervisor";

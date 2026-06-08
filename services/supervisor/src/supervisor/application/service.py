@@ -18,6 +18,7 @@ from supervisor.api.schemas import (
     OperatorViewResponse,
     RoutingDecisionView,
     RoutingLaneEvidenceProfileView,
+    RoutingOverrideView,
     RoutingPreviewView,
     RoutingProfileView,
     SubscriptionHandoffEvidenceView,
@@ -32,6 +33,7 @@ from supervisor.api.schemas import (
     WorkItemExecutionRecipeView,
     WorkItemManagedActionRequest,
     WorkItemRoutingPreviewRequest,
+    WorkItemRoutingOverrideRequest,
     WorkItemSubscriptionHandoffRequest,
     WorkItemManagedActionView,
     WorkItemPolicyGateView,
@@ -351,6 +353,59 @@ class SupervisorService:
             await session.commit()
             await session.refresh(item)
         return explanation
+
+    async def record_routing_override(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemRoutingOverrideRequest,
+    ) -> RoutingOverrideView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        try:
+            proposed_lane = ExecutionLane(payload.proposedLane)
+        except ValueError as exc:
+            raise ValueError(f"Unknown routing lane: {payload.proposedLane}") from exc
+        reason = payload.reason.strip()
+        if not reason:
+            raise ValueError("Routing override evidence requires a reason.")
+
+        preview = await self.get_routing_preview(session, work_item_id)
+        if not preview:
+            return None
+        override = RoutingOverrideView(
+            overrideId=f"routing-override-{uuid.uuid4()}",
+            workItemId=item.id,
+            createdAt=datetime.now(timezone.utc),
+            currentRoute=preview.decision,
+            proposedLane=proposed_lane.value,
+            reason=reason,
+            note=payload.note.strip() if payload.note else None,
+            actorId=payload.actorId,
+            actorLabel=payload.actorLabel,
+            executionAffected=False,
+        )
+        await self._record_event(
+            session,
+            item,
+            "routing.override_recorded",
+            f"Operator recorded routing override evidence from {preview.decision.selectedLane} to {override.proposedLane}.",
+            {
+                "overrideId": override.overrideId,
+                "currentLane": preview.decision.selectedLane,
+                "proposedLane": override.proposedLane,
+                "reason": override.reason,
+                "note": override.note,
+                "executionAffected": override.executionAffected,
+                "currentDecisionId": preview.decision.decisionId,
+            },
+            actor_type="operator",
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
+        )
+        await session.commit()
+        return override
     def _apply_routing_preview_request(
         self,
         profile: RoutingProfile,

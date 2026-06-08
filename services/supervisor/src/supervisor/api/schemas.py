@@ -142,6 +142,14 @@ class WorkItemLocalEvidenceExplanationRequest(BaseModel):
     recordEvent: bool = False
 
 
+class WorkItemRoutingOverrideRequest(BaseModel):
+    proposedLane: str
+    reason: str
+    note: str | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
 class RoutingProfileView(BaseModel):
     workItemId: str
     stepId: str
@@ -247,6 +255,19 @@ class RoutingLaneEvidenceProfileView(BaseModel):
     localExplanationCount: int
     recentReasonCodes: list[str]
     latestEventAt: datetime | None = None
+
+
+class RoutingOverrideView(BaseModel):
+    overrideId: str
+    workItemId: str
+    createdAt: datetime
+    currentRoute: RoutingDecisionView
+    proposedLane: str
+    reason: str
+    note: str | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
+    executionAffected: bool = False
 
 
 class WorkItemExecutionRecipeView(BaseModel):

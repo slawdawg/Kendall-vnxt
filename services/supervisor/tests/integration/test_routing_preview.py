@@ -395,6 +395,77 @@ def test_routing_preview_post_can_record_workflow_event(tmp_path, monkeypatch) -
     assert payload["permissionSummary"]
 
 
+def test_routing_override_records_evidence_without_affecting_execution(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "routing-override.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/routing-override",
+            json={
+                "proposedLane": "local_readonly",
+                "reason": "Operator wants a second read-only explanation before continuing.",
+                "note": "Record this as tuning evidence only.",
+                "actorId": "operator:routing-override-test",
+                "actorLabel": "Primary operator",
+            },
+        )
+
+        after_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    override = response.json()["data"]
+    assert override["overrideId"].startswith("routing-override-")
+    assert override["workItemId"] == work_item_id
+    assert override["currentRoute"]["selectedLane"] == "utility"
+    assert override["proposedLane"] == "local_readonly"
+    assert override["executionAffected"] is False
+    assert override["actorLabel"] == "Primary operator"
+    assert before_item == after_item
+    assert len(after_events) == len(before_events) + 1
+    event = after_events[0]
+    assert event["eventType"] == "routing.override_recorded"
+    assert event["actorType"] == "operator"
+    assert event["actorLabel"] == "Primary operator"
+    assert event["payload"]["currentLane"] == "utility"
+    assert event["payload"]["proposedLane"] == "local_readonly"
+    assert event["payload"]["executionAffected"] is False
+
+
+def test_routing_override_rejects_unknown_lane_without_recording_event(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "routing-override-invalid.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/routing-override",
+            json={"proposedLane": "not_a_lane", "reason": "Bad lane should not record."},
+        )
+
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"]["code"] == "invalid_routing_override"
+    assert before_events == after_events
+
 def test_routing_lane_profiles_aggregate_recorded_routing_events(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "routing-lane-profiles.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

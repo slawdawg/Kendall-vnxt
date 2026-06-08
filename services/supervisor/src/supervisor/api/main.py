@@ -22,6 +22,7 @@ from supervisor.api.schemas import (
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemManagedActionRequest,
     WorkItemRoutingPreviewRequest,
+    WorkItemRoutingOverrideRequest,
     WorkItemSubscriptionHandoffRequest,
 )
 from supervisor.application.service import SupervisorService
@@ -153,6 +154,23 @@ async def create_work_item_routing_preview(
         raise HTTPException(status_code=404, detail=error_response("Routing preview not found.", "routing_preview_not_found").model_dump())
     return ApiEnvelope(data=preview)
 
+
+@app.post("/work-items/{work_item_id}/routing-override", response_model=ApiEnvelope)
+async def record_work_item_routing_override(
+    work_item_id: str,
+    payload: WorkItemRoutingOverrideRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        override = await service.record_routing_override(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_routing_override").model_dump()) from exc
+    if not override:
+        raise HTTPException(status_code=404, detail=error_response("Routing override not found.", "routing_override_not_found").model_dump())
+    return ApiEnvelope(data=override)
 
 @app.post("/work-items/{work_item_id}/local-evidence-explanation", response_model=ApiEnvelope)
 async def create_work_item_local_evidence_explanation(
