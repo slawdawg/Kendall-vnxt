@@ -783,6 +783,8 @@ def test_subscription_handoff_package_generation_is_non_mutating(tmp_path, monke
     assert package["launchAllowed"] is False
     assert package["context"]
     assert any("Do not launch" in constraint for constraint in package["constraints"])
+    assert any("Architecture review handoff" in constraint for constraint in package["constraints"])
+    assert any("Expected output: recommended architecture decision" in instruction for instruction in package["operatorInstructions"])
     assert package["operatorInstructions"]
     assert before_item == after_item
     assert before_events == after_events
@@ -816,6 +818,36 @@ def test_subscription_handoff_package_can_record_workflow_event(tmp_path, monkey
     assert event["payload"]["selectedLane"] == "subscription_handoff"
     assert event["payload"]["launchAllowed"] is False
     assert event["payload"]["reasonCodes"] == ["task.security_review", "quality.subscription_handoff_preferred"]
+    package = response.json()["data"]
+    assert any("do not include secrets" in constraint for constraint in package["constraints"])
+    assert any("risk-ranked findings" in instruction for instruction in package["operatorInstructions"])
+
+
+def test_subscription_handoff_package_hardens_implementation_handoff(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-handoff-package-implementation.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-handoff-package",
+            json={"stepId": "implementation", "taskKind": "bounded_recipe_implementation"},
+        )
+
+    assert response.status_code == 200
+    package = response.json()["data"]
+    assert package["route"]["selectedLane"] == "subscription_handoff"
+    assert package["launchAllowed"] is False
+    assert "apps/dashboard" in package["allowedPaths"]
+    assert "pnpm run check" in package["validationCommands"]
+    assert any("Implementation handoff" in constraint for constraint in package["constraints"])
+    assert any("Stay within recipe allowed paths" in constraint for constraint in package["constraints"])
+    assert any("bounded patch plan" in instruction for instruction in package["operatorInstructions"])
 
 
 def test_subscription_handoff_package_rejects_non_handoff_route(tmp_path, monkeypatch) -> None:

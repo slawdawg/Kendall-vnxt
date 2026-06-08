@@ -4,7 +4,7 @@ baseline_commit: 1c29b12
 
 # Story 1.17: Subscription Handoff Template Hardening
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -23,20 +23,20 @@ so that Codex/Claude handoffs are safer and more useful before any direct agent 
 
 ## Tasks / Subtasks
 
-- [ ] Add handoff template helpers. (AC: 1, 2, 3, 4)
-  - [ ] Add task-kind-specific constraints.
-  - [ ] Add expected output guidance.
-- [ ] Wire templates into existing package response. (AC: 5)
-  - [ ] Preserve `launchAllowed: false`.
-  - [ ] Preserve existing package fields and event behavior.
-- [ ] Add focused tests. (AC: 3, 4, 5, 6)
-  - [ ] Assert security handoff has stronger privacy/secret constraints.
-  - [ ] Assert implementation handoff includes allowed path and validation expectations.
-  - [ ] Assert non-mutating behavior remains intact.
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused tests.
-  - [ ] Run broader workspace verification.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add handoff template helpers. (AC: 1, 2, 3, 4)
+  - [x] Add task-kind-specific constraints.
+  - [x] Add expected output guidance.
+- [x] Wire templates into existing package response. (AC: 5)
+  - [x] Preserve `launchAllowed: false`.
+  - [x] Preserve existing package fields and event behavior.
+- [x] Add focused tests. (AC: 3, 4, 5, 6)
+  - [x] Assert security handoff has stronger privacy/secret constraints.
+  - [x] Assert implementation handoff includes allowed path and validation expectations.
+  - [x] Assert non-mutating behavior remains intact.
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused tests.
+  - [x] Run broader workspace verification.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -67,17 +67,24 @@ Recommended design:
 
 ### Debug Log References
 
-- Pending.
+- `uv run --directory C:\Users\slaw_dawg\Kendall_Nxt\services\supervisor pytest tests/integration/test_routing_preview.py -q -k "subscription_handoff"` - passed, 5 selected.
+- `uv run --directory C:\Users\slaw_dawg\Kendall_Nxt\services\supervisor pytest tests/integration/test_routing_preview.py -q` - passed, 28 tests, 1 existing aiosqlite warning.
+- `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt run check` - passed, dashboard build plus 61 supervisor tests, 1 existing aiosqlite warning.
 
 ### Completion Notes List
 
-- Pending.
+- Added task-kind-specific subscription handoff constraints for architecture review, security review, implementation work, and general handoffs.
+- Added expected output guidance to operator instructions while preserving `launchAllowed: false` and non-mutating package generation.
+- Extended integration coverage for architecture, security, implementation, non-mutating behavior, and invalid non-handoff routes.
 
 ### File List
 
-- Pending.
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/tests/integration/test_routing_preview.py`
+- `docs/stories/1-17-subscription-handoff-template-hardening.md`
+- `_bmad-output/implementation-artifacts/1-17-subscription-handoff-template-hardening.md`
 
 ## Change Log
 
 - 2026-06-08: Created story from routing follow-on roadmap after local worker registry slices.
-
+- 2026-06-08: Completed subscription handoff template hardening implementation and focused verification.

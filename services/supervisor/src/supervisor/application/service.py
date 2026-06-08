@@ -314,7 +314,7 @@ class SupervisorService:
             route=preview.decision,
             summary=self._subscription_handoff_summary(item, preview),
             context=self._subscription_handoff_context(item, preview),
-            constraints=self._subscription_handoff_constraints(item, recipe),
+            constraints=self._subscription_handoff_constraints(item, recipe, preview),
             allowedPaths=list(preview.profile.allowedPaths),
             validationCommands=list(preview.profile.validationExpectations),
             recentEvidence=[
@@ -325,7 +325,7 @@ class SupervisorService:
                 )
                 for event in events[:8]
             ],
-            operatorInstructions=self._subscription_handoff_operator_instructions(),
+            operatorInstructions=self._subscription_handoff_operator_instructions(preview),
             launchAllowed=False,
         )
         if payload.recordEvent:
@@ -634,12 +634,13 @@ class SupervisorService:
             context.append(f"Details: {item.details}")
         return context
 
-    def _subscription_handoff_constraints(self, item: WorkItem, recipe: ExecutionRecipe | None) -> list[str]:
+    def _subscription_handoff_constraints(self, item: WorkItem, recipe: ExecutionRecipe | None, preview: RoutingPreviewView) -> list[str]:
         constraints = [
             "Do not launch a subscription agent from this package; launchAllowed is false.",
             "Preserve the work item state unless an operator explicitly approves the next workflow action.",
             "Keep secrets and local-only environment details out of any external prompt.",
         ]
+        constraints.extend(self._subscription_handoff_task_constraints(preview))
         if recipe:
             constraints.extend(
                 [
@@ -651,13 +652,48 @@ class SupervisorService:
             constraints.append(f"Current blocked reason must be resolved first: {item.blocked_reason}")
         return constraints
 
-    def _subscription_handoff_operator_instructions(self) -> list[str]:
+
+    def _subscription_handoff_task_constraints(self, preview: RoutingPreviewView) -> list[str]:
+        task_kind = preview.profile.taskKind
+        if task_kind == TaskKind.SECURITY_REVIEW.value:
+            return [
+                "Security review handoff: do not include secrets, credentials, tokens, private keys, or raw environment values.",
+                "Security review handoff: focus on risk, exploitability, affected paths, and concrete mitigation evidence.",
+                "Security review handoff: recommendations must not ask the operator to weaken supervisor approval gates.",
+            ]
+        if task_kind == TaskKind.ARCHITECTURE_REVIEW.value:
+            return [
+                "Architecture review handoff: focus on tradeoffs, boundaries, failure modes, and reversible decisions.",
+                "Architecture review handoff: call out assumptions separately from verified repo evidence.",
+            ]
+        if task_kind in {TaskKind.BOUNDED_RECIPE_IMPLEMENTATION.value, TaskKind.MULTI_FILE_IMPLEMENTATION.value, TaskKind.SIMPLE_PATCH_DRAFT.value}:
+            return [
+                "Implementation handoff: propose changes only inside allowed paths and include a validation plan.",
+                "Implementation handoff: return patch guidance, touched files, tests to run, and rollback notes.",
+            ]
+        return [
+            "General handoff: return concise findings, assumptions, recommended next action, and stop conditions.",
+        ]
+
+    def _subscription_handoff_operator_instructions(self, preview: RoutingPreviewView) -> list[str]:
         return [
             "Review the route decision and rejected lanes before using this package.",
             "Use the summary, constraints, allowed paths, and validation commands as the handoff boundary.",
             "Paste only the needed package sections into a subscription agent; do not include secrets or unrelated local files.",
             "Return any generated patch or recommendation through the existing supervisor review and validation flow.",
+            f"Expected output: {self._subscription_handoff_expected_output(preview)}",
         ]
+
+
+    def _subscription_handoff_expected_output(self, preview: RoutingPreviewView) -> str:
+        task_kind = preview.profile.taskKind
+        if task_kind == TaskKind.SECURITY_REVIEW.value:
+            return "risk-ranked findings with affected paths, evidence, mitigation, and residual risk."
+        if task_kind == TaskKind.ARCHITECTURE_REVIEW.value:
+            return "recommended architecture decision, alternatives considered, tradeoffs, assumptions, and validation needs."
+        if task_kind in {TaskKind.BOUNDED_RECIPE_IMPLEMENTATION.value, TaskKind.MULTI_FILE_IMPLEMENTATION.value, TaskKind.SIMPLE_PATCH_DRAFT.value}:
+            return "bounded patch plan with files, tests, rollback notes, and explicit stop conditions."
+        return "concise findings, assumptions, recommended next action, and stop conditions."
 
     async def _record_subscription_handoff_package_event(
         self,
