@@ -19,6 +19,7 @@ from supervisor.api.schemas import (
     WorkItemCreate,
     WorkItemDeliveryReadinessRequest,
     WorkItemEscalationRequest,
+    WorkItemLocalEvidenceExplanationRequest,
     WorkItemManagedActionRequest,
     WorkItemRoutingPreviewRequest,
     WorkItemSubscriptionHandoffRequest,
@@ -147,6 +148,23 @@ async def create_work_item_routing_preview(
         raise HTTPException(status_code=404, detail=error_response("Routing preview not found.", "routing_preview_not_found").model_dump())
     return ApiEnvelope(data=preview)
 
+
+@app.post("/work-items/{work_item_id}/local-evidence-explanation", response_model=ApiEnvelope)
+async def create_work_item_local_evidence_explanation(
+    work_item_id: str,
+    payload: WorkItemLocalEvidenceExplanationRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        explanation = await service.get_local_evidence_explanation(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_local_evidence_explanation").model_dump()) from exc
+    if not explanation:
+        raise HTTPException(status_code=404, detail=error_response("Local evidence explanation not found.", "local_evidence_explanation_not_found").model_dump())
+    return ApiEnvelope(data=explanation)
 
 @app.post("/work-items/{work_item_id}/subscription-handoff-package", response_model=ApiEnvelope)
 async def create_work_item_subscription_handoff_package(

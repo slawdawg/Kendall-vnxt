@@ -172,6 +172,29 @@ export interface SubscriptionHandoffPackageView {
   launchAllowed: boolean;
 }
 
+export interface LocalEvidenceItemView {
+  eventType: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface LocalEvidenceExplanationView {
+  explanationId: string;
+  workItemId: string;
+  title: string;
+  requestedOutcome: string;
+  taskKind: string;
+  stepId: string;
+  createdAt: string;
+  route: RoutingDecisionView;
+  summary: string;
+  evidence: LocalEvidenceItemView[];
+  boundaries: string[];
+  nextStepSuggestions: string[];
+  writesAllowed: boolean;
+  commandsAllowed: boolean;
+}
+
 export interface WorkItemView extends WorkItemPayload {
   id: string;
   origin: "operator" | "supervisor";

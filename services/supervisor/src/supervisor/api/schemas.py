@@ -136,6 +136,12 @@ class WorkItemSubscriptionHandoffRequest(BaseModel):
     recordEvent: bool = False
 
 
+class WorkItemLocalEvidenceExplanationRequest(BaseModel):
+    stepId: str | None = None
+    taskKind: str | None = None
+    recordEvent: bool = False
+
+
 class RoutingProfileView(BaseModel):
     workItemId: str
     stepId: str
@@ -207,6 +213,29 @@ class SubscriptionHandoffPackageView(BaseModel):
     recentEvidence: list[SubscriptionHandoffEvidenceView]
     operatorInstructions: list[str]
     launchAllowed: bool = False
+
+
+class LocalEvidenceItemView(BaseModel):
+    eventType: str
+    summary: str
+    createdAt: datetime
+
+
+class LocalEvidenceExplanationView(BaseModel):
+    explanationId: str
+    workItemId: str
+    title: str
+    requestedOutcome: str
+    taskKind: str
+    stepId: str
+    createdAt: datetime
+    route: RoutingDecisionView
+    summary: str
+    evidence: list[LocalEvidenceItemView]
+    boundaries: list[str]
+    nextStepSuggestions: list[str]
+    writesAllowed: bool = False
+    commandsAllowed: bool = False
 
 
 class WorkItemExecutionRecipeView(BaseModel):

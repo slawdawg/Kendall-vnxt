@@ -395,6 +395,100 @@ def test_routing_preview_post_can_record_workflow_event(tmp_path, monkeypatch) -
     assert payload["permissionSummary"]
 
 
+def test_local_evidence_explanation_generation_is_non_mutating(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "local-evidence-explanation.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/local-evidence-explanation",
+            json={"stepId": "evidence", "taskKind": "evidence_summary"},
+        )
+
+        after_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    explanation = response.json()["data"]
+    assert explanation["explanationId"].startswith("local-evidence-route-")
+    assert explanation["workItemId"] == work_item_id
+    assert explanation["taskKind"] == "evidence_summary"
+    assert explanation["stepId"] == "evidence"
+    assert explanation["route"]["selectedLane"] == "local_readonly"
+    assert explanation["writesAllowed"] is False
+    assert explanation["commandsAllowed"] is False
+    assert explanation["evidence"]
+    assert any("Read-only" in boundary for boundary in explanation["boundaries"])
+    assert explanation["nextStepSuggestions"]
+    assert before_item == after_item
+    assert before_events == after_events
+
+
+def test_local_evidence_explanation_can_record_workflow_event(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "local-evidence-explanation-event.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/local-evidence-explanation",
+            json={"taskKind": "validation_failure_analysis", "recordEvent": True},
+        )
+
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert len(after_events) == len(before_events) + 1
+    event = after_events[0]
+    assert event["eventType"] == "routing.local_evidence_explained"
+    assert event["payload"]["taskKind"] == "validation_failure_analysis"
+    assert event["payload"]["selectedLane"] == "local_readonly"
+    assert event["payload"]["writesAllowed"] is False
+    assert event["payload"]["commandsAllowed"] is False
+    assert event["payload"]["evidenceCount"] >= 1
+
+
+def test_local_evidence_explanation_rejects_non_readonly_route(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "local-evidence-explanation-reject.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/local-evidence-explanation",
+            json={"taskKind": "architecture_review", "recordEvent": True},
+        )
+
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "invalid_local_evidence_explanation"
+    assert "local_readonly" in response.json()["detail"]["error"]["message"]
+    assert before_events == after_events
+
 def test_subscription_handoff_package_generation_is_non_mutating(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "subscription-handoff-package.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
