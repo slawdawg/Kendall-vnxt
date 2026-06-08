@@ -24,6 +24,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Instal
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -VerifyRemote -RunCheck -WriteReport
 ```
 
+5. Start Codex from the repo root and orient it with:
+
+```text
+Read docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md and continue from it. Use the repo state as source of truth.
+```
+
 If required tools are already installed and you only want to verify the machine:
 
 ```powershell
@@ -138,6 +144,16 @@ pnpm run doctor:github -- --remote
 pnpm run check
 git status --short --branch
 ```
+
+## Codex Orientation
+
+Fresh Codex sessions should read:
+
+```text
+docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md
+```
+
+That handoff summarizes current commits, auth policy, BMAD/KNX requirements, safety gates, verification commands, and the connector-backed GitHub workflow expectation.
 
 ## DPAPI Or Credential Store Failure
 
