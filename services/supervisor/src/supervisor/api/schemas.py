@@ -172,6 +172,13 @@ class WorkItemExecutionAttemptCreateRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkItemExecutionAttemptTransitionRequest(BaseModel):
+    status: ExecutionAttemptStatus
+    reason: str | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
 class ExecutionAttemptView(BaseModel):
     attemptId: str
     workItemId: str

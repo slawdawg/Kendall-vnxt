@@ -19,6 +19,7 @@ from supervisor.api.schemas import (
     WorkItemCreate,
     WorkItemDeliveryReadinessRequest,
     WorkItemExecutionAttemptCreateRequest,
+    WorkItemExecutionAttemptTransitionRequest,
     WorkItemEscalationRequest,
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemManagedActionRequest,
@@ -148,6 +149,25 @@ async def create_work_item_execution_attempt(
         attempt = await service.create_execution_attempt(session, work_item_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_execution_attempt").model_dump()) from exc
+    if not attempt:
+        raise HTTPException(status_code=404, detail=error_response("Execution attempt not found.", "execution_attempt_not_found").model_dump())
+    return ApiEnvelope(data=attempt)
+
+
+@app.post("/work-items/{work_item_id}/execution-attempts/{attempt_id}/lifecycle", response_model=ApiEnvelope)
+async def transition_work_item_execution_attempt(
+    work_item_id: str,
+    attempt_id: str,
+    payload: WorkItemExecutionAttemptTransitionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        attempt = await service.transition_execution_attempt(session, work_item_id, attempt_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_execution_attempt_transition").model_dump()) from exc
     if not attempt:
         raise HTTPException(status_code=404, detail=error_response("Execution attempt not found.", "execution_attempt_not_found").model_dump())
     return ApiEnvelope(data=attempt)

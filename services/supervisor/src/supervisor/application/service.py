@@ -34,6 +34,7 @@ from supervisor.api.schemas import (
     RunStatusView,
     WorkItemCreate,
     WorkItemExecutionAttemptCreateRequest,
+    WorkItemExecutionAttemptTransitionRequest,
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemPremiumApprovalRequest,
     WorkItemBranchPreparationRequest,
@@ -87,6 +88,56 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
     ExecutionAttemptStatus.STARTING.value,
     ExecutionAttemptStatus.RUNNING.value,
     ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+}
+
+TERMINAL_EXECUTION_ATTEMPT_STATUSES = {
+    ExecutionAttemptStatus.CANCELLED.value,
+    ExecutionAttemptStatus.TIMED_OUT.value,
+    ExecutionAttemptStatus.FAILED.value,
+    ExecutionAttemptStatus.COMPLETED.value,
+    ExecutionAttemptStatus.REJECTED.value,
+}
+
+EXECUTION_ATTEMPT_TRANSITIONS = {
+    ExecutionAttemptStatus.PLANNED.value: {
+        ExecutionAttemptStatus.APPROVED.value,
+        ExecutionAttemptStatus.STARTING.value,
+        ExecutionAttemptStatus.RUNNING.value,
+        ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+        ExecutionAttemptStatus.COMPLETED.value,
+    },
+    ExecutionAttemptStatus.APPROVED.value: {
+        ExecutionAttemptStatus.STARTING.value,
+        ExecutionAttemptStatus.RUNNING.value,
+        ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+        ExecutionAttemptStatus.COMPLETED.value,
+    },
+    ExecutionAttemptStatus.STARTING.value: {
+        ExecutionAttemptStatus.RUNNING.value,
+        ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+        ExecutionAttemptStatus.COMPLETED.value,
+    },
+    ExecutionAttemptStatus.RUNNING.value: {
+        ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+        ExecutionAttemptStatus.COMPLETED.value,
+    },
+    ExecutionAttemptStatus.CANCEL_REQUESTED.value: {
+        ExecutionAttemptStatus.CANCELLED.value,
+        ExecutionAttemptStatus.TIMED_OUT.value,
+        ExecutionAttemptStatus.FAILED.value,
+    },
 }
 
 _LANE_UNSET = object()
@@ -286,6 +337,71 @@ class SupervisorService:
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)
 
+    async def transition_execution_attempt(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        attempt_id: str,
+        payload: WorkItemExecutionAttemptTransitionRequest,
+    ) -> ExecutionAttemptView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        attempt = await session.get(ExecutionAttempt, attempt_id)
+        if not attempt or attempt.work_item_id != work_item_id:
+            return None
+
+        current_status = attempt.status
+        requested_status = payload.status.value
+        if current_status in TERMINAL_EXECUTION_ATTEMPT_STATUSES:
+            raise ValueError(f"Execution attempt {attempt.id} is terminal with status {current_status}.")
+        allowed = EXECUTION_ATTEMPT_TRANSITIONS.get(current_status, set())
+        if requested_status not in allowed:
+            raise ValueError(f"Invalid execution attempt transition from {current_status} to {requested_status}.")
+
+        now = datetime.now(timezone.utc)
+        attempt.status = requested_status
+        attempt.updated_at = now
+        if requested_status in {ExecutionAttemptStatus.STARTING.value, ExecutionAttemptStatus.RUNNING.value} and not attempt.started_at:
+            attempt.started_at = now
+        if requested_status == ExecutionAttemptStatus.RUNNING.value:
+            attempt.heartbeat_at = now
+        if requested_status == ExecutionAttemptStatus.CANCEL_REQUESTED.value:
+            attempt.cancel_requested_at = now
+            attempt.cancel_reason = payload.reason
+        if requested_status == ExecutionAttemptStatus.CANCELLED.value:
+            attempt.cancel_requested_at = attempt.cancel_requested_at or now
+            attempt.completed_at = now
+            if payload.reason:
+                attempt.cancel_reason = payload.reason
+        if requested_status == ExecutionAttemptStatus.TIMED_OUT.value:
+            attempt.timeout_at = now
+            attempt.completed_at = now
+            if payload.reason:
+                attempt.failure_reason = payload.reason
+        if requested_status == ExecutionAttemptStatus.FAILED.value:
+            attempt.completed_at = now
+            attempt.failure_reason = payload.reason
+        if requested_status == ExecutionAttemptStatus.COMPLETED.value:
+            attempt.completed_at = now
+
+        event = await self._record_execution_attempt_transition_event(
+            session,
+            item,
+            attempt,
+            previous_status=current_status,
+            reason=payload.reason,
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
+        )
+        event_refs = list(attempt.event_refs_json or [])
+        event_refs.append({"eventId": event.id, "eventType": event.event_type})
+        attempt.event_refs_json = event_refs
+        await session.commit()
+        await session.refresh(attempt)
+        await session.refresh(item)
+        return self._to_execution_attempt_view(attempt)
+
     async def _active_execution_attempt(self, session: AsyncSession, work_item_id: str) -> ExecutionAttempt | None:
         result = await session.execute(
             select(ExecutionAttempt)
@@ -352,6 +468,42 @@ class SupervisorService:
                 "taskKind": preview.profile.taskKind,
                 "stepId": preview.profile.stepId,
                 "rejectionReason": attempt.rejection_reason,
+                "executionAllowed": False,
+                "processLaunchAllowed": False,
+                "providerCallsAllowed": False,
+                "sourceMutationAllowed": False,
+            },
+            actor_type="operator" if actor_id or actor_label else "supervisor",
+            actor_id=actor_id,
+            actor_label=actor_label,
+        )
+
+    async def _record_execution_attempt_transition_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        previous_status: str,
+        reason: str | None,
+        actor_id: str | None,
+        actor_label: str | None,
+    ) -> WorkflowEvent:
+        event_type = f"execution_attempt.{attempt.status}"
+        return await self._record_event(
+            session,
+            item,
+            event_type,
+            f"Execution attempt moved from {previous_status} to {attempt.status}.",
+            {
+                "attemptId": attempt.id,
+                "workItemId": item.id,
+                "routeDecisionId": attempt.route_decision_id,
+                "workerId": attempt.worker_id,
+                "selectedLane": attempt.lane,
+                "authorityMode": attempt.authority_mode,
+                "previousStatus": previous_status,
+                "status": attempt.status,
+                "reason": reason,
                 "executionAllowed": False,
                 "processLaunchAllowed": False,
                 "providerCallsAllowed": False,

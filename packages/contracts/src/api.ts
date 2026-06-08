@@ -118,6 +118,13 @@ export interface ExecutionAttemptCreateRequest {
   actorLabel?: string | null;
 }
 
+export interface ExecutionAttemptTransitionRequest {
+  status: ExecutionAttemptStatus;
+  reason?: string | null;
+  actorId?: string | null;
+  actorLabel?: string | null;
+}
+
 export interface ExecutionAttemptView {
   attemptId: string;
   workItemId: string;

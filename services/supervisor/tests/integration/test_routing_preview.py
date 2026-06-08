@@ -1267,3 +1267,165 @@ def test_execution_attempt_rejects_disabled_subscription_handoff_and_missing_wor
     assert attempt["workerId"] == "subscription.handoff"
     assert attempt["rejectionReason"] == "direct_subscription_launch_not_enabled"
     assert history_response.json()["data"][0]["attemptId"] == attempt["attemptId"]
+
+
+def test_execution_attempt_lifecycle_records_cancel_history_without_execution(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-lifecycle-cancel.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cancel planned execution attempt",
+                "requestedOutcome": "Record a non-executing cancellation lifecycle.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts",
+            json={"actorId": "operator-1", "actorLabel": "Primary operator"},
+        )
+        attempt = attempt_response.json()["data"]
+
+        cancel_requested_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "cancel_requested",
+                "reason": "operator paused the route",
+                "actorId": "operator-1",
+                "actorLabel": "Primary operator",
+            },
+        )
+        cancelled_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "cancelled",
+                "reason": "operator confirmed cancellation",
+                "actorId": "operator-1",
+                "actorLabel": "Primary operator",
+            },
+        )
+        terminal_transition_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={"status": "completed"},
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert cancel_requested_response.status_code == 200
+    cancel_requested = cancel_requested_response.json()["data"]
+    assert cancel_requested["status"] == "cancel_requested"
+    assert cancel_requested["cancelReason"] == "operator paused the route"
+    assert cancel_requested["cancelRequestedAt"] is not None
+
+    assert cancelled_response.status_code == 200
+    cancelled = cancelled_response.json()["data"]
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["cancelReason"] == "operator confirmed cancellation"
+    assert cancelled["completedAt"] is not None
+    assert [event_ref["eventType"] for event_ref in cancelled["eventRefs"]] == [
+        "execution_attempt.planned",
+        "execution_attempt.cancel_requested",
+        "execution_attempt.cancelled",
+    ]
+
+    assert terminal_transition_response.status_code == 409
+    assert terminal_transition_response.json()["detail"]["error"]["code"] == "invalid_execution_attempt_transition"
+
+    events = events_response.json()["data"]
+    cancel_event = next(event for event in events if event["eventType"] == "execution_attempt.cancel_requested")
+    assert cancel_event["actorType"] == "operator"
+    assert cancel_event["payload"]["previousStatus"] == "planned"
+    assert cancel_event["payload"]["status"] == "cancel_requested"
+    assert cancel_event["payload"]["executionAllowed"] is False
+    assert cancel_event["payload"]["processLaunchAllowed"] is False
+    assert cancel_event["payload"]["providerCallsAllowed"] is False
+    assert cancel_event["payload"]["sourceMutationAllowed"] is False
+
+    history = history_response.json()["data"]
+    assert history[0]["attemptId"] == attempt["attemptId"]
+    assert history[0]["status"] == "cancelled"
+
+
+def test_execution_attempt_lifecycle_records_completion_and_rejects_invalid_transition(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-attempt-lifecycle-complete.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Complete planned execution attempt",
+                "requestedOutcome": "Record non-executing completion lifecycle metadata.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        attempt = attempt_response.json()["data"]
+        completed_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={"status": "completed", "reason": "mock lifecycle finished"},
+        )
+        second_attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+
+        rejected_work_item = client.post(
+            "/work-items",
+            json={
+                "title": "Reject invalid lifecycle transition",
+                "requestedOutcome": "Record disabled execution authority for local read-only.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "low",
+            },
+        )
+        rejected_work_item_id = rejected_work_item.json()["data"]["id"]
+        rejected_attempt_response = client.post(
+            f"/work-items/{rejected_work_item_id}/execution-attempts",
+            json={"taskKind": "evidence_summary", "stepId": "evidence-summary"},
+        )
+        rejected_attempt = rejected_attempt_response.json()["data"]
+        invalid_transition_response = client.post(
+            f"/work-items/{rejected_work_item_id}/execution-attempts/{rejected_attempt['attemptId']}/lifecycle",
+            json={"status": "cancel_requested", "reason": "cannot cancel rejected attempt"},
+        )
+        missing_attempt_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/missing/lifecycle",
+            json={"status": "completed"},
+        )
+
+    assert completed_response.status_code == 200
+    completed = completed_response.json()["data"]
+    assert completed["status"] == "completed"
+    assert completed["completedAt"] is not None
+    assert completed["eventRefs"][-1]["eventType"] == "execution_attempt.completed"
+
+    assert second_attempt_response.status_code == 200
+    assert second_attempt_response.json()["data"]["status"] == "planned"
+
+    assert invalid_transition_response.status_code == 409
+    assert "terminal with status rejected" in invalid_transition_response.json()["detail"]["error"]["message"]
+    assert missing_attempt_response.status_code == 404
