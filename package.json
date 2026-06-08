@@ -19,7 +19,7 @@
     "preflight:js": "node ./scripts/preflight.mjs js",
     "preflight:python": "node ./scripts/preflight.mjs python",
     "dev:dashboard": "pnpm run preflight:js && pnpm --filter @kendall/dashboard dev",
-    "dev:supervisor": "pnpm run preflight:python && uv run --directory services/supervisor uvicorn supervisor.api.main:app --reload",
+    "dev:supervisor": "pnpm run preflight:python && uv run --directory services/supervisor uvicorn supervisor.api.main:app --host 0.0.0.0 --reload",
     "build:dashboard": "pnpm --filter @kendall/dashboard build",
     "lint:dashboard": "pnpm --filter @kendall/dashboard lint",
     "test:e2e:dashboard": "playwright test",

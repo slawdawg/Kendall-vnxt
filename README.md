@@ -22,12 +22,15 @@ Default local URLs:
 - dashboard: `http://localhost:3000`
 - supervisor API: `http://localhost:8000`
 
+By default, the dev and start commands bind to `0.0.0.0`, so the dashboard is reachable from the VM's LAN IP and Tailscale IP as well as localhost.
+
 Important environment variables:
 
 - `NEXT_PUBLIC_SUPERVISOR_URL`: browser-visible supervisor base URL
 - `SUPERVISOR_INTERNAL_URL`: server-side dashboard fetch URL for the supervisor
 - `SUPERVISOR_DATABASE_URL`: SQLite by default for local use, PostgreSQL supported via `asyncpg`
 - `SUPERVISOR_CORS_ORIGINS`: comma-separated allowed dashboard origins for browser calls and SSE
+- `SUPERVISOR_CORS_ORIGIN_REGEX`: regex fallback for browser origins such as LAN IPs or Tailscale hostnames on port `3000`
 
 ## Verification
 
@@ -51,6 +54,14 @@ This repo uses a `pnpm` workspace so JS dependencies come from a shared global s
 - `pnpm run setup:js` installs the JS workspace only
 - `pnpm run setup:py` syncs the supervisor virtualenv only
 - `pnpm run doctor` confirms the local Node/dependency/runtime setup is usable
+
+## Windows startup
+
+- `scripts/windows/Install-KendallNxtStartup.ps1` registers per-user logon tasks for the dashboard and supervisor.
+- `scripts/windows/Start-KendallNxtDashboard.ps1` serves the built dashboard on `0.0.0.0:3000`.
+- `scripts/windows/Start-KendallNxtSupervisor.ps1` serves the supervisor API on `0.0.0.0:8000`.
+- `scripts/windows/Launch-KendallNxtAtLogon.vbs` is suitable for the Windows Startup folder when you want a hidden per-user logon launcher.
+- Logs are written to `.data/logs/`.
 
 ## Container stack
 

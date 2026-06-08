@@ -13,6 +13,8 @@ pnpm run dev:dashboard
 
 The dashboard expects the supervisor API on `http://localhost:8000` unless overridden by environment variables in the root README.
 
+The default dev and start commands bind to `0.0.0.0` so you can reach the dashboard through the VM's LAN or Tailscale address.
+
 ## Verification
 
 ```bash

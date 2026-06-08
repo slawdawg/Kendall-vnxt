@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+import re
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,10 @@ class Settings(BaseSettings):
         default="http://localhost:3000,http://127.0.0.1:3000",
         alias="SUPERVISOR_CORS_ORIGINS",
     )
+    cors_origin_regex: str = Field(
+        default=r"^https?://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\]):3000$",
+        alias="SUPERVISOR_CORS_ORIGIN_REGEX",
+    )
     allow_dirty_repo: bool = Field(default=False, alias="SUPERVISOR_ALLOW_DIRTY_REPO")
     allow_remote_delivery: bool = Field(default=False, alias="SUPERVISOR_ALLOW_REMOTE_DELIVERY")
     lease_ttl_seconds: int = 30
@@ -30,6 +35,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def cors_origin_pattern(self) -> re.Pattern[str]:
+        return re.compile(self.cors_origin_regex)
 
 
 @lru_cache
