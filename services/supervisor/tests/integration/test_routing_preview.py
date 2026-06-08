@@ -549,8 +549,8 @@ def test_worker_registry_lists_static_workers_without_mutating_events(tmp_path, 
     assert "path_scope_check" in utility["capabilities"]
 
     assert local["lane"] == "local_readonly"
-    assert local["health"] == "disabled"
-    assert local["disabledReason"] == "local_readonly_adapter_not_enabled"
+    assert local["health"] == "online"
+    assert local["disabledReason"] is None
     assert "no_file_writes" in local["permissions"]
 
     assert handoff["lane"] == "subscription_handoff"
@@ -600,6 +600,48 @@ def test_local_evidence_packet_preview_is_non_mutating_and_bounded(tmp_path, mon
     assert all("eventType" in evidence for evidence in packet["evidence"])
     assert any("Do not include secrets" in note for note in packet["redactionNotes"])
     assert any("file writes are not allowed" in boundary for boundary in packet["boundaries"])
+
+
+def test_mock_local_readonly_worker_preview_is_deterministic_and_non_mutating(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "mock-local-readonly-worker.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        first_response = client.post(f"/work-items/{work_item_id}/local-readonly-worker-preview")
+        second_response = client.post(f"/work-items/{work_item_id}/local-readonly-worker-preview")
+        registry_response = client.get("/routing/worker-registry")
+        after_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert registry_response.status_code == 200
+    assert first_response.json() == second_response.json()
+    assert before_item == after_item
+    assert before_events == after_events
+
+    preview = first_response.json()["data"]
+    assert preview["workerId"] == "local.readonly.mock"
+    assert preview["runId"] == "mock-local-readonly-" + work_item_id
+    assert preview["status"] == "succeeded"
+    assert preview["packetId"] == preview["packet"]["packetId"]
+    assert preview["packet"]["route"]["selectedLane"] == "local_readonly"
+    assert preview["writesAllowed"] is False
+    assert preview["commandsAllowed"] is False
+    assert "deterministic boundary validation" in preview["recommendations"][0]
+    assert "Mock local read-only worker reviewed" in preview["summary"]
+
+    workers = {worker["workerId"]: worker for worker in registry_response.json()["data"]}
+    assert workers["local.readonly.mock"]["health"] == "online"
+    assert workers["local.readonly.mock"]["disabledReason"] is None
 
 def test_local_evidence_explanation_generation_is_non_mutating(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "local-evidence-explanation.db").as_posix()

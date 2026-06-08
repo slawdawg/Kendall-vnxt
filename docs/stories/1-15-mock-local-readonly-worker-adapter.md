@@ -4,7 +4,7 @@ baseline_commit: ab19e5a
 
 # Story 1.15: Mock Local Read-Only Worker Adapter
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -24,23 +24,23 @@ so that the supervisor can prove the local AI worker boundary before connecting 
 
 ## Tasks / Subtasks
 
-- [ ] Add mock local read-only worker contract. (AC: 1, 2, 3)
-  - [ ] Define deterministic result view.
-  - [ ] Add adapter that consumes evidence packets only.
-- [ ] Add read-only preview endpoint. (AC: 4)
-  - [ ] Expose `POST /work-items/{work_item_id}/local-readonly-worker-preview`.
-  - [ ] Do not record workflow events by default.
-- [ ] Update registry and shared contracts. (AC: 5, 7)
-  - [ ] Mark `local.readonly.mock` online.
-  - [ ] Keep real local provider adapters disabled/not configured.
-- [ ] Add focused tests. (AC: 3, 6)
-  - [ ] Assert deterministic mock output.
-  - [ ] Assert registry health for mock local worker.
-  - [ ] Assert no item/event mutation.
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused tests.
-  - [ ] Run broader workspace verification.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add mock local read-only worker contract. (AC: 1, 2, 3)
+  - [x] Define deterministic result view.
+  - [x] Add adapter that consumes evidence packets only.
+- [x] Add read-only preview endpoint. (AC: 4)
+  - [x] Expose `POST /work-items/{work_item_id}/local-readonly-worker-preview`.
+  - [x] Do not record workflow events by default.
+- [x] Update registry and shared contracts. (AC: 5, 7)
+  - [x] Mark `local.readonly.mock` online.
+  - [x] Keep real local provider adapters disabled/not configured.
+- [x] Add focused tests. (AC: 3, 6)
+  - [x] Assert deterministic mock output.
+  - [x] Assert registry health for mock local worker.
+  - [x] Assert no item/event mutation.
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused tests.
+  - [x] Run broader workspace verification.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -74,17 +74,30 @@ Recommended design:
 
 ### Debug Log References
 
-- Pending.
+- Focused: `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q -k "worker_registry or mock_local_readonly"` passed, 2 tests.
+- Workspace check: `pnpm run check` passed; dashboard build succeeded and supervisor tests passed, 60 tests, 1 aiosqlite warning.
 
 ### Completion Notes List
 
-- Pending.
+- Added deterministic `MockLocalReadonlyWorkerAdapter` consuming evidence packet metadata only.
+- Added `POST /work-items/{work_item_id}/local-readonly-worker-preview` as a non-mutating preview endpoint.
+- Added `LocalReadonlyWorkerPreviewView` Python and TypeScript contracts.
+- Marked `local.readonly.mock` online in the worker registry while provider-backed local adapters remain unimplemented.
 
 ### File List
 
-- Pending.
+- `docs/stories/1-15-mock-local-readonly-worker-adapter.md`
+- `_bmad-output/implementation-artifacts/1-15-mock-local-readonly-worker-adapter.md`
+- `packages/contracts/src/api.ts`
+- `services/supervisor/src/supervisor/api/main.py`
+- `services/supervisor/src/supervisor/api/schemas.py`
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/src/supervisor/domain/local_readonly_worker.py`
+- `services/supervisor/src/supervisor/domain/worker_registry.py`
+- `services/supervisor/tests/integration/test_routing_preview.py`
 
 ## Change Log
 
 - 2026-06-08: Created story from routing follow-on roadmap after Story 1.14 completion.
+- 2026-06-08: Implemented mock local read-only worker adapter; status moved to done.
 

@@ -50,8 +50,7 @@ class StaticWorkerRegistry:
                 adapter_type=WorkerAdapterType.LOCAL_OPENAI_COMPATIBLE,
                 capabilities=("evidence_summary", "log_review", "failure_explanation"),
                 permissions=("read_only_evidence_packets", "no_file_writes", "no_commands"),
-                health=WorkerHealthStatus.DISABLED,
-                disabled_reason="local_readonly_adapter_not_enabled",
+                health=WorkerHealthStatus.ONLINE,
             ),
             WorkerRegistryEntry(
                 worker_id="subscription.handoff",

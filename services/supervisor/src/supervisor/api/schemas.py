@@ -248,6 +248,19 @@ class LocalEvidencePacketView(BaseModel):
     writesAllowed: bool = False
     commandsAllowed: bool = False
 
+
+class LocalReadonlyWorkerPreviewView(BaseModel):
+    workerId: str
+    runId: str
+    packetId: str
+    workItemId: str
+    status: str
+    summary: str
+    recommendations: list[str]
+    packet: LocalEvidencePacketView
+    writesAllowed: bool = False
+    commandsAllowed: bool = False
+
 class LocalEvidenceItemView(BaseModel):
     eventType: str
     summary: str

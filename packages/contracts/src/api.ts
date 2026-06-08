@@ -197,6 +197,19 @@ export interface LocalEvidencePacketView {
   writesAllowed: boolean;
   commandsAllowed: boolean;
 }
+
+export interface LocalReadonlyWorkerPreviewView {
+  workerId: string;
+  runId: string;
+  packetId: string;
+  workItemId: string;
+  status: string;
+  summary: string;
+  recommendations: string[];
+  packet: LocalEvidencePacketView;
+  writesAllowed: boolean;
+  commandsAllowed: boolean;
+}
 export interface LocalEvidenceItemView {
   eventType: string;
   summary: string;

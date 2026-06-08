@@ -185,6 +185,14 @@ async def get_work_item_local_evidence_packet(work_item_id: str, session: AsyncS
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     return ApiEnvelope(data=packet)
 
+
+@app.post("/work-items/{work_item_id}/local-readonly-worker-preview", response_model=ApiEnvelope)
+async def preview_work_item_local_readonly_worker(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    preview = await service.preview_local_readonly_worker(session, work_item_id)
+    if not preview:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=preview)
+
 @app.post("/work-items/{work_item_id}/local-evidence-explanation", response_model=ApiEnvelope)
 async def create_work_item_local_evidence_explanation(
     work_item_id: str,

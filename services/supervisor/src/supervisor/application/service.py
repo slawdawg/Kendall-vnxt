@@ -16,6 +16,7 @@ from supervisor.api.schemas import (
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
     LocalEvidencePacketView,
+    LocalReadonlyWorkerPreviewView,
     OperatorViewCreate,
     OperatorViewResponse,
     RoutingDecisionView,
@@ -48,6 +49,7 @@ from supervisor.api.schemas import (
     WorkItemView,
 )
 from supervisor.config.settings import Settings
+from supervisor.domain.local_readonly_worker import MockLocalReadonlyWorkerAdapter
 from supervisor.domain.recipes import EXECUTION_RECIPES, ExecutionRecipe, RecipeCommand
 from supervisor.domain.routing import (
     ExecutionLane,
@@ -93,6 +95,7 @@ class SupervisorService:
         self._loop_lock = asyncio.Lock()
         self.utility_worker = UtilityWorkerAdapter()
         self.worker_registry = StaticWorkerRegistry()
+        self.local_readonly_worker = MockLocalReadonlyWorkerAdapter()
 
     async def ensure_control(self, session: AsyncSession) -> SupervisorControl:
         control = await session.get(SupervisorControl, 1)
@@ -386,6 +389,33 @@ class SupervisorService:
             ],
             writesAllowed=False,
             commandsAllowed=False,
+        )
+
+    async def preview_local_readonly_worker(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+    ) -> LocalReadonlyWorkerPreviewView | None:
+        packet = await self.get_local_evidence_packet(session, work_item_id)
+        if not packet:
+            return None
+        result = self.local_readonly_worker.run(
+            packet_id=packet.packetId,
+            work_item_id=packet.workItemId,
+            evidence_count=len(packet.evidence),
+            route_lane=packet.route.selectedLane,
+        )
+        return LocalReadonlyWorkerPreviewView(
+            workerId=result.worker_id,
+            runId=result.run_id,
+            packetId=result.packet_id,
+            workItemId=packet.workItemId,
+            status=result.status.value,
+            summary=result.summary,
+            recommendations=list(result.recommendations),
+            packet=packet,
+            writesAllowed=result.writes_allowed,
+            commandsAllowed=result.commands_allowed,
         )
     async def get_local_evidence_explanation(
         self,
