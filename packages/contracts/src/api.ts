@@ -127,6 +127,7 @@ export interface RoutingDecisionView {
   decisionId: string;
   workItemId: string;
   stepId: string;
+  createdAt: string;
   profileSnapshot: RoutingProfileView;
   selectedLane: string;
   selectedWorkerId?: string | null;
