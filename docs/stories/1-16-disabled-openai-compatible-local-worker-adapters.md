@@ -4,7 +4,7 @@ baseline_commit: 5479270
 
 # Story 1.16: Disabled OpenAI-Compatible Local Worker Adapters
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -23,19 +23,19 @@ so that Ollama, LM Studio, vLLM, and llama.cpp can be represented safely before 
 
 ## Tasks / Subtasks
 
-- [ ] Add disabled OpenAI-compatible provider definitions. (AC: 1, 2)
-  - [ ] Include Ollama, LM Studio, vLLM, and llama.cpp identifiers.
-  - [ ] Keep endpoints metadata-only and disabled.
-- [ ] Extend worker registry. (AC: 3, 4)
-  - [ ] Keep `local.readonly.mock` online.
-  - [ ] Add disabled real-provider local entries with reasons.
-- [ ] Add focused tests. (AC: 5, 6)
-  - [ ] Assert provider-backed entries are present and disabled.
-  - [ ] Assert registry reads remain non-mutating.
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused tests.
-  - [ ] Run broader workspace verification.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add disabled OpenAI-compatible provider definitions. (AC: 1, 2)
+  - [x] Include Ollama, LM Studio, vLLM, and llama.cpp identifiers.
+  - [x] Keep endpoints metadata-only and disabled.
+- [x] Extend worker registry. (AC: 3, 4)
+  - [x] Keep `local.readonly.mock` online.
+  - [x] Add disabled real-provider local entries with reasons.
+- [x] Add focused tests. (AC: 5, 6)
+  - [x] Assert provider-backed entries are present and disabled.
+  - [x] Assert registry reads remain non-mutating.
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused tests.
+  - [x] Run broader workspace verification.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -67,17 +67,25 @@ Recommended design:
 
 ### Debug Log References
 
-- Pending.
+- Focused: `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q -k "worker_registry or mock_local_readonly"` passed, 2 tests, 1 aiosqlite warning.
+- Workspace check: `pnpm run check` passed; dashboard build succeeded and supervisor tests passed, 60 tests, 1 aiosqlite warning.
 
 ### Completion Notes List
 
-- Pending.
+- Added disabled registry entries for Ollama, LM Studio, vLLM, and llama.cpp OpenAI-compatible local providers.
+- Kept provider-backed local entries metadata-only with `provider_disabled`, `no_http_calls`, and `no_model_calls` permissions.
+- Preserved `local.readonly.mock` as the only online local read-only worker.
+- Added integration assertions for disabled provider visibility and non-mutating registry reads.
 
 ### File List
 
-- Pending.
+- `docs/stories/1-16-disabled-openai-compatible-local-worker-adapters.md`
+- `_bmad-output/implementation-artifacts/1-16-disabled-openai-compatible-local-worker-adapters.md`
+- `services/supervisor/src/supervisor/domain/worker_registry.py`
+- `services/supervisor/tests/integration/test_routing_preview.py`
 
 ## Change Log
 
 - 2026-06-08: Created story from routing follow-on roadmap after Story 1.15 completion.
+- 2026-06-08: Implemented disabled OpenAI-compatible local provider registry entries; status moved to done.
 

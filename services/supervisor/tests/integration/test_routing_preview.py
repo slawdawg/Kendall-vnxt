@@ -553,6 +553,20 @@ def test_worker_registry_lists_static_workers_without_mutating_events(tmp_path, 
     assert local["disabledReason"] is None
     assert "no_file_writes" in local["permissions"]
 
+    for worker_id, disabled_reason in {
+        "local.ollama.disabled": "ollama_local_provider_not_enabled",
+        "local.lmstudio.disabled": "lmstudio_local_provider_not_enabled",
+        "local.vllm.disabled": "vllm_local_provider_not_enabled",
+        "local.llamacpp.disabled": "llamacpp_local_provider_not_enabled",
+    }.items():
+        provider = workers[worker_id]
+        assert provider["lane"] == "local_readonly"
+        assert provider["adapterType"] == "local_openai_compatible"
+        assert provider["health"] == "disabled"
+        assert provider["disabledReason"] == disabled_reason
+        assert "provider_disabled" in provider["permissions"]
+        assert "no_http_calls" in provider["permissions"]
+        assert "no_model_calls" in provider["permissions"]
     assert handoff["lane"] == "subscription_handoff"
     assert handoff["health"] == "disabled"
     assert handoff["disabledReason"] == "direct_subscription_launch_not_enabled"
