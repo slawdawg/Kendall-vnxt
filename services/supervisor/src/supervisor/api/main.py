@@ -21,6 +21,7 @@ from supervisor.api.schemas import (
     WorkItemEscalationRequest,
     WorkItemLocalEvidenceExplanationRequest,
     WorkItemManagedActionRequest,
+    WorkItemPremiumApprovalRequest,
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
     WorkItemSubscriptionHandoffRequest,
@@ -226,6 +227,23 @@ async def create_work_item_subscription_handoff_package(
     if not package:
         raise HTTPException(status_code=404, detail=error_response("Subscription handoff package not found.", "subscription_handoff_package_not_found").model_dump())
     return ApiEnvelope(data=package)
+
+@app.post("/work-items/{work_item_id}/premium-approval-request", response_model=ApiEnvelope)
+async def create_work_item_premium_approval_request(
+    work_item_id: str,
+    payload: WorkItemPremiumApprovalRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        request = await service.get_premium_approval_request(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_premium_approval_request").model_dump()) from exc
+    if not request:
+        raise HTTPException(status_code=404, detail=error_response("Premium approval request not found.", "premium_approval_request_not_found").model_dump())
+    return ApiEnvelope(data=request)
 
 @app.post("/work-items/{work_item_id}/prepare-branch", response_model=ApiEnvelope)
 async def prepare_work_item_branch(

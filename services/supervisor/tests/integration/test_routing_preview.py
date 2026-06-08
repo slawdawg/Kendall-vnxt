@@ -489,6 +489,10 @@ def test_routing_lane_profiles_aggregate_recorded_routing_events(tmp_path, monke
             f"/work-items/{work_item_id}/subscription-handoff-package",
             json={"taskKind": "architecture_review", "recordEvent": True},
         )
+        premium = client.post(
+            f"/work-items/{work_item_id}/premium-approval-request",
+            json={"taskKind": "security_review", "approvalReason": "Security impact is high.", "recordEvent": True},
+        )
         before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
         profiles_response = client.get("/routing/lane-profiles")
         after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
@@ -496,6 +500,7 @@ def test_routing_lane_profiles_aggregate_recorded_routing_events(tmp_path, monke
     assert utility.status_code == 200
     assert local.status_code == 200
     assert handoff.status_code == 200
+    assert premium.status_code == 200
     assert profiles_response.status_code == 200
     profiles = {profile["lane"]: profile for profile in profiles_response.json()["data"]}
     assert profiles["utility"]["decisionCount"] == 1
@@ -508,6 +513,10 @@ def test_routing_lane_profiles_aggregate_recorded_routing_events(tmp_path, monke
     assert profiles["subscription_handoff"]["decisionCount"] == 1
     assert profiles["subscription_handoff"]["handoffPackageCount"] == 1
     assert "task.architecture_review" in profiles["subscription_handoff"]["recentReasonCodes"]
+    assert profiles["premium_approval"]["decisionCount"] == 1
+    assert profiles["premium_approval"]["premiumApprovalRequestCount"] == 1
+    assert profiles["premium_approval"]["outcomeCount"] == 0
+    assert "task.security_review" in profiles["premium_approval"]["recentReasonCodes"]
     assert all(profile["latestEventAt"] for profile in profiles.values())
     assert before_events == after_events
 
@@ -749,6 +758,104 @@ def test_local_evidence_explanation_rejects_non_readonly_route(tmp_path, monkeyp
     assert response.status_code == 409
     assert response.json()["detail"]["error"]["code"] == "invalid_local_evidence_explanation"
     assert "local_readonly" in response.json()["detail"]["error"]["message"]
+    assert before_events == after_events
+
+def test_premium_approval_request_generation_is_non_mutating(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "premium-approval-request.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/premium-approval-request",
+            json={
+                "stepId": "security",
+                "taskKind": "security_review",
+                "approvalReason": "Potential security impact needs premium scrutiny.",
+            },
+        )
+
+        after_item = client.get(f"/work-items/{work_item_id}").json()["data"]
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    request = response.json()["data"]
+    assert request["approvalRequestId"].startswith("premium-approval-route-")
+    assert request["workItemId"] == work_item_id
+    assert request["taskKind"] == "security_review"
+    assert request["stepId"] == "security"
+    assert request["requestedLane"] == "premium_approval"
+    assert request["route"]["selectedLane"] == "subscription_handoff"
+    assert request["approvalReason"] == "Potential security impact needs premium scrutiny."
+    assert request["executionAllowed"] is False
+    assert any("Secrets" in item for item in request["approvalChecklist"])
+    assert any("executionAllowed is false" in item for item in request["riskControls"])
+    assert before_item == after_item
+    assert before_events == after_events
+
+
+def test_premium_approval_request_can_record_workflow_event(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "premium-approval-request-event.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/premium-approval-request",
+            json={"taskKind": "architecture_review", "approvalReason": "Architecture decision is high impact.", "recordEvent": True},
+        )
+
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert len(after_events) == len(before_events) + 1
+    event = after_events[0]
+    assert event["eventType"] == "routing.premium_approval_requested"
+    assert event["payload"]["taskKind"] == "architecture_review"
+    assert event["payload"]["selectedLane"] == "premium_approval"
+    assert event["payload"]["sourceRouteLane"] == "subscription_handoff"
+    assert event["payload"]["executionAllowed"] is False
+    assert event["payload"]["approvalReason"] == "Architecture decision is high impact."
+
+
+def test_premium_approval_request_rejects_ineligible_task_kind(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "premium-approval-request-reject.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+        response = client.post(
+            f"/work-items/{work_item_id}/premium-approval-request",
+            json={"taskKind": "path_scope_check", "recordEvent": True},
+        )
+
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "invalid_premium_approval_request"
+    assert "not eligible" in response.json()["detail"]["error"]["message"]
     assert before_events == after_events
 
 def test_subscription_handoff_package_generation_is_non_mutating(tmp_path, monkeypatch) -> None:

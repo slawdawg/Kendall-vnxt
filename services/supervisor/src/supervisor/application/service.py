@@ -19,6 +19,8 @@ from supervisor.api.schemas import (
     LocalReadonlyWorkerPreviewView,
     OperatorViewCreate,
     OperatorViewResponse,
+    PremiumApprovalEvidenceView,
+    PremiumApprovalRequestView,
     RoutingDecisionView,
     RoutingLaneEvidenceProfileView,
     RoutingOverrideView,
@@ -30,6 +32,7 @@ from supervisor.api.schemas import (
     RunStatusView,
     WorkItemCreate,
     WorkItemLocalEvidenceExplanationRequest,
+    WorkItemPremiumApprovalRequest,
     WorkItemBranchPreparationRequest,
     WorkItemDeliveryReadinessRequest,
     WorkItemDeliveryReadinessView,
@@ -86,9 +89,18 @@ class SupervisorService:
         "routing.preview_recorded",
         "routing.utility_execution_authorized",
         "routing.subscription_handoff_packaged",
+        "routing.premium_approval_requested",
         "routing.local_evidence_explained",
         "routing.outcome_recorded",
     }
+    _PREMIUM_APPROVAL_TASK_KINDS = {
+        TaskKind.ARCHITECTURE_REVIEW.value,
+        TaskKind.SECURITY_REVIEW.value,
+        TaskKind.FINAL_VALIDATION_REVIEW.value,
+        TaskKind.BOUNDED_RECIPE_IMPLEMENTATION.value,
+        TaskKind.MULTI_FILE_IMPLEMENTATION.value,
+    }
+
     def __init__(self, settings: Settings, bus: EventBus) -> None:
         self.settings = settings
         self.bus = bus
@@ -211,6 +223,7 @@ class SupervisorService:
                     "previewCount": 0,
                     "guardedExecutionCount": 0,
                     "handoffPackageCount": 0,
+                    "premiumApprovalRequestCount": 0,
                     "localExplanationCount": 0,
                     "outcomeCount": 0,
                     "recentReasonCodes": [],
@@ -224,8 +237,12 @@ class SupervisorService:
                 profile["guardedExecutionCount"] += 1
             elif event.event_type == "routing.subscription_handoff_packaged":
                 profile["handoffPackageCount"] += 1
+            elif event.event_type == "routing.premium_approval_requested":
+                profile["premiumApprovalRequestCount"] += 1
             elif event.event_type == "routing.local_evidence_explained":
                 profile["localExplanationCount"] += 1
+            elif event.event_type == "routing.outcome_recorded":
+                profile["outcomeCount"] += 1
             if profile["latestEventAt"] is None:
                 profile["latestEventAt"] = self._normalize_timestamp(event.created_at)
             reason_codes = payload.get("reasonCodes")
@@ -240,6 +257,7 @@ class SupervisorService:
                 previewCount=profile["previewCount"],
                 guardedExecutionCount=profile["guardedExecutionCount"],
                 handoffPackageCount=profile["handoffPackageCount"],
+                premiumApprovalRequestCount=profile["premiumApprovalRequestCount"],
                 localExplanationCount=profile["localExplanationCount"],
                 outcomeCount=profile["outcomeCount"],
                 recentReasonCodes=profile["recentReasonCodes"][:8],
@@ -333,6 +351,64 @@ class SupervisorService:
             await session.commit()
             await session.refresh(item)
         return package
+
+    async def get_premium_approval_request(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemPremiumApprovalRequest,
+    ) -> PremiumApprovalRequestView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        preview_payload = WorkItemRoutingPreviewRequest(
+            stepId=payload.stepId,
+            taskKind=payload.taskKind,
+            recordEvent=False,
+        )
+        preview = await self.get_routing_preview(session, work_item_id, preview_payload)
+        if not preview:
+            return None
+        if ExecutionLane.PREMIUM_APPROVAL.value not in preview.decision.escalationPath:
+            raise ValueError(
+                f"Route selected {preview.decision.selectedLane}; premium approval request requires a premium escalation path."
+            )
+        if preview.profile.taskKind not in self._PREMIUM_APPROVAL_TASK_KINDS:
+            raise ValueError(
+                f"Task kind {preview.profile.taskKind} is not eligible for premium approval request artifacts."
+            )
+
+        events = await self.list_work_item_events(session, work_item_id)
+        request = PremiumApprovalRequestView(
+            approvalRequestId=f"premium-approval-{preview.decision.decisionId}",
+            workItemId=item.id,
+            title=item.title,
+            requestedOutcome=item.requested_outcome,
+            taskKind=preview.profile.taskKind,
+            stepId=preview.profile.stepId,
+            createdAt=datetime.now(timezone.utc),
+            requestedLane=ExecutionLane.PREMIUM_APPROVAL.value,
+            route=preview.decision,
+            justification=self._premium_approval_justification(item, preview, payload),
+            requiredEvidence=self._premium_approval_required_evidence(preview),
+            approvalChecklist=self._premium_approval_checklist(),
+            riskControls=self._premium_approval_risk_controls(),
+            recentEvidence=[
+                PremiumApprovalEvidenceView(
+                    eventType=event.event_type,
+                    summary=event.summary,
+                    createdAt=self._normalize_timestamp(event.created_at),
+                )
+                for event in events[:8]
+            ],
+            approvalReason=payload.approvalReason,
+            executionAllowed=False,
+        )
+        if payload.recordEvent:
+            await self._record_premium_approval_request_event(session, item, request)
+            await session.commit()
+            await session.refresh(item)
+        return request
 
 
     async def get_local_evidence_packet(
@@ -620,6 +696,53 @@ class SupervisorService:
                 "commandsAllowed": explanation.commandsAllowed,
             },
         )
+    def _premium_approval_justification(
+        self,
+        item: WorkItem,
+        preview: RoutingPreviewView,
+        payload: WorkItemPremiumApprovalRequest,
+    ) -> list[str]:
+        justification = [
+            f"Current route is {preview.decision.selectedLane} with {preview.decision.confidenceBand} confidence.",
+            f"Premium approval is requested only as an escalation artifact for {preview.profile.taskKind}.",
+            f"Work item risk level is {item.risk_level}; premium usage remains operator-gated.",
+        ]
+        if payload.approvalReason:
+            justification.append(f"Operator reason: {payload.approvalReason}")
+        if item.blocked_reason:
+            justification.append(f"Blocked reason to resolve first: {item.blocked_reason}")
+        return justification
+
+    def _premium_approval_required_evidence(self, preview: RoutingPreviewView) -> list[str]:
+        evidence = [
+            "Current routing decision and rejected lanes.",
+            "Relevant work item context and recent supervisor events.",
+            "Focused validation commands or evidence needed to judge the escalation.",
+            "Expected cost of a wrong answer versus premium usage.",
+        ]
+        if preview.profile.taskKind == TaskKind.SECURITY_REVIEW.value:
+            evidence.append("Security-specific evidence with secrets redacted before any external prompt.")
+        if preview.profile.validationExpectations:
+            evidence.append("Validation expectations: " + ", ".join(preview.profile.validationExpectations))
+        return evidence
+
+    def _premium_approval_checklist(self) -> list[str]:
+        return [
+            "Operator has reviewed route decision, reason codes, and rejected lanes.",
+            "Local and subscription lanes are insufficient, failed, or too risky for this task.",
+            "Secrets, credentials, tokens, private keys, and raw environment values are excluded.",
+            "Allowed paths, validation plan, and rollback expectations are documented.",
+            "A human approval decision is recorded before any premium execution is attempted.",
+        ]
+
+    def _premium_approval_risk_controls(self) -> list[str]:
+        return [
+            "executionAllowed is false; this artifact cannot launch a premium provider.",
+            "Use this package for approval review only, not direct model invocation.",
+            "Record any approval or rejection in the supervisor event trail before execution work continues.",
+            "Prefer the smallest useful premium prompt and include only necessary evidence.",
+        ]
+
     def _subscription_handoff_summary(self, item: WorkItem, preview: RoutingPreviewView) -> str:
         return f"{item.title}: {preview.decision.humanExplanation}"
 
@@ -694,6 +817,31 @@ class SupervisorService:
         if task_kind in {TaskKind.BOUNDED_RECIPE_IMPLEMENTATION.value, TaskKind.MULTI_FILE_IMPLEMENTATION.value, TaskKind.SIMPLE_PATCH_DRAFT.value}:
             return "bounded patch plan with files, tests, rollback notes, and explicit stop conditions."
         return "concise findings, assumptions, recommended next action, and stop conditions."
+
+    async def _record_premium_approval_request_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        request: PremiumApprovalRequestView,
+    ) -> None:
+        await self._record_event(
+            session,
+            item,
+            "routing.premium_approval_requested",
+            f"Premium approval request artifact created for {request.taskKind}.",
+            {
+                "approvalRequestId": request.approvalRequestId,
+                "stepId": request.stepId,
+                "taskKind": request.taskKind,
+                "selectedLane": request.requestedLane,
+                "sourceRouteLane": request.route.selectedLane,
+                "authorityMode": request.route.authorityMode,
+                "confidenceBand": request.route.confidenceBand,
+                "reasonCodes": request.route.reasonCodes,
+                "executionAllowed": request.executionAllowed,
+                "approvalReason": request.approvalReason,
+            },
+        )
 
     async def _record_subscription_handoff_package_event(
         self,

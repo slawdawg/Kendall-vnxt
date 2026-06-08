@@ -172,6 +172,30 @@ export interface SubscriptionHandoffPackageView {
   launchAllowed: boolean;
 }
 
+export interface PremiumApprovalEvidenceView {
+  eventType: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface PremiumApprovalRequestView {
+  approvalRequestId: string;
+  workItemId: string;
+  title: string;
+  requestedOutcome: string;
+  taskKind: string;
+  stepId: string;
+  createdAt: string;
+  requestedLane: string;
+  route: RoutingDecisionView;
+  justification: string[];
+  requiredEvidence: string[];
+  approvalChecklist: string[];
+  riskControls: string[];
+  recentEvidence: PremiumApprovalEvidenceView[];
+  approvalReason?: string | null;
+  executionAllowed: boolean;
+}
 
 export interface LocalEvidencePacketItemView {
   eventType: string;
@@ -239,6 +263,7 @@ export interface RoutingLaneEvidenceProfileView {
   previewCount: number;
   guardedExecutionCount: number;
   handoffPackageCount: number;
+  premiumApprovalRequestCount: number;
   localExplanationCount: number;
   outcomeCount: number;
   recentReasonCodes: string[];

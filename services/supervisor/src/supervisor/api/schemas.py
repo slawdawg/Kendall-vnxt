@@ -136,6 +136,13 @@ class WorkItemSubscriptionHandoffRequest(BaseModel):
     recordEvent: bool = False
 
 
+class WorkItemPremiumApprovalRequest(BaseModel):
+    stepId: str | None = None
+    taskKind: str | None = None
+    approvalReason: str | None = None
+    recordEvent: bool = False
+
+
 class WorkItemLocalEvidenceExplanationRequest(BaseModel):
     stepId: str | None = None
     taskKind: str | None = None
@@ -223,6 +230,30 @@ class SubscriptionHandoffPackageView(BaseModel):
     launchAllowed: bool = False
 
 
+class PremiumApprovalEvidenceView(BaseModel):
+    eventType: str
+    summary: str
+    createdAt: datetime
+
+
+class PremiumApprovalRequestView(BaseModel):
+    approvalRequestId: str
+    workItemId: str
+    title: str
+    requestedOutcome: str
+    taskKind: str
+    stepId: str
+    createdAt: datetime
+    requestedLane: str
+    route: RoutingDecisionView
+    justification: list[str]
+    requiredEvidence: list[str]
+    approvalChecklist: list[str]
+    riskControls: list[str]
+    recentEvidence: list[PremiumApprovalEvidenceView]
+    approvalReason: str | None = None
+    executionAllowed: bool = False
+
 
 class LocalEvidencePacketItemView(BaseModel):
     eventType: str
@@ -290,6 +321,7 @@ class RoutingLaneEvidenceProfileView(BaseModel):
     previewCount: int
     guardedExecutionCount: int
     handoffPackageCount: int
+    premiumApprovalRequestCount: int
     localExplanationCount: int
     outcomeCount: int
     recentReasonCodes: list[str]

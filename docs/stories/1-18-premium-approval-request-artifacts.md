@@ -4,7 +4,7 @@ baseline_commit: 8679bd6
 
 # Story 1.18: Premium Approval Request Artifacts
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -24,22 +24,22 @@ so that premium model usage remains deliberate, reviewable, and recoverable befo
 
 ## Tasks / Subtasks
 
-- [ ] Add premium approval artifact contract. (AC: 1, 2, 3, 6)
-  - [ ] Add Python API schema.
-  - [ ] Add shared TypeScript contract type.
-- [ ] Add supervisor service/API support. (AC: 1, 2, 3, 4, 5)
-  - [ ] Create deterministic artifact generation from work item and routing preview.
-  - [ ] Keep `executionAllowed: false` and no provider launch.
-  - [ ] Support explicit event recording only.
-  - [ ] Reject requests with no premium escalation path.
-- [ ] Add focused tests. (AC: 2, 3, 4, 5, 7)
-  - [ ] Assert non-mutating default generation.
-  - [ ] Assert optional event recording.
-  - [ ] Assert invalid utility-only task rejection.
-- [ ] Verify and update story trail. (AC: all)
-  - [ ] Run focused tests.
-  - [ ] Run broader workspace verification.
-  - [ ] Update Dev Agent Record, File List, and Change Log.
+- [x] Add premium approval artifact contract. (AC: 1, 2, 3, 6)
+  - [x] Add Python API schema.
+  - [x] Add shared TypeScript contract type.
+- [x] Add supervisor service/API support. (AC: 1, 2, 3, 4, 5)
+  - [x] Create deterministic artifact generation from work item and routing preview.
+  - [x] Keep `executionAllowed: false` and no provider launch.
+  - [x] Support explicit event recording only.
+  - [x] Reject requests with no premium escalation path.
+- [x] Add focused tests. (AC: 2, 3, 4, 5, 7)
+  - [x] Assert non-mutating default generation.
+  - [x] Assert optional event recording.
+  - [x] Assert invalid utility-only task rejection.
+- [x] Verify and update story trail. (AC: all)
+  - [x] Run focused tests.
+  - [x] Run broader workspace verification.
+  - [x] Update Dev Agent Record, File List, and Change Log.
 
 ## Dev Notes
 
@@ -74,16 +74,29 @@ Recommended design:
 
 ### Debug Log References
 
-- Pending.
+- `uv run --directory C:\Users\slaw_dawg\Kendall_Nxt\services\supervisor pytest tests/integration/test_routing_preview.py -q -k "premium_approval or lane_profiles"` - passed, 4 selected, 1 existing aiosqlite warning.
+- `uv run --directory C:\Users\slaw_dawg\Kendall_Nxt\services\supervisor pytest tests/integration/test_routing_preview.py -q` - passed, 31 tests, 1 existing aiosqlite warning.
+- `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt run check` - passed, dashboard build plus 64 supervisor tests, 1 existing aiosqlite warning.
 
 ### Completion Notes List
 
-- Pending.
+- Added `POST /work-items/{work_item_id}/premium-approval-request` as a deterministic artifact generator with no premium provider launch.
+- Added premium approval request schemas and shared TypeScript contract types.
+- Added optional `routing.premium_approval_requested` workflow event recording and lane-profile evidence counting for premium approval requests.
+- Corrected lane-profile `routing.outcome_recorded` aggregation while updating the same evidence counter.
+- Added integration coverage for non-mutating generation, optional event recording, ineligible task rejection, and premium lane evidence profiles.
 
 ### File List
 
-- Pending.
+- `services/supervisor/src/supervisor/api/main.py`
+- `services/supervisor/src/supervisor/api/schemas.py`
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/tests/integration/test_routing_preview.py`
+- `packages/contracts/src/api.ts`
+- `docs/stories/1-18-premium-approval-request-artifacts.md`
+- `_bmad-output/implementation-artifacts/1-18-premium-approval-request-artifacts.md`
 
 ## Change Log
 
 - 2026-06-08: Created story from routing follow-on roadmap after subscription handoff template hardening.
+- 2026-06-08: Completed premium approval request artifact implementation and verification.
