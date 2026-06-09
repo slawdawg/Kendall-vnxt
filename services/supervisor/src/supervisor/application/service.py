@@ -457,6 +457,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-managed-recipes",
+                label="Managed recipe policy drift",
+                command="pnpm run check:managed-recipes",
+                status="required",
+                requiredFor=["managed recipe changes", "recipe policy report changes", "controls-page report changes"],
+                evidence=[
+                    "Validates managed recipe contracts, schemas, API route, service report, dashboard rendering, browser assertions, and story evidence stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-build",
                 label="Dashboard build and type check",
                 command="pnpm --filter @kendall/dashboard build",
@@ -1034,8 +1045,9 @@ class SupervisorService:
                 recommendedSliceSize="large",
                 evidence=[
                     f"{len(required_verification)} required verification commands are surfaced.",
-                    "Dashboard e2e, supervisor report catalog, runtime evidence export, and safe backlog drift checks now run inside the full local check.",
+                    "Dashboard e2e, supervisor report catalog, runtime evidence export, safe backlog, and managed recipe policy drift checks now run inside the full local check.",
                     "Focused dashboard e2e runners cover controls, detail, mobile, and managed recipe slices.",
+                    "Future PRs should batch related API, dashboard, docs, and tests into larger coherent slices.",
                 ],
                 relatedReports=[
                     "GET /supervisor/verification-readiness-report",
@@ -1048,8 +1060,9 @@ class SupervisorService:
                     "docs/stories/3-31-runtime-evidence-export-drift-check.md",
                     "docs/stories/3-32-safe-development-backlog-drift-check.md",
                     "docs/stories/3-35-runbook-check-chain-hardening.md",
+                    "docs/stories/3-37-managed-recipe-policy-drift-check.md",
                 ],
-                nextAction="Add or extend static drift checks whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
+                nextAction="Add or extend static drift checks in larger coherent PR slices whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="read-only-evidence-polish",
@@ -1484,6 +1497,7 @@ class SupervisorService:
             "docs/stories/3-34-report-shortcuts-in-evidence-overview.md",
             "docs/stories/3-35-runbook-check-chain-hardening.md",
             "docs/stories/3-36-managed-recipe-policy-report.md",
+            "docs/stories/3-37-managed-recipe-policy-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
