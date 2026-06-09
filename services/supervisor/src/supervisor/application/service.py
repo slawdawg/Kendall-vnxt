@@ -458,6 +458,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-execution-boundary",
+                label="Execution boundary report drift",
+                command="pnpm run check:execution-boundary",
+                status="required",
+                requiredFor=["execution readiness changes", "execution configuration changes", "threat boundary changes", "authority boundary references"],
+                evidence=[
+                    "Validates execution configuration, execution readiness, and threat-boundary contracts, schemas, routes, service evidence, dashboard shortcuts, browser assertions, supervisor tests, and story evidence stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-runbooks",
                 label="Runbook verification alignment",
                 command="pnpm run check:runbooks",
@@ -1780,6 +1791,7 @@ class SupervisorService:
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
             "docs/stories/3-46-maintenance-readiness-drift-check.md",
             "docs/stories/3-47-core-readiness-drift-checks.md",
+            "docs/stories/3-48-execution-boundary-report-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, and core readiness drift coverage through Story 3.47
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, and execution boundary drift coverage through Story 3.48
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -15,7 +15,7 @@ Source review artifacts:
 - `docs/prds/supervisor-dynamic-routing-follow-on-roadmap.md`
 - `docs/stories/index.md`
 - `docs/stories/2-1-execution-attempt-contract-and-state-model.md`
-- `docs/stories/3-47-core-readiness-drift-checks.md`
+- `docs/stories/3-48-execution-boundary-report-drift-check.md`
 
 Implementation areas checked:
 
@@ -90,6 +90,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Maintenance readiness drift check | Implemented | `pnpm run check:maintenance-readiness`, Story 3.46 | Keeps maintenance readiness contracts, schemas, API route, service tracks, dashboard rendering, browser assertions, runbooks, and story evidence aligned. |
 | Documentation authority drift check | Implemented | `pnpm run check:documentation-authority`, Story 3.47 | Keeps documentation authority contracts, schemas, API route, service report, dashboard rendering, browser assertions, tests, runbooks, and story evidence aligned. |
 | Verification readiness drift check | Implemented | `pnpm run check:verification-readiness`, Story 3.47 | Keeps verification readiness contracts, schemas, API route, command inventory, dashboard rendering, browser assertions, tests, runbooks, and story evidence aligned. |
+| Execution boundary report drift check | Implemented | `pnpm run check:execution-boundary`, Story 3.48 | Keeps execution configuration, execution readiness, and threat-boundary contracts, schemas, API routes, service evidence, dashboard shortcuts, browser assertions, supervisor assertions, runtime evidence, runbooks, and story evidence aligned. |
 | Subscription-agent launch PRD | Documented | `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`, Story 3.12 | Drafts supervised launch gates, lifecycle, workspace, output, session, dashboard, runtime export, rollback, and open questions without approving implementation. |
 | Subscription-agent launch PRD review and story breakdown | Documented | `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`, Stories 5.1-5.5 | Resolves planning questions and creates blocked implementation stories pending explicit approval. |
 | Execution authority approval checkpoints | Documented | `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`, Story 3.13 | Defines approval language, non-approval language, evidence requirements, and currently blocked authority stories. |
