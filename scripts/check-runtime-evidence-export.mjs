@@ -87,6 +87,7 @@ for (const shortcutText of [
   "reportShortcutHref",
   "#execution-readiness-report",
   "#safe-development-backlog",
+  "#github-workflow-policy-report",
   "#supervisor-report-catalog",
 ]) {
   assertCondition(reportShortcuts.includes(shortcutText), `Report shortcut helper must include ${shortcutText}`, failures);
@@ -127,6 +128,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-40-runtime-report-anchor-links.md"),
   "Story index must reference Story 3.40 runtime report anchor links",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-42-github-workflow-policy-report.md"),
+  "Story index must reference Story 3.42 GitHub workflow policy report",
   failures,
 );
 

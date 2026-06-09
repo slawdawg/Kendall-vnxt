@@ -26,6 +26,8 @@ from supervisor.api.schemas import (
     ExecutionReadinessReportView,
     ExecutionStateBoundaryView,
     DisabledProviderProofView,
+    GitHubWorkflowPolicyItemView,
+    GitHubWorkflowPolicyReportView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
@@ -859,6 +861,19 @@ class SupervisorService:
                 ],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="github-workflow-policy-report-v1",
+                label="GitHub workflow policy report",
+                endpoint="GET /supervisor/github-workflow-policy-report",
+                status="active",
+                summary="Documents Git/GCM, Codex GitHub connector, optional gh auth, and plaintext-token stop lines for remote delivery workflows.",
+                evidenceScope=["Git credential posture", "Codex connector workflow", "GitHub CLI optionality", "remote delivery checks"],
+                relatedDocs=[
+                    "docs/github-connector-workflow.md",
+                    "docs/stories/3-1-github-auth-and-remote-sync-doctor.md",
+                    "docs/stories/3-4-connector-backed-github-workflow-polish.md",
+                ],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="disabled-provider-proofs",
                 label="Disabled provider proofs",
                 endpoint="GET /supervisor/disabled-provider-proofs",
@@ -1173,6 +1188,85 @@ class SupervisorService:
             remoteAutomationApproved=False,
         )
 
+    def get_github_workflow_policy_report(self) -> GitHubWorkflowPolicyReportView:
+        return GitHubWorkflowPolicyReportView(
+            reportId="github-workflow-policy-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only GitHub delivery policy for using Git Credential Manager for Git remotes, "
+                "the Codex GitHub connector for PR automation, and optional local gh auth only when a workflow explicitly shells out to gh."
+            ),
+            authModel=[
+                GitHubWorkflowPolicyItemView(
+                    itemId="git-gcm-remotes",
+                    label="Git remotes use Git Credential Manager",
+                    status="preferred",
+                    summary="Ordinary fetch, pull, and push should use Git/GCM with Windows DPAPI credential storage.",
+                    evidence=[
+                        "docs/github-connector-workflow.md defines Git/GCM as the preferred remote Git path.",
+                        "pnpm run doctor:github checks credential helper and credentialStore posture.",
+                    ],
+                ),
+                GitHubWorkflowPolicyItemView(
+                    itemId="codex-github-connector",
+                    label="Codex GitHub connector handles PR work",
+                    status="preferred",
+                    summary="Connector-backed PR inspection, metadata, and merge actions avoid local plaintext GitHub CLI token requirements.",
+                    evidence=[
+                        "docs/github-connector-workflow.md names the connector probe before relying on PR automation.",
+                        "Fresh VM handoff requires connector-backed workflow awareness before product work.",
+                    ],
+                ),
+                GitHubWorkflowPolicyItemView(
+                    itemId="local-gh-auth",
+                    label="GitHub CLI auth is optional",
+                    status="optional_when_workflow_shells_out_to_gh",
+                    summary="Local gh auth is not a baseline requirement and must not be replaced with persistent insecure token storage.",
+                    evidence=[
+                        "Bootstrap checks gh auth posture without creating tokens.",
+                        "doctor:github treats gh auth as optional when Git/GCM remote delivery is healthy.",
+                    ],
+                ),
+            ],
+            requiredChecks=[
+                GitHubWorkflowPolicyItemView(
+                    itemId="github-doctor-local",
+                    label="Local GitHub doctor",
+                    status="required_for_remote_debugging",
+                    summary="Run the non-mutating local doctor before diagnosing remote delivery failures.",
+                    evidence=["pnpm run doctor:github"],
+                ),
+                GitHubWorkflowPolicyItemView(
+                    itemId="github-doctor-remote",
+                    label="Remote GitHub doctor",
+                    status="required_for_fresh_vm_acceptance",
+                    summary="Run live remote checks only when interactive Git/GCM credentials are expected to work.",
+                    evidence=["pnpm run doctor:github -- --remote"],
+                ),
+                GitHubWorkflowPolicyItemView(
+                    itemId="connector-probe",
+                    label="Connector probe",
+                    status="required_before_connector_pr_automation",
+                    summary="Use the Codex GitHub connector to inspect repository or PR state before connector-backed automation.",
+                    evidence=["docs/github-connector-workflow.md"],
+                ),
+            ],
+            stopLines=[
+                "This report is not approval for worker source mutation, network access, credential access, or arbitrary remote automation.",
+                "Do not create persistent plaintext GitHub CLI tokens or use gh auth insecure storage as a baseline setup.",
+                "If Git/GCM or connector authentication is unavailable, pause and ask the operator which GitHub path to use.",
+            ],
+            nextSafeActions=[
+                "Use Git/GCM for ordinary Git push and pull operations.",
+                "Use the Codex GitHub connector for PR inspection, PR creation, and merge actions when available.",
+                "Keep GitHub delivery checks documented in runbooks and fresh VM acceptance evidence.",
+            ],
+            readOnly=True,
+            executionAuthorityApproved=False,
+            plaintextTokenStorageApproved=False,
+            remoteAutomationApproved=False,
+        )
+
     def get_execution_configuration_checks(self) -> ExecutionConfigurationChecksView:
         workers = self.worker_registry.list_workers()
 
@@ -1468,6 +1562,7 @@ class SupervisorService:
             "GET /supervisor/maintenance-readiness-report",
             "GET /supervisor/safe-development-backlog",
             "GET /supervisor/managed-recipe-policy-report",
+            "GET /supervisor/github-workflow-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
         ]
@@ -1504,6 +1599,7 @@ class SupervisorService:
             "docs/stories/3-39-report-shortcut-anchor-polish.md",
             "docs/stories/3-40-runtime-report-anchor-links.md",
             "docs/stories/3-41-current-gap-review-refresh.md",
+            "docs/stories/3-42-github-workflow-policy-report.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

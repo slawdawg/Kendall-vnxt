@@ -4,6 +4,7 @@ import type {
   DocumentationAuthorityReportView,
   ExecutionAttemptView,
   ExecutionReadinessReportView,
+  GitHubWorkflowPolicyReportView,
   ManagedRecipePolicyReportView,
   MaintenanceReadinessReportView,
   RuntimeEvidenceExportView,
@@ -121,6 +122,10 @@ export async function getSafeDevelopmentBacklogReport(): Promise<SafeDevelopment
 
 export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolicyReportView> {
   return requestJson<ManagedRecipePolicyReportView>("/supervisor/managed-recipe-policy-report");
+}
+
+export async function getGitHubWorkflowPolicyReport(): Promise<GitHubWorkflowPolicyReportView> {
+  return requestJson<GitHubWorkflowPolicyReportView>("/supervisor/github-workflow-policy-report");
 }
 
 export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {

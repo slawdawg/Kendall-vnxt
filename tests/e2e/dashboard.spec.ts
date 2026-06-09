@@ -190,6 +190,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/dashboard-e2e-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
     await expect(page.locator("#supervisor-report-catalog")).toBeVisible();
 
@@ -219,6 +220,15 @@ test.describe("dashboard workflow coverage", () => {
     await expect(managedRecipePolicyPanel.getByText("Remote automation", { exact: true })).toBeVisible();
     await expect(managedRecipePolicyPanel.getByText("Managed recipe policies are not execution-authority approvals.")).toBeVisible();
     await expect(page.locator("#managed-recipe-policy-report")).toBeVisible();
+
+    const githubPolicyPanel = page.locator("section").filter({ hasText: "Delivery policy" }).first();
+    await expect(githubPolicyPanel.getByText("GitHub workflow", { exact: true })).toBeVisible();
+    await expect(githubPolicyPanel.getByText("Git remotes use Git Credential Manager")).toBeVisible();
+    await expect(githubPolicyPanel.getByText("Codex GitHub connector handles PR work")).toBeVisible();
+    await expect(githubPolicyPanel.getByText("pnpm run doctor:github -- --remote")).toBeVisible();
+    await expect(githubPolicyPanel.getByText("Plaintext tokens")).toBeVisible();
+    await expect(githubPolicyPanel.getByText("Do not create persistent plaintext GitHub CLI tokens")).toBeVisible();
+    await expect(page.locator("#github-workflow-policy-report")).toBeVisible();
 
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();

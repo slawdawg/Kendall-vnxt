@@ -639,6 +639,28 @@ export interface ManagedRecipePolicyReportView {
   remoteAutomationApproved: boolean;
 }
 
+export interface GitHubWorkflowPolicyItemView {
+  itemId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface GitHubWorkflowPolicyReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  authModel: GitHubWorkflowPolicyItemView[];
+  requiredChecks: GitHubWorkflowPolicyItemView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+  plaintextTokenStorageApproved: boolean;
+  remoteAutomationApproved: boolean;
+}
+
 export interface ThreatBoundaryRuleView {
   ruleId: string;
   label: string;

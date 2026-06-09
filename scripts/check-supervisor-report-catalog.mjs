@@ -83,6 +83,13 @@ const reports = [
     dashboardFetch: "getManagedRecipePolicyReport",
   },
   {
+    reportId: "github-workflow-policy-report-v1",
+    endpoint: "GET /supervisor/github-workflow-policy-report",
+    apiPath: "/supervisor/github-workflow-policy-report",
+    story: "docs/stories/3-42-github-workflow-policy-report.md",
+    dashboardFetch: "getGitHubWorkflowPolicyReport",
+  },
+  {
     reportId: "disabled-provider-proofs",
     endpoint: "GET /supervisor/disabled-provider-proofs",
     apiPath: "/supervisor/disabled-provider-proofs",
@@ -158,6 +165,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/dashboard-e2e-report",
   "GET /supervisor/safe-development-backlog",
   "GET /supervisor/managed-recipe-policy-report",
+  "GET /supervisor/github-workflow-policy-report",
 ]) {
   assertCondition(
     dashboardSpec.includes(visibleEndpoint),
@@ -212,6 +220,7 @@ for (const controlsAnchor of [
   'id="verification-readiness-report"',
   'id="supervisor-report-catalog"',
   'id="managed-recipe-policy-report"',
+  'id="github-workflow-policy-report"',
 ]) {
   assertCondition(
     controlsPage.includes(controlsAnchor),
@@ -248,6 +257,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-40-runtime-report-anchor-links.md"),
   "Story index must reference Story 3.40 runtime report anchor links",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-42-github-workflow-policy-report.md"),
+  "Story index must reference Story 3.42 GitHub workflow policy report",
   failures,
 );
 

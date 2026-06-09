@@ -752,6 +752,28 @@ class ManagedRecipePolicyReportView(BaseModel):
     remoteAutomationApproved: bool = False
 
 
+class GitHubWorkflowPolicyItemView(BaseModel):
+    itemId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class GitHubWorkflowPolicyReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    authModel: list[GitHubWorkflowPolicyItemView]
+    requiredChecks: list[GitHubWorkflowPolicyItemView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+    plaintextTokenStorageApproved: bool = False
+    remoteAutomationApproved: bool = False
+
+
 class WorkItemView(BaseModel):
     id: str
     title: str
