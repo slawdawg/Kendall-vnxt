@@ -57,6 +57,7 @@ Do not rebuild these as new architecture work:
 - Dashboard runtime evidence export access.
 - Draft subscription-agent launch PRD.
 - Subscription-agent launch PRD review decisions and blocked implementation story breakdown.
+- Execution authority approval checkpoint rules.
 
 ## Current Gaps
 
@@ -76,13 +77,13 @@ Risk: generic OpenAI-compatible assumptions could hide provider differences in e
 
 Recommendation: review the Ollama PRD, resolve open questions, then split it into implementation stories only if explicit approval is granted.
 
-### 3. Execution Authority Approval Checkpoints
+### 3. Dashboard Evidence Polish
 
-Ollama and subscription-agent launch now have reviewed PRDs and blocked story breakdowns, but neither authority is approved for implementation.
+Dashboard evidence surfaces exist for routing, attempts, readiness, runtime exports, and provider proofs, but operators may still benefit from small review shortcuts after repeated use.
 
-Risk: future work could accidentally move blocked execution stories to ready without explicit operator approval.
+Risk: evidence is available but could require too much scrolling during repeated reviews.
 
-Recommendation: add an explicit approval checkpoint document that names which authority stories remain blocked and what approval language is required to unblock them.
+Recommendation: add targeted polish only where it improves review speed without adding execution controls.
 
 ## Recommended Build Order
 
@@ -99,15 +100,15 @@ Recommendation: add an explicit approval checkpoint document that names which au
 
 ## Recommended Immediate Story
 
-Title: Execution Authority Approval Checkpoints
+Title: Dashboard Evidence Polish
 
-Goal: Document the approval language and evidence required before any Ollama or subscription-agent execution story can move from blocked to ready.
+Goal: Identify and implement small read-only dashboard evidence improvements after reviewing current operator surfaces.
 
 Acceptance outline:
 
-- List all blocked Ollama and subscription-agent stories.
-- Define required approval wording and evidence for each authority family.
-- State that generic "continue development" does not approve execution authority.
+- Improve evidence navigation, grouping, or summaries only.
+- Do not add execution controls.
+- Keep all execution-authority approval checkpoint rules intact.
 - Keep all current execution authority disabled.
 
 ## Stop Conditions

@@ -77,6 +77,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Runtime evidence export dashboard access | Implemented | `RuntimeEvidenceExportPanel`, Story 3.11 | Work-item detail pages show export summary, safety flags, related reports, and git-backed boundary evidence. |
 | Subscription-agent launch PRD | Documented | `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`, Story 3.12 | Drafts supervised launch gates, lifecycle, workspace, output, session, dashboard, runtime export, rollback, and open questions without approving implementation. |
 | Subscription-agent launch PRD review and story breakdown | Documented | `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`, Stories 5.1-5.5 | Resolves planning questions and creates blocked implementation stories pending explicit approval. |
+| Execution authority approval checkpoints | Documented | `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`, Story 3.13 | Defines approval language, non-approval language, evidence requirements, and currently blocked authority stories. |
 | Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
 | Direct subscription-agent process launch | Deferred | Launch stub is disabled | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
 | Premium execution | Deferred | Approval request artifacts only | Requires premium provider boundary and explicit approval policy. |
@@ -89,17 +90,17 @@ The architecture gap has moved from missing execution-attempt primitives to miss
 The highest-value next work should:
 
 1. Keep architecture docs aligned with the implemented non-executing control plane.
-2. Add explicit execution authority approval checkpoints.
+2. Add targeted dashboard evidence polish where it improves read-only review.
 3. Wait for explicit approval before moving any Ollama or launch story from blocked to ready.
 4. Use execution-readiness reports to decide when a provider-specific PRD has enough evidence.
 5. Only then implement the next controlled worker execution capability.
 
 ## Recommended Next Backlog
 
-1. **Execution Authority Approval Checkpoints**: document approval language and evidence required before blocked Ollama or launch stories can move to ready.
+1. **Dashboard Evidence Polish**: add targeted evidence-navigation or summary improvements without execution controls.
 2. **Provider Approval Checkpoint**: wait for explicit approval before implementing any Ollama execution story.
 3. **Provider PRD Review Loop**: decide whether Ollama remains first or another local provider should be prioritized.
-4. **Dashboard Evidence Polish**: add targeted export affordances only if operators need more review shortcuts.
+4. **Maintenance And Hygiene**: keep checks, docs, and blocked-story state current.
 
 ## Stop Conditions
 
