@@ -767,6 +767,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert {command["commandId"] for command in report["optionalCommands"]} == {
         "setup-e2e",
         "dashboard-controls-e2e",
+        "dashboard-detail-e2e",
         "dashboard-e2e",
         "github-doctor-remote",
         "bootstrap-run-check",

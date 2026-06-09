@@ -157,6 +157,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("Checks and stop lines")).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:controls", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:detail", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("Passing verification does not approve local provider/model calls.")).toBeVisible();
 

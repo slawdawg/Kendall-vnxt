@@ -73,6 +73,7 @@ Do not rebuild these as new architecture work:
 - Supervisor report catalog for read-only evidence navigation.
 - Maintenance readiness report for safe repo hygiene while authority stories remain blocked.
 - Runtime evidence review manifest for export counts, retention notes, and stop lines.
+- Focused dashboard detail e2e runner for runtime export verification.
 
 ## Current Gaps
 

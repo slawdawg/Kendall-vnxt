@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-21-dashboard-detail-e2e-runner.md` | Focused work-item detail e2e command and owned lifecycle runner. |
 | `3-20-runtime-evidence-review-manifest.md` | Runtime evidence export review manifest and dashboard panel polish. |
 | `3-19-maintenance-readiness-report.md` | Read-only maintenance readiness map and controls-page safe work panel. |
 | `3-18-supervisor-report-catalog.md` | Read-only supervisor report catalog and controls-page evidence map. |
