@@ -20,6 +20,14 @@ Current safe posture:
 - Arbitrary shell execution remains disabled.
 - Worker source mutation, network access, and credential access remain disabled.
 
+## Navigation Indexes
+
+Use these indexes before starting new architecture, PRD, story, or authority work:
+
+- `docs/architecture/index.md`
+- `docs/prds/index.md`
+- `docs/stories/index.md`
+
 ## What Is Already Covered
 
 Do not rebuild these as new architecture work:
