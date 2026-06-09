@@ -163,6 +163,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:e2e-report", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:reports", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:execution-boundary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:runbooks", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:runtime-export", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:safe-backlog", { exact: true })).toBeVisible();

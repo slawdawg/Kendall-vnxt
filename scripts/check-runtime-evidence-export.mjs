@@ -70,6 +70,7 @@ for (const story of [
   "docs/stories/3-20-runtime-evidence-review-manifest.md",
   "docs/stories/3-30-runtime-evidence-review-navigator.md",
   "docs/stories/3-31-runtime-evidence-export-drift-check.md",
+  "docs/stories/3-48-execution-boundary-report-drift-check.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing runtime export story evidence ${story}`, failures);
 }
@@ -159,6 +160,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-47-core-readiness-drift-checks.md"),
   "Story index must reference Story 3.47 core readiness drift checks",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-48-execution-boundary-report-drift-check.md"),
+  "Story index must reference Story 3.48 execution boundary report drift check",
   failures,
 );
 
