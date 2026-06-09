@@ -20,6 +20,7 @@ const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/s
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const exportPanel = readWorkspaceFile("apps/dashboard/src/components/runtime-evidence-export-panel.tsx");
+const overviewPanel = readWorkspaceFile("apps/dashboard/src/components/evidence-overview-panel.tsx");
 const detailSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const storyIndex = readWorkspaceFile("docs/stories/index.md");
@@ -76,8 +77,16 @@ for (const panelText of ["Review navigator", "exportView.reviewNavigator.map", "
   assertCondition(exportPanel.includes(panelText), `Runtime evidence export panel must render ${panelText}`, failures);
 }
 
+for (const panelText of ["Review shortcuts", "runtimeEvidenceExport.reviewNavigator", "item.target", "item.itemId"]) {
+  assertCondition(overviewPanel.includes(panelText), `Evidence overview panel must render ${panelText}`, failures);
+}
+
 for (const panelText of ["Review navigator", "Runtime state", "Authority boundary", "Git-backed evidence"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert ${panelText}`, failures);
+}
+
+for (const panelText of ["Review shortcuts", "3 shortcuts"]) {
+  assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert overview ${panelText}`, failures);
 }
 
 assertCondition(
