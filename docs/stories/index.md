@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-50-provider-fixture-policy-drift-check.md` | Dedicated static drift check for disabled local-provider fixture policy alignment. |
 | `3-49-execution-evidence-boundary-drift-check.md` | Dedicated static drift check for execution-state boundary and disabled-provider proof alignment. |
 | `3-48-execution-boundary-report-drift-check.md` | Dedicated static drift check for execution configuration, execution readiness, and threat-boundary report alignment. |
 | `3-47-core-readiness-drift-checks.md` | Dedicated static drift checks for documentation authority and verification readiness report alignment. |
