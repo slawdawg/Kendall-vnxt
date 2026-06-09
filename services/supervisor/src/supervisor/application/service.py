@@ -1655,6 +1655,12 @@ class SupervisorService:
                     "GET /supervisor/safe-development-backlog",
                     "GET /supervisor/maintenance-action-plan-report",
                 ],
+                relatedDocs=[
+                    "docs/stories/3-18-supervisor-report-catalog.md",
+                    "docs/stories/3-31-runtime-evidence-export-drift-check.md",
+                    "docs/stories/3-60-safe-backlog-report-anchors.md",
+                    "docs/stories/3-64-development-runway-evidence-links.md",
+                ],
                 dashboardAnchors=[
                     "/controls#development-runway-report",
                     "/controls#supervisor-report-catalog",
@@ -1670,6 +1676,8 @@ class SupervisorService:
                         evidence=["safe-backlog-report-alignment"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
+                        relatedDocs=["docs/stories/3-27-safe-development-backlog-report.md", "docs/stories/3-60-safe-backlog-report-anchors.md"],
+                        dashboardAnchors=["/controls#safe-development-backlog"],
                         nextAction="Keep the safe backlog item ready before starting report/evidence navigation work.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
@@ -1682,6 +1690,8 @@ class SupervisorService:
                         evidence=["select-large-safe-slice", "verify-evidence-surfaces"],
                         requiredCommandIds=["check-maintenance-action-plan"],
                         relatedReports=["GET /supervisor/maintenance-action-plan-report"],
+                        relatedDocs=["docs/stories/3-52-maintenance-action-plan-report.md", "docs/stories/3-61-maintenance-action-evidence-links.md"],
+                        dashboardAnchors=["/controls#maintenance-action-plan-report"],
                         nextAction="Keep maintenance action plan steps aligned with report/evidence navigation work.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
@@ -1692,6 +1702,8 @@ class SupervisorService:
                         evidence=["check-reports", "check-runtime-export", "check-safe-backlog"],
                         requiredCommandIds=["check-reports", "check-runtime-export", "check-safe-backlog"],
                         relatedReports=["GET /supervisor/verification-readiness-report"],
+                        relatedDocs=["docs/stories/3-16-verification-readiness-report.md", "docs/stories/3-31-runtime-evidence-export-drift-check.md"],
+                        dashboardAnchors=["/controls#verification-readiness-report"],
                         nextAction="Run focused checks before the full local gate when this slice changes.",
                     ),
                 ],
@@ -1718,6 +1730,12 @@ class SupervisorService:
                     "GET /supervisor/github-workflow-policy-report",
                     "GET /supervisor/delivery-readiness-policy-report",
                 ],
+                relatedDocs=[
+                    "docs/stories/3-16-verification-readiness-report.md",
+                    "docs/stories/3-22-dashboard-e2e-report.md",
+                    "docs/stories/3-43-safe-delivery-hygiene.md",
+                    "docs/stories/3-58-verification-handoff-checkpoints.md",
+                ],
                 dashboardAnchors=[
                     "/controls#verification-readiness-report",
                     "/controls#dashboard-e2e-report",
@@ -1735,6 +1753,8 @@ class SupervisorService:
                         evidence=["verification-surface-hardening", "github-delivery-hygiene"],
                         requiredCommandIds=["check-safe-backlog", "check-development-runway"],
                         relatedReports=["GET /supervisor/safe-development-backlog", "GET /supervisor/development-runway-report"],
+                        relatedDocs=["docs/stories/3-43-safe-delivery-hygiene.md", "docs/stories/3-54-development-runway-safe-slices.md"],
+                        dashboardAnchors=["/controls#safe-development-backlog", "/controls#development-runway-report"],
                         nextAction="Keep both backlog items ready before changing verification or runbook guidance.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
@@ -1745,6 +1765,8 @@ class SupervisorService:
                         evidence=[checkpoint.checkpointId for checkpoint in verification.handoffCheckpoints],
                         requiredCommandIds=["check-verification-readiness", "check-runbooks"],
                         relatedReports=["GET /supervisor/verification-readiness-report"],
+                        relatedDocs=["docs/stories/3-58-verification-handoff-checkpoints.md", "docs/handoffs/current.md"],
+                        dashboardAnchors=["/controls#verification-readiness-report"],
                         nextAction="Keep handoff checkpoints aligned with runbooks whenever verification guidance changes.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
@@ -1755,6 +1777,8 @@ class SupervisorService:
                         evidence=["full-check"],
                         requiredCommandIds=["full-check"],
                         relatedReports=["GET /supervisor/verification-readiness-report"],
+                        relatedDocs=["docs/stories/3-16-verification-readiness-report.md", "docs/stories/3-56-verification-execution-plan-groups.md"],
+                        dashboardAnchors=["/controls#verification-readiness-report"],
                         nextAction="Run the full local gate before committing verification/runbook work.",
                     ),
                 ],
@@ -1782,6 +1806,12 @@ class SupervisorService:
                     "GET /supervisor/execution-readiness-report",
                     "GET /supervisor/maintenance-readiness-report",
                 ],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+                    "docs/stories/index.md",
+                    "docs/stories/3-53-authority-readiness-matrix-report.md",
+                    "docs/stories/3-62-maintenance-readiness-evidence-links.md",
+                ],
                 dashboardAnchors=[
                     "/controls#documentation-authority-report",
                     "/controls#authority-readiness-matrix-report",
@@ -1797,6 +1827,8 @@ class SupervisorService:
                         evidence=blocked_families,
                         requiredCommandIds=["check-authority-readiness"],
                         relatedReports=["GET /supervisor/authority-readiness-matrix-report"],
+                        relatedDocs=["docs/stories/3-53-authority-readiness-matrix-report.md", "docs/stories/index.md"],
+                        dashboardAnchors=["/controls#authority-readiness-matrix-report"],
                         nextAction="Keep this slice read-only until explicit operator approval names the authority family and scope.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
@@ -1807,6 +1839,8 @@ class SupervisorService:
                         evidence=["docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"],
                         requiredCommandIds=["check-docs", "check-documentation-authority"],
                         relatedReports=["GET /supervisor/documentation-authority-report"],
+                        relatedDocs=["docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md", "docs/stories/index.md"],
+                        dashboardAnchors=["/controls#documentation-authority-report"],
                         nextAction="Update approval checkpoint evidence only as read-only governance maintenance.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
@@ -1817,6 +1851,11 @@ class SupervisorService:
                         evidence=["check-execution-boundary", "check-process-lifecycle"],
                         requiredCommandIds=["check-execution-boundary", "check-process-lifecycle"],
                         relatedReports=["GET /supervisor/execution-readiness-report", "GET /supervisor/maintenance-readiness-report"],
+                        relatedDocs=[
+                            "docs/stories/3-48-execution-boundary-report-drift-check.md",
+                            "docs/stories/3-51-process-lifecycle-policy-drift-check.md",
+                        ],
+                        dashboardAnchors=["/controls#execution-readiness-report", "/controls#maintenance-readiness-report"],
                         nextAction="Do not treat green boundary checks as approval to implement blocked authority stories.",
                     ),
                 ],
@@ -2765,6 +2804,7 @@ class SupervisorService:
             "docs/stories/3-54-development-runway-safe-slices.md",
             "docs/stories/3-59-development-runway-readiness-checks.md",
             "docs/stories/3-63-development-runway-pr-batching-policy.md",
+            "docs/stories/3-64-development-runway-evidence-links.md",
             "docs/stories/3-55-runtime-evidence-review-index.md",
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",
