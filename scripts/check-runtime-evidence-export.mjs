@@ -135,6 +135,11 @@ assertCondition(
   "Story index must reference Story 3.42 GitHub workflow policy report",
   failures,
 );
+assertCondition(
+  storyIndex.includes("3-43-safe-delivery-hygiene.md"),
+  "Story index must reference Story 3.43 safe delivery hygiene",
+  failures,
+);
 
 if (failures.length > 0) {
   console.error("Runtime evidence export drift check failed:");

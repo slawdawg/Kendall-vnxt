@@ -1081,6 +1081,31 @@ class SupervisorService:
                 nextAction="Add or extend static drift checks in larger coherent PR slices whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
             ),
             SafeDevelopmentBacklogItemView(
+                itemId="github-delivery-hygiene",
+                label="GitHub delivery hygiene",
+                priority="P1",
+                status="ready",
+                summary="Keep Git/GCM, Codex connector, optional gh auth, PR sizing, and delivery verification guidance aligned before remote work depends on it.",
+                recommendedSliceSize="large",
+                evidence=[
+                    "GitHub workflow policy report documents Git/GCM, Codex connector, optional gh auth, and plaintext-token stop lines.",
+                    "Future PRs should be larger coherent slices that bundle related API, dashboard, docs, tests, and drift checks.",
+                    "Remote delivery must use Git/GCM or the Codex GitHub connector rather than persistent plaintext gh token storage.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/report-catalog",
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/managed-recipe-policy-report",
+                ],
+                relatedDocs=[
+                    "docs/github-connector-workflow.md",
+                    "docs/stories/3-42-github-workflow-policy-report.md",
+                    "docs/stories/3-43-safe-delivery-hygiene.md",
+                ],
+                nextAction="Before remote delivery changes, confirm Git/GCM or connector posture and keep the PR scoped as one larger coherent work package.",
+            ),
+            SafeDevelopmentBacklogItemView(
                 itemId="read-only-evidence-polish",
                 label="Read-only evidence polish",
                 priority="P2",
@@ -1154,6 +1179,7 @@ class SupervisorService:
             ],
             nextSafeActions=[
                 "Choose the next PR from ready safe backlog items and keep it large enough to include API, dashboard, docs, and tests when related.",
+                "Keep GitHub delivery hygiene current before relying on remote PR automation, and avoid persistent plaintext token storage.",
                 "Use required verification commands and focused e2e runners as acceptance evidence for each slice.",
                 "Keep blocked authority work visible but outside implementation until explicit approval arrives.",
             ],
@@ -1600,6 +1626,7 @@ class SupervisorService:
             "docs/stories/3-40-runtime-report-anchor-links.md",
             "docs/stories/3-41-current-gap-review-refresh.md",
             "docs/stories/3-42-github-workflow-policy-report.md",
+            "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

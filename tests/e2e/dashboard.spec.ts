@@ -207,6 +207,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(safeBacklogPanel.getByText("Large-slice development map")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Report-aligned backlog governance")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Verification surface hardening")).toBeVisible();
+    await expect(safeBacklogPanel.getByRole("heading", { name: "GitHub delivery hygiene" })).toBeVisible();
+    await expect(safeBacklogPanel.getByText("persistent plaintext gh token storage")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 
