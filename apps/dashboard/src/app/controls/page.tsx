@@ -1,19 +1,28 @@
 import { ControlPanel } from "../../components/control-panel";
+import { DocumentationAuthorityReportPanel } from "../../components/documentation-authority-report-panel";
 import { ExecutionReadinessReportPanel } from "../../components/execution-readiness-report-panel";
 import { OperatorProfilePanel } from "../../components/operator-profile-panel";
 import { PageIntro } from "../../components/page-intro";
 import { RoutingFleetPanel } from "../../components/routing-fleet-panel";
 import { Shell } from "../../components/shell";
 import { buildNavStats } from "../../lib/nav-stats";
-import { getExecutionReadinessReport, getRoutingLaneProfiles, getRunStatus, getWorkerRegistry, getWorkItems } from "../../lib/supervisor";
+import {
+  getDocumentationAuthorityReport,
+  getExecutionReadinessReport,
+  getRoutingLaneProfiles,
+  getRunStatus,
+  getWorkerRegistry,
+  getWorkItems,
+} from "../../lib/supervisor";
 
 export default async function ControlsPage() {
-  const [status, items, workers, laneProfiles, readinessReport] = await Promise.all([
+  const [status, items, workers, laneProfiles, readinessReport, documentationAuthorityReport] = await Promise.all([
     getRunStatus(),
     getWorkItems(),
     getWorkerRegistry(),
     getRoutingLaneProfiles(),
     getExecutionReadinessReport(),
+    getDocumentationAuthorityReport(),
   ]);
   const navStats = buildNavStats(items);
 
@@ -33,6 +42,7 @@ export default async function ControlsPage() {
       <OperatorProfilePanel />
       <ControlPanel />
       <ExecutionReadinessReportPanel report={readinessReport} />
+      <DocumentationAuthorityReportPanel report={documentationAuthorityReport} />
       <RoutingFleetPanel workers={workers} laneProfiles={laneProfiles} />
     </Shell>
   );

@@ -67,6 +67,7 @@ Do not rebuild these as new architecture work:
 - Subscription-agent launch PRD review decisions and blocked implementation story breakdown.
 - Execution authority approval checkpoint rules.
 - Dashboard evidence overview polish.
+- Documentation authority indexes, drift checks, and controls-page report.
 
 ## Current Gaps
 

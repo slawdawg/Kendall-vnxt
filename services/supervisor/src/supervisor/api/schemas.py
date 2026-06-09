@@ -541,6 +541,32 @@ class ExecutionReadinessReportView(BaseModel):
     sourceMutationAllowed: bool = False
 
 
+class DocumentationAuthorityDocumentView(BaseModel):
+    path: str
+    label: str
+    status: str
+    evidence: list[str] = Field(default_factory=list)
+
+
+class DocumentationAuthorityBlockedStoryView(BaseModel):
+    storyId: str
+    path: str
+    authorityFamily: str
+    status: str
+
+
+class DocumentationAuthorityReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    indexes: list[DocumentationAuthorityDocumentView]
+    approvalCheckpoint: DocumentationAuthorityDocumentView
+    blockedStories: list[DocumentationAuthorityBlockedStoryView]
+    driftChecks: list[ProviderEnablementPolicyStepView]
+    nextSafeActions: list[str]
+    executionAuthorityApproved: bool = False
+
+
 class ThreatBoundaryRuleView(BaseModel):
     ruleId: str
     label: str
