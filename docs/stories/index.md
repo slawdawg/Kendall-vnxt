@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-17-dashboard-e2e-reliability-guardrails.md` | Focused controls-page e2e command and repo-local Playwright cache defaults. |
 | `3-16-verification-readiness-report.md` | Read-only verification readiness report and controls panel. |
 | `3-15-documentation-authority-report.md` | Read-only documentation authority report and controls panel. |
 | `3-14-dashboard-evidence-overview-polish.md` | Read-only dashboard evidence overview. |

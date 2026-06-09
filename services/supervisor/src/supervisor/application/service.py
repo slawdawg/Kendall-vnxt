@@ -426,6 +426,28 @@ class SupervisorService:
         ]
         optional_commands = [
             VerificationCommandView(
+                commandId="setup-e2e",
+                label="Playwright browser setup",
+                command="pnpm run setup:e2e",
+                status="optional_when_browser_stack_missing",
+                requiredFor=["dashboard browser coverage", "fresh VM browser verification", "focused e2e scripts"],
+                evidence=[
+                    "Installs Chromium for Playwright when the browser cache is missing.",
+                    "Can use the repo-local `.data/ms-playwright` browser cache configured by Playwright.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="dashboard-controls-e2e",
+                label="Dashboard controls browser slice",
+                command="pnpm run test:e2e:dashboard:controls",
+                status="optional_when_browser_stack_ready",
+                requiredFor=["controls page report changes", "read-only evidence panel changes", "focused browser regression checks"],
+                evidence=[
+                    "Runs the controls-page Playwright slice with stable test-file and grep arguments.",
+                    "Uses the Playwright config web servers, including repo-local uv/temp cache defaults.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-e2e",
                 label="Dashboard browser coverage",
                 command="pnpm run test:e2e:dashboard",
