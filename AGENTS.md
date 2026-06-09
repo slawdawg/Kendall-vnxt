@@ -1,6 +1,6 @@
 # Kendall_Nxt Agent Notes
 
-## PowerShell Commands
+## Windows Sandbox
 
 - On native Windows Codex sandbox sessions, do not run multiple `shell_command`
   tool calls in parallel. The Windows sandbox setup path can race when several
@@ -11,12 +11,21 @@
   `functions.shell_command` in this Windows workspace. Parallel file reads may
   be useful elsewhere, but here they can fan out into simultaneous sandbox
   setup attempts and destabilize the runner.
-- If a sandboxed Node-based resolver or inline Node command times out before
-  producing output, verify the underlying tool directly before retrying the
-  same Node command. For Python readiness, prefer
-  `services\supervisor\.venv\Scripts\python.exe` or
-  `uv run --directory services/supervisor ...` over bare `python` or `node -e`
-  diagnostics in the Windows sandbox.
+- If a command fails with a Windows sandbox runner timeout before producing
+  process output, treat the result as inconclusive. Confirm the runner with a
+  simple serialized no-op such as `Get-Location`, then retry once with a
+  simpler command shape.
+- For Node or pnpm verification commands, such as `node ./scripts/*.mjs`,
+  `pnpm.cmd run check:*`, or `pnpm.cmd run check`, if the sandbox runner
+  times out before output twice, stop retrying inside the sandbox and request
+  approval to run the same read-only verification command outside the sandbox.
+- Verify direct tool availability before resolver scripts or package-manager
+  indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
+  `services\supervisor\.venv\Scripts\python.exe --version` before retrying
+  `pnpm run ...`, Node resolver scripts, or Python readiness checks.
+
+## PowerShell Commands
+
 - Prefer running PowerShell directly in the current shell over nested `powershell -Command "..."`.
 - Avoid nested `powershell -Command "..."` when the command contains `$variables`, `$_`, loops, arrays, scriptblocks, or mixed quotes. Use a direct command or a small `.ps1` script/block instead.
 - Do not retry the same failed quoting shape. Simplify the command first.
@@ -47,14 +56,6 @@
   `services\supervisor\.venv\Scripts\python.exe` for direct Python checks or
   `uv run --directory services/supervisor ...` when the uv-managed environment
   is required.
-- Prefer direct tool invocations over package-manager indirection when
-  troubleshooting readiness. For example, use `uv --version`,
-  `node --version`, `pnpm --version`, or the supervisor venv Python before
-  retrying `pnpm run ...` or a Node resolver script.
-- If a command fails with a sandbox runner timeout before producing process
-  output, treat the result as inconclusive. Confirm with a simple serialized
-  no-op such as `Get-Location`, then retry once with a simpler command shape or
-  run the same read-only diagnostic outside the sandbox with approval.
 - Keep verification scoped to the change. Run the smallest relevant check
   first, then broaden only when the touched code crosses package, API, or
   workflow boundaries.

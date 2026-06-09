@@ -1,14 +1,14 @@
 # Kendall_vNxt Execution Authority Approval Packet
 
 Date: 2026-06-09
-Status: approval packet with Option A approved for non-executing implementation
+Status: approval packet with Options A and B approved for non-executing implementation
 Scope: Operator approval choices for blocked Ollama local-provider and subscription-agent launch stories
 
 ## Purpose
 
 This packet converts the current blocked execution-authority work into explicit approval choices.
 
-The operator approved Option A on 2026-06-09 for Stories 4.1-4.3 only. The remaining options still require explicit approval before a blocked story can move from `Blocked Pending Explicit Approval` to implementation.
+The operator approved Option A on 2026-06-09 for Stories 4.1-4.3 only. The operator approved Option B on 2026-06-09 for Stories 5.1-5.4 only. Real execution options still require explicit approval before a blocked story can move from `Blocked Pending Explicit Approval` to implementation.
 
 ## Current Blocked Families
 
@@ -22,13 +22,16 @@ The operator approved Option A on 2026-06-09 for Stories 4.1-4.3 only. The remai
 - `docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md`
 - `docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md`
 
-### Subscription-Agent Launch
+### Subscription-Agent Supervised Process Launch
+
+- `docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md`
+
+### Subscription-Agent Non-Executing Preparation Approved For Review
 
 - `docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md`
 - `docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md`
 - `docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md`
 - `docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md`
-- `docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md`
 
 ## Recommended Safe Approval Order
 
@@ -63,7 +66,7 @@ Still blocked:
 
 ## Approval Option B: Subscription Non-Executing Preparation
 
-Use this if the operator wants to clear subscription-agent launch setup blockers without allowing process launch.
+Approved on 2026-06-09 to clear subscription-agent launch setup blockers without allowing process launch.
 
 ```text
 Approve Stories 5.1-5.4 only: implement disabled-default launch settings, target registry evidence, launch approval binding and stale rejection, workspace/output/session contracts, disabled process-supervisor lifecycle adapter, dashboard/report/export updates, and no-process fixture tests. Do not launch Codex, Claude, Gemini, Antigravity, or any other process; do not add real command execution, provider/model calls, source mutation, credential/session inheritance, premium execution, external sends, or background runtime assistant behavior. Review point: stop after Stories 5.1-5.4 are implemented, verified, committed, pushed, and PR-ready. Rollback expectation: disabling the launch gate or target-specific policy returns all launch evidence to disabled/non-executing state.

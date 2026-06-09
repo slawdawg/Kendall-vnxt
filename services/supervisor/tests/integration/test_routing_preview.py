@@ -617,6 +617,17 @@ def test_execution_configuration_checks_report_disabled_defaults_without_mutatio
     checks = {check["checkId"]: check for check in checks_view["checks"]}
     assert checks["subscription-agent-launch"]["disabledReason"] == "subscription_agent_process_launch_not_enabled"
     assert checks["subscription-agent-launch"]["affectedWorkers"] == ["subscription.agent.disabled"]
+    assert checks["subscription-agent-launch"]["launchTargets"][0]["targetId"] == "codex.subscription.disabled"
+    assert checks["subscription-agent-launch"]["launchTargets"][0]["enabled"] is False
+    assert checks["subscription-agent-launch"]["launchTargets"][0]["broadGateEnabled"] is False
+    assert checks["subscription-agent-launch"]["launchTargets"][0]["targetSpecificGateEnabled"] is False
+    assert checks["subscription-launch-targets"]["disabledReason"] == "subscription_launch_targets_not_enabled"
+    assert checks["subscription-launch-targets"]["affectedWorkers"] == ["subscription.agent.disabled"]
+    assert {target["targetId"] for target in checks["subscription-launch-targets"]["launchTargets"]} == {
+        "codex.subscription.disabled",
+        "claude.subscription.disabled",
+        "gemini.subscription.disabled",
+    }
     assert checks["local-provider-calls"]["disabledReason"] == "local_provider_http_calls_not_enabled"
     assert set(checks["local-provider-calls"]["affectedWorkers"]) == {
         "local.ollama.disabled",
@@ -649,6 +660,37 @@ def test_execution_configuration_checks_report_disabled_defaults_without_mutatio
         assert check["networkAllowed"] is False
         assert check["credentialAccessAllowed"] is False
         assert check["evidence"]
+
+
+def test_subscription_launch_target_gate_reports_disabled_target_specific_state(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-launch-target-gate.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/supervisor/execution-configuration-checks")
+
+    assert response.status_code == 200
+    checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
+    launch_targets = {target["targetId"]: target for target in checks["subscription-launch-targets"]["launchTargets"]}
+    codex = launch_targets["codex.subscription.disabled"]
+    claude = launch_targets["claude.subscription.disabled"]
+
+    assert checks["subscription-agent-launch"]["enabled"] is True
+    assert checks["subscription-agent-launch"]["processLaunchAllowed"] is False
+    assert checks["subscription-launch-targets"]["enabled"] is False
+    assert codex["broadGateEnabled"] is True
+    assert codex["targetSpecificGateEnabled"] is True
+    assert codex["enabled"] is False
+    assert codex["processLaunchAllowed"] is False
+    assert claude["targetSpecificGateEnabled"] is False
+    assert claude["enabled"] is False
 
 
 def test_ollama_provider_gate_stays_non_executing_when_broad_gate_is_enabled(tmp_path, monkeypatch) -> None:
@@ -878,7 +920,7 @@ def test_documentation_authority_report_surfaces_indexes_and_blocked_stories_wit
         "docs/stories/index.md",
     }
     assert report["approvalCheckpoint"]["path"].endswith("kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md")
-    assert {story["storyId"] for story in report["blockedStories"]} == {"4.4", "5.1", "5.2", "5.3", "5.4", "5.5"}
+    assert {story["storyId"] for story in report["blockedStories"]} == {"4.4", "5.5"}
     assert all(story["status"] == "blocked_pending_explicit_approval" for story in report["blockedStories"])
     assert {check["stepId"] for check in report["driftChecks"]} == {
         "required-documents-present",
@@ -1873,6 +1915,21 @@ def test_subscription_agent_launch_stub_generation_is_non_mutating(tmp_path, mon
     assert stub["estimate"]["cost"] == "subscription_plan_usage_only"
     assert any("Do not include secrets" in instruction for instruction in stub["launchInstructions"])
     assert any("Operator approval" in approval for approval in stub["requiredApprovals"])
+    assert stub["targetRegistry"][0]["targetId"] == "codex.subscription.disabled"
+    assert all(target["enabled"] is False for target in stub["targetRegistry"])
+    assert stub["approvalBinding"]["workItemId"] == work_item_id
+    assert stub["approvalBinding"]["targetId"] == "codex.subscription.disabled"
+    assert stub["approvalBinding"]["workspacePlanId"] == stub["workspaceContract"]["workspacePlanId"]
+    assert stub["workspaceContract"]["materializationMode"] == "artifact_only_no_workspace_created"
+    assert stub["workspaceContract"]["environmentPolicy"] == "deny_inheritance_allowlist_only"
+    assert ".ssh" in stub["workspaceContract"]["forbiddenPaths"]
+    assert stub["workspaceContract"]["commandsAllowed"] is False
+    assert stub["workspaceContract"]["credentialAccessAllowed"] is False
+    assert stub["outputContract"]["rawOutputStored"] is False
+    assert stub["lifecycleEvidence"]["processLaunchAttempted"] is False
+    assert stub["lifecycleEvidence"]["shellExecutionAttempted"] is False
+    assert stub["lifecycleEvidence"]["credentialAccessAttempted"] is False
+    assert "timed_out -> terminal_timed_out_without_process" in stub["lifecycleEvidence"]["stateMapping"]
     assert before_item == after_item
     assert before_events == after_events
 
@@ -1905,6 +1962,12 @@ def test_subscription_agent_launch_stub_can_record_workflow_event(tmp_path, monk
     assert event["payload"]["sourceRouteLane"] == "subscription_handoff"
     assert event["payload"]["workerId"] == "subscription.agent.disabled"
     assert event["payload"]["requestedAgent"] == "claude"
+    assert event["payload"]["targetId"] == "claude.subscription.disabled"
+    assert event["payload"]["workspacePlanId"].startswith("subscription-workspace-plan-route-")
+    assert event["payload"]["processLaunchAttempted"] is False
+    assert event["payload"]["shellExecutionAttempted"] is False
+    assert event["payload"]["credentialAccessAttempted"] is False
+    assert event["payload"]["externalSendAttempted"] is False
     assert event["payload"]["processLaunchAllowed"] is False
     assert event["payload"]["executionAllowed"] is False
 
@@ -2298,6 +2361,8 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
     assert "environment variables and credential stores" in export["boundary"]["excludedState"]
     assert "raw Ollama prompts and completions" in export["boundary"]["excludedState"]
+    assert "raw subscription-agent stdout and stderr" in export["boundary"]["excludedState"]
+    assert "subscription-agent inherited environment values" in export["boundary"]["excludedState"]
     assert export["safety"]["exportOnly"] is True
     assert export["safety"]["processLaunchAllowed"] is False
     assert export["safety"]["providerCallsAllowed"] is False
@@ -2324,6 +2389,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
         "review-authority-boundary",
         "review-git-backed-evidence",
         "review-ollama-no-call-prep",
+        "review-subscription-launch-prep",
     }
     authority_item = next(item for item in export["reviewNavigator"] if item["itemId"] == "review-authority-boundary")
     assert authority_item["priority"] == "P0"
@@ -2820,3 +2886,67 @@ def test_execution_attempt_approval_rejects_stale_or_mismatched_binding_without_
     history = history_response.json()["data"]
     assert history[0]["attemptId"] == attempt["attemptId"]
     assert history[0]["status"] == "planned"
+
+
+def test_subscription_launch_approval_rejection_records_non_executing_event(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-launch-approval-rejection.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Reject incomplete subscription launch approval",
+                "requestedOutcome": "Record incomplete subscription launch approval as non-executing evidence.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+        attempt = client.post(f"/work-items/{work_item_id}/execution-attempts", json={}).json()["data"]
+
+        rejection_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "incomplete launch approval",
+                "workItemId": work_item_id,
+                "attemptId": attempt["attemptId"],
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+                "workspacePlanId": attempt["workspaceIsolationPlan"]["planId"],
+                "launchPolicyId": "subscription-launch-policy-disabled-v1",
+                "commandTemplateId": "codex-subscription-cli-template-disabled-v1",
+                "actorId": "operator-1",
+                "approvalTimestamp": "2026-06-09T12:00:00Z",
+                "expiresAt": "2026-06-09T12:05:00Z",
+            },
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert rejection_response.status_code == 409
+    assert "targetId" in rejection_response.json()["detail"]["error"]["message"]
+
+    events = events_response.json()["data"]
+    rejection_event = next(event for event in events if event["eventType"] == "execution_attempt.approval_rejected")
+    assert rejection_event["payload"]["processLaunchAttempted"] is False
+    assert rejection_event["payload"]["shellExecutionAttempted"] is False
+    assert rejection_event["payload"]["credentialAccessAttempted"] is False
+    assert rejection_event["payload"]["externalSendAttempted"] is False
+    assert rejection_event["payload"]["providedBinding"]["commandTemplateId"] == "codex-subscription-cli-template-disabled-v1"
+
+    history = history_response.json()["data"]
+    assert history[0]["status"] == "planned"
+    assert history[0]["eventRefs"][-1]["eventType"] == "execution_attempt.approval_rejected"

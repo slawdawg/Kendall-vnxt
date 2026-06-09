@@ -16,6 +16,9 @@ function formatTimestamp(value: string | null | undefined): string {
 }
 
 export function ExecutionReadinessReportPanel({ report }: { report: ExecutionReadinessReportView }) {
+  const subscriptionTargetCheck = report.disabledAuthorityChecks.find((check) => check.checkId === "subscription-launch-targets");
+  const subscriptionTargets = subscriptionTargetCheck?.launchTargets ?? [];
+
   return (
     <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -64,6 +67,36 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
             ))}
           </div>
         </div>
+
+        {subscriptionTargets.length > 0 ? (
+          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <h4 className="text-base font-semibold">Subscription target registry</h4>
+            <div className="mt-3 space-y-3">
+              {subscriptionTargets.map((target) => (
+                <article key={String(target.targetId)} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">
+                        {String(target.targetId)}
+                      </p>
+                      <h5 className="mt-1 text-sm font-semibold">{String(target.displayName)}</h5>
+                    </div>
+                    <span className="w-fit rounded-full bg-[var(--surface)] px-3 py-1 font-mono text-[11px] text-[var(--muted)]">
+                      {target.enabled ? "Enabled" : "Disabled"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                    Policy {String(target.launchPolicyId)}. Template {String(target.commandTemplateId)}.
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                    Broad gate {target.broadGateEnabled ? "enabled" : "disabled"}; target gate{" "}
+                    {target.targetSpecificGateEnabled ? "enabled" : "disabled"}; process launch disabled.
+                  </p>
+                </article>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="space-y-4">
           <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">

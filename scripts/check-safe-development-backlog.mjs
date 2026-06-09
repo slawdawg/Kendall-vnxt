@@ -77,7 +77,7 @@ for (const safetyText of [
   "do_not_start",
   "Ollama Story 4.4 remains blocked",
   "Ollama Stories 4.1-4.3 are non-executing no-call preparation only",
-  "Subscription-agent stories 5.1-5.5 remain blocked",
+  "Subscription-agent Story 5.5 remains blocked pending explicit process-launch approval",
   "provider/model calls",
   "worker shell commands",
   "credential access",

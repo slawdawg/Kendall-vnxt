@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     allow_dirty_repo: bool = Field(default=False, alias="SUPERVISOR_ALLOW_DIRTY_REPO")
     allow_remote_delivery: bool = Field(default=False, alias="SUPERVISOR_ALLOW_REMOTE_DELIVERY")
     allow_subscription_agent_launch: bool = Field(default=False, alias="SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH")
+    allow_codex_subscription_agent_launch: bool = Field(
+        default=False,
+        alias="SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH",
+    )
+    allow_claude_subscription_agent_launch: bool = Field(
+        default=False,
+        alias="SUPERVISOR_ALLOW_CLAUDE_SUBSCRIPTION_AGENT_LAUNCH",
+    )
+    allow_gemini_subscription_agent_launch: bool = Field(
+        default=False,
+        alias="SUPERVISOR_ALLOW_GEMINI_SUBSCRIPTION_AGENT_LAUNCH",
+    )
     allow_local_provider_calls: bool = Field(default=False, alias="SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS")
     allow_ollama_provider_calls: bool = Field(default=False, alias="SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS")
     ollama_model_id: str | None = Field(default=None, alias="SUPERVISOR_OLLAMA_MODEL_ID")

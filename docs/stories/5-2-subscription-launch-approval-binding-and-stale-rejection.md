@@ -2,7 +2,7 @@
 
 ## Status
 
-Blocked Pending Explicit Approval
+done
 
 ## Story
 
@@ -12,7 +12,7 @@ so that stale or mismatched approvals cannot start a subscription-agent process.
 
 ## Approval Required Before Implementation
 
-Do not implement this story until the operator explicitly approves subscription-agent launch work.
+Approved on 2026-06-09 for non-executing subscription-agent launch preparation only. Do not add or perform process launch, shell command execution, credential access, source mutation by workers, external sends, provider/model calls, premium execution, or subscription-agent supervised process execution.
 
 ## Acceptance Criteria
 
@@ -30,3 +30,30 @@ Do not implement this story until the operator explicitly approves subscription-
 - No command runner.
 - No source mutation.
 - No credential access.
+
+## Tasks/Subtasks
+
+- [x] Define route, attempt, workspace, policy, target, command-template, actor, timestamp, and expiry binding fields.
+- [x] Reject missing, mismatched, expired, or stale launch approval binding fields.
+- [x] Record launch approval rejection as a non-executing workflow event.
+- [x] Prove launch-style approval rejection does not launch a process.
+
+## Dev Agent Record
+
+### Completion Notes
+
+- Added launch-specific approval binding metadata to the disabled subscription launch stub.
+- Added launch-style approval rejection evidence for missing/stale binding fields.
+- Ordinary attempt approval behavior remains route-bound and non-executing.
+
+## File List
+
+- `services/supervisor/src/supervisor/domain/subscription_launch.py`
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/src/supervisor/api/schemas.py`
+- `packages/contracts/src/api.ts`
+- `services/supervisor/tests/integration/test_routing_preview.py`
+
+## Change Log
+
+- 2026-06-09: Implemented under explicit non-executing subscription-agent launch preparation approval and moved to done.

@@ -175,10 +175,18 @@ class WorkItemExecutionAttemptCreateRequest(BaseModel):
 class WorkItemExecutionAttemptTransitionRequest(BaseModel):
     status: ExecutionAttemptStatus
     reason: str | None = None
+    workItemId: str | None = None
+    attemptId: str | None = None
     routeDecisionId: str | None = None
     workerId: str | None = None
     lane: str | None = None
     authorityMode: str | None = None
+    workspacePlanId: str | None = None
+    launchPolicyId: str | None = None
+    targetId: str | None = None
+    commandTemplateId: str | None = None
+    approvalTimestamp: datetime | None = None
+    expiresAt: datetime | None = None
     actorId: str | None = None
     actorLabel: str | None = None
 
@@ -205,6 +213,11 @@ class WorkspaceIsolationPlanView(BaseModel):
     providerEndpointPolicy: str = "provider_endpoints_denied"
     promptConstructionPolicy: str = "approved_evidence_only"
     boundaryRejectionReason: str = "worker_execution_safety_boundary_not_satisfied"
+    materializationMode: str = "metadata_only"
+    environmentPolicy: str = "deny_inheritance_allowlist_only"
+    environmentAllowlist: list[str] = Field(default_factory=list)
+    sessionBoundary: str = "credentials_sessions_and_shell_profiles_forbidden"
+    outputPolicy: str = "summary_only_no_raw_output"
 
 
 class ExecutionAttemptView(BaseModel):
@@ -345,6 +358,11 @@ class SubscriptionAgentLaunchStubView(BaseModel):
     launchInstructions: list[str]
     requiredApprovals: list[str]
     disabledReason: str
+    targetRegistry: list[dict[str, Any]] = Field(default_factory=list)
+    approvalBinding: dict[str, Any] = Field(default_factory=dict)
+    workspaceContract: dict[str, Any] = Field(default_factory=dict)
+    outputContract: dict[str, Any] = Field(default_factory=dict)
+    lifecycleEvidence: dict[str, Any] = Field(default_factory=dict)
     processLaunchAllowed: bool = False
     executionAllowed: bool = False
 
@@ -444,6 +462,7 @@ class ExecutionConfigurationCheckView(BaseModel):
     disabledReason: str | None = None
     affectedWorkers: list[str] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
+    launchTargets: list[dict[str, Any]] = Field(default_factory=list)
     processLaunchAllowed: bool = False
     providerCallsAllowed: bool = False
     modelCallsAllowed: bool = False

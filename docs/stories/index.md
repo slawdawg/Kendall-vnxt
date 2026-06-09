@@ -13,16 +13,16 @@ These stories must not be implemented until the operator explicitly approves the
 
 ### Subscription-Agent Launch
 
-- `5-1-subscription-launch-settings-policy-and-target-registry.md`
-- `5-2-subscription-launch-approval-binding-and-stale-rejection.md`
-- `5-3-subscription-launch-workspace-output-and-session-contract.md`
-- `5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md`
 - `5-5-subscription-launch-supervised-process-behind-approval.md`
 
 ## Recent Ready For Review Stories
 
 | Story | Slice |
 | --- | --- |
+| `5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md` | Disabled subscription launch lifecycle adapter evidence for timeout, cancellation, cleanup, and terminal states without process launch. |
+| `5-3-subscription-launch-workspace-output-and-session-contract.md` | Artifact-only workspace, session, environment, output, redaction, and retention contracts for subscription launch prep. |
+| `5-2-subscription-launch-approval-binding-and-stale-rejection.md` | Launch approval binding fields and non-executing stale/missing approval rejection evidence. |
+| `5-1-subscription-launch-settings-policy-and-target-registry.md` | Disabled-default subscription launch settings and target registry evidence separate from handoff packages. |
 | `4-3-ollama-timeout-cancellation-and-attempt-evidence.md` | Ollama timeout, cancellation, terminal-state, retry, dashboard, and export evidence using no-call fixtures only. |
 | `4-2-ollama-prompt-redaction-and-retention-contract.md` | Ollama prompt-source, rejected-source, redaction, retention, dashboard, and export evidence without raw prompt or completion retention. |
 | `4-1-ollama-provider-settings-and-registry-gates.md` | Ollama-specific disabled-default settings, registry gate evidence, dashboard/report updates, and no-call fixture tests. |

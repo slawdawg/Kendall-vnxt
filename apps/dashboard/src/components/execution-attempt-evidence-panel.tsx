@@ -121,6 +121,22 @@ function AttemptCard({ attempt }: { attempt: ExecutionAttemptView }) {
             <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Forbidden paths</p>
             <p className="mt-1 text-sm text-[var(--muted)]">{pathList(plan.forbiddenPaths)}</p>
           </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Materialization</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">{titleCase(plan.materializationMode)}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Environment</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">{titleCase(plan.environmentPolicy)}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Session boundary</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">{titleCase(plan.sessionBoundary)}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Output policy</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">{titleCase(plan.outputPolicy)}</p>
+          </div>
         </div>
         <DisabledEvidence plan={plan} />
         <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{plan.rollbackRule}</p>

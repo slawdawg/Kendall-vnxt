@@ -151,6 +151,11 @@ export interface WorkspaceIsolationPlanView {
   providerEndpointPolicy: string;
   promptConstructionPolicy: string;
   boundaryRejectionReason: string;
+  materializationMode: string;
+  environmentPolicy: string;
+  environmentAllowlist: string[];
+  sessionBoundary: string;
+  outputPolicy: string;
 }
 
 export interface ExecutionAttemptView {
@@ -291,6 +296,11 @@ export interface SubscriptionAgentLaunchStubView {
   launchInstructions: string[];
   requiredApprovals: string[];
   disabledReason: string;
+  targetRegistry: Record<string, unknown>[];
+  approvalBinding: Record<string, unknown>;
+  workspaceContract: Record<string, unknown>;
+  outputContract: Record<string, unknown>;
+  lifecycleEvidence: Record<string, unknown>;
   processLaunchAllowed: boolean;
   executionAllowed: boolean;
 }
@@ -390,6 +400,7 @@ export interface ExecutionConfigurationCheckView {
   disabledReason?: string | null;
   affectedWorkers: string[];
   evidence: string[];
+  launchTargets: Record<string, unknown>[];
   processLaunchAllowed: boolean;
   providerCallsAllowed: boolean;
   modelCallsAllowed: boolean;

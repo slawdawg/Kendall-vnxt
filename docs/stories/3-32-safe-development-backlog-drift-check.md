@@ -12,7 +12,7 @@ Add a required static verification check that keeps the safe development backlog
 - Add `pnpm run check:safe-backlog`.
 - Validate safe backlog shared contracts and supervisor schema classes.
 - Validate the supervisor API route and service item IDs for ready and blocked backlog work.
-- Validate blocked authority stop lines for Ollama stories 4.1-4.4 and subscription-agent stories 5.1-5.5.
+- Validate blocked authority stop lines for Ollama Story 4.4 and subscription-agent Story 5.5.
 - Validate dashboard client, controls-page rendering, panel fields, and controls e2e assertions.
 - Include the safe backlog drift check in `pnpm run check`.
 - Surface the check in verification readiness, safe backlog evidence, runtime evidence export references, story docs, and architecture tracking.

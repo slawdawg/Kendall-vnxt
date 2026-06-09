@@ -12,6 +12,8 @@ Generic continuation instructions do not approve execution authority.
 
 On 2026-06-09, the operator explicitly approved Stories 4.1-4.3 for non-executing Ollama preparation only. That approval allows disabled-default settings, registry evidence, prompt redaction/retention contracts, timeout/cancellation evidence, dashboard/report/export updates, and no-call fixture tests. It does not approve Story 4.4, Ollama HTTP calls, endpoint discovery, model discovery, provider/model calls, process launch, shell command execution, source mutation, credential access, premium execution, external sends, or subscription-agent launch.
 
+On 2026-06-09, the operator explicitly approved subscription-agent launch Stories 5.1-5.4 for non-executing preparation only. That approval allows disabled-default launch settings, target registry evidence, launch approval binding and stale rejection, workspace/output/session contracts, disabled lifecycle adapter evidence, dashboard/report/export updates, and no-process fixture tests. It does not approve Story 5.5, real process launch, command execution, credential/session access, source mutation by workers, external sends, provider/model calls, premium execution, or supervised subscription-agent process execution.
+
 ## Current Blocked Execution Stories
 
 ### Ollama Local Provider
@@ -20,10 +22,6 @@ On 2026-06-09, the operator explicitly approved Stories 4.1-4.3 for non-executin
 
 ### Subscription-Agent Launch
 
-- `docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md`
-- `docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md`
-- `docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md`
-- `docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md`
 - `docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md`
 
 ## Approval Language Required
@@ -80,7 +78,7 @@ Before a blocked execution story can move to ready, the implementer must inspect
 
 ## Current Decision
 
-Stories 4.1-4.3 are approved only for non-executing Ollama preparation and no-call fixture evidence.
+Stories 4.1-4.3 are approved only for non-executing Ollama preparation and no-call fixture evidence. Stories 5.1-5.4 are approved only for non-executing subscription-agent launch preparation and no-process fixture evidence.
 
 Current status remains:
 

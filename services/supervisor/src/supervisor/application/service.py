@@ -114,6 +114,7 @@ from supervisor.domain.routing import (
     TaskKind,
 )
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
+from supervisor.domain.subscription_launch import DisabledSubscriptionLaunchAdapter, SubscriptionLaunchRegistry
 from supervisor.domain.types import AuditMode, BmadLane, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
@@ -227,6 +228,8 @@ class SupervisorService:
         self.worker_registry = StaticWorkerRegistry()
         self.local_readonly_worker = MockLocalReadonlyWorkerAdapter()
         self.disabled_provider_adapter = DisabledLocalProviderAdapter()
+        self.subscription_launch_registry = SubscriptionLaunchRegistry()
+        self.disabled_subscription_launch_adapter = DisabledSubscriptionLaunchAdapter()
 
     async def ensure_control(self, session: AsyncSession) -> SupervisorControl:
         control = await session.get(SupervisorControl, 1)
@@ -311,10 +314,6 @@ class SupervisorService:
         approval_checkpoint_path = "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"
         blocked_stories = [
             ("4.4", "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md", "Ollama local provider"),
-            ("5.1", "docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md", "Subscription-agent launch"),
-            ("5.2", "docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md", "Subscription-agent launch"),
-            ("5.3", "docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md", "Subscription-agent launch"),
-            ("5.4", "docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md", "Subscription-agent launch"),
             ("5.5", "docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md", "Subscription-agent launch"),
         ]
 
@@ -370,8 +369,8 @@ class SupervisorService:
                 ProviderEnablementPolicyStepView(
                     stepId="blocked-story-count",
                     label="Blocked execution-authority stories",
-                    status="passed" if authority_story_count == 6 else "blocked",
-                    summary=f"{authority_story_count} blocked stories are represented for remaining Ollama execution and subscription-agent launch authority.",
+                    status="passed" if authority_story_count == 2 else "blocked",
+                    summary=f"{authority_story_count} blocked stories are represented for remaining Ollama execution and supervised subscription-agent process authority.",
                     requiredEvidence=[path for _story_id, path, _family in blocked_stories],
                 ),
                 ProviderEnablementPolicyStepView(
@@ -1579,7 +1578,7 @@ class SupervisorService:
                     f"{len(blocked_backlog_items)} safe backlog items remain blocked pending explicit approval.",
                     "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
                     "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
-                    "Subscription-agent stories 5.1-5.5 remain blocked.",
+                    "Subscription-agent Story 5.5 remains blocked.",
                 ],
                 verificationCommands=["pnpm run check:docs", "pnpm run check:execution-boundary", "pnpm run check:process-lifecycle"],
                 relatedReports=[
@@ -1968,7 +1967,7 @@ class SupervisorService:
                 summary="Provider calls and subscription-agent launch stay blocked while maintenance work continues above the execution line.",
                 evidence=[
                     "Ollama local provider stories 4.1-4.4 remain blocked.",
-                    "Subscription-agent launch stories 5.1-5.5 remain blocked.",
+                    "Subscription-agent launch Story 5.5 remains blocked.",
                     "Generic continuation language is not execution-authority approval.",
                 ],
                 relatedReports=[
@@ -2158,7 +2157,7 @@ class SupervisorService:
                 evidence=[
                     "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
                     "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
-                    "Subscription-agent stories 5.1-5.5 remain blocked pending explicit approval.",
+                    "Subscription-agent Story 5.5 remains blocked pending explicit process-launch approval.",
                     f"Blocked maintenance tracks: {', '.join(blocked_maintenance_tracks) or 'none'}.",
                 ],
                 relatedReports=[
@@ -2393,6 +2392,7 @@ class SupervisorService:
     def get_execution_configuration_checks(self) -> ExecutionConfigurationChecksView:
         workers = self.worker_registry.list_workers()
         ollama_state = self._ollama_provider_gate_state()
+        subscription_launch_targets = self._subscription_launch_target_views()
 
         def affected_by_adapter(adapter_type: str) -> list[str]:
             return [worker.worker_id for worker in workers if worker.adapter_type.value == adapter_type]
@@ -2407,8 +2407,24 @@ class SupervisorService:
                 evidence=[
                     "Subscription launch stubs can create instructions only.",
                     "No Codex, Claude, Gemini, Antigravity, or subscription CLI process launch is enabled.",
+                    "Target-specific subscription launch gates are reported separately from handoff packages.",
                 ],
-                process_launch_allowed=self.settings.allow_subscription_agent_launch,
+                launch_targets=subscription_launch_targets,
+                process_launch_allowed=False,
+            ),
+            self._execution_configuration_check(
+                check_id="subscription-launch-targets",
+                label="Subscription launch target registry",
+                enabled=False,
+                disabled_reason="subscription_launch_targets_not_enabled",
+                affected_workers=affected_by_adapter("subscription_agent"),
+                evidence=[
+                    "Approved target entries are present only as disabled registry metadata.",
+                    "A target remains denied unless the broad launch gate, target-specific gate, policy id, and command template id all match.",
+                    "Subscription handoff packages remain separate package-only artifacts.",
+                ],
+                launch_targets=subscription_launch_targets,
+                process_launch_allowed=False,
             ),
             self._execution_configuration_check(
                 check_id="local-provider-calls",
@@ -2555,6 +2571,36 @@ class SupervisorService:
             "adapter_ready": adapter_ready,
         }
 
+    def _subscription_launch_target_views(self) -> list[dict[str, object]]:
+        target_gate_enabled = {
+            "codex.subscription.disabled": self.settings.allow_codex_subscription_agent_launch,
+            "claude.subscription.disabled": self.settings.allow_claude_subscription_agent_launch,
+            "gemini.subscription.disabled": self.settings.allow_gemini_subscription_agent_launch,
+        }
+        targets = []
+        for target in self.subscription_launch_registry.list_targets():
+            target_specific_gate = target_gate_enabled.get(target.target_id, False)
+            enabled = bool(self.settings.allow_subscription_agent_launch and target_specific_gate and target.enabled)
+            targets.append(
+                {
+                    "targetId": target.target_id,
+                    "displayName": target.display_name,
+                    "workerId": target.worker_id,
+                    "launchPolicyId": target.launch_policy_id,
+                    "commandTemplateId": target.command_template_id,
+                    "enabled": enabled,
+                    "disabledReason": None if enabled else target.disabled_reason,
+                    "broadGateEnabled": self.settings.allow_subscription_agent_launch,
+                    "targetSpecificGateEnabled": target_specific_gate,
+                    "approvalRequired": target.approval_required,
+                    "processLaunchAllowed": False,
+                    "commandExecutionAllowed": False,
+                    "credentialAccessAllowed": False,
+                    "externalSendAllowed": False,
+                }
+            )
+        return targets
+
     def get_threat_boundary(self) -> ThreatBoundaryView:
         redaction_boundary = [
             "Use workflow event summaries, work item metadata, route decisions, attempt metadata, and approved recipe metadata only.",
@@ -2664,6 +2710,7 @@ class SupervisorService:
         disabled_reason: str,
         affected_workers: list[str],
         evidence: list[str],
+        launch_targets: list[dict[str, object]] | None = None,
         process_launch_allowed: bool = False,
         provider_calls_allowed: bool = False,
         model_calls_allowed: bool = False,
@@ -2681,6 +2728,7 @@ class SupervisorService:
             disabledReason=None if enabled else disabled_reason,
             affectedWorkers=affected_workers,
             evidence=evidence,
+            launchTargets=launch_targets or [],
             processLaunchAllowed=process_launch_allowed,
             providerCallsAllowed=provider_calls_allowed,
             modelCallsAllowed=model_calls_allowed,
@@ -2906,6 +2954,10 @@ class SupervisorService:
             "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
             "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
             "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
+            "docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md",
+            "docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md",
+            "docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md",
+            "docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md",
             "docs/stories/3-51-process-lifecycle-policy-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
@@ -2936,6 +2988,8 @@ class SupervisorService:
                     "provider HTTP request/response bodies",
                     "model prompts or completions from external providers",
                     "raw Ollama prompts and completions",
+                    "raw subscription-agent stdout and stderr",
+                    "subscription-agent inherited environment values",
                     "filesystem snapshots outside recorded artifact references",
                     "background process output not recorded as workflow events",
                 ],
@@ -2949,7 +3003,7 @@ class SupervisorService:
                     "workflowEvents": len(events),
                     "relatedSupervisorReports": len(related_reports),
                     "gitBackedEvidence": len(git_backed_evidence),
-                    "excludedState": 6,
+                    "excludedState": 8,
                 },
                 reviewChecklist=[
                     "Confirm work-item state, attempts, and workflow events match the review question.",
@@ -2961,6 +3015,7 @@ class SupervisorService:
                     "Export includes supervisor database evidence and git-backed references.",
                     "Export excludes credential stores, provider request/response bodies, and external filesystem snapshots.",
                     "Ollama timeout and cancellation summaries are metadata-only; raw prompts and completions remain excluded.",
+                    "Subscription launch lifecycle evidence is metadata-only; raw process output, inherited environment, and session state remain excluded.",
                     "Generated timestamps and identifiers are local runtime evidence, not durable Git state.",
                 ],
                 stopLines=[
@@ -3061,6 +3116,35 @@ class SupervisorService:
                     stopLines=[
                         "Ollama no-call preparation keeps no provider/model calls allowed.",
                         "Do not add an HTTP adapter, endpoint discovery, model discovery, or raw payload retention before Story 4.4 approval.",
+                    ],
+                ),
+                RuntimeEvidenceReviewNavigatorItemView(
+                    itemId="review-subscription-launch-prep",
+                    label="Subscription launch prep",
+                    priority="P1",
+                    target="Review disabled subscription launch target, approval, workspace, output, and lifecycle evidence without approving process launch.",
+                    summary="Stories 5.1-5.4 add non-executing subscription launch preparation only; Story 5.5 remains required for any supervised process.",
+                    evidence=[
+                        "SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH and target-specific gates default to false.",
+                        "Launch approval bindings require route, attempt, workspace, policy, target, command template, actor, timestamp, and expiry evidence.",
+                        "Workspace and output contracts exclude credentials, sessions, inherited environment values, and raw stdout/stderr.",
+                        "Disabled lifecycle evidence records cancellation, timeout, cleanup, and terminal states without process launch.",
+                    ],
+                    relatedReports=[
+                        "GET /supervisor/execution-configuration-checks",
+                        "GET /supervisor/threat-boundary",
+                        "GET /supervisor/execution-readiness-report",
+                    ],
+                    relatedDocs=[
+                        "docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md",
+                        "docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md",
+                        "docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md",
+                        "docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md",
+                    ],
+                    dashboardAnchors=["#runtime-evidence-export", "#execution-attempts", "/controls#execution-readiness-report"],
+                    stopLines=[
+                        "Subscription launch prep keeps process launch disabled.",
+                        "Do not add a command runner, process supervisor, credential/session access, shell execution, or external send before Story 5.5 approval.",
                     ],
                 ),
             ],
@@ -3369,7 +3453,22 @@ class SupervisorService:
         if requested_status not in allowed:
             raise ValueError(f"Invalid execution attempt transition from {current_status} to {requested_status}.")
         if requested_status == ExecutionAttemptStatus.APPROVED.value:
-            self._validate_execution_attempt_approval_binding(attempt, payload)
+            try:
+                self._validate_execution_attempt_approval_binding(attempt, payload)
+            except ValueError as exc:
+                if self._has_subscription_launch_approval_fields(payload):
+                    event = await self._record_execution_attempt_approval_rejection_event(
+                        session,
+                        item,
+                        attempt,
+                        reason=str(exc),
+                        payload=payload,
+                    )
+                    event_refs = list(attempt.event_refs_json or [])
+                    event_refs.append({"eventId": event.id, "eventType": event.event_type})
+                    attempt.event_refs_json = event_refs
+                    await session.commit()
+                raise
 
         now = datetime.now(timezone.utc)
         attempt.status = requested_status
@@ -3440,6 +3539,50 @@ class SupervisorService:
             mismatches.append("authorityMode")
         if mismatches:
             raise ValueError(f"Execution attempt approval binding mismatch: {', '.join(mismatches)}.")
+
+        launch_binding_fields = {
+            "workItemId": payload.workItemId,
+            "attemptId": payload.attemptId,
+            "workspacePlanId": payload.workspacePlanId,
+            "launchPolicyId": payload.launchPolicyId,
+            "targetId": payload.targetId,
+            "commandTemplateId": payload.commandTemplateId,
+            "actorId": payload.actorId,
+            "approvalTimestamp": payload.approvalTimestamp,
+            "expiresAt": payload.expiresAt,
+        }
+        if self._has_subscription_launch_approval_fields(payload):
+            missing_launch_fields = [field for field, value in launch_binding_fields.items() if value is None or value == ""]
+            if missing_launch_fields:
+                raise ValueError(
+                    f"Subscription launch approval requires binding fields: {', '.join(missing_launch_fields)}."
+                )
+            if payload.workItemId != attempt.work_item_id:
+                mismatches.append("workItemId")
+            if payload.attemptId != attempt.id:
+                mismatches.append("attemptId")
+            workspace_plan = attempt.workspace_isolation_plan_json or {}
+            if payload.workspacePlanId != workspace_plan.get("planId"):
+                mismatches.append("workspacePlanId")
+            if payload.expiresAt and payload.expiresAt <= datetime.now(timezone.utc):
+                mismatches.append("expiresAt")
+            if mismatches:
+                raise ValueError(f"Subscription launch approval binding mismatch or stale approval: {', '.join(mismatches)}.")
+
+    def _has_subscription_launch_approval_fields(self, payload: WorkItemExecutionAttemptTransitionRequest) -> bool:
+        return any(
+            value is not None and value != ""
+            for value in (
+                payload.workItemId,
+                payload.attemptId,
+                payload.workspacePlanId,
+                payload.launchPolicyId,
+                payload.targetId,
+                payload.commandTemplateId,
+                payload.approvalTimestamp,
+                payload.expiresAt,
+            )
+        )
 
     async def _active_execution_attempt(self, session: AsyncSession, work_item_id: str) -> ExecutionAttempt | None:
         result = await session.execute(
@@ -3513,6 +3656,11 @@ class SupervisorService:
             "providerEndpointPolicy": threat_boundary.providerEndpointPolicy,
             "promptConstructionPolicy": "approved_evidence_only",
             "boundaryRejectionReason": "worker_execution_safety_boundary_not_satisfied",
+            "materializationMode": "metadata_only_no_workspace_created",
+            "environmentPolicy": "deny_inheritance_allowlist_only",
+            "environmentAllowlist": ["PATH"],
+            "sessionBoundary": "forbid_shell_profiles_ssh_browser_tokens_subscription_sessions_and_credentials",
+            "outputPolicy": "summary_only_no_raw_stdout_or_stderr_retention",
         }
 
     async def _record_execution_attempt_event(
@@ -3630,6 +3778,55 @@ class SupervisorService:
             actor_type="operator" if actor_id or actor_label else "supervisor",
             actor_id=actor_id,
             actor_label=actor_label,
+        )
+
+    async def _record_execution_attempt_approval_rejection_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        *,
+        reason: str,
+        payload: WorkItemExecutionAttemptTransitionRequest,
+    ) -> WorkflowEvent:
+        return await self._record_event(
+            session,
+            item,
+            "execution_attempt.approval_rejected",
+            "Execution attempt approval rejected before any process launch.",
+            {
+                "attemptId": attempt.id,
+                "workItemId": item.id,
+                "routeDecisionId": attempt.route_decision_id,
+                "workerId": attempt.worker_id,
+                "selectedLane": attempt.lane,
+                "authorityMode": attempt.authority_mode,
+                "status": attempt.status,
+                "rejectionReason": reason,
+                "providedBinding": {
+                    "workItemId": payload.workItemId,
+                    "attemptId": payload.attemptId,
+                    "routeDecisionId": payload.routeDecisionId,
+                    "workerId": payload.workerId,
+                    "lane": payload.lane,
+                    "authorityMode": payload.authorityMode,
+                    "workspacePlanId": payload.workspacePlanId,
+                    "launchPolicyId": payload.launchPolicyId,
+                    "targetId": payload.targetId,
+                    "commandTemplateId": payload.commandTemplateId,
+                    "actorId": payload.actorId,
+                    "approvalTimestampPresent": payload.approvalTimestamp is not None,
+                    "expiresAtPresent": payload.expiresAt is not None,
+                },
+                "processLaunchAllowed": False,
+                "processLaunchAttempted": False,
+                "shellExecutionAttempted": False,
+                "credentialAccessAttempted": False,
+                "externalSendAttempted": False,
+            },
+            actor_type="operator" if payload.actorId or payload.actorLabel else "supervisor",
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
         )
 
     async def list_routing_lane_profiles(self, session: AsyncSession) -> list[RoutingLaneEvidenceProfileView]:
@@ -3865,6 +4062,11 @@ class SupervisorService:
                 f"Task kind {preview.profile.taskKind} is not eligible for subscription agent launch stubs."
             )
 
+        target = self.subscription_launch_registry.get_target(payload.requestedAgent)
+        workspace_contract = self.disabled_subscription_launch_adapter.workspace_contract(
+            attempt_id=preview.decision.decisionId,
+            target=target,
+        )
         stub = SubscriptionAgentLaunchStubView(
             launchStubId=f"subscription-agent-stub-{preview.decision.decisionId}",
             workItemId=item.id,
@@ -3880,6 +4082,17 @@ class SupervisorService:
             launchInstructions=self._subscription_agent_stub_instructions(preview),
             requiredApprovals=self._subscription_agent_stub_required_approvals(),
             disabledReason="subscription_agent_process_launch_not_enabled",
+            targetRegistry=self._subscription_launch_target_views(),
+            approvalBinding=self.disabled_subscription_launch_adapter.approval_binding(
+                work_item_id=item.id,
+                attempt_id=preview.decision.decisionId,
+                route_decision_id=preview.decision.decisionId,
+                workspace_plan_id=str(workspace_contract["workspacePlanId"]),
+                target=target,
+            ),
+            workspaceContract=workspace_contract,
+            outputContract=self.disabled_subscription_launch_adapter.output_contract(attempt_id=preview.decision.decisionId),
+            lifecycleEvidence=self.disabled_subscription_launch_adapter.lifecycle_evidence(target),
             processLaunchAllowed=False,
             executionAllowed=False,
         )
@@ -4356,6 +4569,16 @@ class SupervisorService:
                 "authorityMode": stub.route.authorityMode,
                 "confidenceBand": stub.route.confidenceBand,
                 "reasonCodes": stub.route.reasonCodes,
+                "targetId": stub.approvalBinding.get("targetId"),
+                "launchPolicyId": stub.approvalBinding.get("launchPolicyId"),
+                "commandTemplateId": stub.approvalBinding.get("commandTemplateId"),
+                "workspacePlanId": stub.workspaceContract.get("workspacePlanId"),
+                "outputContractId": stub.outputContract.get("outputContractId"),
+                "lifecyclePolicy": stub.lifecycleEvidence.get("lifecyclePolicy"),
+                "processLaunchAttempted": False,
+                "shellExecutionAttempted": False,
+                "credentialAccessAttempted": False,
+                "externalSendAttempted": False,
                 "processLaunchAllowed": stub.processLaunchAllowed,
                 "executionAllowed": stub.executionAllowed,
                 "disabledReason": stub.disabledReason,
@@ -7243,6 +7466,11 @@ class SupervisorService:
             "commandsAllowed": False,
             "networkAllowed": False,
             "credentialAccessAllowed": False,
+            "materializationMode": "metadata_only_no_workspace_created",
+            "environmentPolicy": "deny_inheritance_allowlist_only",
+            "environmentAllowlist": ["PATH"],
+            "sessionBoundary": "forbid_shell_profiles_ssh_browser_tokens_subscription_sessions_and_credentials",
+            "outputPolicy": "summary_only_no_raw_stdout_or_stderr_retention",
         }
 
     def to_event_view(self, event: WorkflowEvent) -> WorkflowEventView:
