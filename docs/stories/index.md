@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-37-managed-recipe-policy-drift-check.md` | Required static drift check for managed recipe policy report contracts, route, dashboard rendering, browser assertions, tests, and story evidence. |
 | `3-36-managed-recipe-policy-report.md` | Read-only controls-page report for managed recipe gates, allowed paths, commands, and blocked remote automation posture. |
 | `3-35-runbook-check-chain-hardening.md` | Runbook verification guard for the full active check chain, including runtime export and safe backlog drift checks. |
 | `3-34-report-shortcuts-in-evidence-overview.md` | Work-item evidence overview shortcuts for runtime export related supervisor reports and the controls catalog. |
