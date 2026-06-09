@@ -445,6 +445,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-safe-backlog",
+                label="Safe development backlog drift",
+                command="pnpm run check:safe-backlog",
+                status="required",
+                requiredFor=["safe backlog changes", "maintenance report changes", "blocked authority story reference changes"],
+                evidence=[
+                    "Validates safe backlog contracts, schemas, API route, service items, dashboard rendering, browser assertions, blocked authority stop lines, and story references stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-build",
                 label="Dashboard build and type check",
                 command="pnpm --filter @kendall/dashboard build",
@@ -473,7 +484,7 @@ class SupervisorService:
                 status="required",
                 requiredFor=["pre-merge confidence", "local handoff", "fresh VM acceptance"],
                 evidence=[
-                    "Runs preflight, documentation checks, report/runtime drift checks, runbook checks, dashboard build, and supervisor integration tests.",
+                    "Runs preflight, documentation checks, report/runtime/safe-backlog drift checks, runbook checks, dashboard build, and supervisor integration tests.",
                     "Does not grant execution authority by passing.",
                 ],
             ),
@@ -1010,7 +1021,7 @@ class SupervisorService:
                 recommendedSliceSize="large",
                 evidence=[
                     f"{len(required_verification)} required verification commands are surfaced.",
-                    "Dashboard e2e, supervisor report catalog, and runtime evidence export drift checks now run inside the full local check.",
+                    "Dashboard e2e, supervisor report catalog, runtime evidence export, and safe backlog drift checks now run inside the full local check.",
                     "Focused dashboard e2e runners cover controls, detail, mobile, and managed recipe slices.",
                 ],
                 relatedReports=[
@@ -1022,8 +1033,9 @@ class SupervisorService:
                     "docs/stories/3-26-dashboard-e2e-report-drift-check.md",
                     "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
                     "docs/stories/3-31-runtime-evidence-export-drift-check.md",
+                    "docs/stories/3-32-safe-development-backlog-drift-check.md",
                 ],
-                nextAction="Add or extend static drift checks whenever commands, reports, runtime export contracts, or dashboard assertions gain new surfaces.",
+                nextAction="Add or extend static drift checks whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="read-only-evidence-polish",
@@ -1418,6 +1430,7 @@ class SupervisorService:
             "docs/stories/3-29-runbook-verification-alignment.md",
             "docs/stories/3-30-runtime-evidence-review-navigator.md",
             "docs/stories/3-31-runtime-evidence-export-drift-check.md",
+            "docs/stories/3-32-safe-development-backlog-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
