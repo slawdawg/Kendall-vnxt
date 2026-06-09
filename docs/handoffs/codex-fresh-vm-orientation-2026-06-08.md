@@ -72,9 +72,16 @@ Preferred:
 - GitHub connector/app for Codex PR inspection, metadata updates, and merge operations.
 - Local GitHub CLI auth only when a workflow explicitly shells out to `gh`.
 
+Current Codex CLI environment exception:
+
+- This Windows Codex CLI runner cannot reliably read GitHub CLI credentials from the DPAPI/keyring path.
+- In this environment, use `gh auth login --with-token --insecure-storage` when `gh` access is required from Codex sessions.
+- The token is stored in plaintext under `C:\Users\slaw_dawg\AppData\Roaming\GitHub CLI\hosts.yml`; do not commit, copy, or share that file.
+- Prefer returning to keyring/GCM-backed storage if the runner environment later supports it.
+
 Avoid:
 
-- persistent `gh auth login --insecure-storage`,
+- persistent `gh auth login --insecure-storage` outside the Codex CLI exception above,
 - storing GitHub tokens in `hosts.yml`,
 - treating `gh auth status` failure as a blocker for connector-backed Codex work.
 

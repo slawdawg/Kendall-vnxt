@@ -13,6 +13,7 @@ Status: current navigation index
 ## Execution Authority Boundaries
 
 - `kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`: approval language required before blocked authority stories can move to ready.
+- `kendall-vnxt-execution-authority-approval-packet-2026-06-09.md`: explicit operator approval choices for blocked Ollama and subscription-agent authority stories.
 - `kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md`: provider enablement, attempt reporting, and outcome evidence policy.
 - `kendall-vnxt-worker-threat-boundary-2026-06-08.md`: command, prompt, provider, network, credential, and artifact safety boundary.
 - `kendall-vnxt-dashboard-command-boundary-2026-06-08.md`: dashboard read, command, approval, and execution-prohibited surfaces.
