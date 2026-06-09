@@ -960,8 +960,13 @@ def test_maintenance_readiness_report_tracks_safe_work_without_mutation(tmp_path
     blocker_track = next(track for track in report["tracks"] if track["trackId"] == "authority-blocker-watch")
     assert blocker_track["status"] == "blocked_pending_explicit_approval"
     assert "GET /supervisor/execution-readiness-report" in blocker_track["relatedReports"]
+    assert "/controls#execution-readiness-report" in blocker_track["dashboardAnchors"]
     verification_track = next(track for track in report["tracks"] if track["trackId"] == "verification-hygiene")
     assert "GET /supervisor/dashboard-e2e-report" in verification_track["relatedReports"]
+    assert "/controls#dashboard-e2e-report" in verification_track["dashboardAnchors"]
+    documentation_track = next(track for track in report["tracks"] if track["trackId"] == "documentation-hygiene")
+    assert "docs/stories/index.md" in documentation_track["relatedDocs"]
+    assert "/controls#documentation-authority-report" in documentation_track["dashboardAnchors"]
     assert any("must not approve local provider/model calls" in stop_line for stop_line in report["stopLines"])
     assert any("coherent PRs" in action for action in report["nextSafeActions"])
 

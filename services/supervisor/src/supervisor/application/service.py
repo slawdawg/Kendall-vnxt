@@ -1874,6 +1874,7 @@ class SupervisorService:
                     "docs/prds/index.md",
                     "docs/stories/index.md",
                 ],
+                dashboardAnchors=["/controls#documentation-authority-report"],
                 nextAction="Run `pnpm run check:docs` after every architecture, PRD, story, or approval-checkpoint change.",
             ),
             MaintenanceReadinessTrackView(
@@ -1892,6 +1893,7 @@ class SupervisorService:
                     "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
                     "docs/stories/3-22-dashboard-e2e-report.md",
                 ],
+                dashboardAnchors=["/controls#verification-readiness-report", "/controls#dashboard-e2e-report"],
                 nextAction="Run focused checks for changed areas, then `pnpm run check` before merge.",
             ),
             MaintenanceReadinessTrackView(
@@ -1906,6 +1908,7 @@ class SupervisorService:
                 ],
                 relatedReports=["GET /supervisor/report-catalog", "GET /supervisor/dashboard-e2e-report", "GET /supervisor/managed-recipe-policy-report"],
                 relatedDocs=["docs/stories/3-18-supervisor-report-catalog.md", "docs/stories/3-22-dashboard-e2e-report.md"],
+                dashboardAnchors=["/controls#supervisor-report-catalog", "/controls#dashboard-e2e-report", "/controls#managed-recipe-policy-report"],
                 nextAction="Add new read-only reports to the catalog, controls page, tests, and runtime export references together.",
             ),
             MaintenanceReadinessTrackView(
@@ -1926,6 +1929,7 @@ class SupervisorService:
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
                     "docs/stories/index.md",
                 ],
+                dashboardAnchors=["/controls#documentation-authority-report", "/controls#execution-readiness-report"],
                 nextAction="Wait for explicit operator approval naming authority and scope before moving blocked stories into implementation.",
             ),
         ]
@@ -2776,6 +2780,7 @@ class SupervisorService:
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
             "docs/stories/3-46-maintenance-readiness-drift-check.md",
+            "docs/stories/3-62-maintenance-readiness-evidence-links.md",
             "docs/stories/3-47-core-readiness-drift-checks.md",
             "docs/stories/3-48-execution-boundary-report-drift-check.md",
             "docs/stories/3-49-execution-evidence-boundary-drift-check.md",

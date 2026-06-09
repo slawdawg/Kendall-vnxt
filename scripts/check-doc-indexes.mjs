@@ -147,7 +147,7 @@ if (blockedStoryIndexRefs.size === 0) {
 
 for (const currentGapText of [
   "Updated: 2026-06-09",
-  "Story 3.61",
+  "Story 3.62",
   "Managed recipe policy report",
   "GitHub workflow policy report",
   "Safe backlog delivery-hygiene guidance",
@@ -155,6 +155,7 @@ for (const currentGapText of [
   "Delivery readiness policy report",
   "Delivery readiness policy drift check",
   "Maintenance readiness drift check",
+  "Maintenance readiness evidence links",
   "Core readiness drift checks",
   "Execution boundary drift check",
   "Execution evidence drift check",
