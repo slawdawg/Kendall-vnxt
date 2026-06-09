@@ -1,4 +1,10 @@
-import type { ExecutionAttemptView, RoutingPreviewView, RuntimeEvidenceExportView, WorkflowEventView } from "@kendall/contracts";
+import type {
+  ExecutionAttemptView,
+  RoutingPreviewView,
+  RuntimeEvidenceExportView,
+  RuntimeEvidenceReviewWorkItemView,
+  WorkflowEventView,
+} from "@kendall/contracts";
 import { reportShortcutHref } from "../lib/report-shortcuts";
 
 function titleCase(value: string): string {
@@ -16,11 +22,13 @@ export function EvidenceOverviewPanel({
   routingPreview,
   attempts,
   runtimeEvidenceExport,
+  runtimeEvidenceReviewItem,
   events,
 }: {
   routingPreview: RoutingPreviewView;
   attempts: ExecutionAttemptView[];
   runtimeEvidenceExport: RuntimeEvidenceExportView;
+  runtimeEvidenceReviewItem: RuntimeEvidenceReviewWorkItemView | null;
   events: WorkflowEventView[];
 }) {
   const latestAttempt = attempts[0] ?? null;
@@ -55,6 +63,12 @@ export function EvidenceOverviewPanel({
       detail: `${disabledSafetyCount} authority flags disabled`,
     },
     {
+      href: runtimeEvidenceReviewItem?.runtimeExportHref ?? "/controls#runtime-evidence-review-report",
+      label: "Review queue",
+      value: runtimeEvidenceReviewItem ? titleCase(runtimeEvidenceReviewItem.reviewPriority) : "Not indexed",
+      detail: runtimeEvidenceReviewItem?.reviewReason ?? "No runtime review queue entry",
+    },
+    {
       href: "#workflow-history",
       label: "History",
       value: `${events.length} events`,
@@ -80,7 +94,7 @@ export function EvidenceOverviewPanel({
           No execution controls
         </span>
       </div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {cards.map((card) => (
           <a
             key={card.href}
@@ -92,6 +106,57 @@ export function EvidenceOverviewPanel({
             <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{card.detail}</p>
           </a>
         ))}
+      </div>
+      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h4 className="text-base font-semibold">Review queue position</h4>
+            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+              Current item context from the runtime evidence review queue.
+            </p>
+          </div>
+          <a
+            href="/controls#runtime-evidence-review-report"
+            className="w-fit rounded-full border bg-[var(--panel)] px-3 py-1 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          >
+            Open review index
+          </a>
+        </div>
+        {runtimeEvidenceReviewItem ? (
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="rounded-[0.85rem] border bg-[var(--panel)] p-3">
+              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Priority</p>
+              <p className="mt-2 text-base font-semibold">{titleCase(runtimeEvidenceReviewItem.reviewPriority)}</p>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{runtimeEvidenceReviewItem.reviewReason}</p>
+            </div>
+            <div className="rounded-[0.85rem] border bg-[var(--panel)] p-3">
+              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Evidence counts</p>
+              <p className="mt-2 text-base font-semibold">
+                {runtimeEvidenceReviewItem.attemptCount} attempts / {runtimeEvidenceReviewItem.eventCount} events
+              </p>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                {runtimeEvidenceReviewItem.relatedReportCount} related reports indexed
+              </p>
+            </div>
+            <a
+              href={runtimeEvidenceReviewItem.runtimeExportHref}
+              className="rounded-[0.85rem] border bg-[var(--panel)] p-3 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Recommended action</p>
+              <p className="mt-2 text-sm font-semibold">{runtimeEvidenceReviewItem.recommendedAction}</p>
+              <p className="mt-2 break-words font-mono text-[11px] text-[var(--muted)]">
+                {runtimeEvidenceReviewItem.runtimeExportHref}
+              </p>
+            </a>
+          </div>
+        ) : (
+          <p className="mt-3 rounded-[0.85rem] border bg-[var(--panel)] p-3 text-sm leading-6 text-[var(--muted)]">
+            This work item is not currently present in the runtime evidence review queue.
+          </p>
+        )}
+        <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
+          Review queue shortcuts are not execution-authority approvals.
+        </p>
       </div>
       <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">

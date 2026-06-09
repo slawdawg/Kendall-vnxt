@@ -543,6 +543,15 @@ test.describe("dashboard workflow coverage", () => {
       "href",
       "/controls#execution-readiness-report",
     );
+    await expect(overviewPanel.getByRole("heading", { name: "Review queue position" })).toBeVisible();
+    await expect(overviewPanel.getByRole("link", { name: "Open review index" })).toHaveAttribute(
+      "href",
+      "/controls#runtime-evidence-review-report",
+    );
+    await expect(overviewPanel.getByText("Evidence counts")).toBeVisible();
+    await expect(overviewPanel.getByText("related reports indexed")).toBeVisible();
+    await expect(overviewPanel.getByText("Recommended action")).toBeVisible();
+    await expect(overviewPanel.getByText("Review queue shortcuts are not execution-authority approvals.")).toBeVisible();
     await expect(overviewPanel.getByRole("heading", { name: "Review shortcuts" })).toBeVisible();
     await expect(overviewPanel.getByText("3 shortcuts")).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Runtime state/ })).toBeVisible();
