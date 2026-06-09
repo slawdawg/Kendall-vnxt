@@ -627,6 +627,18 @@ export interface SafeDevelopmentBacklogReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface ManagedRecipePolicyReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  recipes: WorkItemExecutionRecipeView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+  remoteAutomationApproved: boolean;
+}
+
 export interface ThreatBoundaryRuleView {
   ruleId: string;
   label: string;

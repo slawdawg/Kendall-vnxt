@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-36-managed-recipe-policy-report.md` | Read-only controls-page report for managed recipe gates, allowed paths, commands, and blocked remote automation posture. |
 | `3-35-runbook-check-chain-hardening.md` | Runbook verification guard for the full active check chain, including runtime export and safe backlog drift checks. |
 | `3-34-report-shortcuts-in-evidence-overview.md` | Work-item evidence overview shortcuts for runtime export related supervisor reports and the controls catalog. |
 | `3-33-evidence-overview-review-shortcuts.md` | Work-item evidence overview shortcuts backed by runtime export review navigator items. |

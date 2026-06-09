@@ -4,6 +4,7 @@ import type {
   DocumentationAuthorityReportView,
   ExecutionAttemptView,
   ExecutionReadinessReportView,
+  ManagedRecipePolicyReportView,
   MaintenanceReadinessReportView,
   RuntimeEvidenceExportView,
   RoutingLaneEvidenceProfileView,
@@ -116,6 +117,10 @@ export async function getMaintenanceReadinessReport(): Promise<MaintenanceReadin
 
 export async function getSafeDevelopmentBacklogReport(): Promise<SafeDevelopmentBacklogReportView> {
   return requestJson<SafeDevelopmentBacklogReportView>("/supervisor/safe-development-backlog");
+}
+
+export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolicyReportView> {
+  return requestJson<ManagedRecipePolicyReportView>("/supervisor/managed-recipe-policy-report");
 }
 
 export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {
