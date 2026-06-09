@@ -54,6 +54,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 - `pnpm run check:execution-boundary` passes.
 - `pnpm run check:execution-evidence` passes.
 - `pnpm run check:provider-fixtures` passes.
+- `pnpm run check:process-lifecycle` passes.
 - `pnpm run check:runbooks` passes.
 - `pnpm run check:runtime-export` passes.
 - `pnpm run check:safe-backlog` passes.
