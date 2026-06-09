@@ -22,6 +22,7 @@ This architecture stitches together the current source of truth from:
 - `docs/prds/supervisor-execution-authority-expansion.md`
 - `docs/architecture/kendall-vnxt-authority-dependency-graph-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md`
+- `docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md`
 - `_bmad/memory/knx/profile.md`
 - `_bmad/memory/knx/decisions/governance-coordinator-2026-06-01.md`
 - `_bmad/memory/knx/decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md`
@@ -250,6 +251,7 @@ The following architecture foundation is implemented or documented:
 - worker threat-boundary documentation and API,
 - authority dependency graph for deferred worker execution,
 - dashboard command/read boundary contract,
+- execution-readiness report and provider enablement policy,
 - recovery/runtime boundary documentation.
 
 ## Intentionally Deferred
@@ -266,13 +268,13 @@ The following require new PRDs or explicit safety decisions before implementatio
 
 ## Recommended Next Architecture Move
 
-The Execution Authority Expansion PRD has produced the current non-executing control-plane spine. The next product-safe architecture work is enablement governance for deferred authority.
+The Execution Authority Expansion PRD has produced the current non-executing control-plane spine. Enablement governance is now anchored by the authority dependency graph, dashboard command boundary, and execution-readiness report.
 
 The architecture sequence should be:
 
 1. keep this overall architecture as the spine,
 2. maintain the authority dependency graph,
 3. maintain dashboard read/command/approval boundaries,
-4. formalize provider enablement policy,
-5. polish attempt and outcome evidence reporting,
+4. maintain the execution-readiness and evidence policy,
+5. use readiness reports to identify missing evidence before future authority work,
 6. only then draft provider-specific or subscription-agent launch PRDs.

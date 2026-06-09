@@ -31,8 +31,8 @@ Routing and lane evidence
   -> Route-bound approval and workspace isolation metadata
   -> Disabled config checks and threat boundary
   -> Runtime evidence export and dashboard visibility
-  -> Provider/command/source-specific enablement policy
-  -> Mock or disabled adapter proof
+  -> Execution-readiness report and provider/command/source-specific enablement policy
+  -> Provider-specific mock or disabled adapter proof
   -> Operator-approved limited execution
   -> Outcome reporting
   -> Adaptive scoring, only after enough audited outcomes exist
@@ -62,6 +62,7 @@ The following work is safe to continue with conservative defaults:
 - architecture dependency documentation,
 - dashboard command/read boundary documentation,
 - provider enablement policy documentation,
+- execution-readiness reports,
 - non-executing mock/disabled adapter contracts,
 - reporting-only outcome evidence,
 - tests proving disabled defaults and no side effects,
@@ -69,8 +70,7 @@ The following work is safe to continue with conservative defaults:
 
 ## Next Architecture Stories
 
-1. Dashboard command/read boundary contract.
-2. Provider enablement policy.
-3. Attempt evidence reporting polish.
-4. Routing outcome reporting expansion.
-5. Provider-specific PRDs only after the above are complete.
+1. Queue lease and execution attempt boundary.
+2. Provider-specific disabled adapter proofs.
+3. Provider-specific PRDs only after the above are complete.
+4. Process lifecycle design record.

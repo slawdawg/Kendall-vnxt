@@ -63,9 +63,11 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Worker threat boundary | Implemented | `GET /supervisor/threat-boundary`, Story 2.8 | Formalizes command, prompt, provider, network, credential, and artifact boundaries. |
 | Connector-backed GitHub workflow | Implemented | `docs/github-connector-workflow.md`, Story 3.4 | Documents Git/GCM plus Codex GitHub connector split. |
 | Dashboard command/read boundary | Implemented | `docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md`, Story 3.6 | Classifies read-only, record-only, workflow, guarded managed, approval-bearing, and execution-prohibited surfaces. |
+| Deferred authority dependency graph | Documented | `docs/architecture/kendall-vnxt-authority-dependency-graph-2026-06-08.md`, Story 3.5 | Names prerequisites for future provider, process, command, source, network, credential, and scoring authority. |
+| Provider enablement precedence | Implemented | `GET /supervisor/execution-readiness-report`, `docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md`, Story 3.7 | Centralizes PRD, threat, settings, registry, permission, dashboard, tests, and rollback gates before enablement. |
+| Compact attempt evidence reporting | Implemented | `ExecutionReadinessReportView.currentAttempts`, dashboard controls panel | Summarizes recent attempts, disabled reasons, latest evidence, and next safe action. |
+| Reporting-only outcome evidence expansion | Implemented | `ExecutionReadinessReportView.latestOutcomes`, routing outcome events | Surfaces lane, worker, task kind, validation, failure, escalation, and override fields without adaptive scoring. |
 | Queue lease vs execution attempt boundary | Partial | `QueueLease` and `ExecutionAttempt` are separate models | Needs an explicit architecture note so future work does not overload queue leases. |
-| Provider enablement precedence | Partial | Disabled settings and registry checks exist | Needs a central policy describing PRD decision, config, registry, dashboard copy, and tests required before enabling a provider. |
-| Dependency graph for deferred authority | Documented gap | Overall architecture lists deferred items | Needs a concrete dependency graph for local provider calls, subscription-agent launch, premium execution, and adaptive scoring. |
 | Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
 | Direct subscription-agent process launch | Deferred | Launch stub is disabled | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
 | Premium execution | Deferred | Approval request artifacts only | Requires premium provider boundary and explicit approval policy. |
@@ -77,18 +79,18 @@ The architecture gap has moved from missing execution-attempt primitives to miss
 
 The highest-value next work should:
 
-1. Update architecture docs so they no longer route agents toward completed Story 2.1 work.
-2. Add a dependency graph for deferred execution authority.
-3. Formalize provider enablement precedence across PRDs, settings, registry, dashboard, and tests.
-4. Improve operator reporting around existing attempt and runtime evidence.
+1. Keep architecture docs aligned with the implemented non-executing control plane.
+2. Clarify the queue lease versus execution attempt boundary before process lifecycle work.
+3. Add provider-specific disabled adapter proofs and redaction fixtures.
+4. Use execution-readiness reports to decide when a provider-specific PRD has enough evidence.
 5. Only then design the next controlled worker execution capability.
 
 ## Recommended Next Backlog
 
-1. **Architecture Authority Dependency Graph**: document prerequisites for local provider calls, subscription-agent launch, premium execution, command execution, and adaptive scoring.
-2. **Provider Enablement Policy**: define the exact checks required before any provider can move from capable/disabled to executable.
-3. **Attempt Evidence Reporting Polish**: add a compact operator report or dashboard summary that highlights current attempts, disabled reasons, and next safe action.
-4. **Outcome Evidence Expansion**: extend guarded utility outcome reporting before using it for adaptive routing.
+1. **Queue Lease And Execution Attempt Boundary**: document scheduling state versus worker-authority evidence before process lifecycle work.
+2. **Provider-Specific Disabled Adapter Proofs**: add no-call fixtures and tests for Ollama, LM Studio, vLLM, and llama.cpp adapters.
+3. **Provider-Specific PRD Drafting**: draft the first local-provider PRD only after disabled adapter proofs and readiness evidence exist.
+4. **Process Lifecycle Design Record**: design subscription-agent process supervision only after attempt/workspace boundaries are explicit.
 
 ## Stop Conditions
 

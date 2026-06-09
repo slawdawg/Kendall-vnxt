@@ -43,69 +43,58 @@ Do not rebuild these as new architecture work:
 - Worker threat-boundary documentation and API.
 - Connector-backed GitHub workflow documentation.
 - Dashboard command/read boundary contract.
+- Authority dependency graph for deferred worker execution.
+- Execution-readiness report and provider enablement policy.
+- Compact attempt evidence reporting for readiness review.
+- Reporting-only routing outcome evidence expansion.
 
 ## Current Gaps
 
-### 1. Deferred Authority Dependency Graph
+### 1. Provider-Specific Execution PRDs
 
-Deferred authority is listed, but the architecture needs a dependency graph that names prerequisites for each future authority type:
+The general readiness policy exists, but each executable authority still needs its own PRD or decision record before implementation.
 
-- local provider/model calls,
-- direct subscription-agent launch,
-- premium execution,
-- arbitrary command execution,
-- source mutation,
-- adaptive routing/scoring.
+Risk: a generic readiness report could be mistaken for approval to enable a specific provider or launch path.
 
-Risk: future work could enable one authority type without satisfying its specific upstream controls.
+Recommendation: draft provider-specific or subscription-agent PRDs only after the readiness report shows enough policy, test, dashboard, and rollback evidence for that lane.
 
-Recommendation: add an architecture dependency graph and keep it close to the overall architecture and threat boundary docs.
+### 2. Queue Lease And Execution Attempt Boundary
 
-### 2. Provider Enablement Policy
+Queue leases and execution attempts are separate in code, but the architecture should make the boundary explicit before process execution is designed.
 
-Settings and registry checks deny execution by default, but the project needs a single policy for how a provider moves from disabled capability to executable authority.
+Risk: future launch work could overload queue leases with worker lifecycle semantics.
 
-Risk: config shortcuts could bypass PRD, threat, dashboard, and test requirements.
+Recommendation: add a short architecture note that defines queue leases as supervisor scheduling state and execution attempts as worker-authority evidence.
 
-Recommendation: define an enablement ladder: PRD decision, threat update, settings gate, registry state, permission envelope, dashboard copy, focused tests, and rollback plan.
+### 3. Provider-Specific Disabled Adapter Proofs
 
-### 3. Attempt Evidence Reporting Polish
+Local provider entries are disabled metadata today, and the readiness policy names required gates, but provider-specific disabled adapter fixtures are still useful before any real endpoint design.
 
-Attempt evidence is visible, but operators would benefit from a compact summary of current attempts, disabled reasons, latest lifecycle event, and next safe action.
+Risk: provider enablement could start at HTTP integration without first proving no-call adapter behavior and redaction boundaries.
 
-Risk: evidence exists but may be too scattered for repeated operator review.
-
-Recommendation: add a small reporting layer before any real worker launch.
-
-### 4. Outcome Evidence Expansion
-
-Guarded utility outcome evidence exists, but adaptive scoring is still premature.
-
-Risk: hidden or sparse scoring could make routing less predictable.
-
-Recommendation: add reporting-only outcome fields first: selected lane, worker, task kind, runtime, validation result, failure class, escalation reason, and operator override reason.
+Recommendation: add provider-specific disabled adapter tests and fixtures for Ollama, LM Studio, vLLM, and llama.cpp.
 
 ## Recommended Build Order
 
 1. Refresh architecture docs with the current Story 2.1-2.8 state.
 2. Add the deferred authority dependency graph.
 3. Add a dashboard command/read boundary contract.
-4. Add provider enablement policy and tests around disabled defaults.
-5. Add compact attempt evidence reporting.
-6. Expand routing outcome evidence for reporting.
+4. Add execution-readiness report, provider enablement policy, attempt evidence reporting, and outcome evidence reporting.
+5. Clarify queue lease versus execution attempt boundaries.
+6. Add provider-specific disabled adapter proofs.
 7. Only then draft PRDs for real local provider calls or direct subscription-agent launch.
 
 ## Recommended Immediate Story
 
-Title: Provider Enablement Policy
+Title: Queue Lease And Execution Attempt Boundary
 
-Goal: Define the policy gates required before any disabled provider or execution lane can become executable.
+Goal: Document the boundary between supervisor scheduling state and worker-authority attempt evidence before real process lifecycle work begins.
 
 Acceptance outline:
 
-- Define the enablement ladder from PRD decision through settings, registry, permission envelope, dashboard copy, tests, and rollback.
-- Cover local providers, subscription-agent launch, premium execution, command execution, source mutation, network access, and credential access.
-- State the exact artifacts and tests required before a worker can move from capable/disabled to executable.
+- Define queue leases as work scheduling and ownership state.
+- Define execution attempts as authority, lifecycle, workspace, and evidence state.
+- State what future process lifecycle work may attach to attempts and what must not be stored in queue leases.
 - Keep all current execution authority disabled.
 
 ## Stop Conditions

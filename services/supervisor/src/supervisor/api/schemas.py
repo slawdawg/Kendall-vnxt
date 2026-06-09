@@ -461,6 +461,57 @@ class ExecutionConfigurationChecksView(BaseModel):
     checks: list[ExecutionConfigurationCheckView]
 
 
+class ProviderEnablementPolicyStepView(BaseModel):
+    stepId: str
+    label: str
+    status: str
+    summary: str
+    requiredEvidence: list[str] = Field(default_factory=list)
+
+
+class ExecutionReadinessAttemptSummaryView(BaseModel):
+    attemptId: str
+    workItemId: str
+    status: str
+    workerId: str
+    lane: str
+    authorityMode: str
+    disabledReason: str | None = None
+    latestEventType: str | None = None
+    latestEventAt: datetime | None = None
+    nextSafeAction: str
+
+
+class ExecutionReadinessOutcomeEvidenceView(BaseModel):
+    eventId: str
+    workItemId: str
+    createdAt: datetime
+    selectedLane: str | None = None
+    workerId: str | None = None
+    taskKind: str | None = None
+    attemptStatus: str | None = None
+    validationStatus: str | None = None
+    failureClass: str | None = None
+    escalationReason: str | None = None
+    operatorOverrideReason: str | None = None
+    reportingOnly: bool = True
+
+
+class ExecutionReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    providerEnablementPolicy: list[ProviderEnablementPolicyStepView]
+    disabledAuthorityChecks: list[ExecutionConfigurationCheckView]
+    currentAttempts: list[ExecutionReadinessAttemptSummaryView]
+    latestOutcomes: list[ExecutionReadinessOutcomeEvidenceView]
+    nextSafeActions: list[str]
+    executionAllowed: bool = False
+    providerCallsAllowed: bool = False
+    commandExecutionAllowed: bool = False
+    sourceMutationAllowed: bool = False
+
+
 class ThreatBoundaryRuleView(BaseModel):
     ruleId: str
     label: str

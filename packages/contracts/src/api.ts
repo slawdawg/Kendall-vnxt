@@ -407,6 +407,57 @@ export interface ExecutionConfigurationChecksView {
   checks: ExecutionConfigurationCheckView[];
 }
 
+export interface ProviderEnablementPolicyStepView {
+  stepId: string;
+  label: string;
+  status: string;
+  summary: string;
+  requiredEvidence: string[];
+}
+
+export interface ExecutionReadinessAttemptSummaryView {
+  attemptId: string;
+  workItemId: string;
+  status: string;
+  workerId: string;
+  lane: string;
+  authorityMode: string;
+  disabledReason?: string | null;
+  latestEventType?: string | null;
+  latestEventAt?: string | null;
+  nextSafeAction: string;
+}
+
+export interface ExecutionReadinessOutcomeEvidenceView {
+  eventId: string;
+  workItemId: string;
+  createdAt: string;
+  selectedLane?: string | null;
+  workerId?: string | null;
+  taskKind?: string | null;
+  attemptStatus?: string | null;
+  validationStatus?: string | null;
+  failureClass?: string | null;
+  escalationReason?: string | null;
+  operatorOverrideReason?: string | null;
+  reportingOnly: boolean;
+}
+
+export interface ExecutionReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  providerEnablementPolicy: ProviderEnablementPolicyStepView[];
+  disabledAuthorityChecks: ExecutionConfigurationCheckView[];
+  currentAttempts: ExecutionReadinessAttemptSummaryView[];
+  latestOutcomes: ExecutionReadinessOutcomeEvidenceView[];
+  nextSafeActions: string[];
+  executionAllowed: boolean;
+  providerCallsAllowed: boolean;
+  commandExecutionAllowed: boolean;
+  sourceMutationAllowed: boolean;
+}
+
 export interface ThreatBoundaryRuleView {
   ruleId: string;
   label: string;
