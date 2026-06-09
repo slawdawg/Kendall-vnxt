@@ -65,9 +65,12 @@ for (const serviceText of [
   "RuntimeEvidenceReviewWorkItemView",
   "reviewQueue",
   "runtimeExportHref",
+  "relatedDocs",
+  "dashboardAnchors",
   "Runtime evidence review is not execution-authority approval.",
   "GET /supervisor/runtime-evidence-review-report",
   "docs/stories/3-55-runtime-evidence-review-index.md",
+  "docs/stories/3-65-runtime-review-evidence-links.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Runtime evidence review service must include ${serviceText}`, failures);
 }
@@ -93,8 +96,15 @@ for (const panelText of [
   "Work-item evidence queue",
   "Review queue",
   "item.runtimeExportHref",
+  "item.relatedReports",
+  "item.relatedDocs",
+  "item.dashboardAnchors",
   "report.relatedReports",
+  "report.relatedDocs",
   "report.dashboardAnchors",
+  "reportShortcutHref",
+  "Related reports",
+  "Related docs",
   "report.stopLines",
 ]) {
   assertCondition(reviewPanel.includes(panelText), `Runtime evidence review panel must render ${panelText}`, failures);
@@ -126,6 +136,9 @@ for (const browserText of [
   "Review queue position",
   "Open review index",
   "GET /supervisor/runtime-evidence-review-report",
+  "Related reports",
+  "Related docs",
+  "docs/stories/3-65-runtime-review-evidence-links.md",
   "pnpm run check:runtime-review",
   "/controls#runtime-evidence-review-report",
   "Runtime evidence review is not execution-authority approval.",
@@ -139,7 +152,10 @@ for (const testText of [
   '"/supervisor/runtime-evidence-review-report"',
   '"reviewQueue"',
   '"runtimeExportHref"',
+  '"relatedDocs"',
+  '"dashboardAnchors"',
   "docs/stories/3-55-runtime-evidence-review-index.md",
+  "docs/stories/3-65-runtime-review-evidence-links.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
 }
@@ -152,6 +168,11 @@ assertCondition(
 assertCondition(
   runtimeExportCheck.includes("docs/stories/3-55-runtime-evidence-review-index.md"),
   "Runtime evidence export drift check must require Story 3.55 git-backed evidence",
+  failures,
+);
+assertCondition(
+  runtimeExportCheck.includes("docs/stories/3-65-runtime-review-evidence-links.md"),
+  "Runtime evidence export drift check must require Story 3.65 git-backed evidence",
   failures,
 );
 assertCondition(
@@ -169,6 +190,8 @@ const storyPath = "docs/stories/3-55-runtime-evidence-review-index.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing runtime evidence review story ${storyPath}`, failures);
 const shortcutStoryPath = "docs/stories/3-57-work-item-review-queue-shortcuts.md";
 assertCondition(existsSync(join(rootDir, shortcutStoryPath)), `Missing work-item review queue shortcut story ${shortcutStoryPath}`, failures);
+const linksStoryPath = "docs/stories/3-65-runtime-review-evidence-links.md";
+assertCondition(existsSync(join(rootDir, linksStoryPath)), `Missing runtime review evidence links story ${linksStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-55-runtime-evidence-review-index.md"),
   "Story index must reference Story 3.55 runtime evidence review index",
@@ -180,17 +203,24 @@ assertCondition(
   failures,
 );
 assertCondition(
+  storyIndex.includes("3-65-runtime-review-evidence-links.md"),
+  "Story index must reference Story 3.65 runtime review evidence links",
+  failures,
+);
+assertCondition(
   currentGap.includes("Runtime evidence review report") &&
     currentGap.includes("work-item runtime evidence review queue") &&
-    currentGap.includes("Work-item review queue shortcuts"),
-  "Current gap review must track the runtime evidence review report, work-item runtime evidence review queue, and shortcuts",
+    currentGap.includes("Work-item review queue shortcuts") &&
+    currentGap.includes("Runtime review evidence links"),
+  "Current gap review must track the runtime evidence review report, work-item runtime evidence review queue, shortcuts, and evidence links",
   failures,
 );
 assertCondition(
   reconciliation.includes("Runtime evidence review report") &&
     reconciliation.includes("work-item runtime evidence review queue") &&
-    reconciliation.includes("Work-item review queue shortcuts"),
-  "Implementation reconciliation must track the runtime evidence review report, work-item runtime evidence review queue, and shortcuts",
+    reconciliation.includes("Work-item review queue shortcuts") &&
+    reconciliation.includes("Runtime review evidence links"),
+  "Implementation reconciliation must track the runtime evidence review report, work-item runtime evidence review queue, shortcuts, and evidence links",
   failures,
 );
 

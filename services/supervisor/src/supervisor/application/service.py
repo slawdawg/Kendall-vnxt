@@ -2678,6 +2678,17 @@ class SupervisorService:
             "GET /supervisor/execution-readiness-report",
             "GET /supervisor/authority-readiness-matrix-report",
         ]
+        related_docs = [
+            "docs/stories/3-55-runtime-evidence-review-index.md",
+            "docs/stories/3-57-work-item-review-queue-shortcuts.md",
+            "docs/stories/3-65-runtime-review-evidence-links.md",
+            "docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md",
+        ]
+        review_dashboard_anchors = [
+            "/controls#runtime-evidence-review-report",
+            "/controls#development-runway-report",
+            "/controls#supervisor-report-catalog",
+        ]
         work_item_reviews: list[RuntimeEvidenceReviewWorkItemView] = []
 
         for item in items:
@@ -2714,6 +2725,9 @@ class SupervisorService:
                     attemptCount=len(attempts),
                     eventCount=len(events),
                     relatedReportCount=len(related_reports),
+                    relatedReports=related_reports,
+                    relatedDocs=related_docs,
+                    dashboardAnchors=review_dashboard_anchors,
                     latestEventAt=self._normalize_timestamp(latest_event_at) if latest_event_at else None,
                     runtimeExportHref=f"/work-items/{item.id}#runtime-evidence-export",
                     reviewPriority=review_priority,
@@ -2743,11 +2757,8 @@ class SupervisorService:
             workItems=work_item_reviews,
             reviewQueue=review_queue,
             relatedReports=related_reports,
-            dashboardAnchors=[
-                "/controls#runtime-evidence-review-report",
-                "/controls#development-runway-report",
-                "/controls#supervisor-report-catalog",
-            ],
+            relatedDocs=related_docs,
+            dashboardAnchors=review_dashboard_anchors,
             stopLines=[
                 "Runtime evidence review is not execution-authority approval.",
                 "Do not launch processes, call providers, run arbitrary worker commands, mutate source, use network access, or read credentials from this review index.",
@@ -2806,6 +2817,7 @@ class SupervisorService:
             "docs/stories/3-63-development-runway-pr-batching-policy.md",
             "docs/stories/3-64-development-runway-evidence-links.md",
             "docs/stories/3-55-runtime-evidence-review-index.md",
+            "docs/stories/3-65-runtime-review-evidence-links.md",
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",
             "docs/stories/3-22-dashboard-e2e-report.md",

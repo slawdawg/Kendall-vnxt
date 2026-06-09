@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, maintenance readiness evidence-link coverage, development runway PR batching policy coverage, and development runway evidence links through Story 3.64
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, maintenance readiness evidence-link coverage, development runway PR batching policy coverage, development runway evidence links, and runtime review evidence links through Story 3.65
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -94,6 +94,7 @@ Do not rebuild these as new architecture work:
 - Development runway evidence links for reviewing related reports, docs, and dashboard anchors from each larger safe slice and readiness check.
 - Runtime evidence review report for the work-item runtime evidence review queue, review priority, evidence counts, and safe review actions.
 - Work-item review queue shortcuts in the evidence overview for review priority, evidence counts, recommended action, runtime export navigation, and controls-page review index navigation.
+- Runtime review evidence links for queued work-item related reports, docs, and dashboard anchors.
 - Shared dashboard e2e runner lifecycle helper for focused browser verification scripts.
 - Focused mobile dashboard e2e runner for phone-sized intake draft verification.
 - Focused managed-recipe e2e runners for dashboard and mobile coverage intake templates.

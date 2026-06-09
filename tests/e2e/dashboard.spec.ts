@@ -308,8 +308,15 @@ test.describe("dashboard workflow coverage", () => {
     const runtimeReviewPanel = page.locator("section").filter({ hasText: "Work-item evidence queue" }).first();
     await expect(runtimeReviewPanel.getByText("Runtime evidence review", { exact: true })).toBeVisible();
     await expect(runtimeReviewPanel.getByText("Work-item evidence queue")).toBeVisible();
-    await expect(runtimeReviewPanel.getByText("GET /supervisor/runtime-evidence-review-report")).toBeVisible();
-    await expect(runtimeReviewPanel.getByRole("link", { name: "/controls#runtime-evidence-review-report" })).toBeVisible();
+    await expect(runtimeReviewPanel.getByRole("link", { name: "GET /supervisor/runtime-evidence-review-report" }).first()).toBeVisible();
+    await expect(runtimeReviewPanel.getByText("Related reports").first()).toBeVisible();
+    await expect(runtimeReviewPanel.getByText("Related docs").first()).toBeVisible();
+    await expect(runtimeReviewPanel.getByText("docs/stories/3-65-runtime-review-evidence-links.md", { exact: true }).first()).toBeVisible();
+    await expect(runtimeReviewPanel.getByRole("link", { name: "GET /supervisor/runtime-evidence-review-report" }).first()).toHaveAttribute(
+      "href",
+      "/controls#runtime-evidence-review-report",
+    );
+    await expect(runtimeReviewPanel.getByRole("link", { name: "/controls#runtime-evidence-review-report" }).first()).toBeVisible();
     await expect(runtimeReviewPanel.getByText("Runtime evidence review is not execution-authority approval.")).toBeVisible();
     await expect(page.locator("#runtime-evidence-review-report")).toBeVisible();
 

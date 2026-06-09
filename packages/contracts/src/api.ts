@@ -760,6 +760,9 @@ export interface RuntimeEvidenceReviewWorkItemView {
   attemptCount: number;
   eventCount: number;
   relatedReportCount: number;
+  relatedReports: string[];
+  relatedDocs: string[];
+  dashboardAnchors: string[];
   latestEventAt: string | null;
   runtimeExportHref: string;
   reviewPriority: string;
@@ -774,6 +777,7 @@ export interface RuntimeEvidenceReviewReportView {
   workItems: RuntimeEvidenceReviewWorkItemView[];
   reviewQueue: RuntimeEvidenceReviewWorkItemView[];
   relatedReports: string[];
+  relatedDocs: string[];
   dashboardAnchors: string[];
   stopLines: string[];
   nextSafeActions: string[];

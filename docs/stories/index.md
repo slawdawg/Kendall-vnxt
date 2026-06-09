@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-65-runtime-review-evidence-links.md` | Runtime evidence review related report, document, and dashboard anchor links for queued work-item evidence review. |
 | `3-64-development-runway-evidence-links.md` | Development runway related report, document, and dashboard anchor links for larger safe slice evidence review. |
 | `3-63-development-runway-pr-batching-policy.md` | Development runway batching policy and checklist for larger reviewable PR slices. |
 | `3-62-maintenance-readiness-evidence-links.md` | Maintenance readiness related report, document, and dashboard anchor links for safe-lane evidence review. |

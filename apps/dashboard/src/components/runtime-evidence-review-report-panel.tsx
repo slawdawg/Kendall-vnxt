@@ -1,5 +1,6 @@
 import type { RuntimeEvidenceReviewReportView, RuntimeEvidenceReviewWorkItemView } from "@kendall/contracts";
 import Link from "next/link";
+import { reportShortcutHref } from "../lib/report-shortcuts";
 
 function formatTimestamp(value: string | null): string {
   return value ? new Date(value).toLocaleString() : "No events";
@@ -32,6 +33,39 @@ function WorkItemReviewCard({ item }: { item: RuntimeEvidenceReviewWorkItemView 
       </div>
       <p className="mt-3 font-mono text-[11px] text-[var(--muted)]">{formatTimestamp(item.latestEventAt)}</p>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{item.recommendedAction}</p>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
+          <div className="mt-2 grid gap-2">
+            {item.relatedReports.map((report) => (
+              <Link
+                key={report}
+                href={reportShortcutHref(report)}
+                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+              >
+                {report}
+              </Link>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
+          <div className="mt-2 grid gap-2">
+            {item.relatedDocs.map((doc) => (
+              <span key={doc} className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+                {doc}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {item.dashboardAnchors.map((anchor) => (
+          <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
+            {anchor}
+          </Link>
+        ))}
+      </div>
       <Link
         href={item.runtimeExportHref}
         className="mt-3 inline-flex w-fit rounded-full border bg-[var(--surface)] px-3 py-1 font-mono text-[11px] text-[var(--accent)]"
@@ -89,8 +123,23 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
             <h4 className="text-base font-semibold">Related reports</h4>
             <div className="mt-3 space-y-2">
               {report.relatedReports.map((reportEndpoint) => (
-                <p key={reportEndpoint} className="break-all rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+                <Link
+                  key={reportEndpoint}
+                  href={reportShortcutHref(reportEndpoint)}
+                  className="block break-all rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                >
                   {reportEndpoint}
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <h4 className="text-base font-semibold">Related docs</h4>
+            <div className="mt-3 space-y-2">
+              {report.relatedDocs.map((doc) => (
+                <p key={doc} className="break-all rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+                  {doc}
                 </p>
               ))}
             </div>
