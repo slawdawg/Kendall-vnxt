@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, and delivery readiness policy through Story 3.44
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, and delivery readiness drift coverage through Story 3.45
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -15,7 +15,7 @@ Source review artifacts:
 - `docs/prds/supervisor-dynamic-routing-follow-on-roadmap.md`
 - `docs/stories/index.md`
 - `docs/stories/2-1-execution-attempt-contract-and-state-model.md`
-- `docs/stories/3-44-delivery-readiness-policy-report.md`
+- `docs/stories/3-45-delivery-readiness-policy-drift-check.md`
 
 Implementation areas checked:
 
@@ -86,6 +86,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Runtime evidence review navigator | Implemented | `RuntimeEvidenceExportView.reviewNavigator`, Story 3.30 | Adds prioritized runtime state, authority boundary, and git-backed evidence review shortcuts without changing approval state. |
 | Runtime evidence export drift check | Implemented | `pnpm run check:runtime-export`, Story 3.31 | Keeps runtime export contracts, schemas, service navigator items, dashboard rendering, browser assertions, and story evidence aligned. |
 | Safe development backlog drift check | Implemented | `pnpm run check:safe-backlog`, Story 3.32 | Keeps safe backlog contracts, schemas, API route, service items, dashboard rendering, browser assertions, blocked authority stop lines, and story evidence aligned. |
+| Delivery readiness policy drift check | Implemented | `pnpm run check:delivery-readiness`, Story 3.45 | Keeps delivery readiness policy contracts, schemas, API route, service report, dashboard rendering, report shortcut, browser assertions, runbooks, and story evidence aligned. |
 | Subscription-agent launch PRD | Documented | `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`, Story 3.12 | Drafts supervised launch gates, lifecycle, workspace, output, session, dashboard, runtime export, rollback, and open questions without approving implementation. |
 | Subscription-agent launch PRD review and story breakdown | Documented | `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`, Stories 5.1-5.5 | Resolves planning questions and creates blocked implementation stories pending explicit approval. |
 | Execution authority approval checkpoints | Documented | `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`, Story 3.13 | Defines approval language, non-approval language, evidence requirements, and currently blocked authority stories. |

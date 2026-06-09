@@ -162,6 +162,7 @@ pnpm run check:runbooks
 pnpm run check:runtime-export
 pnpm run check:safe-backlog
 pnpm run check:managed-recipes
+pnpm run check:delivery-readiness
 pnpm run check
 git status --short --branch
 ```

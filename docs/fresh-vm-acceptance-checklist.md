@@ -53,6 +53,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 - `pnpm run check:runtime-export` passes.
 - `pnpm run check:safe-backlog` passes.
 - `pnpm run check:managed-recipes` passes.
+- `pnpm run check:delivery-readiness` passes.
 - `pnpm run check` passes.
 - Bootstrap local-only smoke check passes:
 
