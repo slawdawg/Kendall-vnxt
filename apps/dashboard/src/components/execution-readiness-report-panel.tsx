@@ -81,7 +81,11 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
                     </span>
                   </div>
                   <p className="mt-2 text-sm text-[var(--warn)]">{proof.disabledReason}</p>
+                  <p className="mt-2 font-mono text-xs text-[var(--muted)]">{proof.endpointFamily}</p>
                   <p className="mt-2 break-all text-xs leading-5 text-[var(--muted)]">{proof.endpointPolicy}</p>
+                  <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                    {proof.timeoutPolicy}. {proof.cancellationPolicy}. {proof.retentionPolicy}.
+                  </p>
                 </article>
               ))}
             </div>

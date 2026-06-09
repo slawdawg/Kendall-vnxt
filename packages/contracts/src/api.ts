@@ -447,12 +447,16 @@ export interface DisabledProviderProofView {
   workerId: string;
   providerLabel: string;
   disabledReason: string;
+  endpointFamily: string;
   endpointPolicy: string;
   httpCallsAttempted: boolean;
   modelCallsAttempted: boolean;
   networkAccessAttempted: boolean;
   credentialAccessAttempted: boolean;
   redactionChecks: string[];
+  timeoutPolicy: string;
+  cancellationPolicy: string;
+  retentionPolicy: string;
 }
 
 export interface ExecutionStateBoundaryView {
