@@ -60,6 +60,7 @@ for (const path of currentRunbooks) {
   assertCondition(content.includes("pnpm run check:runbooks"), `${path} must mention pnpm run check:runbooks`, failures);
   assertCondition(content.includes("pnpm run check:runtime-export"), `${path} must mention pnpm run check:runtime-export`, failures);
   assertCondition(content.includes("pnpm run check:safe-backlog"), `${path} must mention pnpm run check:safe-backlog`, failures);
+  assertCondition(content.includes("pnpm run check:managed-recipes"), `${path} must mention pnpm run check:managed-recipes`, failures);
   assertCondition(
     !content.includes("77 supervisor tests") && !content.includes("70 supervisor tests"),
     `${path} must not carry stale fixed supervisor test counts`,
@@ -88,8 +89,18 @@ assertCondition(
   failures,
 );
 assertCondition(
+  files["docs/stories/index.md"].includes("3-38-runbook-managed-recipe-check-chain.md"),
+  "Story index must reference Story 3.38 runbook managed recipe check chain",
+  failures,
+);
+assertCondition(
   files["services/supervisor/src/supervisor/application/service.py"].includes("pnpm run check:runbooks"),
   "Verification readiness report must surface pnpm run check:runbooks",
+  failures,
+);
+assertCondition(
+  files["services/supervisor/src/supervisor/application/service.py"].includes("managed recipe policy drift checks"),
+  "Verification readiness report must describe managed recipe policy drift checks in full verification evidence",
   failures,
 );
 assertCondition(
