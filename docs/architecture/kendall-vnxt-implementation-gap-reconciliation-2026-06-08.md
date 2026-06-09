@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, and verification execution plan coverage through Story 3.56
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, and work-item review queue shortcut coverage through Story 3.57
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -21,6 +21,7 @@ Source review artifacts:
 - `docs/stories/3-54-development-runway-safe-slices.md`
 - `docs/stories/3-55-runtime-evidence-review-index.md`
 - `docs/stories/3-56-verification-execution-plan-groups.md`
+- `docs/stories/3-57-work-item-review-queue-shortcuts.md`
 
 Implementation areas checked:
 
@@ -97,6 +98,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Authority readiness matrix report | Implemented | `GET /supervisor/authority-readiness-matrix-report`, Story 3.53 | Maps blocked execution-authority families to required approvals, evidence, blocked stories, related reports, dashboard anchors, and stop lines without changing approval state. |
 | Development runway report | Implemented | `GET /supervisor/development-runway-report`, Story 3.54 | Groups safe backlog, maintenance action, verification readiness, and authority blocker evidence into larger PR-sized safe slices without changing approval state. |
 | Runtime evidence review report | Implemented | `GET /supervisor/runtime-evidence-review-report`, Story 3.55 | Indexes the work-item runtime evidence review queue, export links, evidence counts, related reports, and safe review actions without changing approval state. |
+| Work-item review queue shortcuts | Implemented | `EvidenceOverviewPanel`, Story 3.57 | Links work-item detail evidence overview to runtime evidence review queue priority, evidence counts, recommended action, runtime export navigation, and the controls-page review index without changing approval state. |
 | Documentation authority drift check | Implemented | `pnpm run check:documentation-authority`, Story 3.47 | Keeps documentation authority contracts, schemas, API route, service report, dashboard rendering, browser assertions, tests, runbooks, and story evidence aligned. |
 | Verification readiness drift check | Implemented | `pnpm run check:verification-readiness`, Story 3.47 | Keeps verification readiness contracts, schemas, API route, command inventory, dashboard rendering, browser assertions, tests, runbooks, and story evidence aligned. |
 | Execution boundary report drift check | Implemented | `pnpm run check:execution-boundary`, Story 3.48 | Keeps execution configuration, execution readiness, and threat-boundary contracts, schemas, API routes, service evidence, dashboard shortcuts, browser assertions, supervisor assertions, runtime evidence, runbooks, and story evidence aligned. |
@@ -106,7 +108,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Maintenance action plan drift check | Implemented | `pnpm run check:maintenance-action-plan`, Story 3.52 | Keeps maintenance action plan contracts, schemas, API route, service steps, dashboard rendering, report catalog, runtime evidence, browser assertions, and story evidence aligned. |
 | Authority readiness matrix drift check | Implemented | `pnpm run check:authority-readiness`, Story 3.53 | Keeps authority readiness matrix contracts, schemas, API route, service families, dashboard rendering, report catalog, runtime evidence, browser assertions, and story evidence aligned. |
 | Development runway drift check | Implemented | `pnpm run check:development-runway`, Story 3.54 | Keeps development runway contracts, schemas, API route, service slices, dashboard rendering, report catalog, runtime evidence, browser assertions, runbooks, and story evidence aligned. |
-| Runtime evidence review drift check | Implemented | `pnpm run check:runtime-review`, Story 3.55 | Keeps runtime evidence review contracts, schemas, API route, service queue construction, dashboard rendering, report catalog, runtime evidence, browser assertions, runbooks, and story evidence aligned. |
+| Runtime evidence review drift check | Implemented | `pnpm run check:runtime-review`, Story 3.57 | Keeps runtime evidence review contracts, schemas, API route, service queue construction, dashboard rendering, work-item detail shortcuts, report catalog, runtime evidence, browser assertions, runbooks, and story evidence aligned. |
 | Subscription-agent launch PRD | Documented | `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`, Story 3.12 | Drafts supervised launch gates, lifecycle, workspace, output, session, dashboard, runtime export, rollback, and open questions without approving implementation. |
 | Subscription-agent launch PRD review and story breakdown | Documented | `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`, Stories 5.1-5.5 | Resolves planning questions and creates blocked implementation stories pending explicit approval. |
 | Execution authority approval checkpoints | Documented | `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`, Story 3.13 | Defines approval language, non-approval language, evidence requirements, and currently blocked authority stories. |

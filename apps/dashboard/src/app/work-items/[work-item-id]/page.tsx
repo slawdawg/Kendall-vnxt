@@ -19,6 +19,7 @@ import {
   getRecipeGateAudit,
   getRoutingPreview,
   getRuntimeEvidenceExport,
+  getRuntimeEvidenceReviewReport,
   getWorkItem,
   getWorkItemEvents,
   getWorkItems,
@@ -31,18 +32,22 @@ export default async function WorkItemDetailPage({
   params: Promise<{ "work-item-id": string }>;
 }) {
   const { "work-item-id": workItemId } = await params;
-  const [item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport] = await Promise.all([
-    getWorkItem(workItemId),
-    getWorkItemEvents(workItemId),
-    getWorkItems(),
-    getRoutingPreview(workItemId),
-    getExecutionAttempts(workItemId),
-    getRuntimeEvidenceExport(workItemId),
-  ]);
+  const [item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport] =
+    await Promise.all([
+      getWorkItem(workItemId),
+      getWorkItemEvents(workItemId),
+      getWorkItems(),
+      getRoutingPreview(workItemId),
+      getExecutionAttempts(workItemId),
+      getRuntimeEvidenceExport(workItemId),
+      getRuntimeEvidenceReviewReport(),
+    ]);
   const recipeGateAudit = item.executionRecipe ? await getRecipeGateAudit(workItemId) : null;
   const metadata = item.metadata ?? {};
   const navStats = buildNavStats(items);
   const retryCount = Math.max(0, events.filter((event) => event.eventType === "work_item.implementing").length - 1);
+  const runtimeEvidenceReviewItem =
+    runtimeEvidenceReviewReport.workItems.find((reviewItem) => reviewItem.workItemId === workItemId) ?? null;
 
   return (
     <Shell navStats={navStats}>
@@ -172,6 +177,7 @@ export default async function WorkItemDetailPage({
             routingPreview={routingPreview}
             attempts={executionAttempts}
             runtimeEvidenceExport={runtimeEvidenceExport}
+            runtimeEvidenceReviewItem={runtimeEvidenceReviewItem}
             events={events}
           />
           <RoutingPreviewPanel preview={routingPreview} />
