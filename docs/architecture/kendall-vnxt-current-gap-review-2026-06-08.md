@@ -55,6 +55,7 @@ Do not rebuild these as new architecture work:
 - Draft Ollama local provider PRD.
 - Ollama PRD review decisions and blocked implementation story breakdown.
 - Dashboard runtime evidence export access.
+- Draft subscription-agent launch PRD.
 
 ## Current Gaps
 
@@ -74,13 +75,13 @@ Risk: generic OpenAI-compatible assumptions could hide provider differences in e
 
 Recommendation: review the Ollama PRD, resolve open questions, then split it into implementation stories only if explicit approval is granted.
 
-### 3. Subscription-Agent Launch PRD
+### 3. Subscription-Agent Launch PRD Review Loop
 
-The process lifecycle design exists, but subscription-agent launch has not been converted into a PRD.
+The subscription-agent launch PRD is drafted, but it has not been reviewed, approved, or split into implementation stories.
 
-Risk: future launch work could begin from lifecycle notes without a product-level approval boundary.
+Risk: implementation could begin before launch target, environment inheritance, artifact size, source mutation policy, and approval expiry questions are resolved.
 
-Recommendation: draft launch requirements from the process lifecycle design while keeping launch disabled.
+Recommendation: review the PRD explicitly and produce blocked implementation stories only after approval.
 
 ## Recommended Build Order
 
@@ -92,18 +93,19 @@ Recommendation: draft launch requirements from the process lifecycle design whil
 6. Draft process lifecycle design and polish runtime evidence exports.
 7. Add provider-specific disabled fixture expansion and the first provider PRD draft.
 8. Add dashboard access to runtime evidence exports.
-9. Only then implement real local provider calls or direct subscription-agent launch after explicit approval.
+9. Draft subscription-agent launch PRD.
+10. Only then implement real local provider calls or direct subscription-agent launch after explicit approval.
 
 ## Recommended Immediate Story
 
-Title: Subscription-Agent Launch PRD
+Title: Subscription-Agent Launch PRD Review And Story Breakdown
 
-Goal: Draft subscription-agent launch requirements from the process lifecycle design before any launch implementation.
+Goal: Resolve subscription-agent launch PRD open questions and split approved implementation work into blocked safety-gated stories.
 
 Acceptance outline:
 
-- Define launch target scope and non-goals.
-- Define approval binding, process lifecycle, workspace, output, session, cancellation, timeout, rollback, and dashboard requirements.
+- Resolve first launch target, patch/source policy, output retention, environment inheritance, and approval expiry questions.
+- Create implementation stories only if explicit approval is granted.
 - Keep launch implementation and process execution disabled.
 - Keep all current execution authority disabled.
 
