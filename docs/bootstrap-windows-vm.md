@@ -55,7 +55,13 @@ pnpm run bootstrap:windows -- -VerifyRemote
 - reports VMware Workstation posture, VMware Tools status, memory, free disk, Windows long-path support, and Developer Mode posture,
 - verifies the BMAD method runtime files and required BMAD/KNX modules are installed from the repo,
 - optionally installs missing required tools with winget when `-InstallMissing` or `-Full` is used,
+- attempts to update App Installer/winget before installing missing tools,
+- falls back to direct official installers for Git, Node.js 24, and uv when winget is broken or unavailable,
+- installs and verifies the OpenAI Codex CLI with npm,
 - refreshes PATH after winget/Corepack setup attempts,
+- persists known Git, uv, NVM, and Node shim directories to the user PATH when present,
+- prefers Windows `.cmd` shims for Node tools so PowerShell execution policy does not block pnpm/npm/Corepack,
+- sets the CurrentUser PowerShell execution policy to `RemoteSigned` when no Group Policy controls it, so local pnpm/npm/Corepack `.ps1` shims run in normal shells,
 - configures Git Credential Manager with Windows DPAPI when `-ConfigureGit` or `-Full` is used,
 - configures Git `core.longpaths=true` when `-ConfigureGit` or `-Full` is used,
 - warns when Git commit identity is not configured,
@@ -143,6 +149,12 @@ Do not use `gh auth login --insecure-storage` as a persistent setup. It stores a
 pnpm run doctor:github -- --remote
 pnpm run check
 git status --short --branch
+```
+
+If a shell was already open before bootstrap repaired PATH, refresh it or open a new PowerShell window before testing plain `git`, `uv`, or `pnpm` commands:
+
+```powershell
+$env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')
 ```
 
 ## Codex Orientation

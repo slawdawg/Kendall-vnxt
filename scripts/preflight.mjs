@@ -13,7 +13,19 @@ function resolveCommand(command) {
   }
 
   if (process.platform === "win32" && command === "pnpm") {
-    return "pnpm.cmd";
+    return process.env.ComSpec || "cmd.exe";
+  }
+
+  if (process.platform === "win32" && command === "uv") {
+    for (const candidate of [
+      process.env.UV_EXE,
+      join(process.env.USERPROFILE ?? "", ".local", "bin", "uv.exe"),
+      join(process.env.USERPROFILE ?? "", ".cargo", "bin", "uv.exe"),
+    ]) {
+      if (candidate && existsSync(candidate)) {
+        return candidate;
+      }
+    }
   }
 
   return command;
@@ -22,6 +34,10 @@ function resolveCommand(command) {
 function resolveArgs(command, args) {
   if (command === "pnpm" && process.env.npm_execpath) {
     return [process.env.npm_execpath, ...args];
+  }
+
+  if (process.platform === "win32" && command === "pnpm") {
+    return ["/d", "/s", "/c", "pnpm", ...args];
   }
 
   return args;

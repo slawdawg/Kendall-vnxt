@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
@@ -37,12 +38,28 @@ function run(command, commandArgs, options = {}) {
 
 function resolveCommand(command) {
   if (process.platform === "win32" && command === "pnpm") {
-    return "pnpm.cmd";
+    return process.env.ComSpec || "cmd.exe";
+  }
+  if (process.platform === "win32" && command === "git") {
+    for (const candidate of [
+      process.env.GIT_EXE,
+      "C:\\Program Files\\Git\\cmd\\git.exe",
+      "C:\\Program Files\\Git\\bin\\git.exe",
+      "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
+    ]) {
+      if (candidate && existsSync(candidate)) {
+        return candidate;
+      }
+    }
   }
   return command;
 }
 
 function resolveArgs(_command, commandArgs) {
+  if (process.platform === "win32" && _command === "pnpm") {
+    return ["/d", "/s", "/c", "pnpm", ...commandArgs];
+  }
+
   return commandArgs;
 }
 
@@ -70,7 +87,7 @@ function includesGhCredentialHelper(value) {
 function verifyGitAvailable() {
   const result = run("git", ["--version"]);
   if (result.code !== 0) {
-    fail("git is not available on PATH.");
+    fail("git is not available. Add Git to PATH or install Git for Windows.");
     return false;
   }
   ok(result.stdout);
