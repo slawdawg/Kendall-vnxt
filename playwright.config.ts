@@ -36,37 +36,39 @@ export default defineConfig({
     baseURL: dashboardUrl,
     trace: "on-first-retry",
   },
-  webServer: [
-    {
-      command: supervisorCommand,
-      url: `${supervisorUrl}/health`,
-      reuseExistingServer: false,
-      timeout: 120_000,
-      env: {
-        SUPERVISOR_ALLOW_DIRTY_REPO: "true",
-        SUPERVISOR_DATABASE_URL: dbUrl,
-        SUPERVISOR_POLL_INTERVAL_SECONDS: "1",
-        SUPERVISOR_CORS_ORIGINS: dashboardUrl,
-        UV_CACHE_DIR: uvCacheDir,
-        PLAYWRIGHT_BROWSERS_PATH: browserPath,
-        TEMP: tempDir,
-        TMP: tempDir,
-      },
-    },
-    {
-      command: dashboardCommand,
-      url: dashboardUrl,
-      reuseExistingServer: false,
-      timeout: 120_000,
-      env: {
-        NEXT_PUBLIC_SUPERVISOR_URL: supervisorUrl,
-        SUPERVISOR_INTERNAL_URL: supervisorUrl,
-        PLAYWRIGHT_BROWSERS_PATH: browserPath,
-        TEMP: tempDir,
-        TMP: tempDir,
-      },
-    },
-  ],
+  webServer: process.env.PLAYWRIGHT_DISABLE_WEBSERVER === "true"
+    ? undefined
+    : [
+        {
+          command: supervisorCommand,
+          url: `${supervisorUrl}/health`,
+          reuseExistingServer: false,
+          timeout: 120_000,
+          env: {
+            SUPERVISOR_ALLOW_DIRTY_REPO: "true",
+            SUPERVISOR_DATABASE_URL: dbUrl,
+            SUPERVISOR_POLL_INTERVAL_SECONDS: "1",
+            SUPERVISOR_CORS_ORIGINS: dashboardUrl,
+            UV_CACHE_DIR: uvCacheDir,
+            PLAYWRIGHT_BROWSERS_PATH: browserPath,
+            TEMP: tempDir,
+            TMP: tempDir,
+          },
+        },
+        {
+          command: dashboardCommand,
+          url: dashboardUrl,
+          reuseExistingServer: false,
+          timeout: 120_000,
+          env: {
+            NEXT_PUBLIC_SUPERVISOR_URL: supervisorUrl,
+            SUPERVISOR_INTERNAL_URL: supervisorUrl,
+            PLAYWRIGHT_BROWSERS_PATH: browserPath,
+            TEMP: tempDir,
+            TMP: tempDir,
+          },
+        },
+      ],
   projects: [
     {
       name: "chromium",
