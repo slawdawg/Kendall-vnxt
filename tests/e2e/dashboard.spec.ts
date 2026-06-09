@@ -357,6 +357,12 @@ test.describe("dashboard workflow coverage", () => {
 
     await page.goto(`/work-items/${workItemId}`);
 
+    const overviewPanel = page.locator("section").filter({ hasText: "Evidence overview" }).first();
+    await expect(overviewPanel.getByText("Review map")).toBeVisible();
+    await expect(overviewPanel.getByText("No execution controls")).toBeVisible();
+    await expect(overviewPanel.getByText("Runtime export")).toBeVisible();
+    await expect(overviewPanel.getByText("authority flags disabled")).toBeVisible();
+
     await page.getByRole("link", { name: "Attempts" }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#execution-attempts$`));
 

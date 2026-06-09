@@ -271,6 +271,7 @@ The following architecture foundation is implemented or documented:
 - subscription-agent launch PRD review and blocked story breakdown,
 - execution authority approval checkpoint rules,
 - dashboard runtime evidence export access,
+- dashboard evidence overview polish,
 - recovery/runtime boundary documentation.
 
 ## Intentionally Deferred

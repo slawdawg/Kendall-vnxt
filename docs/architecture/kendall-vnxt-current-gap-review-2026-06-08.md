@@ -58,6 +58,7 @@ Do not rebuild these as new architecture work:
 - Draft subscription-agent launch PRD.
 - Subscription-agent launch PRD review decisions and blocked implementation story breakdown.
 - Execution authority approval checkpoint rules.
+- Dashboard evidence overview polish.
 
 ## Current Gaps
 
@@ -77,13 +78,13 @@ Risk: generic OpenAI-compatible assumptions could hide provider differences in e
 
 Recommendation: review the Ollama PRD, resolve open questions, then split it into implementation stories only if explicit approval is granted.
 
-### 3. Dashboard Evidence Polish
+### 3. Maintenance And Hygiene
 
-Dashboard evidence surfaces exist for routing, attempts, readiness, runtime exports, and provider proofs, but operators may still benefit from small review shortcuts after repeated use.
+The main execution-authority planning and read-only evidence surfaces are now in place. The safest continuing work is maintenance and hygiene while waiting for explicit authority approval.
 
-Risk: evidence is available but could require too much scrolling during repeated reviews.
+Risk: docs, blocked story state, and verification commands may drift as the repo grows.
 
-Recommendation: add targeted polish only where it improves review speed without adding execution controls.
+Recommendation: keep docs, tests, evidence surfaces, and blocked-story status current; add small read-only improvements only when they reduce review friction.
 
 ## Recommended Build Order
 
@@ -100,15 +101,15 @@ Recommendation: add targeted polish only where it improves review speed without 
 
 ## Recommended Immediate Story
 
-Title: Dashboard Evidence Polish
+Title: Maintenance And Hygiene
 
-Goal: Identify and implement small read-only dashboard evidence improvements after reviewing current operator surfaces.
+Goal: Keep checks, docs, blocked-story state, and read-only evidence surfaces current while waiting for explicit execution-authority approval.
 
 Acceptance outline:
 
-- Improve evidence navigation, grouping, or summaries only.
-- Do not add execution controls.
-- Keep all execution-authority approval checkpoint rules intact.
+- Run and document relevant checks.
+- Keep blocked authority stories blocked unless explicit approval is present.
+- Improve docs/tests/read-only evidence surfaces where useful.
 - Keep all current execution authority disabled.
 
 ## Stop Conditions
