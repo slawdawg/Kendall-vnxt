@@ -422,6 +422,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-runbooks",
+                label="Runbook verification alignment",
+                command="pnpm run check:runbooks",
+                status="required",
+                requiredFor=["README changes", "fresh VM runbook changes", "handoff changes", "verification command changes"],
+                evidence=[
+                    "Validates current operator runbooks mention the active verification chain and avoid stale fixed supervisor test counts.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-build",
                 label="Dashboard build and type check",
                 command="pnpm --filter @kendall/dashboard build",
@@ -450,7 +461,7 @@ class SupervisorService:
                 status="required",
                 requiredFor=["pre-merge confidence", "local handoff", "fresh VM acceptance"],
                 evidence=[
-                    "Runs preflight, documentation checks, report drift checks, dashboard build, and supervisor integration tests.",
+                    "Runs preflight, documentation checks, report drift checks, runbook checks, dashboard build, and supervisor integration tests.",
                     "Does not grant execution authority by passing.",
                 ],
             ),
@@ -1391,6 +1402,7 @@ class SupervisorService:
             "docs/stories/3-26-dashboard-e2e-report-drift-check.md",
             "docs/stories/3-27-safe-development-backlog-report.md",
             "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
+            "docs/stories/3-29-runbook-verification-alignment.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

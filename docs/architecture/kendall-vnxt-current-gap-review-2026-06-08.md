@@ -77,6 +77,7 @@ Do not rebuild these as new architecture work:
 - Focused dashboard detail e2e runner for runtime export verification.
 - Dashboard e2e report for focused/full browser verification commands, lifecycle posture, cache posture, stop lines, and static drift checking.
 - Supervisor report catalog drift checking for report routes, runtime references, dashboard fetches, browser assertions, and story evidence.
+- Runbook verification alignment for current operator setup, bootstrap, and handoff instructions.
 - Shared dashboard e2e runner lifecycle helper for focused browser verification scripts.
 - Focused mobile dashboard e2e runner for phone-sized intake draft verification.
 - Focused managed-recipe e2e runners for dashboard and mobile coverage intake templates.
