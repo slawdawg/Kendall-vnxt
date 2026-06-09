@@ -767,6 +767,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-safe-backlog",
         "check-managed-recipes",
         "check-delivery-readiness",
+        "check-maintenance-readiness",
         "dashboard-build",
         "supervisor-tests",
         "full-check",
@@ -961,6 +962,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "docs/stories/3-37-managed-recipe-policy-drift-check.md" in verification_item["relatedDocs"]
     assert "docs/stories/3-38-runbook-managed-recipe-check-chain.md" in verification_item["relatedDocs"]
     assert "docs/stories/3-45-delivery-readiness-policy-drift-check.md" in verification_item["relatedDocs"]
+    assert "docs/stories/3-46-maintenance-readiness-drift-check.md" in verification_item["relatedDocs"]
     github_item = next(item for item in report["items"] if item["itemId"] == "github-delivery-hygiene")
     assert github_item["recommendedSliceSize"] == "large"
     assert "GET /supervisor/github-workflow-policy-report" in github_item["relatedReports"]
@@ -1789,6 +1791,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-43-safe-delivery-hygiene.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-44-delivery-readiness-policy-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-45-delivery-readiness-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-46-maintenance-readiness-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
