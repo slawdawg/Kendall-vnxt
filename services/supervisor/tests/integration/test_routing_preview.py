@@ -819,6 +819,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/safe-development-backlog",
         "GET /supervisor/managed-recipe-policy-report",
         "GET /supervisor/github-workflow-policy-report",
+        "GET /supervisor/delivery-readiness-policy-report",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
         "GET /supervisor/threat-boundary",
@@ -961,8 +962,10 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     github_item = next(item for item in report["items"] if item["itemId"] == "github-delivery-hygiene")
     assert github_item["recommendedSliceSize"] == "large"
     assert "GET /supervisor/github-workflow-policy-report" in github_item["relatedReports"]
+    assert "GET /supervisor/delivery-readiness-policy-report" in github_item["relatedReports"]
     assert "docs/stories/3-42-github-workflow-policy-report.md" in github_item["relatedDocs"]
     assert "docs/stories/3-43-safe-delivery-hygiene.md" in github_item["relatedDocs"]
+    assert "docs/stories/3-44-delivery-readiness-policy-report.md" in github_item["relatedDocs"]
     assert any("plaintext gh token" in evidence for evidence in github_item["evidence"])
     evidence_item = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish")
     assert "docs/stories/3-33-evidence-overview-review-shortcuts.md" in evidence_item["relatedDocs"]
@@ -1782,6 +1785,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-41-current-gap-review-refresh.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-42-github-workflow-policy-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-43-safe-delivery-hygiene.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-44-delivery-readiness-policy-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
@@ -1791,6 +1795,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/safe-development-backlog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/managed-recipe-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/github-workflow-policy-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/delivery-readiness-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
     assert "environment variables and credential stores" in export["boundary"]["excludedState"]
@@ -1881,6 +1886,35 @@ def test_github_workflow_policy_report_documents_auth_split_without_mutation(tmp
     assert {item["itemId"] for item in report["requiredChecks"]} == {"github-doctor-local", "github-doctor-remote", "connector-probe"}
     assert any("plaintext GitHub CLI tokens" in stop_line for stop_line in report["stopLines"])
     assert any("Git/GCM" in action for action in report["nextSafeActions"])
+
+
+def test_delivery_readiness_policy_report_documents_review_gate_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-readiness-policy-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/delivery-readiness-policy-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "delivery-readiness-policy-report-v1"
+    assert report["readOnly"] is True
+    assert report["executionAuthorityApproved"] is False
+    assert report["remoteAutomationApproved"] is False
+    assert {item["itemId"] for item in report["statusPolicy"]} == {"pull-request-status", "ci-status", "merge-status"}
+    assert {item["itemId"] for item in report["waiverPolicy"]} == {"local-only-waiver", "checkpoint-form-only"}
+    assert any("remote delivery automation" in stop_line for stop_line in report["stopLines"])
+    assert any("delivery readiness checkpoint form" in stop_line for stop_line in report["stopLines"])
 
 
 def test_execution_attempt_rejects_local_readonly_without_provider_calls(tmp_path, monkeypatch) -> None:

@@ -149,6 +149,11 @@ assertCondition(
   failures,
 );
 assertCondition(
+  serviceSource.includes("GET /supervisor/delivery-readiness-policy-report"),
+  "Safe backlog must reference the delivery readiness policy report",
+  failures,
+);
+assertCondition(
   serviceSource.includes("pnpm run check:safe-backlog"),
   "Verification readiness report must surface pnpm run check:safe-backlog",
   failures,

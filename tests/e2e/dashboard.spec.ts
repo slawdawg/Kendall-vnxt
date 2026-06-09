@@ -191,6 +191,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/delivery-readiness-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
     await expect(page.locator("#supervisor-report-catalog")).toBeVisible();
 
@@ -231,6 +232,14 @@ test.describe("dashboard workflow coverage", () => {
     await expect(githubPolicyPanel.getByText("Plaintext tokens")).toBeVisible();
     await expect(githubPolicyPanel.getByText("Do not create persistent plaintext GitHub CLI tokens")).toBeVisible();
     await expect(page.locator("#github-workflow-policy-report")).toBeVisible();
+
+    const deliveryReadinessPolicyPanel = page.locator("section").filter({ hasText: "Review gate policy" }).first();
+    await expect(deliveryReadinessPolicyPanel.getByText("Delivery readiness", { exact: true })).toBeVisible();
+    await expect(deliveryReadinessPolicyPanel.getByText("Pull request evidence")).toBeVisible();
+    await expect(deliveryReadinessPolicyPanel.getByText("CI evidence")).toBeVisible();
+    await expect(deliveryReadinessPolicyPanel.getByText("Local-only delivery waiver")).toBeVisible();
+    await expect(deliveryReadinessPolicyPanel.getByText("Record delivery readiness only through the work-item delivery readiness checkpoint form.")).toBeVisible();
+    await expect(page.locator("#delivery-readiness-policy-report")).toBeVisible();
 
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();

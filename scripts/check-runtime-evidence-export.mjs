@@ -88,6 +88,7 @@ for (const shortcutText of [
   "#execution-readiness-report",
   "#safe-development-backlog",
   "#github-workflow-policy-report",
+  "#delivery-readiness-policy-report",
   "#supervisor-report-catalog",
 ]) {
   assertCondition(reportShortcuts.includes(shortcutText), `Report shortcut helper must include ${shortcutText}`, failures);
@@ -138,6 +139,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-43-safe-delivery-hygiene.md"),
   "Story index must reference Story 3.43 safe delivery hygiene",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-44-delivery-readiness-policy-report.md"),
+  "Story index must reference Story 3.44 delivery readiness policy report",
   failures,
 );
 

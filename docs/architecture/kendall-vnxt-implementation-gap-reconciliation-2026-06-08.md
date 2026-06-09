@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, and safe delivery hygiene through Story 3.43
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, and delivery readiness policy through Story 3.44
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -15,7 +15,7 @@ Source review artifacts:
 - `docs/prds/supervisor-dynamic-routing-follow-on-roadmap.md`
 - `docs/stories/index.md`
 - `docs/stories/2-1-execution-attempt-contract-and-state-model.md`
-- `docs/stories/3-43-safe-delivery-hygiene.md`
+- `docs/stories/3-44-delivery-readiness-policy-report.md`
 
 Implementation areas checked:
 
@@ -67,6 +67,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Connector-backed GitHub workflow | Implemented | `docs/github-connector-workflow.md`, Story 3.4 | Documents Git/GCM plus Codex GitHub connector split. |
 | GitHub workflow policy report | Implemented | `GET /supervisor/github-workflow-policy-report`, Story 3.42 | Surfaces Git/GCM, Codex GitHub connector, optional gh auth, doctor commands, connector probe, and plaintext-token stop lines without approving worker authority. |
 | Safe delivery hygiene backlog | Implemented | `GET /supervisor/safe-development-backlog`, Story 3.43 | Keeps GitHub delivery posture, larger PR slice guidance, Git/GCM or connector-backed remote work, and plaintext-token stop lines in the safe backlog and drift checks. |
+| Delivery readiness policy report | Implemented | `GET /supervisor/delivery-readiness-policy-report`, Story 3.44 | Documents PR, CI, merge, checkpoint-form, and local-only waiver rules without approving remote delivery automation. |
 | Dashboard command/read boundary | Implemented | `docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md`, Story 3.6 | Classifies read-only, record-only, workflow, guarded managed, approval-bearing, and execution-prohibited surfaces. |
 | Deferred authority dependency graph | Documented | `docs/architecture/kendall-vnxt-authority-dependency-graph-2026-06-08.md`, Story 3.5 | Names prerequisites for future provider, process, command, source, network, credential, and scoring authority. |
 | Provider enablement precedence | Implemented | `GET /supervisor/execution-readiness-report`, `docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md`, Story 3.7 | Centralizes PRD, threat, settings, registry, permission, dashboard, tests, and rollback gates before enablement. |

@@ -15,6 +15,8 @@ from supervisor.api.schemas import (
     AuditEventView,
     DashboardE2EReportView,
     DashboardE2ERunnerView,
+    DeliveryReadinessPolicyItemView,
+    DeliveryReadinessPolicyReportView,
     DocumentationAuthorityBlockedStoryView,
     DocumentationAuthorityDocumentView,
     DocumentationAuthorityReportView,
@@ -874,6 +876,18 @@ class SupervisorService:
                 ],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="delivery-readiness-policy-report-v1",
+                label="Delivery readiness policy report",
+                endpoint="GET /supervisor/delivery-readiness-policy-report",
+                status="active",
+                summary="Documents PR, CI, merge, and waiver evidence required before recipe review approval without performing remote delivery.",
+                evidenceScope=["delivery readiness statuses", "operator waiver rules", "record-only dashboard checkpoint", "remote automation stop lines"],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md",
+                    "docs/stories/3-44-delivery-readiness-policy-report.md",
+                ],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="disabled-provider-proofs",
                 label="Disabled provider proofs",
                 endpoint="GET /supervisor/disabled-provider-proofs",
@@ -1094,6 +1108,7 @@ class SupervisorService:
                 ],
                 relatedReports=[
                     "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/delivery-readiness-policy-report",
                     "GET /supervisor/report-catalog",
                     "GET /supervisor/verification-readiness-report",
                     "GET /supervisor/managed-recipe-policy-report",
@@ -1102,6 +1117,7 @@ class SupervisorService:
                     "docs/github-connector-workflow.md",
                     "docs/stories/3-42-github-workflow-policy-report.md",
                     "docs/stories/3-43-safe-delivery-hygiene.md",
+                    "docs/stories/3-44-delivery-readiness-policy-report.md",
                 ],
                 nextAction="Before remote delivery changes, confirm Git/GCM or connector posture and keep the PR scoped as one larger coherent work package.",
             ),
@@ -1122,6 +1138,7 @@ class SupervisorService:
                     "GET /supervisor/documentation-authority-report",
                     "GET /supervisor/maintenance-readiness-report",
                     "GET /supervisor/managed-recipe-policy-report",
+                    "GET /supervisor/delivery-readiness-policy-report",
                 ],
                 relatedDocs=[
                     "docs/stories/2-7-runtime-evidence-export-strategy.md",
@@ -1290,6 +1307,83 @@ class SupervisorService:
             readOnly=True,
             executionAuthorityApproved=False,
             plaintextTokenStorageApproved=False,
+            remoteAutomationApproved=False,
+        )
+
+    def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
+        return DeliveryReadinessPolicyReportView(
+            reportId="delivery-readiness-policy-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only policy for the managed recipe delivery checkpoint. It explains how PR, CI, merge, "
+                "and explicit local-only waiver evidence make a work item ready for operator review approval without executing remote delivery."
+            ),
+            statusPolicy=[
+                DeliveryReadinessPolicyItemView(
+                    itemId="pull-request-status",
+                    label="Pull request evidence",
+                    status="record_only",
+                    summary="PR status must be recorded or ready before remote delivery can satisfy the review gate.",
+                    evidence=[
+                        "WorkItemDeliveryReadinessView.pullRequestStatus supports not_recorded, recorded, ready, and waived.",
+                        "Delivery readiness updates are recorded through POST /work-items/{id}/delivery-readiness.",
+                    ],
+                ),
+                DeliveryReadinessPolicyItemView(
+                    itemId="ci-status",
+                    label="CI evidence",
+                    status="record_only",
+                    summary="CI status is review evidence and does not trigger test execution from the report surface.",
+                    evidence=[
+                        "WorkItemDeliveryReadinessView.ciStatus supports not_recorded, pending, passed, failed, and waived.",
+                        "The dashboard delivery gate displays CI state before review approval.",
+                    ],
+                ),
+                DeliveryReadinessPolicyItemView(
+                    itemId="merge-status",
+                    label="Merge evidence",
+                    status="record_only",
+                    summary="Merge status must be ready or merged for remote delivery readiness unless an explicit waiver is recorded.",
+                    evidence=[
+                        "WorkItemDeliveryReadinessView.mergeStatus supports not_recorded, ready, merged, blocked, and waived.",
+                        "readyForApproval is true only for recorded or ready PR evidence plus ready or merged merge evidence, or for a waiver with a reason.",
+                    ],
+                ),
+            ],
+            waiverPolicy=[
+                DeliveryReadinessPolicyItemView(
+                    itemId="local-only-waiver",
+                    label="Local-only delivery waiver",
+                    status="operator_explicit",
+                    summary="A waiver can satisfy the review gate only when the operator records a reason.",
+                    evidence=[
+                        "deliveryWaived must be true and deliveryWaiverReason must be present.",
+                        "Waivers are record-only evidence and are not remote automation approval.",
+                    ],
+                ),
+                DeliveryReadinessPolicyItemView(
+                    itemId="checkpoint-form-only",
+                    label="Dedicated checkpoint form",
+                    status="required",
+                    summary="Managed next action execution redirects readiness updates to the delivery readiness checkpoint form.",
+                    evidence=[
+                        "Managed next action rejects record_delivery_readiness and instructs operators to use the checkpoint form.",
+                        "The report is read-only and does not mutate delivery readiness metadata.",
+                    ],
+                ),
+            ],
+            stopLines=[
+                "This report is not approval for remote delivery automation, GitHub writes, worker execution, provider calls, or process launch.",
+                "Do not treat a local-only waiver as proof that remote PR, CI, or merge evidence exists.",
+                "Record delivery readiness only through the work-item delivery readiness checkpoint form.",
+            ],
+            nextSafeActions=[
+                "Use this report to review delivery-readiness rules before changing the work-item delivery gate.",
+                "Keep delivery readiness dashboard controls, supervisor tests, and report catalog references aligned.",
+                "Use the GitHub workflow policy report for Git/GCM and connector posture before remote delivery work.",
+            ],
+            readOnly=True,
+            executionAuthorityApproved=False,
             remoteAutomationApproved=False,
         )
 
@@ -1589,6 +1683,7 @@ class SupervisorService:
             "GET /supervisor/safe-development-backlog",
             "GET /supervisor/managed-recipe-policy-report",
             "GET /supervisor/github-workflow-policy-report",
+            "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
         ]
@@ -1627,6 +1722,7 @@ class SupervisorService:
             "docs/stories/3-41-current-gap-review-refresh.md",
             "docs/stories/3-42-github-workflow-policy-report.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
+            "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
