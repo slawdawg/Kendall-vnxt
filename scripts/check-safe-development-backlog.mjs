@@ -64,6 +64,7 @@ assertCondition(
 for (const itemId of [
   "safe-backlog-report-alignment",
   "verification-surface-hardening",
+  "github-delivery-hygiene",
   "read-only-evidence-polish",
   "authority-blocked-work",
 ]) {
@@ -79,6 +80,9 @@ for (const safetyText of [
   "provider/model calls",
   "worker shell commands",
   "credential access",
+  "persistent plaintext gh token storage",
+  "Git/GCM",
+  "Codex GitHub connector",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
@@ -91,6 +95,8 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Verification surface hardening",
+  "GitHub delivery hygiene",
+  "persistent plaintext gh token storage",
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
 ]) {
@@ -110,9 +116,16 @@ assertCondition(
 
 const storyPath = "docs/stories/3-32-safe-development-backlog-drift-check.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing safe backlog drift story ${storyPath}`, failures);
+const deliveryStoryPath = "docs/stories/3-43-safe-delivery-hygiene.md";
+assertCondition(existsSync(join(rootDir, deliveryStoryPath)), `Missing safe delivery hygiene story ${deliveryStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-32-safe-development-backlog-drift-check.md"),
   "Story index must reference Story 3.32 safe backlog drift check",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-43-safe-delivery-hygiene.md"),
+  "Story index must reference Story 3.43 safe delivery hygiene",
   failures,
 );
 assertCondition(
@@ -123,6 +136,16 @@ assertCondition(
 assertCondition(
   serviceSource.includes("docs/stories/3-32-safe-development-backlog-drift-check.md"),
   "Runtime evidence export git-backed evidence must include Story 3.32",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("docs/stories/3-43-safe-delivery-hygiene.md"),
+  "Runtime evidence export git-backed evidence must include Story 3.43",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("GET /supervisor/github-workflow-policy-report"),
+  "Safe backlog must reference the GitHub workflow policy report",
   failures,
 );
 assertCondition(

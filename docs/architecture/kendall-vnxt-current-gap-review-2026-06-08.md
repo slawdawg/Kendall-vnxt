@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, and GitHub workflow policy through Story 3.42
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, and safe delivery hygiene through Story 3.43
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -87,6 +87,7 @@ Do not rebuild these as new architecture work:
 - Managed recipe policy report and dedicated drift checking for recipe gates, path policies, command evidence, and blocked remote automation.
 - Evidence overview report shortcuts and runtime export report links that jump to stable controls-page report anchors.
 - GitHub workflow policy report for Git/GCM, Codex GitHub connector, optional gh auth, doctor commands, connector probe, and plaintext-token stop lines.
+- Safe backlog delivery-hygiene guidance for larger PR slices, Git/GCM or connector-backed remote work, and plaintext-token stop lines.
 
 ## Current Gaps
 

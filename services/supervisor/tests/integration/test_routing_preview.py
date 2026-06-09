@@ -943,6 +943,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert {item["itemId"] for item in report["items"]} == {
         "safe-backlog-report-alignment",
         "verification-surface-hardening",
+        "github-delivery-hygiene",
         "read-only-evidence-polish",
         "authority-blocked-work",
     }
@@ -957,6 +958,12 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "docs/stories/3-35-runbook-check-chain-hardening.md" in verification_item["relatedDocs"]
     assert "docs/stories/3-37-managed-recipe-policy-drift-check.md" in verification_item["relatedDocs"]
     assert "docs/stories/3-38-runbook-managed-recipe-check-chain.md" in verification_item["relatedDocs"]
+    github_item = next(item for item in report["items"] if item["itemId"] == "github-delivery-hygiene")
+    assert github_item["recommendedSliceSize"] == "large"
+    assert "GET /supervisor/github-workflow-policy-report" in github_item["relatedReports"]
+    assert "docs/stories/3-42-github-workflow-policy-report.md" in github_item["relatedDocs"]
+    assert "docs/stories/3-43-safe-delivery-hygiene.md" in github_item["relatedDocs"]
+    assert any("plaintext gh token" in evidence for evidence in github_item["evidence"])
     evidence_item = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish")
     assert "docs/stories/3-33-evidence-overview-review-shortcuts.md" in evidence_item["relatedDocs"]
     assert "docs/stories/3-34-report-shortcuts-in-evidence-overview.md" in evidence_item["relatedDocs"]
@@ -964,6 +971,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("large enough" in action for action in report["nextSafeActions"])
+    assert any("GitHub delivery hygiene" in action for action in report["nextSafeActions"])
 
 
 def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path, monkeypatch) -> None:
@@ -1773,6 +1781,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-40-runtime-report-anchor-links.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-41-current-gap-review-refresh.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-42-github-workflow-policy-report.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-43-safe-delivery-hygiene.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
