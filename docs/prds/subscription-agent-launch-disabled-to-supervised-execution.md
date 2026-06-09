@@ -1,7 +1,7 @@
 # PRD: Subscription Agent Launch Disabled To Supervised Execution
 
 Date: 2026-06-08
-Status: draft, not approved for implementation
+Status: draft, reviewed, not approved for implementation
 Scope: Future direct subscription-agent launch under supervised execution controls
 
 ## Summary
@@ -9,6 +9,18 @@ Scope: Future direct subscription-agent launch under supervised execution contro
 This PRD defines the requirements for a future transition from disabled subscription-agent launch stubs to supervised subscription-agent process execution.
 
 It does not approve implementation. Direct launch of Codex, Claude, Gemini, Antigravity, or any other subscription-agent process remains disabled until this PRD or a successor decision record is explicitly approved and converted into implementation stories.
+
+Review record:
+
+- `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`
+
+Approval-gated story breakdown:
+
+- `docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md`
+- `docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md`
+- `docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md`
+- `docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md`
+- `docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md`
 
 ## Source Artifacts
 
@@ -219,8 +231,10 @@ Rollback must include:
 
 ## Open Questions
 
-- Which subscription-agent targets are eligible for the first supervised launch?
-- Should the first implementation produce patch artifacts only, with source mutation still operator-applied?
-- What is the maximum retained stdout/stderr artifact size?
-- What environment variables, if any, can be inherited?
-- Should approvals expire by time only, or also when route/workspace evidence changes?
+Resolved for planning in `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`:
+
+- No concrete launch target is approved.
+- First implementation should be artifact-only or patch-only.
+- Workflow events retain no raw stdout/stderr; exact artifact byte limits require approval.
+- No arbitrary environment inheritance is approved.
+- Approvals must expire by time and by evidence changes.

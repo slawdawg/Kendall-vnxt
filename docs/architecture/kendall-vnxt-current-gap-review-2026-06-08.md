@@ -56,6 +56,7 @@ Do not rebuild these as new architecture work:
 - Ollama PRD review decisions and blocked implementation story breakdown.
 - Dashboard runtime evidence export access.
 - Draft subscription-agent launch PRD.
+- Subscription-agent launch PRD review decisions and blocked implementation story breakdown.
 
 ## Current Gaps
 
@@ -75,13 +76,13 @@ Risk: generic OpenAI-compatible assumptions could hide provider differences in e
 
 Recommendation: review the Ollama PRD, resolve open questions, then split it into implementation stories only if explicit approval is granted.
 
-### 3. Subscription-Agent Launch PRD Review Loop
+### 3. Execution Authority Approval Checkpoints
 
-The subscription-agent launch PRD is drafted, but it has not been reviewed, approved, or split into implementation stories.
+Ollama and subscription-agent launch now have reviewed PRDs and blocked story breakdowns, but neither authority is approved for implementation.
 
-Risk: implementation could begin before launch target, environment inheritance, artifact size, source mutation policy, and approval expiry questions are resolved.
+Risk: future work could accidentally move blocked execution stories to ready without explicit operator approval.
 
-Recommendation: review the PRD explicitly and produce blocked implementation stories only after approval.
+Recommendation: add an explicit approval checkpoint document that names which authority stories remain blocked and what approval language is required to unblock them.
 
 ## Recommended Build Order
 
@@ -98,15 +99,15 @@ Recommendation: review the PRD explicitly and produce blocked implementation sto
 
 ## Recommended Immediate Story
 
-Title: Subscription-Agent Launch PRD Review And Story Breakdown
+Title: Execution Authority Approval Checkpoints
 
-Goal: Resolve subscription-agent launch PRD open questions and split approved implementation work into blocked safety-gated stories.
+Goal: Document the approval language and evidence required before any Ollama or subscription-agent execution story can move from blocked to ready.
 
 Acceptance outline:
 
-- Resolve first launch target, patch/source policy, output retention, environment inheritance, and approval expiry questions.
-- Create implementation stories only if explicit approval is granted.
-- Keep launch implementation and process execution disabled.
+- List all blocked Ollama and subscription-agent stories.
+- Define required approval wording and evidence for each authority family.
+- State that generic "continue development" does not approve execution authority.
 - Keep all current execution authority disabled.
 
 ## Stop Conditions

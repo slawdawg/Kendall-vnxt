@@ -76,6 +76,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Ollama PRD review and story breakdown | Documented | `docs/prds/local-provider-ollama-prd-review-2026-06-08.md`, Stories 4.1-4.4 | Resolves planning questions and creates blocked implementation stories pending explicit approval. |
 | Runtime evidence export dashboard access | Implemented | `RuntimeEvidenceExportPanel`, Story 3.11 | Work-item detail pages show export summary, safety flags, related reports, and git-backed boundary evidence. |
 | Subscription-agent launch PRD | Documented | `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`, Story 3.12 | Drafts supervised launch gates, lifecycle, workspace, output, session, dashboard, runtime export, rollback, and open questions without approving implementation. |
+| Subscription-agent launch PRD review and story breakdown | Documented | `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`, Stories 5.1-5.5 | Resolves planning questions and creates blocked implementation stories pending explicit approval. |
 | Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
 | Direct subscription-agent process launch | Deferred | Launch stub is disabled | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
 | Premium execution | Deferred | Approval request artifacts only | Requires premium provider boundary and explicit approval policy. |
@@ -88,14 +89,14 @@ The architecture gap has moved from missing execution-attempt primitives to miss
 The highest-value next work should:
 
 1. Keep architecture docs aligned with the implemented non-executing control plane.
-2. Review subscription-agent launch PRD and split implementation only after explicit approval.
+2. Add explicit execution authority approval checkpoints.
 3. Wait for explicit approval before moving any Ollama or launch story from blocked to ready.
 4. Use execution-readiness reports to decide when a provider-specific PRD has enough evidence.
 5. Only then implement the next controlled worker execution capability.
 
 ## Recommended Next Backlog
 
-1. **Subscription-Agent Launch PRD Review And Story Breakdown**: resolve open questions and split implementation only after explicit approval.
+1. **Execution Authority Approval Checkpoints**: document approval language and evidence required before blocked Ollama or launch stories can move to ready.
 2. **Provider Approval Checkpoint**: wait for explicit approval before implementing any Ollama execution story.
 3. **Provider PRD Review Loop**: decide whether Ollama remains first or another local provider should be prioritized.
 4. **Dashboard Evidence Polish**: add targeted export affordances only if operators need more review shortcuts.

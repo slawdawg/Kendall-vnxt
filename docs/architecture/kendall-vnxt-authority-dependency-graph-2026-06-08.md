@@ -70,6 +70,7 @@ The following work is safe to continue with conservative defaults:
 - draft provider PRDs,
 - approval-gated provider story breakdowns,
 - draft subscription-agent launch PRDs,
+- approval-gated subscription-agent launch story breakdowns,
 - dashboard runtime evidence export access,
 - reporting-only outcome evidence,
 - tests proving disabled defaults and no side effects,
@@ -77,7 +78,7 @@ The following work is safe to continue with conservative defaults:
 
 ## Next Architecture Stories
 
-1. Subscription-agent launch PRD review and story breakdown only after explicit approval.
+1. Execution authority approval checkpoints.
 2. Provider approval checkpoint before any Ollama execution story moves to ready.
 3. Provider PRD review loop.
 4. Dashboard evidence polish.
