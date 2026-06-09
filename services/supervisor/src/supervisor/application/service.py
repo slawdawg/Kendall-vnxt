@@ -18,6 +18,8 @@ from supervisor.api.schemas import (
     ExecutionReadinessAttemptSummaryView,
     ExecutionReadinessOutcomeEvidenceView,
     ExecutionReadinessReportView,
+    ExecutionStateBoundaryView,
+    DisabledProviderProofView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
@@ -68,6 +70,7 @@ from supervisor.api.schemas import (
     WorkItemView,
 )
 from supervisor.config.settings import Settings
+from supervisor.domain.disabled_provider_adapter import DisabledLocalProviderAdapter
 from supervisor.domain.local_readonly_worker import MockLocalReadonlyWorkerAdapter
 from supervisor.domain.recipes import EXECUTION_RECIPES, ExecutionRecipe, RecipeCommand
 from supervisor.domain.routing import (
@@ -81,7 +84,7 @@ from supervisor.domain.routing import (
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
 from supervisor.domain.types import AuditMode, BmadLane, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
-from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerRegistryEntry
+from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
 from supervisor.infrastructure.db.models import AuditEvent, ExecutionAttempt, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
 from supervisor.infrastructure.streaming.bus import EventBus
 
@@ -191,6 +194,7 @@ class SupervisorService:
         self.utility_worker = UtilityWorkerAdapter()
         self.worker_registry = StaticWorkerRegistry()
         self.local_readonly_worker = MockLocalReadonlyWorkerAdapter()
+        self.disabled_provider_adapter = DisabledLocalProviderAdapter()
 
     async def ensure_control(self, session: AsyncSession) -> SupervisorControl:
         control = await session.get(SupervisorControl, 1)
@@ -586,6 +590,7 @@ class SupervisorService:
 
     async def get_execution_readiness_report(self, session: AsyncSession) -> ExecutionReadinessReportView:
         configuration = self.get_execution_configuration_checks()
+        disabled_provider_proofs = self.list_disabled_provider_proofs()
         attempt_result = await session.execute(select(ExecutionAttempt).order_by(ExecutionAttempt.updated_at.desc()).limit(8))
         attempts = list(attempt_result.scalars())
         outcome_result = await session.execute(
@@ -613,9 +618,67 @@ class SupervisorService:
             ),
             providerEnablementPolicy=self._provider_enablement_policy_steps(),
             disabledAuthorityChecks=[check for check in configuration.checks if not check.enabled],
+            disabledProviderProofs=disabled_provider_proofs,
             currentAttempts=[self._execution_readiness_attempt_summary(attempt) for attempt in attempts],
             latestOutcomes=[self._execution_readiness_outcome_evidence(event) for event in outcomes],
             nextSafeActions=next_safe_actions,
+        )
+
+    def list_disabled_provider_proofs(self) -> list[DisabledProviderProofView]:
+        proofs = []
+        for worker in self.worker_registry.list_workers():
+            if (
+                worker.adapter_type == WorkerAdapterType.LOCAL_OPENAI_COMPATIBLE
+                and worker.health == WorkerHealthStatus.DISABLED
+                and worker.disabled_reason
+            ):
+                proof = self.disabled_provider_adapter.prove_disabled(worker)
+                proofs.append(
+                    DisabledProviderProofView(
+                        workerId=proof.worker_id,
+                        providerLabel=proof.provider_label,
+                        disabledReason=proof.disabled_reason,
+                        endpointPolicy=proof.endpoint_policy,
+                        httpCallsAttempted=proof.http_calls_attempted,
+                        modelCallsAttempted=proof.model_calls_attempted,
+                        networkAccessAttempted=proof.network_access_attempted,
+                        credentialAccessAttempted=proof.credential_access_attempted,
+                        redactionChecks=list(proof.redaction_checks),
+                    )
+                )
+        return proofs
+
+    def get_execution_state_boundary(self) -> ExecutionStateBoundaryView:
+        return ExecutionStateBoundaryView(
+            boundaryId="queue-lease-execution-attempt-boundary-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary="Queue leases schedule supervisor work; execution attempts record worker-authority evidence without launching workers.",
+            queueLeaseRole=[
+                "Track supervisor ownership of queued work.",
+                "Record lease heartbeat, expiry, fencing token, and retry count.",
+                "Remain independent from route decision, worker, lane, authority mode, workspace, and provider policy.",
+            ],
+            executionAttemptRole=[
+                "Record route-bound worker, lane, authority mode, and lifecycle evidence.",
+                "Carry workspace isolation, disabled permission, artifact, and event references.",
+                "Provide the attachment point for any future process lifecycle evidence after explicit approval.",
+            ],
+            forbiddenQueueLeaseFields=[
+                "worker_id",
+                "provider_endpoint",
+                "process_id",
+                "command_line",
+                "credential_reference",
+                "workspace_write_root",
+                "approval_binding",
+            ],
+            futureProcessLifecycleAttachments=[
+                "stdout/stderr artifact references",
+                "process supervisor id",
+                "cancellation and timeout evidence",
+                "workspace materialization id",
+                "rollback artifact reference",
+            ],
         )
 
     def _provider_enablement_policy_steps(self) -> list[ProviderEnablementPolicyStepView]:

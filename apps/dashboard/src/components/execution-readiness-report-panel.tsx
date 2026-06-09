@@ -32,9 +32,9 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
       <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {[
           ["Authority checks", `${report.disabledAuthorityChecks.length} disabled`],
+          ["Provider proofs", `${report.disabledProviderProofs.length} no-call`],
           ["Attempts", `${report.currentAttempts.length} recent`],
           ["Outcomes", `${report.latestOutcomes.length} reported`],
-          ["Provider calls", report.providerCallsAllowed ? "Allowed" : "Disabled"],
         ].map(([label, value]) => (
           <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
@@ -66,6 +66,27 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
         </div>
 
         <div className="space-y-4">
+          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <h4 className="text-base font-semibold">Provider no-call proofs</h4>
+            <div className="mt-3 space-y-3">
+              {report.disabledProviderProofs.map((proof) => (
+                <article key={proof.workerId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{proof.workerId}</p>
+                      <h5 className="mt-1 text-sm font-semibold">{proof.providerLabel}</h5>
+                    </div>
+                    <span className="w-fit rounded-full bg-[var(--surface)] px-3 py-1 font-mono text-[11px] text-[var(--muted)]">
+                      No calls
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-[var(--warn)]">{proof.disabledReason}</p>
+                  <p className="mt-2 break-all text-xs leading-5 text-[var(--muted)]">{proof.endpointPolicy}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+
           <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Current attempts</h4>
             <div className="mt-3 space-y-3">

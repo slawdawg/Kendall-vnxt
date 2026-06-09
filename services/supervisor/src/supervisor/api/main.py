@@ -459,6 +459,16 @@ async def get_execution_readiness_report(session: AsyncSession = Depends(get_ses
     return ApiEnvelope(data=await service.get_execution_readiness_report(session))
 
 
+@app.get("/supervisor/disabled-provider-proofs", response_model=ApiEnvelope)
+async def list_disabled_provider_proofs():
+    return ApiEnvelope(data=service.list_disabled_provider_proofs())
+
+
+@app.get("/supervisor/execution-state-boundary", response_model=ApiEnvelope)
+async def get_execution_state_boundary():
+    return ApiEnvelope(data=service.get_execution_state_boundary())
+
+
 @app.get("/supervisor/threat-boundary", response_model=ApiEnvelope)
 async def get_threat_boundary():
     return ApiEnvelope(data=service.get_threat_boundary())

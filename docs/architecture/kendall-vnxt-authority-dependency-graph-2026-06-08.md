@@ -32,7 +32,7 @@ Routing and lane evidence
   -> Disabled config checks and threat boundary
   -> Runtime evidence export and dashboard visibility
   -> Execution-readiness report and provider/command/source-specific enablement policy
-  -> Provider-specific mock or disabled adapter proof
+  -> Provider-specific disabled adapter proof
   -> Operator-approved limited execution
   -> Outcome reporting
   -> Adaptive scoring, only after enough audited outcomes exist
@@ -64,13 +64,14 @@ The following work is safe to continue with conservative defaults:
 - provider enablement policy documentation,
 - execution-readiness reports,
 - non-executing mock/disabled adapter contracts,
+- queue lease and execution attempt boundary reports,
 - reporting-only outcome evidence,
 - tests proving disabled defaults and no side effects,
 - dashboard and runtime evidence polish that does not add execution controls.
 
 ## Next Architecture Stories
 
-1. Queue lease and execution attempt boundary.
-2. Provider-specific disabled adapter proofs.
-3. Provider-specific PRDs only after the above are complete.
-4. Process lifecycle design record.
+1. Process lifecycle design record.
+2. Provider-specific PRDs only after readiness and no-call proof evidence are complete.
+3. Provider disabled adapter fixture expansion.
+4. Runtime evidence export polish.

@@ -443,12 +443,37 @@ export interface ExecutionReadinessOutcomeEvidenceView {
   reportingOnly: boolean;
 }
 
+export interface DisabledProviderProofView {
+  workerId: string;
+  providerLabel: string;
+  disabledReason: string;
+  endpointPolicy: string;
+  httpCallsAttempted: boolean;
+  modelCallsAttempted: boolean;
+  networkAccessAttempted: boolean;
+  credentialAccessAttempted: boolean;
+  redactionChecks: string[];
+}
+
+export interface ExecutionStateBoundaryView {
+  boundaryId: string;
+  generatedAt: string;
+  summary: string;
+  queueLeaseRole: string[];
+  executionAttemptRole: string[];
+  forbiddenQueueLeaseFields: string[];
+  futureProcessLifecycleAttachments: string[];
+  queueLeaseGrantsExecutionAuthority: boolean;
+  executionAttemptLaunchesWorkers: boolean;
+}
+
 export interface ExecutionReadinessReportView {
   reportId: string;
   generatedAt: string;
   summary: string;
   providerEnablementPolicy: ProviderEnablementPolicyStepView[];
   disabledAuthorityChecks: ExecutionConfigurationCheckView[];
+  disabledProviderProofs: DisabledProviderProofView[];
   currentAttempts: ExecutionReadinessAttemptSummaryView[];
   latestOutcomes: ExecutionReadinessOutcomeEvidenceView[];
   nextSafeActions: string[];

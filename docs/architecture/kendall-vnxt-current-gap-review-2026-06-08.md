@@ -47,6 +47,8 @@ Do not rebuild these as new architecture work:
 - Execution-readiness report and provider enablement policy.
 - Compact attempt evidence reporting for readiness review.
 - Reporting-only routing outcome evidence expansion.
+- Queue lease versus execution attempt boundary.
+- Disabled local provider no-call proofs for Ollama, LM Studio, vLLM, and llama.cpp.
 
 ## Current Gaps
 
@@ -56,23 +58,23 @@ The general readiness policy exists, but each executable authority still needs i
 
 Risk: a generic readiness report could be mistaken for approval to enable a specific provider or launch path.
 
-Recommendation: draft provider-specific or subscription-agent PRDs only after the readiness report shows enough policy, test, dashboard, and rollback evidence for that lane.
+Recommendation: draft provider-specific or subscription-agent PRDs only after the readiness report shows enough policy, test, dashboard, no-call proof, and rollback evidence for that lane.
 
-### 2. Queue Lease And Execution Attempt Boundary
+### 2. Process Lifecycle Design Record
 
-Queue leases and execution attempts are separate in code, but the architecture should make the boundary explicit before process execution is designed.
+The attempt boundary is explicit, but direct subscription-agent launch still lacks a process lifecycle design.
 
-Risk: future launch work could overload queue leases with worker lifecycle semantics.
+Risk: future launch work could add process supervision without cancellation, output capture, workspace materialization, or session/secret boundaries.
 
-Recommendation: add a short architecture note that defines queue leases as supervisor scheduling state and execution attempts as worker-authority evidence.
+Recommendation: write the process lifecycle design record before any launch adapter work.
 
-### 3. Provider-Specific Disabled Adapter Proofs
+### 3. Provider-Specific PRD Drafting
 
-Local provider entries are disabled metadata today, and the readiness policy names required gates, but provider-specific disabled adapter fixtures are still useful before any real endpoint design.
+Disabled provider proofs exist, but no provider-specific executable lane has been approved.
 
-Risk: provider enablement could start at HTTP integration without first proving no-call adapter behavior and redaction boundaries.
+Risk: generic OpenAI-compatible assumptions could hide provider differences in endpoints, auth, timeouts, model selection, retention, and cancellation behavior.
 
-Recommendation: add provider-specific disabled adapter tests and fixtures for Ollama, LM Studio, vLLM, and llama.cpp.
+Recommendation: draft the first local-provider PRD only after choosing one provider and naming its exact endpoint, timeout, redaction, cancellation, and rollback constraints.
 
 ## Recommended Build Order
 
@@ -80,21 +82,22 @@ Recommendation: add provider-specific disabled adapter tests and fixtures for Ol
 2. Add the deferred authority dependency graph.
 3. Add a dashboard command/read boundary contract.
 4. Add execution-readiness report, provider enablement policy, attempt evidence reporting, and outcome evidence reporting.
-5. Clarify queue lease versus execution attempt boundaries.
-6. Add provider-specific disabled adapter proofs.
-7. Only then draft PRDs for real local provider calls or direct subscription-agent launch.
+5. Clarify queue lease versus execution attempt boundaries and add provider-specific disabled adapter proofs.
+6. Draft process lifecycle and provider-specific PRDs.
+7. Only then implement real local provider calls or direct subscription-agent launch.
 
 ## Recommended Immediate Story
 
-Title: Queue Lease And Execution Attempt Boundary
+Title: Process Lifecycle Design Record
 
-Goal: Document the boundary between supervisor scheduling state and worker-authority attempt evidence before real process lifecycle work begins.
+Goal: Define the process supervision, cancellation, workspace, output, session, and rollback model for future direct subscription-agent launch.
 
 Acceptance outline:
 
-- Define queue leases as work scheduling and ownership state.
-- Define execution attempts as authority, lifecycle, workspace, and evidence state.
-- State what future process lifecycle work may attach to attempts and what must not be stored in queue leases.
+- Define process lifecycle states and how they attach to execution attempts.
+- Define stdout/stderr capture, artifact retention, timeout, and cancellation behavior.
+- Define session/auth and secret boundaries.
+- Define rollback and recovery for failed or cancelled process launch.
 - Keep all current execution authority disabled.
 
 ## Stop Conditions

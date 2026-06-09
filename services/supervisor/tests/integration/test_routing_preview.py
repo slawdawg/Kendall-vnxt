@@ -683,11 +683,81 @@ def test_execution_readiness_report_compacts_policy_attempt_and_outcome_evidence
         "subscription-agent-launch",
         "premium-execution",
     }
+    assert {proof["workerId"] for proof in report["disabledProviderProofs"]} == {
+        "local.ollama.disabled",
+        "local.lmstudio.disabled",
+        "local.vllm.disabled",
+        "local.llamacpp.disabled",
+    }
+    assert all(proof["httpCallsAttempted"] is False for proof in report["disabledProviderProofs"])
+    assert all(proof["modelCallsAttempted"] is False for proof in report["disabledProviderProofs"])
     assert report["currentAttempts"][0]["workItemId"] == work_item_id
     assert report["currentAttempts"][0]["nextSafeAction"]
     assert report["latestOutcomes"][0]["workItemId"] == work_item_id
     assert report["latestOutcomes"][0]["reportingOnly"] is True
     assert report["nextSafeActions"]
+
+
+def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "disabled-provider-proofs.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/disabled-provider-proofs")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    proofs = response.json()["data"]
+    assert {proof["workerId"] for proof in proofs} == {
+        "local.ollama.disabled",
+        "local.lmstudio.disabled",
+        "local.vllm.disabled",
+        "local.llamacpp.disabled",
+    }
+    for proof in proofs:
+        assert proof["disabledReason"].endswith("_local_provider_not_enabled")
+        assert proof["endpointPolicy"].startswith("deny_all")
+        assert proof["httpCallsAttempted"] is False
+        assert proof["modelCallsAttempted"] is False
+        assert proof["networkAccessAttempted"] is False
+        assert proof["credentialAccessAttempted"] is False
+        assert "no_secrets_in_prompt_fixture" in proof["redactionChecks"]
+
+
+def test_execution_state_boundary_keeps_queue_leases_separate_from_attempt_authority(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-state-boundary.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/execution-state-boundary")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    boundary = response.json()["data"]
+    assert boundary["boundaryId"] == "queue-lease-execution-attempt-boundary-v1"
+    assert boundary["queueLeaseGrantsExecutionAuthority"] is False
+    assert boundary["executionAttemptLaunchesWorkers"] is False
+    assert "worker_id" in boundary["forbiddenQueueLeaseFields"]
+    assert "credential_reference" in boundary["forbiddenQueueLeaseFields"]
+    assert any("Record route-bound worker" in role for role in boundary["executionAttemptRole"])
 
 
 def test_threat_boundary_reports_redaction_command_provider_and_secret_denials_without_mutation(tmp_path, monkeypatch) -> None:
