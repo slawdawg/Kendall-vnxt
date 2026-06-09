@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-25-managed-recipe-e2e-runners.md` | Focused managed-recipe browser runners using shared lifecycle helper. |
 | `3-24-dashboard-mobile-e2e-runner.md` | Focused mobile dashboard browser runner using shared lifecycle helper. |
 | `3-23-dashboard-e2e-runner-lifecycle-helper.md` | Shared owned-lifecycle helper for focused dashboard browser runners. |
 | `3-22-dashboard-e2e-report.md` | Read-only dashboard browser verification map for focused/full e2e runners. |
