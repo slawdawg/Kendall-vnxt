@@ -483,6 +483,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-maintenance-readiness",
+                label="Maintenance readiness drift",
+                command="pnpm run check:maintenance-readiness",
+                status="required",
+                requiredFor=["maintenance report changes", "safe backlog changes", "authority blocker reference changes"],
+                evidence=[
+                    "Validates maintenance readiness contracts, schemas, API route, service tracks, dashboard rendering, browser assertions, and story evidence stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-build",
                 label="Dashboard build and type check",
                 command="pnpm --filter @kendall/dashboard build",
@@ -511,7 +522,7 @@ class SupervisorService:
                 status="required",
                 requiredFor=["pre-merge confidence", "local handoff", "fresh VM acceptance"],
                 evidence=[
-                    "Runs preflight, documentation checks, report/runtime/safe-backlog/managed recipe policy/delivery readiness policy drift checks, runbook checks, dashboard build, and supervisor integration tests.",
+                    "Runs preflight, documentation checks, report/runtime/safe-backlog/managed recipe policy/delivery readiness policy/maintenance readiness drift checks, runbook checks, dashboard build, and supervisor integration tests.",
                     "Does not grant execution authority by passing.",
                 ],
             ),
@@ -1103,6 +1114,7 @@ class SupervisorService:
                     "docs/stories/3-37-managed-recipe-policy-drift-check.md",
                     "docs/stories/3-38-runbook-managed-recipe-check-chain.md",
                     "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
+                    "docs/stories/3-46-maintenance-readiness-drift-check.md",
                 ],
                 nextAction="Add or extend static drift checks in larger coherent PR slices whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
             ),
@@ -1736,6 +1748,7 @@ class SupervisorService:
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
+            "docs/stories/3-46-maintenance-readiness-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

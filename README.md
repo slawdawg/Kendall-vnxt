@@ -34,7 +34,7 @@ Important environment variables:
 
 ## Verification
 
-- `pnpm run check` runs preflight, documentation drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, delivery readiness policy drift checks, dashboard build, and supervisor integration tests
+- `pnpm run check` runs preflight, documentation drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, delivery readiness policy drift checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - `pnpm run check:e2e-report` verifies dashboard e2e runner/report/browser/story alignment
 - `pnpm run check:reports` verifies supervisor report catalog route/runtime/dashboard/story alignment
@@ -43,6 +43,7 @@ Important environment variables:
 - `pnpm run check:safe-backlog` verifies safe backlog contract/schema/service/dashboard/story alignment
 - `pnpm run check:managed-recipes` verifies managed recipe policy contract/schema/service/dashboard/story alignment
 - `pnpm run check:delivery-readiness` verifies delivery readiness policy contract/schema/service/dashboard/story alignment
+- `pnpm run check:maintenance-readiness` verifies maintenance readiness contract/schema/service/dashboard/story alignment
 - `pnpm run test:supervisor` runs supervisor tests through a repo-local uv cache wrapper
 - `pnpm run test:e2e:dashboard` runs browser coverage for intake drafts, workflow actions, and detail navigation
 - `pnpm run test:e2e:dashboard:controls` runs the focused controls-page browser slice with repo-local Playwright cache defaults
