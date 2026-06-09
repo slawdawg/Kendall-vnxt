@@ -1,6 +1,6 @@
 import { expect, test, devices } from "@playwright/test";
 
-test.use(devices["iPhone 13"]);
+test.use(devices["Pixel 5"]);
 
 test("restores a saved intake draft after refresh and clears it after submit", async ({ page }) => {
   await page.goto("/");

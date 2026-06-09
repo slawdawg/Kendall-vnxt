@@ -178,6 +178,7 @@ DASHBOARD_MOBILE_COVERAGE_RECIPE = ExecutionRecipe(
         RecipeCommand(display="pnpm run lint:dashboard", args=("pnpm", "run", "lint:dashboard")),
     ),
     verification_commands=(
+        RecipeCommand(display="pnpm run test:e2e:dashboard:mobile", args=("pnpm", "run", "test:e2e:dashboard:mobile")),
         RecipeCommand(display="pnpm run test:e2e:dashboard", args=("pnpm", "run", "test:e2e:dashboard")),
         RecipeCommand(display="pnpm run check", args=("pnpm", "run", "check")),
     ),

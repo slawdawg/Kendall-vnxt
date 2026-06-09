@@ -29,6 +29,7 @@
     "test:e2e:dashboard": "playwright test",
     "test:e2e:dashboard:controls": "node ./scripts/run-controls-e2e.mjs",
     "test:e2e:dashboard:detail": "node ./scripts/run-detail-e2e.mjs",
+    "test:e2e:dashboard:mobile": "node ./scripts/run-mobile-e2e.mjs",
     "test:supervisor": "uv run --directory services/supervisor pytest",
     "check": "pnpm run preflight && pnpm run check:docs && pnpm run build:dashboard && pnpm run test:supervisor"
   }

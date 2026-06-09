@@ -466,6 +466,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="dashboard-mobile-e2e",
+                label="Dashboard mobile browser slice",
+                command="pnpm run test:e2e:dashboard:mobile",
+                status="optional_when_browser_stack_ready",
+                requiredFor=["mobile dashboard changes", "intake draft persistence changes", "focused phone viewport regression checks"],
+                evidence=[
+                    "Runs the mobile intake draft Playwright slice with stable test-file and grep arguments.",
+                    "Uses the shared focused dashboard e2e lifecycle helper with repo-local cache defaults.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-e2e",
                 label="Dashboard browser coverage",
                 command="pnpm run test:e2e:dashboard",
@@ -577,6 +588,19 @@ class SupervisorService:
                 ],
             ),
             DashboardE2ERunnerView(
+                runnerId="dashboard-mobile-e2e",
+                label="Mobile intake draft slice",
+                command="pnpm run test:e2e:dashboard:mobile",
+                target="Phone-sized intake draft persistence and submission cleanup.",
+                status="active",
+                evidence=[
+                    "scripts/run-mobile-e2e.mjs declares the mobile intake slice.",
+                    "scripts/dashboard-e2e-runner.mjs owns supervisor and dashboard server lifecycle.",
+                    "tests/e2e/dashboard-mobile.spec.ts covers iPhone-sized draft restore behavior.",
+                    "Uses repo-local database, uv cache, temp, and Playwright browser cache paths.",
+                ],
+            ),
+            DashboardE2ERunnerView(
                 runnerId="dashboard-full-e2e",
                 label="Full dashboard coverage",
                 command="pnpm run test:e2e:dashboard",
@@ -667,6 +691,7 @@ class SupervisorService:
                     "docs/stories/3-21-dashboard-detail-e2e-runner.md",
                     "docs/stories/3-22-dashboard-e2e-report.md",
                     "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md",
+                    "docs/stories/3-24-dashboard-mobile-e2e-runner.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -1134,6 +1159,7 @@ class SupervisorService:
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",
             "docs/stories/3-22-dashboard-e2e-report.md",
             "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md",
+            "docs/stories/3-24-dashboard-mobile-e2e-runner.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
