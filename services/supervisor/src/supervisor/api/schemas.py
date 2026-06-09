@@ -774,6 +774,27 @@ class GitHubWorkflowPolicyReportView(BaseModel):
     remoteAutomationApproved: bool = False
 
 
+class DeliveryReadinessPolicyItemView(BaseModel):
+    itemId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class DeliveryReadinessPolicyReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    statusPolicy: list[DeliveryReadinessPolicyItemView]
+    waiverPolicy: list[DeliveryReadinessPolicyItemView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+    remoteAutomationApproved: bool = False
+
+
 class WorkItemView(BaseModel):
     id: str
     title: str

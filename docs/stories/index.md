@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-44-delivery-readiness-policy-report.md` | Read-only controls-page report for PR, CI, merge, and local-only waiver rules in managed recipe delivery readiness. |
 | `3-43-safe-delivery-hygiene.md` | Safe backlog delivery-hygiene item for Git/GCM, Codex connector, larger PR slices, and plaintext-token stop lines. |
 | `3-42-github-workflow-policy-report.md` | Read-only controls-page report for Git/GCM, Codex GitHub connector, optional gh auth, and plaintext-token stop lines. |
 | `3-41-current-gap-review-refresh.md` | Current gap review and continuation handoff refresh with static documentation drift coverage. |

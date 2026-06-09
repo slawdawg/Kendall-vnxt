@@ -1,6 +1,7 @@
 import type {
   ApiEnvelope,
   DashboardE2EReportView,
+  DeliveryReadinessPolicyReportView,
   DocumentationAuthorityReportView,
   ExecutionAttemptView,
   ExecutionReadinessReportView,
@@ -126,6 +127,10 @@ export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolic
 
 export async function getGitHubWorkflowPolicyReport(): Promise<GitHubWorkflowPolicyReportView> {
   return requestJson<GitHubWorkflowPolicyReportView>("/supervisor/github-workflow-policy-report");
+}
+
+export async function getDeliveryReadinessPolicyReport(): Promise<DeliveryReadinessPolicyReportView> {
+  return requestJson<DeliveryReadinessPolicyReportView>("/supervisor/delivery-readiness-policy-report");
 }
 
 export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {

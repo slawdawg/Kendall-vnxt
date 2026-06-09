@@ -1,5 +1,6 @@
 import { ControlPanel } from "../../components/control-panel";
 import { DashboardE2EReportPanel } from "../../components/dashboard-e2e-report-panel";
+import { DeliveryReadinessPolicyReportPanel } from "../../components/delivery-readiness-policy-report-panel";
 import { DocumentationAuthorityReportPanel } from "../../components/documentation-authority-report-panel";
 import { ExecutionReadinessReportPanel } from "../../components/execution-readiness-report-panel";
 import { GitHubWorkflowPolicyReportPanel } from "../../components/github-workflow-policy-report-panel";
@@ -16,6 +17,7 @@ import { buildNavStats } from "../../lib/nav-stats";
 import {
   getDocumentationAuthorityReport,
   getDashboardE2EReport,
+  getDeliveryReadinessPolicyReport,
   getExecutionReadinessReport,
   getGitHubWorkflowPolicyReport,
   getMaintenanceReadinessReport,
@@ -44,6 +46,7 @@ export default async function ControlsPage() {
     safeDevelopmentBacklog,
     managedRecipePolicyReport,
     githubWorkflowPolicyReport,
+    deliveryReadinessPolicyReport,
   ] = await Promise.all([
     getRunStatus(),
     getWorkItems(),
@@ -58,6 +61,7 @@ export default async function ControlsPage() {
     getSafeDevelopmentBacklogReport(),
     getManagedRecipePolicyReport(),
     getGitHubWorkflowPolicyReport(),
+    getDeliveryReadinessPolicyReport(),
   ]);
   const navStats = buildNavStats(items);
 
@@ -102,6 +106,9 @@ export default async function ControlsPage() {
       </div>
       <div id="github-workflow-policy-report" className="scroll-mt-28">
         <GitHubWorkflowPolicyReportPanel report={githubWorkflowPolicyReport} />
+      </div>
+      <div id="delivery-readiness-policy-report" className="scroll-mt-28">
+        <DeliveryReadinessPolicyReportPanel report={deliveryReadinessPolicyReport} />
       </div>
       <RoutingFleetPanel workers={workers} laneProfiles={laneProfiles} />
     </Shell>

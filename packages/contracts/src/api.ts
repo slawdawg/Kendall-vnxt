@@ -661,6 +661,27 @@ export interface GitHubWorkflowPolicyReportView {
   remoteAutomationApproved: boolean;
 }
 
+export interface DeliveryReadinessPolicyItemView {
+  itemId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface DeliveryReadinessPolicyReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  statusPolicy: DeliveryReadinessPolicyItemView[];
+  waiverPolicy: DeliveryReadinessPolicyItemView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+  remoteAutomationApproved: boolean;
+}
+
 export interface ThreatBoundaryRuleView {
   ruleId: string;
   label: string;
