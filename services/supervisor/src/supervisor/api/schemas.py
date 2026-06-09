@@ -588,6 +588,29 @@ class VerificationReadinessReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class SupervisorReportCatalogEntryView(BaseModel):
+    reportId: str
+    label: str
+    endpoint: str
+    status: str
+    summary: str
+    evidenceScope: list[str] = Field(default_factory=list)
+    relatedDocs: list[str] = Field(default_factory=list)
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+
+
+class SupervisorReportCatalogView(BaseModel):
+    catalogId: str
+    generatedAt: datetime
+    summary: str
+    reports: list[SupervisorReportCatalogEntryView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+
+
 class ThreatBoundaryRuleView(BaseModel):
     ruleId: str
     label: str

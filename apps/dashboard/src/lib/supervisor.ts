@@ -9,6 +9,7 @@ import type {
   RunStatusView,
   SavedWorkItemView,
   SavedWorkItemViewPayload,
+  SupervisorReportCatalogView,
   WorkItemBranchPreparationPayload,
   WorkItemAssignmentPayload,
   WorkItemFilterScope,
@@ -96,6 +97,10 @@ export async function getDocumentationAuthorityReport(): Promise<DocumentationAu
 
 export async function getVerificationReadinessReport(): Promise<VerificationReadinessReportView> {
   return requestJson<VerificationReadinessReportView>("/supervisor/verification-readiness-report");
+}
+
+export async function getSupervisorReportCatalog(): Promise<SupervisorReportCatalogView> {
+  return requestJson<SupervisorReportCatalogView>("/supervisor/report-catalog");
 }
 
 export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {

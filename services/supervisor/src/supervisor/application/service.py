@@ -45,6 +45,8 @@ from supervisor.api.schemas import (
     SubscriptionAgentLaunchStubView,
     SubscriptionHandoffEvidenceView,
     SubscriptionHandoffPackageView,
+    SupervisorReportCatalogEntryView,
+    SupervisorReportCatalogView,
     ThreatBoundaryRuleView,
     ThreatBoundaryView,
     VerificationCommandView,
@@ -505,6 +507,93 @@ class SupervisorService:
             ],
         )
 
+    def get_supervisor_report_catalog(self) -> SupervisorReportCatalogView:
+        reports = [
+            SupervisorReportCatalogEntryView(
+                reportId="execution-configuration-checks",
+                label="Execution configuration checks",
+                endpoint="GET /supervisor/execution-configuration-checks",
+                status="active",
+                summary="Reports disabled process, provider, model, premium, command, source, network, and credential authority.",
+                evidenceScope=["runtime settings", "worker registry", "disabled authority gates"],
+                relatedDocs=["docs/stories/2-6-disabled-execution-configuration-checks.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="execution-readiness-report-v1",
+                label="Execution readiness report",
+                endpoint="GET /supervisor/execution-readiness-report",
+                status="active",
+                summary="Summarizes provider enablement policy, disabled authority checks, provider proofs, attempts, and outcomes.",
+                evidenceScope=["provider enablement policy", "attempt evidence", "routing outcome evidence"],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
+                    "docs/stories/3-7-execution-readiness-and-evidence-report.md",
+                ],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="documentation-authority-report-v1",
+                label="Documentation authority report",
+                endpoint="GET /supervisor/documentation-authority-report",
+                status="active",
+                summary="Indexes architecture, PRD, story, approval checkpoint, blocked story, and documentation drift status.",
+                evidenceScope=["documentation indexes", "blocked authority stories", "approval checkpoint"],
+                relatedDocs=["docs/stories/3-15-documentation-authority-report.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="verification-readiness-report-v1",
+                label="Verification readiness report",
+                endpoint="GET /supervisor/verification-readiness-report",
+                status="active",
+                summary="Lists required checks, optional checks, and verification stop lines for local delivery readiness.",
+                evidenceScope=["workspace checks", "dashboard build", "supervisor tests", "browser test setup"],
+                relatedDocs=["docs/stories/3-16-verification-readiness-report.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="disabled-provider-proofs",
+                label="Disabled provider proofs",
+                endpoint="GET /supervisor/disabled-provider-proofs",
+                status="active",
+                summary="Shows no-call proof fixtures for disabled OpenAI-compatible local providers.",
+                evidenceScope=["provider endpoint policy", "redaction checks", "timeout and retention policy"],
+                relatedDocs=["docs/architecture/kendall-vnxt-provider-disabled-fixtures-2026-06-08.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="queue-lease-execution-attempt-boundary-v1",
+                label="Execution state boundary",
+                endpoint="GET /supervisor/execution-state-boundary",
+                status="active",
+                summary="Separates queue leases from execution attempt authority and future process lifecycle attachments.",
+                evidenceScope=["queue lease roles", "attempt roles", "forbidden lease fields"],
+                relatedDocs=["docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="supervisor-worker-threat-boundary-v1",
+                label="Worker threat boundary",
+                endpoint="GET /supervisor/threat-boundary",
+                status="active",
+                summary="Reports prompt, command, provider, network, credential, and artifact safety boundaries.",
+                evidenceScope=["redaction boundary", "command policy", "provider and credential policy"],
+                relatedDocs=["docs/architecture/kendall-vnxt-worker-threat-boundary-2026-06-08.md"],
+            ),
+        ]
+
+        return SupervisorReportCatalogView(
+            catalogId="supervisor-report-catalog-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary="Read-only catalog of supervisor reports used to review execution readiness, documentation authority, verification, and safety boundaries.",
+            reports=reports,
+            stopLines=[
+                "Catalog entries are references, not approvals.",
+                "Reading reports does not enable provider calls or process launch.",
+                "Execution-authority stories remain blocked until explicit operator approval names authority and scope.",
+            ],
+            nextSafeActions=[
+                "Use the catalog before reviewing work that touches execution authority, verification, or report surfaces.",
+                "Keep report endpoints, dashboard panels, and runtime evidence export references aligned.",
+                "Add new read-only reports to this catalog before relying on them in operator workflows.",
+            ],
+        )
+
     def get_execution_configuration_checks(self) -> ExecutionConfigurationChecksView:
         workers = self.worker_registry.list_workers()
 
@@ -810,6 +899,9 @@ class SupervisorService:
                     "docs/stories/2-7-runtime-evidence-export-strategy.md",
                     "docs/stories/3-7-execution-readiness-and-evidence-report.md",
                     "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md",
+                    "docs/stories/3-15-documentation-authority-report.md",
+                    "docs/stories/3-16-verification-readiness-report.md",
+                    "docs/stories/3-18-supervisor-report-catalog.md",
                     "docs/prds/supervisor-execution-authority-expansion.md",
                     "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
                     "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
@@ -821,6 +913,9 @@ class SupervisorService:
                     "GET /supervisor/execution-configuration-checks",
                     "GET /supervisor/threat-boundary",
                     "GET /supervisor/execution-readiness-report",
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/report-catalog",
                     "GET /supervisor/execution-state-boundary",
                     "GET /supervisor/disabled-provider-proofs",
                 ],
