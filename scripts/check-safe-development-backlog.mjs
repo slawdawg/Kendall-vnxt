@@ -154,6 +154,11 @@ assertCondition(
   failures,
 );
 assertCondition(
+  serviceSource.includes("docs/stories/3-47-core-readiness-drift-checks.md"),
+  "Runtime evidence export git-backed evidence must include Story 3.47",
+  failures,
+);
+assertCondition(
   serviceSource.includes("GET /supervisor/github-workflow-policy-report"),
   "Safe backlog must reference the GitHub workflow policy report",
   failures,

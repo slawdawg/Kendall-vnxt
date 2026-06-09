@@ -156,6 +156,11 @@ assertCondition(
   "Story index must reference Story 3.46 maintenance readiness drift check",
   failures,
 );
+assertCondition(
+  storyIndex.includes("3-47-core-readiness-drift-checks.md"),
+  "Story index must reference Story 3.47 core readiness drift checks",
+  failures,
+);
 
 if (failures.length > 0) {
   console.error("Runtime evidence export drift check failed:");

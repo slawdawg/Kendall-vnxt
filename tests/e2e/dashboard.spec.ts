@@ -148,14 +148,19 @@ test.describe("dashboard workflow coverage", () => {
     const documentationPanel = page.locator("section").filter({ hasText: "Indexes and approval stop lines" }).first();
     await expect(documentationPanel.getByText("Documentation authority", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("Indexes and approval stop lines")).toBeVisible();
+    await expect(documentationPanel.getByText("Blocked authority stories")).toBeVisible();
     await expect(documentationPanel.getByText("9 pending approval")).toBeVisible();
     await expect(documentationPanel.getByText("docs/architecture/index.md", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("blocked pending explicit approval").first()).toBeVisible();
+    await expect(documentationPanel.getByText("Documentation drift command")).toBeVisible();
+    await expect(documentationPanel.getByText("Documentation authority report drift command")).toBeVisible();
 
     const verificationPanel = page.locator("section").filter({ hasText: "Checks and stop lines" }).first();
     await expect(verificationPanel.getByText("Verification readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("Checks and stop lines")).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:e2e-report", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:reports", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:runbooks", { exact: true })).toBeVisible();

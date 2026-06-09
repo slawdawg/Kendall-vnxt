@@ -373,9 +373,17 @@ class SupervisorService:
                     summary="Run `pnpm run check:docs` or the full `pnpm run check` before merging authority documentation changes.",
                     requiredEvidence=["scripts/check-doc-indexes.mjs", "package.json"],
                 ),
+                ProviderEnablementPolicyStepView(
+                    stepId="check-documentation-authority-command",
+                    label="Documentation authority report drift command",
+                    status="required",
+                    summary="Run `pnpm run check:documentation-authority` before merging documentation authority report changes.",
+                    requiredEvidence=["scripts/check-documentation-authority-report.mjs", "docs/stories/3-47-core-readiness-drift-checks.md"],
+                ),
             ],
             nextSafeActions=[
                 "Keep blocked authority stories blocked unless explicit operator approval names authority and scope.",
+                "Run `pnpm run check:documentation-authority` after changing documentation authority report surfaces.",
                 "Run `pnpm run check:docs` after changing architecture, PRD, story, or approval checkpoint references.",
                 "Use the documentation indexes before starting new execution-authority work.",
             ],
@@ -403,6 +411,28 @@ class SupervisorService:
                 evidence=[
                     "Validates documentation indexes reference existing files.",
                     "Validates blocked execution-authority stories remain consistent with the approval checkpoint.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-documentation-authority",
+                label="Documentation authority report drift",
+                command="pnpm run check:documentation-authority",
+                status="required",
+                requiredFor=["documentation authority report changes", "blocked story surface changes", "authority checkpoint report changes"],
+                evidence=[
+                    "Validates documentation authority contracts, schemas, API route, service report, dashboard rendering, browser assertions, and story evidence stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-verification-readiness",
+                label="Verification readiness report drift",
+                command="pnpm run check:verification-readiness",
+                status="required",
+                requiredFor=["verification readiness report changes", "verification command changes", "controls-page verification report changes"],
+                evidence=[
+                    "Validates verification readiness contracts, schemas, API route, service commands, dashboard rendering, browser assertions, and story evidence stay aligned.",
+                    "Runs as part of the full local verification command.",
                 ],
             ),
             VerificationCommandView(
@@ -522,7 +552,7 @@ class SupervisorService:
                 status="required",
                 requiredFor=["pre-merge confidence", "local handoff", "fresh VM acceptance"],
                 evidence=[
-                    "Runs preflight, documentation checks, report/runtime/safe-backlog/managed recipe policy/delivery readiness policy/maintenance readiness drift checks, runbook checks, dashboard build, and supervisor integration tests.",
+                    "Runs preflight, documentation checks, core readiness/report/runtime/safe-backlog/managed recipe policy/delivery readiness policy/maintenance readiness drift checks, runbook checks, dashboard build, and supervisor integration tests.",
                     "Does not grant execution authority by passing.",
                 ],
             ),
@@ -1749,6 +1779,7 @@ class SupervisorService:
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
             "docs/stories/3-46-maintenance-readiness-drift-check.md",
+            "docs/stories/3-47-core-readiness-drift-checks.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

@@ -55,6 +55,8 @@ for (const path of currentRunbooks) {
   const content = files[path];
   assertCondition(content.includes("pnpm run check"), `${path} must mention pnpm run check`, failures);
   assertCondition(content.includes("pnpm run check:docs"), `${path} must mention pnpm run check:docs`, failures);
+  assertCondition(content.includes("pnpm run check:documentation-authority"), `${path} must mention pnpm run check:documentation-authority`, failures);
+  assertCondition(content.includes("pnpm run check:verification-readiness"), `${path} must mention pnpm run check:verification-readiness`, failures);
   assertCondition(content.includes("pnpm run check:e2e-report"), `${path} must mention pnpm run check:e2e-report`, failures);
   assertCondition(content.includes("pnpm run check:reports"), `${path} must mention pnpm run check:reports`, failures);
   assertCondition(content.includes("pnpm run check:runbooks"), `${path} must mention pnpm run check:runbooks`, failures);
@@ -101,8 +103,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  files["services/supervisor/src/supervisor/application/service.py"].includes("maintenance readiness drift checks"),
-  "Verification readiness report must describe maintenance readiness drift checks in full verification evidence",
+  files["services/supervisor/src/supervisor/application/service.py"].includes("core readiness/report"),
+  "Verification readiness report must describe core readiness checks in full verification evidence",
   failures,
 );
 assertCondition(
