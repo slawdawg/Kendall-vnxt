@@ -34,15 +34,19 @@ Important environment variables:
 
 ## Verification
 
-- `pnpm run check` builds the dashboard and runs supervisor integration tests
+- `pnpm run check` runs preflight, documentation drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, runbook verification checks, dashboard build, and supervisor integration tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
+- `pnpm run check:e2e-report` verifies dashboard e2e runner/report/browser/story alignment
+- `pnpm run check:reports` verifies supervisor report catalog route/runtime/dashboard/story alignment
+- `pnpm run check:runbooks` verifies current operator runbooks describe the active verification chain
+- `pnpm run test:supervisor` runs supervisor tests through a repo-local uv cache wrapper
 - `pnpm run test:e2e:dashboard` runs browser coverage for intake drafts, workflow actions, and detail navigation
 - `pnpm run test:e2e:dashboard:controls` runs the focused controls-page browser slice with repo-local Playwright cache defaults
 - `pnpm run lint:dashboard` runs the dashboard lint pass
 - `pnpm run preflight` checks that shared JS deps and the supervisor virtualenv are ready
 - `pnpm run doctor` is an alias for `preflight`
 
-Playwright starts the dashboard with `next dev` for faster browser-test startup. `pnpm run check` remains the production-build gate.
+Playwright starts the dashboard with `next dev` for faster browser-test startup. `pnpm run check` remains the production-build gate. Supervisor tests launched from package scripts use a repo-local uv cache wrapper so Windows user-cache state does not decide whether verification can start.
 
 ## Planning
 

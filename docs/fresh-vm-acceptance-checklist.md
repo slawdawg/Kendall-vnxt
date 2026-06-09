@@ -47,6 +47,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 
 - `pnpm run doctor:github -- --remote` passes.
 - `pnpm run check:docs` passes.
+- `pnpm run check:e2e-report` passes.
+- `pnpm run check:reports` passes.
+- `pnpm run check:runbooks` passes.
 - `pnpm run check` passes.
 - Bootstrap local-only smoke check passes:
 

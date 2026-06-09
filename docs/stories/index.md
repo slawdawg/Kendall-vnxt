@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-29-runbook-verification-alignment.md` | Static runbook verification for current operator docs and active verification commands. |
 | `3-28-supervisor-report-catalog-drift-check.md` | Required static drift check for supervisor report catalog routes, runtime references, dashboard fetches, and story evidence. |
 | `3-27-safe-development-backlog-report.md` | Read-only safe backlog map for larger coherent development slices while execution authority remains blocked. |
 | `3-26-dashboard-e2e-report-drift-check.md` | Required static drift check for dashboard e2e report commands, browser assertions, and story references. |

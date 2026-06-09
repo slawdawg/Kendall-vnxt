@@ -134,11 +134,15 @@ Use these after code or bootstrap changes:
 ```powershell
 pnpm run doctor:github
 pnpm run doctor:github -- --remote
+pnpm run check:docs
+pnpm run check:e2e-report
+pnpm run check:reports
+pnpm run check:runbooks
 pnpm run check
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -LocalOnly
 ```
 
-`pnpm run check` is expected to run dashboard build plus 77 supervisor tests. A known intermittent `aiosqlite` event-loop warning may appear after tests pass.
+`pnpm run check` is expected to run preflight, documentation drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, runbook verification checks, dashboard build, and supervisor integration tests through the repo-local uv cache wrapper. A known intermittent `aiosqlite` event-loop warning may appear after tests pass.
 
 ## Connector Check
 
