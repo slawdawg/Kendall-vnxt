@@ -411,6 +411,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-reports",
+                label="Supervisor report catalog drift",
+                command="pnpm run check:reports",
+                status="required",
+                requiredFor=["supervisor report changes", "controls-page report changes", "runtime export report references"],
+                evidence=[
+                    "Validates supervisor report catalog entries, FastAPI routes, runtime export references, dashboard fetches, browser assertions, and story references stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-build",
                 label="Dashboard build and type check",
                 command="pnpm --filter @kendall/dashboard build",
@@ -439,7 +450,7 @@ class SupervisorService:
                 status="required",
                 requiredFor=["pre-merge confidence", "local handoff", "fresh VM acceptance"],
                 evidence=[
-                    "Runs preflight, documentation checks, dashboard e2e report drift checks, dashboard build, and supervisor integration tests.",
+                    "Runs preflight, documentation checks, report drift checks, dashboard build, and supervisor integration tests.",
                     "Does not grant execution authority by passing.",
                 ],
             ),
@@ -976,7 +987,7 @@ class SupervisorService:
                 recommendedSliceSize="large",
                 evidence=[
                     f"{len(required_verification)} required verification commands are surfaced.",
-                    "Dashboard e2e report drift checks now run inside the full local check.",
+                    "Dashboard e2e and supervisor report catalog drift checks now run inside the full local check.",
                     "Focused dashboard e2e runners cover controls, detail, mobile, and managed recipe slices.",
                 ],
                 relatedReports=[
@@ -986,8 +997,9 @@ class SupervisorService:
                 relatedDocs=[
                     "docs/stories/3-16-verification-readiness-report.md",
                     "docs/stories/3-26-dashboard-e2e-report-drift-check.md",
+                    "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
                 ],
-                nextAction="Add or extend static drift checks whenever commands, reports, or dashboard assertions gain new surfaces.",
+                nextAction="Add or extend static drift checks whenever commands, reports, runtime export references, or dashboard assertions gain new surfaces.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="read-only-evidence-polish",
@@ -1378,6 +1390,7 @@ class SupervisorService:
             "docs/stories/3-25-managed-recipe-e2e-runners.md",
             "docs/stories/3-26-dashboard-e2e-report-drift-check.md",
             "docs/stories/3-27-safe-development-backlog-report.md",
+            "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

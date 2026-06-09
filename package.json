@@ -22,6 +22,7 @@
     "preflight:python": "node ./scripts/preflight.mjs python",
     "check:docs": "node ./scripts/check-doc-indexes.mjs",
     "check:e2e-report": "node ./scripts/check-dashboard-e2e-report.mjs",
+    "check:reports": "node ./scripts/check-supervisor-report-catalog.mjs",
     "doctor:github": "node ./scripts/github-sync-doctor.mjs",
     "dev:dashboard": "pnpm run preflight:js && pnpm --filter @kendall/dashboard dev",
     "dev:supervisor": "pnpm run preflight:python && uv run --directory services/supervisor uvicorn supervisor.api.main:app --host 0.0.0.0 --reload",
@@ -34,6 +35,6 @@
     "test:e2e:dashboard:managed": "node ./scripts/run-managed-recipe-e2e.mjs",
     "test:e2e:dashboard:managed:mobile": "node ./scripts/run-managed-mobile-recipe-e2e.mjs",
     "test:supervisor": "node ./scripts/run-supervisor-tests.mjs",
-    "check": "pnpm run preflight && pnpm run check:docs && pnpm run check:e2e-report && pnpm run build:dashboard && pnpm run test:supervisor"
+    "check": "pnpm run preflight && pnpm run check:docs && pnpm run check:e2e-report && pnpm run check:reports && pnpm run build:dashboard && pnpm run test:supervisor"
   }
 }

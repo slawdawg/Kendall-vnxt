@@ -761,6 +761,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "preflight",
         "check-docs",
         "check-e2e-report",
+        "check-reports",
         "dashboard-build",
         "supervisor-tests",
         "full-check",
@@ -1743,6 +1744,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-25-managed-recipe-e2e-runners.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-26-dashboard-e2e-report-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-27-safe-development-backlog-report.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-28-supervisor-report-catalog-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]

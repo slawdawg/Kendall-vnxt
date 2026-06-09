@@ -157,6 +157,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("Checks and stop lines")).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:e2e-report", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:reports", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:controls", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:detail", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:mobile", { exact: true })).toBeVisible();
@@ -182,6 +183,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/verification-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/dashboard-e2e-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
 
     const maintenancePanel = page.locator("section").filter({ hasText: "Safe work map" }).first();
