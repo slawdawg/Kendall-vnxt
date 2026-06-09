@@ -627,6 +627,32 @@ export interface SafeDevelopmentBacklogReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface MaintenanceActionPlanStepView {
+  stepId: string;
+  label: string;
+  priority: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+  verificationCommands: string[];
+  relatedReports: string[];
+  relatedDocs: string[];
+  dashboardAnchors: string[];
+  nextAction: string;
+}
+
+export interface MaintenanceActionPlanReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  steps: MaintenanceActionPlanStepView[];
+  verificationChain: string[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+}
+
 export interface ManagedRecipePolicyReportView {
   reportId: string;
   generatedAt: string;

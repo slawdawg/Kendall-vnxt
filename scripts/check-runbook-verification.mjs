@@ -67,6 +67,7 @@ for (const path of currentRunbooks) {
   assertCondition(content.includes("pnpm run check:runtime-export"), `${path} must mention pnpm run check:runtime-export`, failures);
   assertCondition(content.includes("pnpm run check:safe-backlog"), `${path} must mention pnpm run check:safe-backlog`, failures);
   assertCondition(content.includes("pnpm run check:managed-recipes"), `${path} must mention pnpm run check:managed-recipes`, failures);
+  assertCondition(content.includes("pnpm run check:maintenance-action-plan"), `${path} must mention pnpm run check:maintenance-action-plan`, failures);
   assertCondition(content.includes("pnpm run check:delivery-readiness"), `${path} must mention pnpm run check:delivery-readiness`, failures);
   assertCondition(content.includes("pnpm run check:maintenance-readiness"), `${path} must mention pnpm run check:maintenance-readiness`, failures);
   assertCondition(
