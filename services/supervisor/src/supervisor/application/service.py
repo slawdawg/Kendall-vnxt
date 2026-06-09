@@ -15,6 +15,9 @@ from supervisor.api.schemas import (
     ExecutionConfigurationCheckView,
     ExecutionConfigurationChecksView,
     ExecutionAttemptView,
+    ExecutionReadinessAttemptSummaryView,
+    ExecutionReadinessOutcomeEvidenceView,
+    ExecutionReadinessReportView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
@@ -24,6 +27,7 @@ from supervisor.api.schemas import (
     OperatorViewResponse,
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
+    ProviderEnablementPolicyStepView,
     RuntimeEvidenceExportBoundaryView,
     RuntimeEvidenceExportSafetyView,
     RuntimeEvidenceExportView,
@@ -578,6 +582,134 @@ class SupervisorService:
                 ],
             ),
             safety=RuntimeEvidenceExportSafetyView(),
+        )
+
+    async def get_execution_readiness_report(self, session: AsyncSession) -> ExecutionReadinessReportView:
+        configuration = self.get_execution_configuration_checks()
+        attempt_result = await session.execute(select(ExecutionAttempt).order_by(ExecutionAttempt.updated_at.desc()).limit(8))
+        attempts = list(attempt_result.scalars())
+        outcome_result = await session.execute(
+            select(WorkflowEvent)
+            .where(WorkflowEvent.event_type == "routing.outcome_recorded")
+            .order_by(WorkflowEvent.created_at.desc())
+            .limit(8)
+        )
+        outcomes = list(outcome_result.scalars())
+
+        next_safe_actions = [
+            "Keep all execution authority disabled until a PRD or decision record approves a specific lane.",
+            "Use this report, runtime evidence exports, and threat-boundary checks before drafting provider-specific execution work.",
+            "Expand reporting evidence before adaptive scoring or automated execution authority.",
+        ]
+        if not attempts:
+            next_safe_actions.insert(0, "Record a non-executing attempt when a work item needs lane, worker, and boundary evidence.")
+
+        return ExecutionReadinessReportView(
+            reportId="execution-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Execution readiness is reporting-only: provider calls, command execution, source mutation, and real worker launch "
+                "remain disabled until every enablement policy step is satisfied."
+            ),
+            providerEnablementPolicy=self._provider_enablement_policy_steps(),
+            disabledAuthorityChecks=[check for check in configuration.checks if not check.enabled],
+            currentAttempts=[self._execution_readiness_attempt_summary(attempt) for attempt in attempts],
+            latestOutcomes=[self._execution_readiness_outcome_evidence(event) for event in outcomes],
+            nextSafeActions=next_safe_actions,
+        )
+
+    def _provider_enablement_policy_steps(self) -> list[ProviderEnablementPolicyStepView]:
+        return [
+            ProviderEnablementPolicyStepView(
+                stepId="prd-decision",
+                label="PRD or decision record",
+                status="required",
+                summary="Name the exact lane, provider, authority, rollback, and stop conditions before any setting can enable execution.",
+                requiredEvidence=[
+                    "Approved PRD or decision record.",
+                    "Provider-specific scope, timeout, cancellation, and retention policy.",
+                ],
+            ),
+            ProviderEnablementPolicyStepView(
+                stepId="threat-boundary-update",
+                label="Threat boundary update",
+                status="required",
+                summary="Update prompt, command, provider, network, credential, and artifact rules for the exact authority being requested.",
+                requiredEvidence=[
+                    "Threat-boundary artifact updated.",
+                    "No-secret and redaction fixtures for prompt or provider payloads.",
+                ],
+            ),
+            ProviderEnablementPolicyStepView(
+                stepId="settings-and-registry",
+                label="Settings and registry gate",
+                status="blocked_by_default",
+                summary="Runtime settings and worker registry must agree before a disabled provider can become executable.",
+                requiredEvidence=[
+                    "Configuration check moves only the approved lane from disabled to enabled.",
+                    "Worker registry health, permissions, and disabled reason match the approved policy.",
+                ],
+            ),
+            ProviderEnablementPolicyStepView(
+                stepId="permission-envelope",
+                label="Permission envelope",
+                status="required",
+                summary="Every attempt needs bound read roots, write roots, artifact roots, redaction rules, and denied credential/network defaults.",
+                requiredEvidence=[
+                    "Workspace isolation plan fixtures.",
+                    "Approval binding for route, worker, lane, and authority mode.",
+                ],
+            ),
+            ProviderEnablementPolicyStepView(
+                stepId="operator-copy-and-tests",
+                label="Operator copy and tests",
+                status="required",
+                summary="Dashboard copy and tests must prove what is enabled, what remains denied, and how rollback works.",
+                requiredEvidence=[
+                    "Focused API and dashboard tests.",
+                    "Rollback or disable plan documented beside the enabling change.",
+                ],
+            ),
+        ]
+
+    def _execution_readiness_attempt_summary(self, attempt: ExecutionAttempt) -> ExecutionReadinessAttemptSummaryView:
+        event_refs = list(attempt.event_refs_json or [])
+        latest_event = event_refs[-1] if event_refs else {}
+        disabled_reason = attempt.rejection_reason or attempt.failure_reason or attempt.cancel_reason
+        if attempt.status in ACTIVE_EXECUTION_ATTEMPT_STATUSES:
+            next_safe_action = "Review route binding and disabled authority checks before any lifecycle transition."
+        elif attempt.status == ExecutionAttemptStatus.REJECTED.value:
+            next_safe_action = "Keep rejected authority disabled; satisfy provider enablement policy before retrying execution."
+        else:
+            next_safe_action = "Use the recorded attempt as evidence only; do not infer execution authority from terminal status."
+        return ExecutionReadinessAttemptSummaryView(
+            attemptId=attempt.id,
+            workItemId=attempt.work_item_id,
+            status=attempt.status,
+            workerId=attempt.worker_id,
+            lane=attempt.lane,
+            authorityMode=attempt.authority_mode,
+            disabledReason=disabled_reason,
+            latestEventType=latest_event.get("eventType") if isinstance(latest_event, dict) else None,
+            latestEventAt=self._normalize_timestamp(attempt.updated_at),
+            nextSafeAction=next_safe_action,
+        )
+
+    def _execution_readiness_outcome_evidence(self, event: WorkflowEvent) -> ExecutionReadinessOutcomeEvidenceView:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        failure_reason = payload.get("failureReason") or payload.get("escalationReason")
+        return ExecutionReadinessOutcomeEvidenceView(
+            eventId=event.id,
+            workItemId=event.work_item_id,
+            createdAt=self._normalize_timestamp(event.created_at),
+            selectedLane=payload.get("selectedLane") if isinstance(payload.get("selectedLane"), str) else None,
+            workerId=payload.get("workerId") if isinstance(payload.get("workerId"), str) else None,
+            taskKind=payload.get("taskKind") if isinstance(payload.get("taskKind"), str) else None,
+            attemptStatus=payload.get("attemptStatus") if isinstance(payload.get("attemptStatus"), str) else None,
+            validationStatus=payload.get("validationStatus") if isinstance(payload.get("validationStatus"), str) else None,
+            failureClass=failure_reason if isinstance(failure_reason, str) and failure_reason else None,
+            escalationReason=payload.get("escalationReason") if isinstance(payload.get("escalationReason"), str) else None,
+            operatorOverrideReason=payload.get("operatorOverrideReason") if isinstance(payload.get("operatorOverrideReason"), str) else None,
         )
 
     async def create_execution_attempt(

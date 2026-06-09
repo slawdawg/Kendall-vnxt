@@ -130,9 +130,18 @@ test.describe("dashboard workflow coverage", () => {
       data: { taskKind: "validation_execution", recordEvent: true },
     });
     expect(routeResponse.ok()).toBeTruthy();
+    const attemptResponse = await request.post(`${supervisorUrl}/work-items/${workItemId}/execution-attempts`, {
+      data: { actorId: "playwright", actorLabel: "Playwright" },
+    });
+    expect(attemptResponse.ok()).toBeTruthy();
 
     await page.goto("/controls");
 
+    await expect(page.getByText("Execution readiness")).toBeVisible();
+    await expect(page.getByText("Policy and evidence report")).toBeVisible();
+    await expect(page.getByText("Provider enablement ladder")).toBeVisible();
+    await expect(page.getByText("Authority checks")).toBeVisible();
+    await expect(page.getByText("Provider calls")).toBeVisible();
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
     await expect(fleetPanel.getByText("Internal utility worker")).toBeVisible();

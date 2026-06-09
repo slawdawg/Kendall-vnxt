@@ -454,6 +454,11 @@ async def get_execution_configuration_checks():
     return ApiEnvelope(data=service.get_execution_configuration_checks())
 
 
+@app.get("/supervisor/execution-readiness-report", response_model=ApiEnvelope)
+async def get_execution_readiness_report(session: AsyncSession = Depends(get_session)):
+    return ApiEnvelope(data=await service.get_execution_readiness_report(session))
+
+
 @app.get("/supervisor/threat-boundary", response_model=ApiEnvelope)
 async def get_threat_boundary():
     return ApiEnvelope(data=service.get_threat_boundary())

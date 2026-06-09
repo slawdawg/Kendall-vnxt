@@ -26,6 +26,7 @@ __pycache__/
 
 # Test/tool caches
 .pytest_cache/
+Usersslaw_dawgKendall_Nxt.datapytest-basetemp/
 .mypy_cache/
 .ruff_cache/
 .coverage

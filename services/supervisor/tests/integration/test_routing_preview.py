@@ -640,6 +640,56 @@ def test_execution_configuration_checks_report_disabled_defaults_without_mutatio
         assert check["evidence"]
 
 
+def test_execution_readiness_report_compacts_policy_attempt_and_outcome_evidence_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "execution-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        managed_response = client.post(
+            f"/work-items/{work_item_id}/managed-next-action",
+            json={"expectedActionId": "supervisor_triage"},
+        )
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/execution-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert attempt_response.status_code == 200
+    assert managed_response.status_code == 200
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "execution-readiness-report-v1"
+    assert report["executionAllowed"] is False
+    assert report["providerCallsAllowed"] is False
+    assert report["commandExecutionAllowed"] is False
+    assert report["sourceMutationAllowed"] is False
+    assert {step["stepId"] for step in report["providerEnablementPolicy"]} == {
+        "prd-decision",
+        "threat-boundary-update",
+        "settings-and-registry",
+        "permission-envelope",
+        "operator-copy-and-tests",
+    }
+    assert {check["checkId"] for check in report["disabledAuthorityChecks"]} >= {
+        "local-provider-calls",
+        "subscription-agent-launch",
+        "premium-execution",
+    }
+    assert report["currentAttempts"][0]["workItemId"] == work_item_id
+    assert report["currentAttempts"][0]["nextSafeAction"]
+    assert report["latestOutcomes"][0]["workItemId"] == work_item_id
+    assert report["latestOutcomes"][0]["reportingOnly"] is True
+    assert report["nextSafeActions"]
+
+
 def test_threat_boundary_reports_redaction_command_provider_and_secret_denials_without_mutation(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "threat-boundary.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

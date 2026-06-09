@@ -1,6 +1,7 @@
 import type {
   ApiEnvelope,
   ExecutionAttemptView,
+  ExecutionReadinessReportView,
   RoutingLaneEvidenceProfileView,
   RoutingPreviewView,
   RunStatusView,
@@ -76,6 +77,10 @@ export async function getRoutingPreview(workItemId: string): Promise<RoutingPrev
 
 export async function getRoutingLaneProfiles(): Promise<RoutingLaneEvidenceProfileView[]> {
   return requestJson<RoutingLaneEvidenceProfileView[]>("/routing/lane-profiles");
+}
+
+export async function getExecutionReadinessReport(): Promise<ExecutionReadinessReportView> {
+  return requestJson<ExecutionReadinessReportView>("/supervisor/execution-readiness-report");
 }
 
 export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {
