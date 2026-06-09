@@ -158,6 +158,7 @@ pnpm run doctor:github -- --remote
 pnpm run check:docs
 pnpm run check:documentation-authority
 pnpm run check:verification-readiness
+pnpm run check:authority-readiness
 pnpm run check:e2e-report
 pnpm run check:reports
 pnpm run check:execution-boundary

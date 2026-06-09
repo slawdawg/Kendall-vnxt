@@ -55,6 +55,13 @@ const reports = [
     dashboardFetch: "getVerificationReadinessReport",
   },
   {
+    reportId: "authority-readiness-matrix-report-v1",
+    endpoint: "GET /supervisor/authority-readiness-matrix-report",
+    apiPath: "/supervisor/authority-readiness-matrix-report",
+    story: "docs/stories/3-53-authority-readiness-matrix-report.md",
+    dashboardFetch: "getAuthorityReadinessMatrixReport",
+  },
+  {
     reportId: "dashboard-e2e-report-v1",
     endpoint: "GET /supervisor/dashboard-e2e-report",
     apiPath: "/supervisor/dashboard-e2e-report",
@@ -176,6 +183,7 @@ for (const report of reports) {
 for (const visibleEndpoint of [
   "GET /supervisor/execution-readiness-report",
   "GET /supervisor/verification-readiness-report",
+  "GET /supervisor/authority-readiness-matrix-report",
   "GET /supervisor/dashboard-e2e-report",
   "GET /supervisor/maintenance-action-plan-report",
   "GET /supervisor/safe-development-backlog",
@@ -208,6 +216,7 @@ for (const shortcutText of [
   "reportShortcutHref",
   "`/controls${reportAnchorByEndpoint[endpoint]",
   "#execution-readiness-report",
+  "#authority-readiness-matrix-report",
   "#maintenance-action-plan-report",
   "#supervisor-report-catalog",
 ]) {
@@ -235,6 +244,7 @@ for (const visibleOverviewText of ["Report shortcuts", "Open catalog", "/control
 for (const controlsAnchor of [
   'id="execution-readiness-report"',
   'id="verification-readiness-report"',
+  'id="authority-readiness-matrix-report"',
   'id="supervisor-report-catalog"',
   'id="maintenance-action-plan-report"',
   'id="managed-recipe-policy-report"',
@@ -291,6 +301,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-52-maintenance-action-plan-report.md"),
   "Story index must reference Story 3.52 maintenance action plan report",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-53-authority-readiness-matrix-report.md"),
+  "Story index must reference Story 3.53 authority readiness matrix report",
   failures,
 );
 

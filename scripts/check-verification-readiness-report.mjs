@@ -54,6 +54,7 @@ assertCondition(
 for (const commandText of [
   "check-documentation-authority",
   "check-verification-readiness",
+  "check-authority-readiness",
   "check-e2e-report",
   "check-reports",
   "check-execution-boundary",
@@ -104,6 +105,7 @@ for (const browserText of [
   "Checks and stop lines",
   "pnpm run check:documentation-authority",
   "pnpm run check:verification-readiness",
+  "pnpm run check:authority-readiness",
   "pnpm run check:execution-boundary",
   "pnpm run check:execution-evidence",
   "pnpm run check:provider-fixtures",

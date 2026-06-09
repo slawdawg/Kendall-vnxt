@@ -4,6 +4,7 @@ export const reportAnchorByEndpoint: Record<string, string> = {
   "GET /supervisor/execution-readiness-report": "#execution-readiness-report",
   "GET /supervisor/documentation-authority-report": "#documentation-authority-report",
   "GET /supervisor/verification-readiness-report": "#verification-readiness-report",
+  "GET /supervisor/authority-readiness-matrix-report": "#authority-readiness-matrix-report",
   "GET /supervisor/dashboard-e2e-report": "#dashboard-e2e-report",
   "GET /supervisor/report-catalog": "#supervisor-report-catalog",
   "GET /supervisor/maintenance-readiness-report": "#maintenance-readiness-report",

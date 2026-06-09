@@ -1,4 +1,5 @@
 import { ControlPanel } from "../../components/control-panel";
+import { AuthorityReadinessMatrixReportPanel } from "../../components/authority-readiness-matrix-report-panel";
 import { DashboardE2EReportPanel } from "../../components/dashboard-e2e-report-panel";
 import { DeliveryReadinessPolicyReportPanel } from "../../components/delivery-readiness-policy-report-panel";
 import { DocumentationAuthorityReportPanel } from "../../components/documentation-authority-report-panel";
@@ -16,6 +17,7 @@ import { SupervisorReportCatalogPanel } from "../../components/supervisor-report
 import { VerificationReadinessReportPanel } from "../../components/verification-readiness-report-panel";
 import { buildNavStats } from "../../lib/nav-stats";
 import {
+  getAuthorityReadinessMatrixReport,
   getDocumentationAuthorityReport,
   getDashboardE2EReport,
   getDeliveryReadinessPolicyReport,
@@ -42,6 +44,7 @@ export default async function ControlsPage() {
     readinessReport,
     documentationAuthorityReport,
     verificationReadinessReport,
+    authorityReadinessMatrixReport,
     dashboardE2EReport,
     reportCatalog,
     maintenanceReadinessReport,
@@ -58,6 +61,7 @@ export default async function ControlsPage() {
     getExecutionReadinessReport(),
     getDocumentationAuthorityReport(),
     getVerificationReadinessReport(),
+    getAuthorityReadinessMatrixReport(),
     getDashboardE2EReport(),
     getSupervisorReportCatalog(),
     getMaintenanceReadinessReport(),
@@ -92,6 +96,9 @@ export default async function ControlsPage() {
       </div>
       <div id="verification-readiness-report" className="scroll-mt-28">
         <VerificationReadinessReportPanel report={verificationReadinessReport} />
+      </div>
+      <div id="authority-readiness-matrix-report" className="scroll-mt-28">
+        <AuthorityReadinessMatrixReportPanel report={authorityReadinessMatrixReport} />
       </div>
       <div id="dashboard-e2e-report" className="scroll-mt-28">
         <DashboardE2EReportPanel report={dashboardE2EReport} />

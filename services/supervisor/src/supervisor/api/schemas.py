@@ -588,6 +588,33 @@ class VerificationReadinessReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class AuthorityReadinessFamilyView(BaseModel):
+    familyId: str
+    label: str
+    status: str
+    summary: str
+    blockedStories: list[str] = Field(default_factory=list)
+    requiredApprovals: list[str] = Field(default_factory=list)
+    requiredEvidence: list[str] = Field(default_factory=list)
+    relatedReports: list[str] = Field(default_factory=list)
+    relatedDocs: list[str] = Field(default_factory=list)
+    dashboardAnchors: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
+class AuthorityReadinessMatrixReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    families: list[AuthorityReadinessFamilyView]
+    readinessLadder: list[ProviderEnablementPolicyStepView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+
+
 class DashboardE2ERunnerView(BaseModel):
     runnerId: str
     label: str
