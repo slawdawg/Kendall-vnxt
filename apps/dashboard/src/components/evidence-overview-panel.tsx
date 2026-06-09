@@ -62,6 +62,7 @@ export function EvidenceOverviewPanel({
         : "No related reports",
     },
   ];
+  const reviewShortcuts = runtimeEvidenceExport.reviewNavigator;
 
   return (
     <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
@@ -89,6 +90,40 @@ export function EvidenceOverviewPanel({
             <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{card.detail}</p>
           </a>
         ))}
+      </div>
+      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h4 className="text-base font-semibold">Review shortcuts</h4>
+            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+              Prioritized runtime export navigator items for read-only operator review.
+            </p>
+          </div>
+          <span className="w-fit rounded-full bg-[var(--panel)] px-3 py-1 font-mono text-xs text-[var(--muted)]">
+            {reviewShortcuts.length} shortcuts
+          </span>
+        </div>
+        <div className="mt-3 grid gap-3 lg:grid-cols-3">
+          {reviewShortcuts.map((item) => (
+            <a
+              key={item.itemId}
+              href={item.target.startsWith("#") ? item.target : "#runtime-evidence-export"}
+              className="rounded-[1rem] border bg-[var(--panel)] p-3 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{item.priority}</p>
+                  <p className="mt-1 text-sm font-semibold">{item.label}</p>
+                </div>
+                <span className="shrink-0 rounded-full bg-[var(--surface)] px-2 py-1 font-mono text-[10px] text-[var(--muted)]">
+                  {item.itemId}
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{item.summary}</p>
+              <p className="mt-2 break-words font-mono text-[11px] text-[var(--muted)]">{item.target}</p>
+            </a>
+          ))}
+        </div>
       </div>
     </section>
   );

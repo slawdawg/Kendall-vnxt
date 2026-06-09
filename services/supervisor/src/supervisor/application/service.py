@@ -1046,7 +1046,7 @@ class SupervisorService:
                 recommendedSliceSize="medium_to_large",
                 evidence=[
                     "Runtime evidence exports reference supervisor reports and git-backed evidence.",
-                    "Controls and work-item detail pages already surface read-only evidence panels.",
+                    "Controls and work-item detail pages already surface read-only evidence panels and runtime export review shortcuts.",
                     "Maintenance tracks point future work toward reports rather than execution enablement.",
                 ],
                 relatedReports=[
@@ -1057,6 +1057,8 @@ class SupervisorService:
                 relatedDocs=[
                     "docs/stories/2-7-runtime-evidence-export-strategy.md",
                     "docs/stories/3-20-runtime-evidence-review-manifest.md",
+                    "docs/stories/3-30-runtime-evidence-review-navigator.md",
+                    "docs/stories/3-33-evidence-overview-review-shortcuts.md",
                 ],
                 nextAction="Prefer review shortcuts that reduce operator navigation across existing read-only evidence.",
             ),
@@ -1431,6 +1433,7 @@ class SupervisorService:
             "docs/stories/3-30-runtime-evidence-review-navigator.md",
             "docs/stories/3-31-runtime-evidence-export-drift-check.md",
             "docs/stories/3-32-safe-development-backlog-drift-check.md",
+            "docs/stories/3-33-evidence-overview-review-shortcuts.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
