@@ -26,6 +26,10 @@ function CommandCard({ command }: { command: VerificationCommandView }) {
 }
 
 export function VerificationReadinessReportPanel({ report }: { report: VerificationReadinessReportView }) {
+  const commandLabelById = new Map(
+    [...report.requiredCommands, ...report.optionalCommands].map((command) => [command.commandId, command.label]),
+  );
+
   return (
     <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -50,6 +54,37 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
         ))}
+      </div>
+
+      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <h4 className="text-base font-semibold">Execution plan</h4>
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          {report.commandGroups.map((group) => (
+            <article key={group.groupId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{group.status}</p>
+                  <h5 className="mt-1 text-sm font-semibold">{group.label}</h5>
+                </div>
+                <span className="w-fit rounded-full bg-[var(--surface)] px-3 py-1 font-mono text-[11px] text-[var(--muted)]">
+                  {group.groupId}
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{group.summary}</p>
+              <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+                {group.requiredBefore}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {group.commandIds.map((commandId) => (
+                  <span key={commandId} className="rounded-full border bg-[var(--surface)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+                    {commandLabelById.get(commandId) ?? commandId}
+                  </span>
+                ))}
+              </div>
+              <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{group.nextAction}</p>
+            </article>
+          ))}
+        </div>
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">

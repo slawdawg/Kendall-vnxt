@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, and runtime evidence review coverage through Story 3.55
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, and verification execution plan coverage through Story 3.56
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -20,6 +20,7 @@ Source review artifacts:
 - `docs/stories/3-53-authority-readiness-matrix-report.md`
 - `docs/stories/3-54-development-runway-safe-slices.md`
 - `docs/stories/3-55-runtime-evidence-review-index.md`
+- `docs/stories/3-56-verification-execution-plan-groups.md`
 
 Implementation areas checked:
 
@@ -115,6 +116,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Evidence overview report anchor shortcuts | Implemented | `EvidenceOverviewPanel`, Story 3.39 | Links runtime-export related supervisor reports to stable controls-page report anchors for faster read-only review. |
 | Documentation authority report | Implemented | `GET /supervisor/documentation-authority-report`, `DocumentationAuthorityReportPanel`, Story 3.15 | Surfaces architecture, PRD, story, approval checkpoint, blocked-story, and drift-check status without changing approval state. |
 | Verification readiness report | Implemented | `GET /supervisor/verification-readiness-report`, `VerificationReadinessReportPanel`, Story 3.16 | Surfaces required checks, optional checks, and authority stop lines without changing approval state. |
+| Verification execution plan groups | Implemented | `VerificationReadinessReportView.commandGroups`, Story 3.56 | Groups verification commands into setup, static drift, dashboard/browser, supervisor behavior, full local, and optional remote phases without changing approval state. |
 | Dashboard e2e reliability guardrails | Implemented | `playwright.config.ts`, `pnpm run test:e2e:dashboard:controls`, Story 3.17 | Keeps Playwright web-server cache paths repo-local and adds a focused controls-page browser verification command. |
 | Dashboard detail e2e runner | Implemented | `pnpm run test:e2e:dashboard:detail`, Story 3.21 | Adds an owned-lifecycle work-item detail browser verification command for runtime export changes. |
 | Dashboard e2e report | Implemented | `GET /supervisor/dashboard-e2e-report`, `DashboardE2EReportPanel`, Story 3.22 | Maps focused/full browser runners, setup commands, lifecycle posture, cache posture, and authority stop lines. |

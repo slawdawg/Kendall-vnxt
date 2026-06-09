@@ -522,12 +522,23 @@ export interface VerificationCommandView {
   evidence: string[];
 }
 
+export interface VerificationCommandGroupView {
+  groupId: string;
+  label: string;
+  status: string;
+  summary: string;
+  commandIds: string[];
+  requiredBefore: string;
+  nextAction: string;
+}
+
 export interface VerificationReadinessReportView {
   reportId: string;
   generatedAt: string;
   summary: string;
   requiredCommands: VerificationCommandView[];
   optionalCommands: VerificationCommandView[];
+  commandGroups: VerificationCommandGroupView[];
   stopLines: string[];
   nextSafeActions: string[];
   readyForAuthorityEnablement: boolean;

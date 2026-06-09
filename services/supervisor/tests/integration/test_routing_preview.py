@@ -794,6 +794,22 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "github-doctor-remote",
         "bootstrap-run-check",
     }
+    assert {group["groupId"] for group in report["commandGroups"]} == {
+        "setup-and-preflight",
+        "static-drift-chain",
+        "dashboard-browser-build",
+        "supervisor-behavior-tests",
+        "full-local-gate",
+        "optional-remote-bootstrap",
+    }
+    static_group = next(group for group in report["commandGroups"] if group["groupId"] == "static-drift-chain")
+    assert "check-runtime-review" in static_group["commandIds"]
+    assert "check-development-runway" in static_group["commandIds"]
+    dashboard_group = next(group for group in report["commandGroups"] if group["groupId"] == "dashboard-browser-build")
+    assert "dashboard-controls-e2e" in dashboard_group["commandIds"]
+    assert "dashboard-build" in dashboard_group["commandIds"]
+    full_gate = next(group for group in report["commandGroups"] if group["groupId"] == "full-local-gate")
+    assert full_gate["commandIds"] == ["full-check"]
     assert any("provider/model calls" in stop_line for stop_line in report["stopLines"])
     assert "pnpm run check" in " ".join(report["nextSafeActions"])
 

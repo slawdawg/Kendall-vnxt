@@ -158,6 +158,10 @@ test.describe("dashboard workflow coverage", () => {
     const verificationPanel = page.locator("section").filter({ hasText: "Checks and stop lines" }).first();
     await expect(verificationPanel.getByText("Verification readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("Checks and stop lines")).toBeVisible();
+    await expect(verificationPanel.getByText("Execution plan")).toBeVisible();
+    await expect(verificationPanel.getByText("static-drift-chain")).toBeVisible();
+    await expect(verificationPanel.getByText("dashboard-browser-build")).toBeVisible();
+    await expect(verificationPanel.getByText("full-local-gate")).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
