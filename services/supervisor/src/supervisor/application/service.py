@@ -42,6 +42,8 @@ from supervisor.api.schemas import (
     RuntimeEvidenceReviewManifestView,
     RuntimeEvidenceExportSafetyView,
     RuntimeEvidenceExportView,
+    SafeDevelopmentBacklogItemView,
+    SafeDevelopmentBacklogReportView,
     RoutingDecisionView,
     RoutingLaneEvidenceProfileView,
     RoutingOverrideView,
@@ -776,6 +778,18 @@ class SupervisorService:
                 relatedDocs=["docs/stories/3-19-maintenance-readiness-report.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="safe-development-backlog-report-v1",
+                label="Safe development backlog report",
+                endpoint="GET /supervisor/safe-development-backlog",
+                status="active",
+                summary="Prioritizes larger safe work slices while execution-authority stories remain blocked.",
+                evidenceScope=["safe backlog items", "recommended PR slice size", "blocked authority boundaries"],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md",
+                    "docs/stories/3-27-safe-development-backlog-report.md",
+                ],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="disabled-provider-proofs",
                 label="Disabled provider proofs",
                 endpoint="GET /supervisor/disabled-provider-proofs",
@@ -917,6 +931,134 @@ class SupervisorService:
                 "Batch maintenance changes into coherent PRs covering API, dashboard, docs, and tests when surfaces are related.",
                 "Keep documentation, verification, report catalog, and runtime export references synchronized.",
                 "Prefer read-only evidence improvements until explicit execution-authority approval is recorded.",
+            ],
+        )
+
+    def get_safe_development_backlog_report(self) -> SafeDevelopmentBacklogReportView:
+        maintenance = self.get_maintenance_readiness_report()
+        verification = self.get_verification_readiness_report()
+        catalog = self.get_supervisor_report_catalog()
+
+        blocked_maintenance_tracks = [track.trackId for track in maintenance.tracks if "blocked" in track.status]
+        required_verification = [command.command for command in verification.requiredCommands]
+        report_count = len(catalog.reports)
+
+        items = [
+            SafeDevelopmentBacklogItemView(
+                itemId="safe-backlog-report-alignment",
+                label="Report-aligned backlog governance",
+                priority="P0",
+                status="ready",
+                summary="Keep future work selected from explicit safe backlog items that point to reports, docs, tests, and stop lines.",
+                recommendedSliceSize="large",
+                evidence=[
+                    f"{report_count} supervisor reports are indexed for operator review.",
+                    "Maintenance readiness recommends coherent PRs across API, dashboard, docs, and tests.",
+                    "Architecture reconciliation names maintenance and hygiene as the highest-value next safe work.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/maintenance-readiness-report",
+                    "GET /supervisor/report-catalog",
+                    "GET /supervisor/verification-readiness-report",
+                ],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md",
+                    "docs/stories/3-27-safe-development-backlog-report.md",
+                ],
+                nextAction="Batch future maintenance work into coherent report/API/dashboard/docs/test slices.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="verification-surface-hardening",
+                label="Verification surface hardening",
+                priority="P1",
+                status="ready",
+                summary="Expand drift checks and focused verification when report or browser surfaces grow.",
+                recommendedSliceSize="large",
+                evidence=[
+                    f"{len(required_verification)} required verification commands are surfaced.",
+                    "Dashboard e2e report drift checks now run inside the full local check.",
+                    "Focused dashboard e2e runners cover controls, detail, mobile, and managed recipe slices.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/dashboard-e2e-report",
+                ],
+                relatedDocs=[
+                    "docs/stories/3-16-verification-readiness-report.md",
+                    "docs/stories/3-26-dashboard-e2e-report-drift-check.md",
+                ],
+                nextAction="Add or extend static drift checks whenever commands, reports, or dashboard assertions gain new surfaces.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="read-only-evidence-polish",
+                label="Read-only evidence polish",
+                priority="P2",
+                status="ready",
+                summary="Improve operator review shortcuts only when they connect existing evidence without adding execution authority.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Runtime evidence exports reference supervisor reports and git-backed evidence.",
+                    "Controls and work-item detail pages already surface read-only evidence panels.",
+                    "Maintenance tracks point future work toward reports rather than execution enablement.",
+                ],
+                relatedReports=[
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/maintenance-readiness-report",
+                ],
+                relatedDocs=[
+                    "docs/stories/2-7-runtime-evidence-export-strategy.md",
+                    "docs/stories/3-20-runtime-evidence-review-manifest.md",
+                ],
+                nextAction="Prefer review shortcuts that reduce operator navigation across existing read-only evidence.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="authority-blocked-work",
+                label="Execution-authority stories",
+                priority="blocked",
+                status="blocked_pending_explicit_approval",
+                summary="Ollama provider execution and subscription-agent process launch remain outside the safe backlog.",
+                recommendedSliceSize="do_not_start",
+                evidence=[
+                    "Ollama stories 4.1-4.4 remain blocked pending explicit approval.",
+                    "Subscription-agent stories 5.1-5.5 remain blocked pending explicit approval.",
+                    f"Blocked maintenance tracks: {', '.join(blocked_maintenance_tracks) or 'none'}.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/execution-readiness-report",
+                ],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+                    "docs/stories/index.md",
+                ],
+                blockedBy=[
+                    "explicit operator approval naming authority and scope",
+                    "provider/process PRD approval",
+                    "safety gate evidence",
+                ],
+                nextAction="Do not implement blocked authority stories from generic continuation language.",
+            ),
+        ]
+
+        return SafeDevelopmentBacklogReportView(
+            reportId="safe-development-backlog-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only prioritized backlog for larger safe development slices while provider calls, process launch, "
+                "premium execution, worker commands, source mutation, network access, and credential access remain blocked."
+            ),
+            items=items,
+            stopLines=[
+                "Safe backlog items are planning and maintenance guidance, not execution-authority approvals.",
+                "Do not start Ollama provider execution stories without explicit approval naming authority and scope.",
+                "Do not start subscription-agent launch stories without explicit approval naming authority and scope.",
+                "Do not add provider/model calls, process launch, premium execution, worker shell commands, source mutation, network access, or credential access.",
+            ],
+            nextSafeActions=[
+                "Choose the next PR from ready safe backlog items and keep it large enough to include API, dashboard, docs, and tests when related.",
+                "Use required verification commands and focused e2e runners as acceptance evidence for each slice.",
+                "Keep blocked authority work visible but outside implementation until explicit approval arrives.",
             ],
         )
 
@@ -1213,6 +1355,7 @@ class SupervisorService:
             "GET /supervisor/dashboard-e2e-report",
             "GET /supervisor/report-catalog",
             "GET /supervisor/maintenance-readiness-report",
+            "GET /supervisor/safe-development-backlog",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
         ]
@@ -1234,6 +1377,7 @@ class SupervisorService:
             "docs/stories/3-24-dashboard-mobile-e2e-runner.md",
             "docs/stories/3-25-managed-recipe-e2e-runners.md",
             "docs/stories/3-26-dashboard-e2e-report-drift-check.md",
+            "docs/stories/3-27-safe-development-backlog-report.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

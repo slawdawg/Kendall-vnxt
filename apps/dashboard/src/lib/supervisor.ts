@@ -9,6 +9,7 @@ import type {
   RoutingLaneEvidenceProfileView,
   RoutingPreviewView,
   RunStatusView,
+  SafeDevelopmentBacklogReportView,
   SavedWorkItemView,
   SavedWorkItemViewPayload,
   SupervisorReportCatalogView,
@@ -111,6 +112,10 @@ export async function getSupervisorReportCatalog(): Promise<SupervisorReportCata
 
 export async function getMaintenanceReadinessReport(): Promise<MaintenanceReadinessReportView> {
   return requestJson<MaintenanceReadinessReportView>("/supervisor/maintenance-readiness-report");
+}
+
+export async function getSafeDevelopmentBacklogReport(): Promise<SafeDevelopmentBacklogReportView> {
+  return requestJson<SafeDevelopmentBacklogReportView>("/supervisor/safe-development-backlog");
 }
 
 export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {

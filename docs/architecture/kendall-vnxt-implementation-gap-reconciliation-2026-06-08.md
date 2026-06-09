@@ -92,6 +92,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Dashboard mobile e2e runner | Implemented | `pnpm run test:e2e:dashboard:mobile`, Story 3.24 | Adds an owned-lifecycle focused mobile intake draft verification command through the shared runner helper. |
 | Managed recipe e2e runners | Implemented | `pnpm run test:e2e:dashboard:managed`, `pnpm run test:e2e:dashboard:managed:mobile`, Story 3.25 | Adds owned-lifecycle focused checks for dashboard and mobile managed coverage intake templates. |
 | Dashboard e2e report drift check | Implemented | `pnpm run check:e2e-report`, `scripts/run-supervisor-tests.mjs`, Story 3.26 | Keeps package scripts, supervisor reports, browser assertions, story references, and repo-local supervisor test cache posture aligned for verification changes. |
+| Safe development backlog report | Implemented | `GET /supervisor/safe-development-backlog`, `SafeDevelopmentBacklogPanel`, Story 3.27 | Prioritizes larger safe maintenance/report/verification slices while keeping execution-authority work blocked. |
 | Supervisor report catalog | Implemented | `GET /supervisor/report-catalog`, `SupervisorReportCatalogPanel`, Story 3.18 | Indexes read-only supervisor evidence reports and stop lines without changing approval state. |
 | Maintenance readiness report | Implemented | `GET /supervisor/maintenance-readiness-report`, `MaintenanceReadinessReportPanel`, Story 3.19 | Tracks safe maintenance lanes, report alignment, and blocked authority posture without changing approval state. |
 | Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
@@ -113,7 +114,7 @@ The highest-value next work should:
 
 ## Recommended Next Backlog
 
-1. **Maintenance And Hygiene**: keep checks, docs, and blocked-story state current.
+1. **Maintenance And Hygiene**: keep checks, docs, safe backlog items, and blocked-story state current.
 2. **Provider Approval Checkpoint**: wait for explicit approval before implementing any Ollama execution story.
 3. **Provider PRD Review Loop**: decide whether Ollama remains first or another local provider should be prioritized.
 4. **Read-Only Evidence Polish**: add small review shortcuts only when useful.
