@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, and execution boundary drift coverage through Story 3.48
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, and execution evidence drift coverage through Story 3.49
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -93,6 +93,7 @@ Do not rebuild these as new architecture work:
 - Maintenance readiness drift check in the active verification chain and current runbooks.
 - Core readiness drift checks for documentation authority and verification readiness reports.
 - Execution boundary drift check for execution configuration, execution readiness, and threat-boundary reports.
+- Execution evidence drift check for execution-state boundary and disabled-provider proof reports.
 
 ## Current Gaps
 

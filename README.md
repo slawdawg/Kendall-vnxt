@@ -34,13 +34,14 @@ Important environment variables:
 
 ## Verification
 
-- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, delivery readiness policy drift checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
+- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, delivery readiness policy drift checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - `pnpm run check:documentation-authority` verifies documentation authority report contract/schema/service/dashboard/story alignment
 - `pnpm run check:verification-readiness` verifies verification readiness report contract/schema/service/dashboard/story alignment
 - `pnpm run check:e2e-report` verifies dashboard e2e runner/report/browser/story alignment
 - `pnpm run check:reports` verifies supervisor report catalog route/runtime/dashboard/story alignment
 - `pnpm run check:execution-boundary` verifies execution configuration/readiness/threat-boundary route/service/dashboard/story alignment
+- `pnpm run check:execution-evidence` verifies execution-state boundary and disabled-provider proof route/service/story alignment
 - `pnpm run check:runbooks` verifies current operator runbooks describe the active verification chain
 - `pnpm run check:runtime-export` verifies runtime evidence export contract/schema/service/dashboard/story alignment
 - `pnpm run check:safe-backlog` verifies safe backlog contract/schema/service/dashboard/story alignment
