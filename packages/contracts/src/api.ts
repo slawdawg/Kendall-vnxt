@@ -712,6 +712,8 @@ export interface DevelopmentRunwayReadinessCheckView {
   evidence: string[];
   requiredCommandIds: string[];
   relatedReports: string[];
+  relatedDocs: string[];
+  dashboardAnchors: string[];
   nextAction: string;
 }
 
@@ -725,6 +727,7 @@ export interface DevelopmentRunwaySliceView {
   includedActionSteps: string[];
   requiredVerification: string[];
   relatedReports: string[];
+  relatedDocs: string[];
   dashboardAnchors: string[];
   readinessChecks: DevelopmentRunwayReadinessCheckView[];
   blockedBy: string[];

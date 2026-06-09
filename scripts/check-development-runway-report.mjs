@@ -67,6 +67,8 @@ for (const serviceText of [
   "readinessChecks",
   "batchingPolicy",
   "prBatchingChecklist",
+  "relatedDocs",
+  "dashboardAnchors",
   "ready-backlog-item",
   "handoff-checkpoint-coverage",
   "authority-families-blocked",
@@ -78,6 +80,7 @@ for (const serviceText of [
   "GET /supervisor/development-runway-report",
   "docs/stories/3-54-development-runway-safe-slices.md",
   "docs/stories/3-63-development-runway-pr-batching-policy.md",
+  "docs/stories/3-64-development-runway-evidence-links.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Development runway service must include ${serviceText}`, failures);
 }
@@ -104,8 +107,16 @@ for (const panelText of [
   "Runway slices",
   "PR scope rule",
   "slice.requiredVerification",
+  "slice.relatedReports",
+  "slice.relatedDocs",
   "slice.dashboardAnchors",
   "slice.readinessChecks",
+  "check.relatedReports",
+  "check.relatedDocs",
+  "check.dashboardAnchors",
+  "reportShortcutHref",
+  "Related reports",
+  "Related docs",
   "report.verificationChain",
   "report.batchingPolicy",
   "report.prBatchingChecklist",
@@ -132,6 +143,11 @@ for (const browserText of [
   "larger reviewable PRs",
   "Do not open separate PRs for isolated report text",
   "PR body names the safe slice",
+  "Related reports",
+  "GET /supervisor/report-catalog",
+  "Related docs",
+  "docs/stories/3-64-development-runway-evidence-links.md",
+  "/controls#supervisor-report-catalog",
   "/controls#development-runway-report",
   "Development runway slices are not execution-authority approvals.",
 ]) {
@@ -147,11 +163,14 @@ for (const testText of [
   '"readinessChecks"',
   '"batchingPolicy"',
   '"prBatchingChecklist"',
+  '"relatedDocs"',
+  '"dashboardAnchors"',
   '"ready-backlog-item"',
   '"handoff-checkpoint-coverage"',
   '"authority-families-blocked"',
   "docs/stories/3-54-development-runway-safe-slices.md",
   "docs/stories/3-63-development-runway-pr-batching-policy.md",
+  "docs/stories/3-64-development-runway-evidence-links.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
 }
@@ -183,6 +202,8 @@ const readinessStoryPath = "docs/stories/3-59-development-runway-readiness-check
 assertCondition(existsSync(join(rootDir, readinessStoryPath)), `Missing development runway readiness story ${readinessStoryPath}`, failures);
 const batchingStoryPath = "docs/stories/3-63-development-runway-pr-batching-policy.md";
 assertCondition(existsSync(join(rootDir, batchingStoryPath)), `Missing development runway PR batching story ${batchingStoryPath}`, failures);
+const linksStoryPath = "docs/stories/3-64-development-runway-evidence-links.md";
+assertCondition(existsSync(join(rootDir, linksStoryPath)), `Missing development runway evidence links story ${linksStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-54-development-runway-safe-slices.md"),
   "Story index must reference Story 3.54 development runway safe slices",
@@ -199,19 +220,26 @@ assertCondition(
   failures,
 );
 assertCondition(
+  storyIndex.includes("3-64-development-runway-evidence-links.md"),
+  "Story index must reference Story 3.64 development runway evidence links",
+  failures,
+);
+assertCondition(
   currentGap.includes("Development runway report") &&
     currentGap.includes("larger PR-sized safe slices") &&
     currentGap.includes("Development runway readiness checks") &&
-    currentGap.includes("Development runway PR batching policy"),
-  "Current gap review must track the development runway report, larger PR-sized safe slices, readiness checks, and PR batching policy",
+    currentGap.includes("Development runway PR batching policy") &&
+    currentGap.includes("Development runway evidence links"),
+  "Current gap review must track the development runway report, larger PR-sized safe slices, readiness checks, PR batching policy, and evidence links",
   failures,
 );
 assertCondition(
   reconciliation.includes("Development runway report") &&
     reconciliation.includes("larger PR-sized safe slices") &&
     reconciliation.includes("Development runway readiness checks") &&
-    reconciliation.includes("Development runway PR batching policy"),
-  "Implementation reconciliation must track the development runway report, larger PR-sized safe slices, readiness checks, and PR batching policy",
+    reconciliation.includes("Development runway PR batching policy") &&
+    reconciliation.includes("Development runway evidence links"),
+  "Implementation reconciliation must track the development runway report, larger PR-sized safe slices, readiness checks, PR batching policy, and evidence links",
   failures,
 );
 assertCondition(

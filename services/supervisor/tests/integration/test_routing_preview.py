@@ -1053,6 +1053,7 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "safe-backlog-report-alignment" in report_slice["includedBacklogItems"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
+    assert "docs/stories/3-64-development-runway-evidence-links.md" in report_slice["relatedDocs"]
     assert "/controls#supervisor-report-catalog" in report_slice["dashboardAnchors"]
     assert {check["checkId"] for check in report_slice["readinessChecks"]} == {
         "ready-backlog-item",
@@ -1060,9 +1061,13 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
         "focused-verification",
     }
     assert all(check["status"] == "ready" for check in report_slice["readinessChecks"])
+    ready_check = next(check for check in report_slice["readinessChecks"] if check["checkId"] == "ready-backlog-item")
+    assert "docs/stories/3-27-safe-development-backlog-report.md" in ready_check["relatedDocs"]
+    assert "/controls#safe-development-backlog" in ready_check["dashboardAnchors"]
     verification_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "verification-runbook-hardening-slice")
     assert "pnpm run check:runbooks" in verification_slice["requiredVerification"]
     assert "GET /supervisor/verification-readiness-report" in verification_slice["relatedReports"]
+    assert "docs/stories/3-58-verification-handoff-checkpoints.md" in verification_slice["relatedDocs"]
     assert {check["checkId"] for check in verification_slice["readinessChecks"]} == {
         "ready-backlog-items",
         "handoff-checkpoint-coverage",
@@ -1080,6 +1085,7 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "local-provider-execution" in authority_slice["blockedBy"]
     assert "subscription-agent-launch" in authority_slice["blockedBy"]
     assert "GET /supervisor/authority-readiness-matrix-report" in authority_slice["relatedReports"]
+    assert "docs/stories/index.md" in authority_slice["relatedDocs"]
     assert "pnpm run check:development-runway" in report["verificationChain"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("ready safe backlog items" in action for action in report["nextSafeActions"])
@@ -2082,6 +2088,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-53-authority-readiness-matrix-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-54-development-runway-safe-slices.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-63-development-runway-pr-batching-policy.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-64-development-runway-evidence-links.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-55-runtime-evidence-review-index.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]

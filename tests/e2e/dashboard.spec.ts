@@ -289,11 +289,19 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("larger reviewable PRs")).toBeVisible();
     await expect(runwayPanel.getByText("Do not open separate PRs for isolated report text")).toBeVisible();
     await expect(runwayPanel.getByText("PR body names the safe slice")).toBeVisible();
+    await expect(runwayPanel.getByText("Related reports").first()).toBeVisible();
+    await expect(runwayPanel.getByRole("link", { name: "GET /supervisor/report-catalog" })).toHaveAttribute(
+      "href",
+      "/controls#supervisor-report-catalog",
+    );
+    await expect(runwayPanel.getByText("Related docs").first()).toBeVisible();
+    await expect(runwayPanel.getByText("docs/stories/3-64-development-runway-evidence-links.md", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByRole("link", { name: "/controls#safe-development-backlog" }).first()).toBeVisible();
     await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("handoff-checkpoint-coverage", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("authority-families-blocked", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:development-runway", { exact: true })).toBeVisible();
-    await expect(runwayPanel.getByRole("link", { name: "/controls#development-runway-report" })).toBeVisible();
+    await expect(runwayPanel.getByRole("link", { name: "/controls#development-runway-report" }).first()).toBeVisible();
     await expect(runwayPanel.getByText("Development runway slices are not execution-authority approvals.")).toBeVisible();
     await expect(page.locator("#development-runway-report")).toBeVisible();
 
