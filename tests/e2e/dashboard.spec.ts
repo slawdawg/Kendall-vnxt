@@ -141,7 +141,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Policy and evidence report")).toBeVisible();
     await expect(page.getByText("Provider enablement ladder")).toBeVisible();
     await expect(page.getByText("Authority checks")).toBeVisible();
-    await expect(page.getByText("Provider calls")).toBeVisible();
+    await expect(page.getByText("Provider proofs")).toBeVisible();
+    await expect(page.getByText("Provider no-call proofs")).toBeVisible();
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
     await expect(fleetPanel.getByText("Internal utility worker")).toBeVisible();

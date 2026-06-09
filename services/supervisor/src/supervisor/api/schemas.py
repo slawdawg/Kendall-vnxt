@@ -497,12 +497,37 @@ class ExecutionReadinessOutcomeEvidenceView(BaseModel):
     reportingOnly: bool = True
 
 
+class DisabledProviderProofView(BaseModel):
+    workerId: str
+    providerLabel: str
+    disabledReason: str
+    endpointPolicy: str
+    httpCallsAttempted: bool = False
+    modelCallsAttempted: bool = False
+    networkAccessAttempted: bool = False
+    credentialAccessAttempted: bool = False
+    redactionChecks: list[str] = Field(default_factory=list)
+
+
+class ExecutionStateBoundaryView(BaseModel):
+    boundaryId: str
+    generatedAt: datetime
+    summary: str
+    queueLeaseRole: list[str]
+    executionAttemptRole: list[str]
+    forbiddenQueueLeaseFields: list[str]
+    futureProcessLifecycleAttachments: list[str]
+    queueLeaseGrantsExecutionAuthority: bool = False
+    executionAttemptLaunchesWorkers: bool = False
+
+
 class ExecutionReadinessReportView(BaseModel):
     reportId: str
     generatedAt: datetime
     summary: str
     providerEnablementPolicy: list[ProviderEnablementPolicyStepView]
     disabledAuthorityChecks: list[ExecutionConfigurationCheckView]
+    disabledProviderProofs: list[DisabledProviderProofView]
     currentAttempts: list[ExecutionReadinessAttemptSummaryView]
     latestOutcomes: list[ExecutionReadinessOutcomeEvidenceView]
     nextSafeActions: list[str]

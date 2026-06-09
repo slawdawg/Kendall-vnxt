@@ -67,7 +67,8 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Provider enablement precedence | Implemented | `GET /supervisor/execution-readiness-report`, `docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md`, Story 3.7 | Centralizes PRD, threat, settings, registry, permission, dashboard, tests, and rollback gates before enablement. |
 | Compact attempt evidence reporting | Implemented | `ExecutionReadinessReportView.currentAttempts`, dashboard controls panel | Summarizes recent attempts, disabled reasons, latest evidence, and next safe action. |
 | Reporting-only outcome evidence expansion | Implemented | `ExecutionReadinessReportView.latestOutcomes`, routing outcome events | Surfaces lane, worker, task kind, validation, failure, escalation, and override fields without adaptive scoring. |
-| Queue lease vs execution attempt boundary | Partial | `QueueLease` and `ExecutionAttempt` are separate models | Needs an explicit architecture note so future work does not overload queue leases. |
+| Queue lease vs execution attempt boundary | Implemented | `GET /supervisor/execution-state-boundary`, `docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md`, Story 3.8 | Separates scheduling state from worker-authority evidence and names fields forbidden from leases. |
+| Provider-specific disabled adapter proofs | Implemented | `GET /supervisor/disabled-provider-proofs`, readiness report provider proofs | Ollama, LM Studio, vLLM, and llama.cpp expose no-call proof evidence. |
 | Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
 | Direct subscription-agent process launch | Deferred | Launch stub is disabled | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
 | Premium execution | Deferred | Approval request artifacts only | Requires premium provider boundary and explicit approval policy. |
@@ -80,17 +81,17 @@ The architecture gap has moved from missing execution-attempt primitives to miss
 The highest-value next work should:
 
 1. Keep architecture docs aligned with the implemented non-executing control plane.
-2. Clarify the queue lease versus execution attempt boundary before process lifecycle work.
-3. Add provider-specific disabled adapter proofs and redaction fixtures.
+2. Design process lifecycle for future subscription-agent launch.
+3. Draft provider-specific PRDs from readiness and no-call proof evidence.
 4. Use execution-readiness reports to decide when a provider-specific PRD has enough evidence.
-5. Only then design the next controlled worker execution capability.
+5. Only then implement the next controlled worker execution capability.
 
 ## Recommended Next Backlog
 
-1. **Queue Lease And Execution Attempt Boundary**: document scheduling state versus worker-authority evidence before process lifecycle work.
-2. **Provider-Specific Disabled Adapter Proofs**: add no-call fixtures and tests for Ollama, LM Studio, vLLM, and llama.cpp adapters.
-3. **Provider-Specific PRD Drafting**: draft the first local-provider PRD only after disabled adapter proofs and readiness evidence exist.
-4. **Process Lifecycle Design Record**: design subscription-agent process supervision only after attempt/workspace boundaries are explicit.
+1. **Process Lifecycle Design Record**: design subscription-agent process supervision after attempt/workspace boundaries are explicit.
+2. **Provider-Specific PRD Drafting**: draft the first local-provider PRD from disabled provider proofs and readiness evidence.
+3. **Provider Disabled Adapter Fixture Expansion**: add provider-specific redaction and timeout fixture cases before any HTTP adapter.
+4. **Runtime Evidence Export Polish**: include readiness report and boundary references in work-item exports if useful for operator review.
 
 ## Stop Conditions
 

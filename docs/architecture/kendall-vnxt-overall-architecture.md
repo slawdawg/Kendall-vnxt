@@ -23,6 +23,7 @@ This architecture stitches together the current source of truth from:
 - `docs/architecture/kendall-vnxt-authority-dependency-graph-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md`
+- `docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md`
 - `_bmad/memory/knx/profile.md`
 - `_bmad/memory/knx/decisions/governance-coordinator-2026-06-01.md`
 - `_bmad/memory/knx/decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md`
@@ -252,6 +253,8 @@ The following architecture foundation is implemented or documented:
 - authority dependency graph for deferred worker execution,
 - dashboard command/read boundary contract,
 - execution-readiness report and provider enablement policy,
+- queue lease versus execution attempt boundary,
+- disabled local provider no-call proofs,
 - recovery/runtime boundary documentation.
 
 ## Intentionally Deferred
@@ -268,7 +271,7 @@ The following require new PRDs or explicit safety decisions before implementatio
 
 ## Recommended Next Architecture Move
 
-The Execution Authority Expansion PRD has produced the current non-executing control-plane spine. Enablement governance is now anchored by the authority dependency graph, dashboard command boundary, and execution-readiness report.
+The Execution Authority Expansion PRD has produced the current non-executing control-plane spine. Enablement governance is now anchored by the authority dependency graph, dashboard command boundary, execution-readiness report, queue/attempt boundary, and provider no-call proofs.
 
 The architecture sequence should be:
 
@@ -276,5 +279,6 @@ The architecture sequence should be:
 2. maintain the authority dependency graph,
 3. maintain dashboard read/command/approval boundaries,
 4. maintain the execution-readiness and evidence policy,
-5. use readiness reports to identify missing evidence before future authority work,
-6. only then draft provider-specific or subscription-agent launch PRDs.
+5. maintain queue/attempt boundaries and disabled provider proofs,
+6. use readiness reports to identify missing evidence before future authority work,
+7. only then draft provider-specific or subscription-agent launch PRDs.
