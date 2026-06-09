@@ -29,6 +29,7 @@ This architecture stitches together the current source of truth from:
 - `docs/prds/local-provider-ollama-disabled-to-limited-execution.md`
 - `docs/prds/local-provider-ollama-prd-review-2026-06-08.md`
 - `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`
+- `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`
 - `_bmad/memory/knx/profile.md`
 - `_bmad/memory/knx/decisions/governance-coordinator-2026-06-01.md`
 - `_bmad/memory/knx/decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md`
@@ -266,6 +267,7 @@ The following architecture foundation is implemented or documented:
 - draft Ollama local provider PRD,
 - Ollama PRD review and blocked story breakdown,
 - draft subscription-agent launch PRD,
+- subscription-agent launch PRD review and blocked story breakdown,
 - dashboard runtime evidence export access,
 - recovery/runtime boundary documentation.
 
