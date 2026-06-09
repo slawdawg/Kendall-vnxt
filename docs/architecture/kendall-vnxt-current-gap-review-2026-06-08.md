@@ -42,6 +42,7 @@ Do not rebuild these as new architecture work:
 - Runtime evidence export for work items.
 - Worker threat-boundary documentation and API.
 - Connector-backed GitHub workflow documentation.
+- Dashboard command/read boundary contract.
 
 ## Current Gaps
 
@@ -60,15 +61,7 @@ Risk: future work could enable one authority type without satisfying its specifi
 
 Recommendation: add an architecture dependency graph and keep it close to the overall architecture and threat boundary docs.
 
-### 2. Dashboard Command/Read Boundary Contract
-
-The dashboard code separates read helpers and command helpers, but architecture docs do not yet classify which surfaces are read-only, record-only, approval-bearing, or execution-prohibited.
-
-Risk: future UI work could add controls that imply execution authority before the backend permits it.
-
-Recommendation: document the dashboard command boundary and require new controls to state their authority class.
-
-### 3. Provider Enablement Policy
+### 2. Provider Enablement Policy
 
 Settings and registry checks deny execution by default, but the project needs a single policy for how a provider moves from disabled capability to executable authority.
 
@@ -76,7 +69,7 @@ Risk: config shortcuts could bypass PRD, threat, dashboard, and test requirement
 
 Recommendation: define an enablement ladder: PRD decision, threat update, settings gate, registry state, permission envelope, dashboard copy, focused tests, and rollback plan.
 
-### 4. Attempt Evidence Reporting Polish
+### 3. Attempt Evidence Reporting Polish
 
 Attempt evidence is visible, but operators would benefit from a compact summary of current attempts, disabled reasons, latest lifecycle event, and next safe action.
 
@@ -84,7 +77,7 @@ Risk: evidence exists but may be too scattered for repeated operator review.
 
 Recommendation: add a small reporting layer before any real worker launch.
 
-### 5. Outcome Evidence Expansion
+### 4. Outcome Evidence Expansion
 
 Guarded utility outcome evidence exists, but adaptive scoring is still premature.
 
@@ -104,17 +97,16 @@ Recommendation: add reporting-only outcome fields first: selected lane, worker, 
 
 ## Recommended Immediate Story
 
-Title: Architecture Authority Dependency Graph
+Title: Provider Enablement Policy
 
-Goal: Document the dependency gates for each deferred execution authority so future implementation can proceed without accidentally enabling unsafe worker behavior.
+Goal: Define the policy gates required before any disabled provider or execution lane can become executable.
 
 Acceptance outline:
 
-- Add a dependency graph for local provider/model calls, direct subscription-agent launch, premium execution, arbitrary command execution, source mutation, and adaptive scoring.
-- Link each authority type to required existing controls and missing controls.
-- State stop conditions for any implementation that would cross from control-plane evidence into real execution.
-- Update the current gap review and overall architecture pointers.
-- Verify docs-only changes with `git diff --check` and the normal workspace check when practical.
+- Define the enablement ladder from PRD decision through settings, registry, permission envelope, dashboard copy, tests, and rollback.
+- Cover local providers, subscription-agent launch, premium execution, command execution, source mutation, network access, and credential access.
+- State the exact artifacts and tests required before a worker can move from capable/disabled to executable.
+- Keep all current execution authority disabled.
 
 ## Stop Conditions
 

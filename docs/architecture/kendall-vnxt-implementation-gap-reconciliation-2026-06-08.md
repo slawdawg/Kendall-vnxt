@@ -62,7 +62,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Runtime evidence export | Implemented | `GET /work-items/{id}/runtime-evidence-export`, Story 2.7 | Exports work item, attempts, events, boundaries, and safety flags. |
 | Worker threat boundary | Implemented | `GET /supervisor/threat-boundary`, Story 2.8 | Formalizes command, prompt, provider, network, credential, and artifact boundaries. |
 | Connector-backed GitHub workflow | Implemented | `docs/github-connector-workflow.md`, Story 3.4 | Documents Git/GCM plus Codex GitHub connector split. |
-| Dashboard command/read boundary | Partial | `apps/dashboard/src/lib/supervisor.ts` separates helpers by method shape | The code shape exists; architecture should formally classify commands, reads, and approval-bearing actions. |
+| Dashboard command/read boundary | Implemented | `docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md`, Story 3.6 | Classifies read-only, record-only, workflow, guarded managed, approval-bearing, and execution-prohibited surfaces. |
 | Queue lease vs execution attempt boundary | Partial | `QueueLease` and `ExecutionAttempt` are separate models | Needs an explicit architecture note so future work does not overload queue leases. |
 | Provider enablement precedence | Partial | Disabled settings and registry checks exist | Needs a central policy describing PRD decision, config, registry, dashboard copy, and tests required before enabling a provider. |
 | Dependency graph for deferred authority | Documented gap | Overall architecture lists deferred items | Needs a concrete dependency graph for local provider calls, subscription-agent launch, premium execution, and adaptive scoring. |
@@ -79,18 +79,16 @@ The highest-value next work should:
 
 1. Update architecture docs so they no longer route agents toward completed Story 2.1 work.
 2. Add a dependency graph for deferred execution authority.
-3. Formalize dashboard read/command/approval boundaries.
-4. Formalize provider enablement precedence across PRDs, settings, registry, dashboard, and tests.
-5. Improve operator reporting around existing attempt and runtime evidence.
-6. Only then design the next controlled worker execution capability.
+3. Formalize provider enablement precedence across PRDs, settings, registry, dashboard, and tests.
+4. Improve operator reporting around existing attempt and runtime evidence.
+5. Only then design the next controlled worker execution capability.
 
 ## Recommended Next Backlog
 
 1. **Architecture Authority Dependency Graph**: document prerequisites for local provider calls, subscription-agent launch, premium execution, command execution, and adaptive scoring.
-2. **Dashboard Command Boundary Contract**: classify read-only surfaces, record-only commands, approval-bearing commands, and disabled execution controls.
-3. **Provider Enablement Policy**: define the exact checks required before any provider can move from capable/disabled to executable.
-4. **Attempt Evidence Reporting Polish**: add a compact operator report or dashboard summary that highlights current attempts, disabled reasons, and next safe action.
-5. **Outcome Evidence Expansion**: extend guarded utility outcome reporting before using it for adaptive routing.
+2. **Provider Enablement Policy**: define the exact checks required before any provider can move from capable/disabled to executable.
+3. **Attempt Evidence Reporting Polish**: add a compact operator report or dashboard summary that highlights current attempts, disabled reasons, and next safe action.
+4. **Outcome Evidence Expansion**: extend guarded utility outcome reporting before using it for adaptive routing.
 
 ## Stop Conditions
 
