@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-40-runtime-report-anchor-links.md` | Runtime evidence export related reports use shared controls-page report anchor links. |
 | `3-39-report-shortcut-anchor-polish.md` | Work-item evidence overview links related supervisor reports to specific controls-page report anchors. |
 | `3-38-runbook-managed-recipe-check-chain.md` | Runbook verification guard for the active check chain after adding managed recipe policy drift checks. |
 | `3-37-managed-recipe-policy-drift-check.md` | Required static drift check for managed recipe policy report contracts, route, dashboard rendering, browser assertions, tests, and story evidence. |

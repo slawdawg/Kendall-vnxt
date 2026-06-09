@@ -1,4 +1,5 @@
 import type { RuntimeEvidenceExportView } from "@kendall/contracts";
+import { reportShortcutHref } from "../lib/report-shortcuts";
 
 function titleCase(value: string): string {
   return value
@@ -119,9 +120,13 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
           <h4 className="text-base font-semibold">Related reports</h4>
           <div className="mt-3 space-y-2">
             {exportView.boundary.relatedSupervisorReports.map((report) => (
-              <p key={report} className="rounded-[1rem] border bg-[var(--panel)] p-3 font-mono text-xs text-[var(--muted)]">
+              <a
+                key={report}
+                href={reportShortcutHref(report)}
+                className="block rounded-[1rem] border bg-[var(--panel)] p-3 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+              >
                 {report}
-              </p>
+              </a>
             ))}
           </div>
         </div>

@@ -1502,6 +1502,7 @@ class SupervisorService:
             "docs/stories/3-37-managed-recipe-policy-drift-check.md",
             "docs/stories/3-38-runbook-managed-recipe-check-chain.md",
             "docs/stories/3-39-report-shortcut-anchor-polish.md",
+            "docs/stories/3-40-runtime-report-anchor-links.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
