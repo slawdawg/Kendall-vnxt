@@ -592,6 +592,7 @@ export interface WorkflowEventView {
 export interface RuntimeEvidenceExportBoundaryView {
   localRuntimeState: string[];
   gitBackedEvidence: string[];
+  relatedSupervisorReports: string[];
   excludedState: string[];
 }
 
