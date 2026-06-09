@@ -1834,6 +1834,18 @@ class SupervisorService:
             ),
             planningRule="Prefer one coherent PR per related API, dashboard, docs, tests, drift-check, and runbook slice; avoid standalone micro-PRs for isolated report or doc tweaks.",
             minimumPrScope="A normal PR should include at least two aligned surfaces, such as service plus dashboard, or verification plus runbooks, unless the change is an urgent narrow fix.",
+            batchingPolicy=[
+                "Default to larger reviewable PRs that close a complete safe slice across contracts, supervisor service, dashboard, tests, drift checks, and docs.",
+                "Do not open separate PRs for isolated report text, story-index, dashboard assertion, or drift-check updates when they support the same operator-facing slice.",
+                "Use a narrow PR only for urgent breakage, security fixes, or isolated failures that cannot wait for the surrounding slice.",
+                "Keep authority-blocked work out of batching decisions; larger PRs do not expand execution authority.",
+            ],
+            prBatchingChecklist=[
+                "One clear slice label and story evidence file are present.",
+                "Changed API contracts, supervisor schemas, service construction, dashboard rendering, tests, and drift checks are updated together when applicable.",
+                "Focused verification for each touched surface is listed before the full local gate.",
+                "PR body names the safe slice, verification evidence, and authority stop lines.",
+            ],
             slices=slices,
             verificationChain=verification_chain,
             stopLines=[
@@ -1846,6 +1858,7 @@ class SupervisorService:
                 "Use the report-evidence navigation slice for read-only evidence improvements.",
                 "Use the verification-runbook hardening slice for command, check, and setup guidance changes.",
                 "Keep authority-blocker maintenance read-only until explicit approval exists.",
+                "Batch future safe work into larger PRs when the changes share one reviewable operator outcome.",
             ],
         )
 
@@ -2751,6 +2764,7 @@ class SupervisorService:
             "docs/stories/3-53-authority-readiness-matrix-report.md",
             "docs/stories/3-54-development-runway-safe-slices.md",
             "docs/stories/3-59-development-runway-readiness-checks.md",
+            "docs/stories/3-63-development-runway-pr-batching-policy.md",
             "docs/stories/3-55-runtime-evidence-review-index.md",
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",

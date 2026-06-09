@@ -737,6 +737,8 @@ export interface DevelopmentRunwayReportView {
   summary: string;
   planningRule: string;
   minimumPrScope: string;
+  batchingPolicy: string[];
+  prBatchingChecklist: string[];
   slices: DevelopmentRunwaySliceView[];
   verificationChain: string[];
   stopLines: string[];

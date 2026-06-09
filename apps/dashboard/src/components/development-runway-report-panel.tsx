@@ -159,6 +159,28 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
           </div>
 
           <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <h4 className="text-base font-semibold">Batching policy</h4>
+            <div className="mt-3 space-y-2">
+              {report.batchingPolicy.map((policy) => (
+                <p key={policy} className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+                  {policy}
+                </p>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <h4 className="text-base font-semibold">PR batching checklist</h4>
+            <div className="mt-3 space-y-2">
+              {report.prBatchingChecklist.map((item) => (
+                <p key={item} className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+                  {item}
+                </p>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Verification chain</h4>
             <div className="mt-3 flex flex-wrap gap-2">
               {report.verificationChain.map((command) => (

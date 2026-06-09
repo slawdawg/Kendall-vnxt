@@ -791,6 +791,8 @@ class DevelopmentRunwayReportView(BaseModel):
     summary: str
     planningRule: str
     minimumPrScope: str
+    batchingPolicy: list[str] = Field(default_factory=list)
+    prBatchingChecklist: list[str] = Field(default_factory=list)
     slices: list[DevelopmentRunwaySliceView]
     verificationChain: list[str]
     stopLines: list[str]
