@@ -491,6 +491,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-process-lifecycle",
+                label="Process lifecycle policy drift",
+                command="pnpm run check:process-lifecycle",
+                status="required",
+                requiredFor=["process lifecycle design changes", "execution attempt lifecycle changes", "subscription launch planning changes"],
+                evidence=[
+                    "Validates future process lifecycle design, execution attempt lifecycle states, disabled launch safety flags, runtime evidence, runbooks, and story evidence stay aligned without enabling process launch.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-runbooks",
                 label="Runbook verification alignment",
                 command="pnpm run check:runbooks",
@@ -1816,6 +1827,7 @@ class SupervisorService:
             "docs/stories/3-48-execution-boundary-report-drift-check.md",
             "docs/stories/3-49-execution-evidence-boundary-drift-check.md",
             "docs/stories/3-50-provider-fixture-policy-drift-check.md",
+            "docs/stories/3-51-process-lifecycle-policy-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, and provider fixture drift coverage through Story 3.50
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, and process lifecycle drift coverage through Story 3.51
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -15,7 +15,7 @@ Source review artifacts:
 - `docs/prds/supervisor-dynamic-routing-follow-on-roadmap.md`
 - `docs/stories/index.md`
 - `docs/stories/2-1-execution-attempt-contract-and-state-model.md`
-- `docs/stories/3-50-provider-fixture-policy-drift-check.md`
+- `docs/stories/3-51-process-lifecycle-policy-drift-check.md`
 
 Implementation areas checked:
 
@@ -93,6 +93,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Execution boundary report drift check | Implemented | `pnpm run check:execution-boundary`, Story 3.48 | Keeps execution configuration, execution readiness, and threat-boundary contracts, schemas, API routes, service evidence, dashboard shortcuts, browser assertions, supervisor assertions, runtime evidence, runbooks, and story evidence aligned. |
 | Execution evidence boundary drift check | Implemented | `pnpm run check:execution-evidence`, Story 3.49 | Keeps execution-state boundary and disabled-provider proof contracts, schemas, API routes, service evidence, report catalog entries, browser assertions, supervisor assertions, runtime evidence, runbooks, and story evidence aligned. |
 | Provider fixture policy drift check | Implemented | `pnpm run check:provider-fixtures`, Story 3.50 | Keeps disabled local-provider fixtures, registry entries, no-call proof tests, architecture policy, runtime evidence, runbooks, and story evidence aligned. |
+| Process lifecycle policy drift check | Implemented | `pnpm run check:process-lifecycle`, Story 3.51 | Keeps future process lifecycle design, execution attempt lifecycle states, disabled launch event evidence, runtime evidence, runbooks, and story evidence aligned. |
 | Subscription-agent launch PRD | Documented | `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`, Story 3.12 | Drafts supervised launch gates, lifecycle, workspace, output, session, dashboard, runtime export, rollback, and open questions without approving implementation. |
 | Subscription-agent launch PRD review and story breakdown | Documented | `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`, Stories 5.1-5.5 | Resolves planning questions and creates blocked implementation stories pending explicit approval. |
 | Execution authority approval checkpoints | Documented | `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`, Story 3.13 | Defines approval language, non-approval language, evidence requirements, and currently blocked authority stories. |
