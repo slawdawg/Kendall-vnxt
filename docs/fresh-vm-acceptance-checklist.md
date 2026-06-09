@@ -61,6 +61,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 - `pnpm run check:safe-backlog` passes.
 - `pnpm run check:managed-recipes` passes.
 - `pnpm run check:maintenance-action-plan` passes.
+- `pnpm run check:development-runway` passes.
 - `pnpm run check:delivery-readiness` passes.
 - `pnpm run check:maintenance-readiness` passes.
 - `pnpm run check` passes.

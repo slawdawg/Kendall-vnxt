@@ -173,6 +173,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:safe-backlog", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:managed-recipes", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:maintenance-action-plan", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:development-runway", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:delivery-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:maintenance-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:controls", { exact: true })).toBeVisible();
@@ -214,6 +215,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/authority-readiness-matrix-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/dashboard-e2e-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/maintenance-action-plan-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/development-runway-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
@@ -246,6 +248,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(actionPlanPanel.getByRole("link", { name: "/controls#safe-development-backlog" })).toBeVisible();
     await expect(actionPlanPanel.getByText("Maintenance action plans are not execution-authority approvals.")).toBeVisible();
     await expect(page.locator("#maintenance-action-plan-report")).toBeVisible();
+
+    const runwayPanel = page.locator("section").filter({ hasText: "Larger PR slice planner" }).first();
+    await expect(runwayPanel.getByText("Development runway", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
+    await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
+    await expect(runwayPanel.getByText("verification-runbook-hardening-slice")).toBeVisible();
+    await expect(runwayPanel.getByText("authority-blocker-maintenance-slice")).toBeVisible();
+    await expect(runwayPanel.getByText("pnpm run check:development-runway", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByRole("link", { name: "/controls#development-runway-report" })).toBeVisible();
+    await expect(runwayPanel.getByText("Development runway slices are not execution-authority approvals.")).toBeVisible();
+    await expect(page.locator("#development-runway-report")).toBeVisible();
 
     const safeBacklogPanel = page.locator("section").filter({ hasText: "Large-slice development map" }).first();
     await expect(safeBacklogPanel.getByText("Safe backlog", { exact: true })).toBeVisible();

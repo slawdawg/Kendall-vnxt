@@ -734,6 +734,36 @@ class MaintenanceActionPlanReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class DevelopmentRunwaySliceView(BaseModel):
+    sliceId: str
+    label: str
+    status: str
+    recommendedPrScope: str
+    summary: str
+    includedBacklogItems: list[str] = Field(default_factory=list)
+    includedActionSteps: list[str] = Field(default_factory=list)
+    requiredVerification: list[str] = Field(default_factory=list)
+    relatedReports: list[str] = Field(default_factory=list)
+    dashboardAnchors: list[str] = Field(default_factory=list)
+    blockedBy: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
+class DevelopmentRunwayReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    planningRule: str
+    minimumPrScope: str
+    slices: list[DevelopmentRunwaySliceView]
+    verificationChain: list[str]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+    remoteAutomationApproved: bool = False
+
+
 class ThreatBoundaryRuleView(BaseModel):
     ruleId: str
     label: str

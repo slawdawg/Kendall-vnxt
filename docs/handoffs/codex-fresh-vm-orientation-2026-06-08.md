@@ -149,13 +149,14 @@ pnpm run check:runtime-export
 pnpm run check:safe-backlog
 pnpm run check:managed-recipes
 pnpm run check:maintenance-action-plan
+pnpm run check:development-runway
 pnpm run check:delivery-readiness
 pnpm run check:maintenance-readiness
 pnpm run check
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -LocalOnly
 ```
 
-`pnpm run check` is expected to run preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, delivery readiness policy drift checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests through the repo-local uv cache wrapper. A known intermittent `aiosqlite` event-loop warning may appear after tests pass.
+`pnpm run check` is expected to run preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests through the repo-local uv cache wrapper. A known intermittent `aiosqlite` event-loop warning may appear after tests pass.
 
 ## Connector Check
 

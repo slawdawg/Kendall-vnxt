@@ -2,6 +2,7 @@ import { ControlPanel } from "../../components/control-panel";
 import { AuthorityReadinessMatrixReportPanel } from "../../components/authority-readiness-matrix-report-panel";
 import { DashboardE2EReportPanel } from "../../components/dashboard-e2e-report-panel";
 import { DeliveryReadinessPolicyReportPanel } from "../../components/delivery-readiness-policy-report-panel";
+import { DevelopmentRunwayReportPanel } from "../../components/development-runway-report-panel";
 import { DocumentationAuthorityReportPanel } from "../../components/documentation-authority-report-panel";
 import { ExecutionReadinessReportPanel } from "../../components/execution-readiness-report-panel";
 import { GitHubWorkflowPolicyReportPanel } from "../../components/github-workflow-policy-report-panel";
@@ -21,6 +22,7 @@ import {
   getDocumentationAuthorityReport,
   getDashboardE2EReport,
   getDeliveryReadinessPolicyReport,
+  getDevelopmentRunwayReport,
   getExecutionReadinessReport,
   getGitHubWorkflowPolicyReport,
   getMaintenanceActionPlanReport,
@@ -49,6 +51,7 @@ export default async function ControlsPage() {
     reportCatalog,
     maintenanceReadinessReport,
     maintenanceActionPlanReport,
+    developmentRunwayReport,
     safeDevelopmentBacklog,
     managedRecipePolicyReport,
     githubWorkflowPolicyReport,
@@ -66,6 +69,7 @@ export default async function ControlsPage() {
     getSupervisorReportCatalog(),
     getMaintenanceReadinessReport(),
     getMaintenanceActionPlanReport(),
+    getDevelopmentRunwayReport(),
     getSafeDevelopmentBacklogReport(),
     getManagedRecipePolicyReport(),
     getGitHubWorkflowPolicyReport(),
@@ -111,6 +115,9 @@ export default async function ControlsPage() {
       </div>
       <div id="maintenance-action-plan-report" className="scroll-mt-28">
         <MaintenanceActionPlanReportPanel report={maintenanceActionPlanReport} />
+      </div>
+      <div id="development-runway-report" className="scroll-mt-28">
+        <DevelopmentRunwayReportPanel report={developmentRunwayReport} />
       </div>
       <div id="safe-development-backlog" className="scroll-mt-28">
         <SafeDevelopmentBacklogPanel report={safeDevelopmentBacklog} />

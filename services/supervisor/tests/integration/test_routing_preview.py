@@ -775,6 +775,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-safe-backlog",
         "check-managed-recipes",
         "check-maintenance-action-plan",
+        "check-development-runway",
         "check-delivery-readiness",
         "check-maintenance-readiness",
         "dashboard-build",
@@ -829,6 +830,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/dashboard-e2e-report",
         "GET /supervisor/maintenance-readiness-report",
         "GET /supervisor/maintenance-action-plan-report",
+        "GET /supervisor/development-runway-report",
         "GET /supervisor/safe-development-backlog",
         "GET /supervisor/managed-recipe-policy-report",
         "GET /supervisor/github-workflow-policy-report",
@@ -972,6 +974,55 @@ def test_maintenance_action_plan_report_consolidates_next_safe_steps_without_mut
     assert "pnpm run check" in report["verificationChain"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("one PR" in action for action in report["nextSafeActions"])
+
+
+def test_development_runway_report_groups_larger_safe_slices_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "development-runway-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/development-runway-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "development-runway-report-v1"
+    assert report["readOnly"] is True
+    assert report["executionAuthorityApproved"] is False
+    assert report["remoteAutomationApproved"] is False
+    assert "Prefer one coherent PR" in report["planningRule"]
+    assert "at least two aligned surfaces" in report["minimumPrScope"]
+    assert {slice_item["sliceId"] for slice_item in report["slices"]} == {
+        "report-evidence-navigation-slice",
+        "verification-runbook-hardening-slice",
+        "authority-blocker-maintenance-slice",
+    }
+    report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
+    assert report_slice["status"] == "ready"
+    assert "safe-backlog-report-alignment" in report_slice["includedBacklogItems"]
+    assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
+    assert "pnpm run check:reports" in report_slice["requiredVerification"]
+    assert "/controls#supervisor-report-catalog" in report_slice["dashboardAnchors"]
+    verification_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "verification-runbook-hardening-slice")
+    assert "pnpm run check:runbooks" in verification_slice["requiredVerification"]
+    assert "GET /supervisor/verification-readiness-report" in verification_slice["relatedReports"]
+    authority_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "authority-blocker-maintenance-slice")
+    assert authority_slice["status"] == "blocked_pending_explicit_authority_approval"
+    assert "local-provider-execution" in authority_slice["blockedBy"]
+    assert "subscription-agent-launch" in authority_slice["blockedBy"]
+    assert "GET /supervisor/authority-readiness-matrix-report" in authority_slice["relatedReports"]
+    assert "pnpm run check:development-runway" in report["verificationChain"]
+    assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
+    assert any("ready safe backlog items" in action for action in report["nextSafeActions"])
 
 
 def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutation(tmp_path, monkeypatch) -> None:
@@ -1909,6 +1960,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-51-process-lifecycle-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-52-maintenance-action-plan-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-53-authority-readiness-matrix-report.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-54-development-runway-safe-slices.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
@@ -1917,6 +1969,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/report-catalog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/maintenance-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/maintenance-action-plan-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/development-runway-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/safe-development-backlog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/managed-recipe-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/github-workflow-policy-report" in export["boundary"]["relatedSupervisorReports"]

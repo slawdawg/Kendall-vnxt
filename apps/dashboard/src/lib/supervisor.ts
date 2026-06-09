@@ -3,6 +3,7 @@ import type {
   AuthorityReadinessMatrixReportView,
   DashboardE2EReportView,
   DeliveryReadinessPolicyReportView,
+  DevelopmentRunwayReportView,
   DocumentationAuthorityReportView,
   ExecutionAttemptView,
   ExecutionReadinessReportView,
@@ -129,6 +130,10 @@ export async function getMaintenanceActionPlanReport(): Promise<MaintenanceActio
 
 export async function getSafeDevelopmentBacklogReport(): Promise<SafeDevelopmentBacklogReportView> {
   return requestJson<SafeDevelopmentBacklogReportView>("/supervisor/safe-development-backlog");
+}
+
+export async function getDevelopmentRunwayReport(): Promise<DevelopmentRunwayReportView> {
+  return requestJson<DevelopmentRunwayReportView>("/supervisor/development-runway-report");
 }
 
 export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolicyReportView> {

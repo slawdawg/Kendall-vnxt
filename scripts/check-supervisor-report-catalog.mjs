@@ -90,6 +90,13 @@ const reports = [
     dashboardFetch: "getSafeDevelopmentBacklogReport",
   },
   {
+    reportId: "development-runway-report-v1",
+    endpoint: "GET /supervisor/development-runway-report",
+    apiPath: "/supervisor/development-runway-report",
+    story: "docs/stories/3-54-development-runway-safe-slices.md",
+    dashboardFetch: "getDevelopmentRunwayReport",
+  },
+  {
     reportId: "managed-recipe-policy-report-v1",
     endpoint: "GET /supervisor/managed-recipe-policy-report",
     apiPath: "/supervisor/managed-recipe-policy-report",
@@ -186,6 +193,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/authority-readiness-matrix-report",
   "GET /supervisor/dashboard-e2e-report",
   "GET /supervisor/maintenance-action-plan-report",
+  "GET /supervisor/development-runway-report",
   "GET /supervisor/safe-development-backlog",
   "GET /supervisor/managed-recipe-policy-report",
   "GET /supervisor/github-workflow-policy-report",
@@ -218,6 +226,7 @@ for (const shortcutText of [
   "#execution-readiness-report",
   "#authority-readiness-matrix-report",
   "#maintenance-action-plan-report",
+  "#development-runway-report",
   "#supervisor-report-catalog",
 ]) {
   assertCondition(
@@ -247,6 +256,7 @@ for (const controlsAnchor of [
   'id="authority-readiness-matrix-report"',
   'id="supervisor-report-catalog"',
   'id="maintenance-action-plan-report"',
+  'id="development-runway-report"',
   'id="managed-recipe-policy-report"',
   'id="github-workflow-policy-report"',
   'id="delivery-readiness-policy-report"',
@@ -306,6 +316,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-53-authority-readiness-matrix-report.md"),
   "Story index must reference Story 3.53 authority readiness matrix report",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-54-development-runway-safe-slices.md"),
+  "Story index must reference Story 3.54 development runway safe slices",
   failures,
 );
 

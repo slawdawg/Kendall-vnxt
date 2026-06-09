@@ -19,6 +19,8 @@ from supervisor.api.schemas import (
     DashboardE2ERunnerView,
     DeliveryReadinessPolicyItemView,
     DeliveryReadinessPolicyReportView,
+    DevelopmentRunwayReportView,
+    DevelopmentRunwaySliceView,
     DocumentationAuthorityBlockedStoryView,
     DocumentationAuthorityDocumentView,
     DocumentationAuthorityReportView,
@@ -568,6 +570,17 @@ class SupervisorService:
                 requiredFor=["maintenance action plan changes", "safe backlog changes", "controls-page report changes"],
                 evidence=[
                     "Validates maintenance action plan contracts, schemas, API route, service steps, dashboard rendering, report anchors, runtime evidence, browser assertions, and story evidence stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-development-runway",
+                label="Development runway drift",
+                command="pnpm run check:development-runway",
+                status="required",
+                requiredFor=["development runway changes", "safe slice planning changes", "larger PR policy changes", "controls-page report changes"],
+                evidence=[
+                    "Validates development runway contracts, schemas, API route, service slices, dashboard rendering, report anchors, runtime evidence, browser assertions, runbooks, and story evidence stay aligned.",
                     "Runs as part of the full local verification command.",
                 ],
             ),
@@ -1229,6 +1242,15 @@ class SupervisorService:
                 ],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="development-runway-report-v1",
+                label="Development runway report",
+                endpoint="GET /supervisor/development-runway-report",
+                status="active",
+                summary="Groups safe backlog, maintenance action, verification, and authority blocker evidence into larger PR-sized development slices.",
+                evidenceScope=["larger PR slice planning", "safe backlog items", "verification chain", "authority stop lines"],
+                relatedDocs=["docs/stories/3-54-development-runway-safe-slices.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="managed-recipe-policy-report-v1",
                 label="Managed recipe policy report",
                 endpoint="GET /supervisor/managed-recipe-policy-report",
@@ -1441,6 +1463,131 @@ class SupervisorService:
                 "Use this report to choose the next larger coherent safe slice.",
                 "Keep report catalog, runtime export, dashboard anchors, story evidence, and drift checks aligned.",
                 "Record completed work as one PR when the related surfaces form one reviewable unit.",
+            ],
+        )
+
+    def get_development_runway_report(self) -> DevelopmentRunwayReportView:
+        backlog = self.get_safe_development_backlog_report()
+        action_plan = self.get_maintenance_action_plan_report()
+        authority_matrix = self.get_authority_readiness_matrix_report()
+        verification = self.get_verification_readiness_report()
+
+        verification_chain = [command.command for command in verification.requiredCommands]
+        ready_items = [item for item in backlog.items if item.status == "ready"]
+        blocked_families = [family.familyId for family in authority_matrix.families if "blocked" in family.status]
+
+        slices = [
+            DevelopmentRunwaySliceView(
+                sliceId="report-evidence-navigation-slice",
+                label="Report and evidence navigation slice",
+                status="ready",
+                recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
+                summary="Use this slice when improving read-only report navigation, runtime evidence shortcuts, or operator review surfaces.",
+                includedBacklogItems=["safe-backlog-report-alignment"],
+                includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
+                requiredVerification=[
+                    "pnpm run check:reports",
+                    "pnpm run check:runtime-export",
+                    "pnpm run check:safe-backlog",
+                    "pnpm run test:e2e:dashboard:controls",
+                ],
+                relatedReports=[
+                    "GET /supervisor/report-catalog",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/maintenance-action-plan-report",
+                ],
+                dashboardAnchors=[
+                    "/controls#development-runway-report",
+                    "/controls#supervisor-report-catalog",
+                    "/controls#safe-development-backlog",
+                    "/controls#maintenance-action-plan-report",
+                ],
+                blockedBy=[],
+                nextAction="Select this slice for read-only navigation or evidence-surface work, and keep every touched report registered in the catalog and runtime export references.",
+            ),
+            DevelopmentRunwaySliceView(
+                sliceId="verification-runbook-hardening-slice",
+                label="Verification and runbook hardening slice",
+                status="ready",
+                recommendedPrScope="Bundle package script changes, verification readiness entries, runbook text, focused tests, dashboard assertions, and static drift checks in one PR.",
+                summary="Use this slice when verification commands, setup guidance, or fresh-VM/handoff instructions change.",
+                includedBacklogItems=["verification-surface-hardening", "github-delivery-hygiene"],
+                includedActionSteps=["run-verification-chain", "verify-evidence-surfaces"],
+                requiredVerification=[
+                    "pnpm run check:verification-readiness",
+                    "pnpm run check:runbooks",
+                    "pnpm run check:e2e-report",
+                    "pnpm run check",
+                ],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/dashboard-e2e-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/delivery-readiness-policy-report",
+                ],
+                dashboardAnchors=[
+                    "/controls#verification-readiness-report",
+                    "/controls#dashboard-e2e-report",
+                    "/controls#github-workflow-policy-report",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                blockedBy=[],
+                nextAction="Select this slice when a verification command or runbook changes, and prove the full local chain still names the new command.",
+            ),
+            DevelopmentRunwaySliceView(
+                sliceId="authority-blocker-maintenance-slice",
+                label="Authority blocker maintenance slice",
+                status="blocked_pending_explicit_authority_approval",
+                recommendedPrScope="Only documentation, blocked-story indexing, approval-checkpoint evidence, and read-only dashboard/report updates may be batched here until explicit authority approval exists.",
+                summary="Use this slice to keep blocked authority state current without moving Ollama, subscription launch, premium, command, source, network, credential, or remote automation work into implementation.",
+                includedBacklogItems=["authority-blocked-implementation"],
+                includedActionSteps=["preserve-authority-stop-lines"],
+                requiredVerification=[
+                    "pnpm run check:docs",
+                    "pnpm run check:documentation-authority",
+                    "pnpm run check:authority-readiness",
+                    "pnpm run check:execution-boundary",
+                    "pnpm run check:process-lifecycle",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/authority-readiness-matrix-report",
+                    "GET /supervisor/execution-readiness-report",
+                    "GET /supervisor/maintenance-readiness-report",
+                ],
+                dashboardAnchors=[
+                    "/controls#documentation-authority-report",
+                    "/controls#authority-readiness-matrix-report",
+                    "/controls#execution-readiness-report",
+                    "/controls#maintenance-readiness-report",
+                ],
+                blockedBy=blocked_families,
+                nextAction="Keep this slice limited to read-only authority evidence until explicit operator approval names the authority family and scope.",
+            ),
+        ]
+
+        return DevelopmentRunwayReportView(
+            reportId="development-runway-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only development runway for selecting larger coherent PR slices from current safe backlog, "
+                "maintenance action plan, verification readiness, and authority blocker evidence."
+            ),
+            planningRule="Prefer one coherent PR per related API, dashboard, docs, tests, drift-check, and runbook slice; avoid standalone micro-PRs for isolated report or doc tweaks.",
+            minimumPrScope="A normal PR should include at least two aligned surfaces, such as service plus dashboard, or verification plus runbooks, unless the change is an urgent narrow fix.",
+            slices=slices,
+            verificationChain=verification_chain,
+            stopLines=[
+                "Development runway slices are not execution-authority approvals.",
+                "Do not use a larger PR slice to hide provider calls, process launch, premium execution, arbitrary worker commands, source mutation, network access, credential access, or remote automation.",
+                "Blocked authority stories remain blocked until explicit operator approval names authority and scope.",
+            ],
+            nextSafeActions=[
+                f"Select one of {len(ready_items)} ready safe backlog items and batch all related surfaces into one PR.",
+                "Use the report-evidence navigation slice for read-only evidence improvements.",
+                "Use the verification-runbook hardening slice for command, check, and setup guidance changes.",
+                "Keep authority-blocker maintenance read-only until explicit approval exists.",
             ],
         )
 
@@ -2195,6 +2342,7 @@ class SupervisorService:
             "GET /supervisor/report-catalog",
             "GET /supervisor/maintenance-readiness-report",
             "GET /supervisor/maintenance-action-plan-report",
+            "GET /supervisor/development-runway-report",
             "GET /supervisor/safe-development-backlog",
             "GET /supervisor/managed-recipe-policy-report",
             "GET /supervisor/github-workflow-policy-report",
@@ -2215,6 +2363,7 @@ class SupervisorService:
             "docs/stories/3-19-maintenance-readiness-report.md",
             "docs/stories/3-52-maintenance-action-plan-report.md",
             "docs/stories/3-53-authority-readiness-matrix-report.md",
+            "docs/stories/3-54-development-runway-safe-slices.md",
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",
             "docs/stories/3-22-dashboard-e2e-report.md",
@@ -2363,6 +2512,7 @@ class SupervisorService:
                     relatedReports=[
                         "GET /supervisor/report-catalog",
                         "GET /supervisor/maintenance-action-plan-report",
+                        "GET /supervisor/development-runway-report",
                         "GET /supervisor/safe-development-backlog",
                     ],
                     relatedDocs=[

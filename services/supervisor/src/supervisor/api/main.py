@@ -499,6 +499,11 @@ async def get_safe_development_backlog_report():
     return ApiEnvelope(data=service.get_safe_development_backlog_report())
 
 
+@app.get("/supervisor/development-runway-report", response_model=ApiEnvelope)
+async def get_development_runway_report():
+    return ApiEnvelope(data=service.get_development_runway_report())
+
+
 @app.get("/supervisor/managed-recipe-policy-report", response_model=ApiEnvelope)
 async def get_managed_recipe_policy_report():
     return ApiEnvelope(data=service.get_managed_recipe_policy_report())
