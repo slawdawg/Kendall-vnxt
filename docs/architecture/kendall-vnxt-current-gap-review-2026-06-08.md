@@ -1,145 +1,124 @@
-﻿# Kendall_vNxt Current Gap Review And Recommendations
+# Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
+Updated: 2026-06-08 after execution-authority Stories 2.1-2.8
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
 ## Summary
 
-The dynamic routing foundation is no longer the main gap. The current repo has code-backed and test-backed routing preview, route rationale, lane evidence, worker registry, guarded utility routing, local read-only packet previews, disabled local provider entries, subscription handoff artifacts, premium approval artifacts, and disabled subscription-agent launch stubs.
+The execution-attempt control plane is now implemented. Kendall_vNxt can represent execution attempts, reject unsafe lanes, record lifecycle and approval evidence, attach workspace isolation plans, expose runtime evidence exports, show attempt evidence in the dashboard, and surface disabled-by-default execution and threat-boundary checks.
 
-The remaining gap is the execution authority layer that sits between routing decisions and any future real worker execution. Kendall_vNxt can explain where work should go and can execute a tiny guarded utility path, but it does not yet have a first-class execution attempt model for planned/running/cancelled/failed/completed worker attempts.
+The remaining gap is not basic execution-attempt state. It is the governance and enablement layer required before real workers can be turned on.
 
-The next work should therefore focus on making execution attempts explicit, observable, cancelable, route-bound, and safe before enabling real local model calls or subscription-agent launches.
+Current safe posture:
+
+- Routing and attempt evidence are inspectable.
+- Real process launch remains disabled.
+- Local provider/model calls remain disabled.
+- Premium execution remains disabled.
+- Arbitrary shell execution remains disabled.
+- Worker source mutation, network access, and credential access remain disabled.
 
 ## What Is Already Covered
 
 Do not rebuild these as new architecture work:
 
 - Work-item routing preview and route rationale in the dashboard.
-- Compact routing fleet/worker registry surface.
-- Static worker registry with disabled provider entries.
+- Compact routing fleet and static worker registry surfaces.
 - Guarded utility worker adapter for narrow deterministic supervisor behavior.
 - Routing outcome evidence for guarded utility attempts.
 - Local read-only evidence packet and deterministic mock worker preview.
-- OpenAI-compatible local provider entries represented as disabled/no-call workers.
+- Disabled OpenAI-compatible local provider entries.
 - Subscription handoff package generation.
 - Premium approval request artifact generation.
 - Disabled subscription-agent launch stub artifacts.
-- Managed action stale protection and recipe branch stale protection.
-- Recovery/runtime boundary documentation.
+- First-class execution attempts and history.
+- Attempt lifecycle transitions and cancellation state.
+- Route-decision-bound approval and stale decision rejection.
+- Per-attempt workspace isolation plans.
+- Dashboard execution attempt evidence panel.
+- Disabled execution configuration checks.
+- Runtime evidence export for work items.
+- Worker threat-boundary documentation and API.
+- Connector-backed GitHub workflow documentation.
 
 ## Current Gaps
 
-### 1. Dedicated Execution Attempt State
+### 1. Deferred Authority Dependency Graph
 
-There is no supervisor-owned `ExecutionAttempt` model, shared API type, or attempt history endpoint. Queue leases have heartbeat and attempt counts, but those are coordination leases, not worker execution attempts.
+Deferred authority is listed, but the architecture needs a dependency graph that names prerequisites for each future authority type:
 
-Risk: future worker launch could overload queue state, making cancellation, status history, route binding, and artifact correlation unclear.
+- local provider/model calls,
+- direct subscription-agent launch,
+- premium execution,
+- arbitrary command execution,
+- source mutation,
+- adaptive routing/scoring.
 
-Recommendation: implement PRD Slice 1 next: `Execution Attempt Contract And State Model`.
+Risk: future work could enable one authority type without satisfying its specific upstream controls.
 
-### 2. Route-Decision-Bound Execution Approval
+Recommendation: add an architecture dependency graph and keep it close to the overall architecture and threat boundary docs.
 
-Routing decisions exist, and approval/handoff artifacts include route data, but future execution approval is not yet bound to a current `routeDecisionId` plus worker/lane/authority snapshot.
+### 2. Dashboard Command/Read Boundary Contract
 
-Risk: an operator could approve one decision while the work item, route, or worker target has changed.
+The dashboard code separates read helpers and command helpers, but architecture docs do not yet classify which surfaces are read-only, record-only, approval-bearing, or execution-prohibited.
 
-Recommendation: after attempt state exists, require all attempt approval commands to include the current route decision and reject stale or mismatched approvals.
+Risk: future UI work could add controls that imply execution authority before the backend permits it.
 
-### 3. Lifecycle And Cancellation Semantics
+Recommendation: document the dashboard command boundary and require new controls to state their authority class.
 
-The architecture names lifecycle needs, but there is no generic lifecycle contract for start, heartbeat, cancel, timeout, completion, failure, artifact capture, and cleanup.
+### 3. Provider Enablement Policy
 
-Risk: once real workers exist, the supervisor may be able to start work without being able to stop it cleanly or explain what happened.
+Settings and registry checks deny execution by default, but the project needs a single policy for how a provider moves from disabled capability to executable authority.
 
-Recommendation: implement lifecycle events and cancel-request recording using disabled/mock workers only before process launch is considered.
+Risk: config shortcuts could bypass PRD, threat, dashboard, and test requirements.
 
-### 4. Workspace Isolation Plan Contract
+Recommendation: define an enablement ladder: PRD decision, threat update, settings gate, registry state, permission envelope, dashboard copy, focused tests, and rollback plan.
 
-Recipe branch safeguards exist, but there is no per-attempt workspace isolation plan that defines read roots, write roots, artifact roots, forbidden paths, cleanup, rollback, and diff capture.
+### 4. Attempt Evidence Reporting Polish
 
-Risk: future mutating workers could inherit broad repo access without a reviewable boundary.
+Attempt evidence is visible, but operators would benefit from a compact summary of current attempts, disabled reasons, latest lifecycle event, and next safe action.
 
-Recommendation: add a non-executing `WorkspaceIsolationPlan` to attempts before enabling any mutating worker lane.
+Risk: evidence exists but may be too scattered for repeated operator review.
 
-### 5. Runtime Evidence Export Is Still Document-Level
+Recommendation: add a small reporting layer before any real worker launch.
 
-Recoverability is well documented for source, docs, and runtime separation. Operational runtime state such as local database events and attempt history does not yet have an export/backup path.
+### 5. Outcome Evidence Expansion
 
-Risk: the Git repo can recover the environment shape, but not necessarily the supervisor's operational evidence trail after local machine loss.
+Guarded utility outcome evidence exists, but adaptive scoring is still premature.
 
-Recommendation: defer full export until attempt events exist, then add JSONL event/attempt export or a documented SQLite backup/export command.
+Risk: hidden or sparse scoring could make routing less predictable.
 
-### 6. Provider Enablement Policy Is Not Centralized Yet
-
-The worker registry correctly distinguishes disabled providers, but provider enablement precedence is not yet formalized across config, registry, PRD policy, dashboard copy, and tests.
-
-Risk: future code could accidentally make a provider capable and executable through a config shortcut without matching governance approval.
-
-Recommendation: add a disabled-default configuration check slice after attempt state and history are in place.
-
-### 7. Threat Model Is Still Too General
-
-Safety principles exist, and tests enforce no-launch/no-call behavior in several places. A formal threat model for commands, prompts, local endpoints, credentials, and artifact storage is still missing.
-
-Risk: local workers and subscription agents introduce prompt leakage, secret exposure, command injection, network access, and path-boundary risks that need a more specific review before real execution.
-
-Recommendation: create a short targeted threat model before any real local provider or subscription-agent execution PRD.
-
-### 8. Dashboard Attempt Evidence Is Missing
-
-Dashboard routing and fleet panels exist, but there is no attempt evidence panel because attempt state does not exist yet.
-
-Risk: once attempts are added, operators could see the route but not the status, rejection reason, cancellation state, or artifact evidence of the attempted execution.
-
-Recommendation: build dashboard attempt visibility only after the backend attempt history API exists.
-
-### 9. Adaptive Scoring Remains Premature
-
-Routing outcome evidence exists, but the corpus is not rich enough to tune scoring safely.
-
-Risk: adaptive scoring could optimize on sparse or misleading evidence and make the router less predictable.
-
-Recommendation: keep adaptive scoring deferred until execution attempt outcomes include validation result, runtime, failure class, escalation reason, and operator override evidence.
+Recommendation: add reporting-only outcome fields first: selected lane, worker, task kind, runtime, validation result, failure class, escalation reason, and operator override reason.
 
 ## Recommended Build Order
 
-1. Create Story: Execution Attempt Contract And State Model.
-2. Implement shared contracts, persistence, create/reject service behavior, and focused tests.
-3. Add attempt lifecycle events and work-item attempt history API.
-4. Add route-decision-bound approval and stale decision rejection.
-5. Add workspace isolation plan contract to every attempt.
-6. Add dashboard attempt evidence panel on the work-item detail page.
-7. Add disabled execution configuration checks for subscription agents, local providers, and premium execution.
-8. Create targeted threat model for worker execution, prompts, local endpoints, secrets, and artifacts.
-9. Add runtime evidence export/backup once attempts and events are worth exporting.
-10. Only then consider real local provider calls or subscription-agent process launch PRDs.
+1. Refresh architecture docs with the current Story 2.1-2.8 state.
+2. Add the deferred authority dependency graph.
+3. Add a dashboard command/read boundary contract.
+4. Add provider enablement policy and tests around disabled defaults.
+5. Add compact attempt evidence reporting.
+6. Expand routing outcome evidence for reporting.
+7. Only then draft PRDs for real local provider calls or direct subscription-agent launch.
 
 ## Recommended Immediate Story
 
-Title: Execution Attempt Contract And State Model
+Title: Architecture Authority Dependency Graph
 
-Goal: Add a non-executing supervisor execution-attempt spine downstream of routing and upstream of future worker execution.
+Goal: Document the dependency gates for each deferred execution authority so future implementation can proceed without accidentally enabling unsafe worker behavior.
 
 Acceptance outline:
 
-- Add shared contract types for `ExecutionAttemptView`, `ExecutionAttemptStatus`, and attempt creation input.
-- Add supervisor persistence for attempts separate from queue leases.
-- Link each attempt to `workItemId`, `routeDecisionId`, `workerId`, lane, and authority mode.
-- Reject attempt creation when there is no route decision or when the selected worker/lane is disabled for real execution.
-- Enforce one active attempt per work item.
-- Record attempt planned/rejected events with attempt identifiers.
-- Expose attempt history for a work item, or create the service/repository shape needed for the next history slice.
-- Prove through tests that the slice performs no process launch, HTTP call, model call, shell command, or source mutation.
+- Add a dependency graph for local provider/model calls, direct subscription-agent launch, premium execution, arbitrary command execution, source mutation, and adaptive scoring.
+- Link each authority type to required existing controls and missing controls.
+- State stop conditions for any implementation that would cross from control-plane evidence into real execution.
+- Update the current gap review and overall architecture pointers.
+- Verify docs-only changes with `git diff --check` and the normal workspace check when practical.
 
-## BMad Recommendation
+## Stop Conditions
 
-BMad should route next to `bmad-create-story` for the execution attempt state slice, then `bmad-dev-story` or `bmad-quick-dev` for implementation. The story should explicitly cite this gap review, the implementation reconciliation, and the execution authority PRD so it does not duplicate completed routing, registry, local evidence, handoff, premium, or dashboard fleet work.
-
-## Stop Conditions For The Next Slice
-
-Stop for approval only if implementation would require one of these:
+Stop for explicit operator approval before any implementation would require:
 
 - real process launch,
 - real local model/provider HTTP calls,
@@ -150,4 +129,4 @@ Stop for approval only if implementation would require one of these:
 - externally hosted services,
 - changing the recovery/runtime boundary.
 
-Everything else in the immediate execution-attempt state slice is inferable from current repo patterns and should proceed with conservative defaults.
+Architecture, documentation, tests, and non-executing control-plane work may proceed with conservative defaults.

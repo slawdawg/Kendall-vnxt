@@ -19,6 +19,8 @@ This architecture stitches together the current source of truth from:
 - `docs/prds/supervisor-dynamic-routing-mvp-1.md`
 - `docs/prds/supervisor-dynamic-routing-follow-on-roadmap.md`
 - `docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md`
+- `docs/prds/supervisor-execution-authority-expansion.md`
+- `docs/architecture/kendall-vnxt-authority-dependency-graph-2026-06-08.md`
 - `_bmad/memory/knx/profile.md`
 - `_bmad/memory/knx/decisions/governance-coordinator-2026-06-01.md`
 - `_bmad/memory/knx/decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md`
@@ -237,6 +239,15 @@ The following architecture foundation is implemented or documented:
 - disabled local provider entries,
 - subscription handoff and disabled launch stub artifacts,
 - premium approval request artifacts,
+- first-class execution attempts and history,
+- execution attempt lifecycle transitions and cancellation state,
+- route-decision-bound execution approval,
+- per-attempt workspace isolation plans,
+- dashboard execution attempt evidence,
+- disabled execution configuration checks,
+- runtime evidence export,
+- worker threat-boundary documentation and API,
+- authority dependency graph for deferred worker execution,
 - recovery/runtime boundary documentation.
 
 ## Intentionally Deferred
@@ -253,13 +264,13 @@ The following require new PRDs or explicit safety decisions before implementatio
 
 ## Recommended Next Architecture Move
 
-The next product-safe planning artifact should be an Execution Authority Expansion PRD.
-
-That PRD should define process lifecycle, workspace isolation, approvals, command logging, cancellation, rollback, and verification gates before any direct subscription-agent launch or real provider execution is enabled.
+The Execution Authority Expansion PRD has produced the current non-executing control-plane spine. The next product-safe architecture work is enablement governance for deferred authority.
 
 The architecture sequence should be:
 
 1. keep this overall architecture as the spine,
-2. create the Execution Authority Expansion PRD,
-3. create bounded stories for lifecycle and cancellation controls,
-4. only then consider enabling real local providers or subscription-agent launches.
+2. maintain the authority dependency graph,
+3. formalize dashboard read/command/approval boundaries,
+4. formalize provider enablement policy,
+5. polish attempt and outcome evidence reporting,
+6. only then draft provider-specific or subscription-agent launch PRDs.
