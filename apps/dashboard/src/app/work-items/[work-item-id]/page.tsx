@@ -3,6 +3,7 @@ import { AttentionBadge } from "../../../components/attention-badge";
 import { BranchPreparationPanel } from "../../../components/branch-preparation-panel";
 import { DeliveryReadinessPanel } from "../../../components/delivery-readiness-panel";
 import { EscalationPanel } from "../../../components/escalation-panel";
+import { EvidenceOverviewPanel } from "../../../components/evidence-overview-panel";
 import { ExecutionAttemptEvidencePanel } from "../../../components/execution-attempt-evidence-panel";
 import { ExecutionRecipePanel } from "../../../components/execution-recipe-panel";
 import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
@@ -167,6 +168,12 @@ export default async function WorkItemDetailPage({
               <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-[var(--muted)]">{item.details}</p>
             </section>
           ) : null}
+          <EvidenceOverviewPanel
+            routingPreview={routingPreview}
+            attempts={executionAttempts}
+            runtimeEvidenceExport={runtimeEvidenceExport}
+            events={events}
+          />
           <RoutingPreviewPanel preview={routingPreview} />
           <ExecutionAttemptEvidencePanel attempts={executionAttempts} />
           <RuntimeEvidenceExportPanel exportView={runtimeEvidenceExport} />
