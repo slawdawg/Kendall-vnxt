@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-32-safe-development-backlog-drift-check.md` | Required static drift check for safe backlog contracts, blocked authority stop lines, dashboard rendering, browser assertions, and story evidence. |
 | `3-31-runtime-evidence-export-drift-check.md` | Required static drift check for runtime export contracts, navigator, dashboard rendering, tests, and story evidence. |
 | `3-30-runtime-evidence-review-navigator.md` | Read-only navigator for runtime state, authority boundary, and git-backed evidence review. |
 | `3-29-runbook-verification-alignment.md` | Static runbook verification for current operator docs and active verification commands. |
