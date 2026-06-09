@@ -80,6 +80,7 @@ for (const story of [
   "docs/stories/3-55-runtime-evidence-review-index.md",
   "docs/stories/3-57-work-item-review-queue-shortcuts.md",
   "docs/stories/3-59-development-runway-readiness-checks.md",
+  "docs/stories/3-63-development-runway-pr-batching-policy.md",
   "docs/stories/3-60-safe-backlog-report-anchors.md",
   "docs/stories/3-61-maintenance-action-evidence-links.md",
   "docs/stories/3-62-maintenance-readiness-evidence-links.md",
@@ -247,6 +248,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-59-development-runway-readiness-checks.md"),
   "Story index must reference Story 3.59 development runway readiness checks",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-63-development-runway-pr-batching-policy.md"),
+  "Story index must reference Story 3.63 development runway PR batching policy",
   failures,
 );
 assertCondition(

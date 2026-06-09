@@ -284,6 +284,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("verification-runbook-hardening-slice")).toBeVisible();
     await expect(runwayPanel.getByText("authority-blocker-maintenance-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Readiness checks").first()).toBeVisible();
+    await expect(runwayPanel.getByText("Batching policy")).toBeVisible();
+    await expect(runwayPanel.getByText("PR batching checklist")).toBeVisible();
+    await expect(runwayPanel.getByText("larger reviewable PRs")).toBeVisible();
+    await expect(runwayPanel.getByText("Do not open separate PRs for isolated report text")).toBeVisible();
+    await expect(runwayPanel.getByText("PR body names the safe slice")).toBeVisible();
     await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("handoff-checkpoint-coverage", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("authority-families-blocked", { exact: true })).toBeVisible();

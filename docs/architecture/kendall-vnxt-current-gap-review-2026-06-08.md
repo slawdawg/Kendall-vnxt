@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, and maintenance readiness evidence-link coverage through Story 3.62
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, maintenance readiness evidence-link coverage, and development runway PR batching policy coverage through Story 3.63
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -90,6 +90,7 @@ Do not rebuild these as new architecture work:
 - Authority readiness matrix report for blocked execution-authority families, approval evidence, related reports, and stop lines.
 - Development runway report for larger PR-sized safe slices across report/evidence navigation, verification/runbook hardening, and authority-blocker maintenance.
 - Development runway readiness checks for per-slice ready/blocked evidence before larger PR work starts.
+- Development runway PR batching policy for larger reviewable PR defaults, anti-fragmentation guidance, and PR body checklist evidence.
 - Runtime evidence review report for the work-item runtime evidence review queue, review priority, evidence counts, and safe review actions.
 - Work-item review queue shortcuts in the evidence overview for review priority, evidence counts, recommended action, runtime export navigation, and controls-page review index navigation.
 - Shared dashboard e2e runner lifecycle helper for focused browser verification scripts.

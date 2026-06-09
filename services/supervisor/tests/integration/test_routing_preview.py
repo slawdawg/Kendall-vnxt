@@ -1041,6 +1041,8 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert report["remoteAutomationApproved"] is False
     assert "Prefer one coherent PR" in report["planningRule"]
     assert "at least two aligned surfaces" in report["minimumPrScope"]
+    assert any("larger reviewable PRs" in policy for policy in report["batchingPolicy"])
+    assert any("PR body names the safe slice" in item for item in report["prBatchingChecklist"])
     assert {slice_item["sliceId"] for slice_item in report["slices"]} == {
         "report-evidence-navigation-slice",
         "verification-runbook-hardening-slice",
@@ -1081,6 +1083,7 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "pnpm run check:development-runway" in report["verificationChain"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("ready safe backlog items" in action for action in report["nextSafeActions"])
+    assert any("larger PRs" in action for action in report["nextSafeActions"])
 
 
 def test_runtime_evidence_review_report_indexes_work_item_exports_without_mutation(tmp_path, monkeypatch) -> None:
@@ -2078,6 +2081,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-52-maintenance-action-plan-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-53-authority-readiness-matrix-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-54-development-runway-safe-slices.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-63-development-runway-pr-batching-policy.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-55-runtime-evidence-review-index.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
