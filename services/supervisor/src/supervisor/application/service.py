@@ -52,6 +52,8 @@ from supervisor.api.schemas import (
     RuntimeEvidenceExportBoundaryView,
     RuntimeEvidenceReviewManifestView,
     RuntimeEvidenceReviewNavigatorItemView,
+    RuntimeEvidenceReviewReportView,
+    RuntimeEvidenceReviewWorkItemView,
     RuntimeEvidenceExportSafetyView,
     RuntimeEvidenceExportView,
     SafeDevelopmentBacklogItemView,
@@ -537,6 +539,17 @@ class SupervisorService:
                 requiredFor=["runtime evidence export changes", "work-item detail evidence panel changes", "runtime export story references"],
                 evidence=[
                     "Validates runtime export contracts, schemas, API route, service navigator items, dashboard rendering, browser assertions, and story references stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-runtime-review",
+                label="Runtime evidence review index drift",
+                command="pnpm run check:runtime-review",
+                status="required",
+                requiredFor=["runtime evidence review changes", "work-item evidence navigation changes", "controls-page report changes"],
+                evidence=[
+                    "Validates runtime evidence review contracts, schemas, API route, service queue construction, dashboard rendering, report catalog, browser assertions, runbooks, and story evidence stay aligned.",
                     "Runs as part of the full local verification command.",
                 ],
             ),
@@ -1249,6 +1262,15 @@ class SupervisorService:
                 summary="Groups safe backlog, maintenance action, verification, and authority blocker evidence into larger PR-sized development slices.",
                 evidenceScope=["larger PR slice planning", "safe backlog items", "verification chain", "authority stop lines"],
                 relatedDocs=["docs/stories/3-54-development-runway-safe-slices.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="runtime-evidence-review-report-v1",
+                label="Runtime evidence review report",
+                endpoint="GET /supervisor/runtime-evidence-review-report",
+                status="active",
+                summary="Indexes work-item runtime evidence exports, review priority, evidence counts, related reports, and read-only review actions.",
+                evidenceScope=["work-item review queue", "runtime evidence counts", "review priority", "authority stop lines"],
+                relatedDocs=["docs/stories/3-55-runtime-evidence-review-index.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="managed-recipe-policy-report-v1",
@@ -2324,6 +2346,98 @@ class SupervisorService:
         )
         return [self._to_execution_attempt_view(attempt) for attempt in result.scalars()]
 
+    async def get_runtime_evidence_review_report(self, session: AsyncSession) -> RuntimeEvidenceReviewReportView:
+        items = await self.list_work_items(session)
+        related_reports = [
+            "GET /work-items/{id}/runtime-evidence-export",
+            "GET /supervisor/runtime-evidence-review-report",
+            "GET /supervisor/report-catalog",
+            "GET /supervisor/development-runway-report",
+            "GET /supervisor/execution-readiness-report",
+            "GET /supervisor/authority-readiness-matrix-report",
+        ]
+        work_item_reviews: list[RuntimeEvidenceReviewWorkItemView] = []
+
+        for item in items:
+            attempts = await self.list_execution_attempts(session, item.id)
+            events = await self.list_work_item_events(session, item.id)
+            latest_event_at = events[0].created_at if events else item.last_event_at
+            needs_attention, attention_reason = self._derive_attention(item)
+            terminal_or_blocked = item.state in {
+                WorkflowState.REVIEWING.value,
+                WorkflowState.AWAITING_AUDIT.value,
+                WorkflowState.BLOCKED.value,
+                WorkflowState.NEEDS_REWORK.value,
+            }
+            if item.state == WorkflowState.BLOCKED.value:
+                review_priority = "P0"
+                review_reason = item.blocked_reason or "Blocked work item requires evidence review before any next action."
+            elif needs_attention:
+                review_priority = "P0"
+                review_reason = attention_reason or "Work item needs operator attention."
+            elif terminal_or_blocked or attempts:
+                review_priority = "P1"
+                review_reason = "Runtime evidence is available for review before changing workflow state."
+            else:
+                review_priority = "P2"
+                review_reason = "Runtime evidence exists, but no attempt-specific review signal is active."
+
+            work_item_reviews.append(
+                RuntimeEvidenceReviewWorkItemView(
+                    workItemId=item.id,
+                    title=item.title,
+                    state=item.state,
+                    riskLevel=item.risk_level,
+                    needsAttention=needs_attention,
+                    attemptCount=len(attempts),
+                    eventCount=len(events),
+                    relatedReportCount=len(related_reports),
+                    latestEventAt=self._normalize_timestamp(latest_event_at) if latest_event_at else None,
+                    runtimeExportHref=f"/work-items/{item.id}#runtime-evidence-export",
+                    reviewPriority=review_priority,
+                    reviewReason=review_reason,
+                    recommendedAction=(
+                        "Review runtime evidence export, related reports, and workflow history before resolving the blocker."
+                        if review_priority == "P0"
+                        else "Review runtime evidence export before approving, reworking, or closing the item."
+                    ),
+                )
+            )
+
+        priority_rank = {"P0": 0, "P1": 1, "P2": 2}
+        review_queue = sorted(
+            work_item_reviews,
+            key=lambda entry: (
+                priority_rank.get(entry.reviewPriority, 9),
+                entry.latestEventAt is None,
+                entry.latestEventAt or datetime.min.replace(tzinfo=timezone.utc),
+            ),
+        )[:8]
+
+        return RuntimeEvidenceReviewReportView(
+            reportId="runtime-evidence-review-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary="Read-only index of work-item runtime evidence exports, review priority, evidence counts, and related report links.",
+            workItems=work_item_reviews,
+            reviewQueue=review_queue,
+            relatedReports=related_reports,
+            dashboardAnchors=[
+                "/controls#runtime-evidence-review-report",
+                "/controls#development-runway-report",
+                "/controls#supervisor-report-catalog",
+            ],
+            stopLines=[
+                "Runtime evidence review is not execution-authority approval.",
+                "Do not launch processes, call providers, run arbitrary worker commands, mutate source, use network access, or read credentials from this review index.",
+                "Blocked authority stories remain blocked until explicit operator approval names authority and scope.",
+            ],
+            nextSafeActions=[
+                "Open the highest-priority review queue item before changing workflow state.",
+                "Use related supervisor reports to cross-check authority boundaries before approving review work.",
+                "Keep this index aligned with runtime export, report catalog, dashboard detail, and development runway surfaces.",
+            ],
+        )
+
     async def get_runtime_evidence_export(self, session: AsyncSession, work_item_id: str) -> RuntimeEvidenceExportView | None:
         item = await session.get(WorkItem, work_item_id)
         if not item:
@@ -2343,6 +2457,7 @@ class SupervisorService:
             "GET /supervisor/maintenance-readiness-report",
             "GET /supervisor/maintenance-action-plan-report",
             "GET /supervisor/development-runway-report",
+            "GET /supervisor/runtime-evidence-review-report",
             "GET /supervisor/safe-development-backlog",
             "GET /supervisor/managed-recipe-policy-report",
             "GET /supervisor/github-workflow-policy-report",
@@ -2364,6 +2479,7 @@ class SupervisorService:
             "docs/stories/3-52-maintenance-action-plan-report.md",
             "docs/stories/3-53-authority-readiness-matrix-report.md",
             "docs/stories/3-54-development-runway-safe-slices.md",
+            "docs/stories/3-55-runtime-evidence-review-index.md",
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",
             "docs/stories/3-22-dashboard-e2e-report.md",
@@ -2513,6 +2629,7 @@ class SupervisorService:
                         "GET /supervisor/report-catalog",
                         "GET /supervisor/maintenance-action-plan-report",
                         "GET /supervisor/development-runway-report",
+                        "GET /supervisor/runtime-evidence-review-report",
                         "GET /supervisor/safe-development-backlog",
                     ],
                     relatedDocs=[

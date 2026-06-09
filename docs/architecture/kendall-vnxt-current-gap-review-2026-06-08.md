@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, and development runway coverage through Story 3.54
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, and runtime evidence review coverage through Story 3.55
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -84,6 +84,7 @@ Do not rebuild these as new architecture work:
 - Maintenance action plan report for selecting larger safe slices with verification commands, evidence links, dashboard anchors, and authority stop lines.
 - Authority readiness matrix report for blocked execution-authority families, approval evidence, related reports, and stop lines.
 - Development runway report for larger PR-sized safe slices across report/evidence navigation, verification/runbook hardening, and authority-blocker maintenance.
+- Runtime evidence review report for the work-item runtime evidence review queue, review priority, evidence counts, and safe review actions.
 - Shared dashboard e2e runner lifecycle helper for focused browser verification scripts.
 - Focused mobile dashboard e2e runner for phone-sized intake draft verification.
 - Focused managed-recipe e2e runners for dashboard and mobile coverage intake templates.
@@ -102,6 +103,7 @@ Do not rebuild these as new architecture work:
 - Maintenance action plan drift check for safe slice selection, report/runtime references, controls-page rendering, and story evidence.
 - Authority readiness matrix drift check for blocked story mapping, approval evidence, report/runtime references, controls-page rendering, and story evidence.
 - Development runway drift check for larger PR-sized safe slices, report/runtime references, controls-page rendering, runbooks, and story evidence.
+- Runtime evidence review drift check for work-item runtime export review indexing, report/runtime references, controls-page rendering, runbooks, and story evidence.
 
 ## Current Gaps
 

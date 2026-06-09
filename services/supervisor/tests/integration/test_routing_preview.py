@@ -772,6 +772,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-process-lifecycle",
         "check-runbooks",
         "check-runtime-export",
+        "check-runtime-review",
         "check-safe-backlog",
         "check-managed-recipes",
         "check-maintenance-action-plan",
@@ -831,6 +832,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/maintenance-readiness-report",
         "GET /supervisor/maintenance-action-plan-report",
         "GET /supervisor/development-runway-report",
+        "GET /supervisor/runtime-evidence-review-report",
         "GET /supervisor/safe-development-backlog",
         "GET /supervisor/managed-recipe-policy-report",
         "GET /supervisor/github-workflow-policy-report",
@@ -1023,6 +1025,59 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "pnpm run check:development-runway" in report["verificationChain"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("ready safe backlog items" in action for action in report["nextSafeActions"])
+
+
+def test_runtime_evidence_review_report_indexes_work_item_exports_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "runtime-evidence-review-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Review runtime evidence index",
+                "requestedOutcome": "Create attempt evidence for runtime review.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={})
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/runtime-evidence-review-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert attempt_response.status_code == 200
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "runtime-evidence-review-report-v1"
+    assert report["readOnly"] is True
+    assert report["executionAuthorityApproved"] is False
+    assert "GET /supervisor/runtime-evidence-review-report" in report["relatedReports"]
+    assert "/controls#runtime-evidence-review-report" in report["dashboardAnchors"]
+    assert "reviewQueue" in report
+    assert report["reviewQueue"]
+    review_item = next(item for item in report["workItems"] if item["workItemId"] == work_item_id)
+    assert review_item["title"] == "Review runtime evidence index"
+    assert review_item["attemptCount"] == 1
+    assert review_item["eventCount"] >= 2
+    assert review_item["relatedReportCount"] == len(report["relatedReports"])
+    assert review_item["runtimeExportHref"] == f"/work-items/{work_item_id}#runtime-evidence-export"
+    assert review_item["reviewPriority"] in {"P0", "P1"}
+    assert "Runtime evidence" in review_item["reviewReason"]
+    assert any("not execution-authority approval" in stop_line for stop_line in report["stopLines"])
+    assert any("highest-priority review queue item" in action for action in report["nextSafeActions"])
 
 
 def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutation(tmp_path, monkeypatch) -> None:
@@ -1961,6 +2016,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-52-maintenance-action-plan-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-53-authority-readiness-matrix-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-54-development-runway-safe-slices.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-55-runtime-evidence-review-index.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
@@ -1970,6 +2026,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/maintenance-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/maintenance-action-plan-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/development-runway-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/runtime-evidence-review-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/safe-development-backlog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/managed-recipe-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/github-workflow-policy-report" in export["boundary"]["relatedSupervisorReports"]

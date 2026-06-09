@@ -764,6 +764,36 @@ class DevelopmentRunwayReportView(BaseModel):
     remoteAutomationApproved: bool = False
 
 
+class RuntimeEvidenceReviewWorkItemView(BaseModel):
+    workItemId: str
+    title: str
+    state: str
+    riskLevel: str
+    needsAttention: bool
+    attemptCount: int
+    eventCount: int
+    relatedReportCount: int
+    latestEventAt: datetime | None = None
+    runtimeExportHref: str
+    reviewPriority: str
+    reviewReason: str
+    recommendedAction: str
+
+
+class RuntimeEvidenceReviewReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    workItems: list[RuntimeEvidenceReviewWorkItemView]
+    reviewQueue: list[RuntimeEvidenceReviewWorkItemView]
+    relatedReports: list[str]
+    dashboardAnchors: list[str]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+
+
 class ThreatBoundaryRuleView(BaseModel):
     ruleId: str
     label: str
