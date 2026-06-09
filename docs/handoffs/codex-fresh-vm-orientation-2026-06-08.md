@@ -163,4 +163,4 @@ If the connector is unavailable, do not fall back to plaintext `gh` token storag
 
 Continue with bootstrap/readiness hardening only if a concrete gap appears from a fresh VM test.
 
-Otherwise, return to product work. Connector-backed GitHub workflow polish is captured in Story 3.4; the next product slice should be the next explicit BMad story chosen by the operator.
+Otherwise, continue safe product work from the safe backlog and architecture gap review: prefer larger coherent slices that improve read-only evidence, documentation freshness, static drift checks, or verification coverage. Do not start blocked Ollama or subscription-agent authority stories without explicit approval naming authority and scope.

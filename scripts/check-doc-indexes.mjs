@@ -25,6 +25,16 @@ const documents = [
     path: "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
     relativeBase: "docs/architecture",
   },
+  {
+    label: "current gap review",
+    path: "docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md",
+    relativeBase: "docs/architecture",
+  },
+  {
+    label: "fresh VM handoff",
+    path: "docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md",
+    relativeBase: "docs/handoffs",
+  },
 ];
 
 const failures = [];
@@ -109,6 +119,8 @@ for (const document of documents) {
 const storyIndex = loadedDocuments.get("docs/stories/index.md") ?? "";
 const approvalCheckpoints =
   loadedDocuments.get("docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md") ?? "";
+const currentGapReview = loadedDocuments.get("docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md") ?? "";
+const freshVmHandoff = loadedDocuments.get("docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md") ?? "";
 
 const blockedStoryIndexRefs = new Set(storyReferencesFromSection(storyIndex, "Blocked Pending Explicit Approval"));
 const approvalCheckpointRefs = new Set(
@@ -131,6 +143,33 @@ if (blockedStoryIndexRefs.size === 0) {
   failures.push("Story index has no blocked execution-authority stories.");
 } else {
   successes.push(`Blocked authority story list is consistent across ${blockedStoryIndexRefs.size} stories.`);
+}
+
+for (const currentGapText of [
+  "Updated: 2026-06-09",
+  "Story 3.40",
+  "Managed recipe policy report",
+  "Runbook managed recipe check-chain alignment",
+  "stable controls-page report anchors",
+  "larger coherent slices",
+]) {
+  if (!currentGapReview.includes(currentGapText)) {
+    failures.push(`Current gap review must mention current safe-work evidence: ${currentGapText}`);
+  }
+}
+
+if (currentGapReview.includes("Updated: 2026-06-08 after execution-authority Stories 2.1-2.8")) {
+  failures.push("Current gap review must not retain stale Story 2.1-2.8-only update framing.");
+}
+
+for (const handoffText of ["larger coherent slices", "static drift checks", "Do not start blocked Ollama or subscription-agent authority stories"]) {
+  if (!freshVmHandoff.includes(handoffText)) {
+    failures.push(`Fresh VM handoff must mention current continuation guidance: ${handoffText}`);
+  }
+}
+
+if (freshVmHandoff.includes("the next product slice should be the next explicit BMad story chosen by the operator")) {
+  failures.push("Fresh VM handoff must not point continuation at stale explicit-BMad-story-only guidance.");
 }
 
 for (const message of successes) {
