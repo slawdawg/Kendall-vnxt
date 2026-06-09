@@ -16,6 +16,7 @@ Make focused dashboard browser verification easier to run from Windows Codex ses
 - Start the dashboard Playwright web server through the Next dev server; production build remains covered by `pnpm run check`.
 - Launch the dashboard Playwright web server from the app directory with the app-local Next shim on Windows.
 - Add `pnpm run test:e2e:dashboard:controls` for the controls-page evidence-report slice with owned server lifecycle management.
+- Add `pnpm run test:e2e:dashboard:detail` for the work-item detail/runtime-export slice with owned server lifecycle management.
 - Surface the focused command in the verification readiness report.
 - Update README verification guidance.
 - Keep this as verification infrastructure only.
@@ -41,5 +42,7 @@ This story does not change runtime authority. It does not approve:
 - Playwright browser checks no longer run a production dashboard build during web-server startup.
 - Windows Playwright starts the dashboard from `apps/dashboard` instead of a root-level `pnpm exec` wrapper.
 - The focused controls-page e2e script exists, manages its own server lifecycle, and is listed by the verification readiness report.
+- The focused work-item detail e2e script exists, manages its own server lifecycle, and is listed by the verification readiness report.
 - The dashboard controls-page browser test can be invoked through the package script.
+- The dashboard detail-page browser test can be invoked through the package script.
 - `pnpm run check` continues to pass.

@@ -453,6 +453,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="dashboard-detail-e2e",
+                label="Dashboard detail browser slice",
+                command="pnpm run test:e2e:dashboard:detail",
+                status="optional_when_browser_stack_ready",
+                requiredFor=["work-item detail changes", "runtime evidence panel changes", "focused browser regression checks"],
+                evidence=[
+                    "Runs the work-item detail Playwright slice with stable test-file and grep arguments.",
+                    "Owns supervisor and dashboard server lifecycle to avoid raw Playwright teardown hangs in Windows sessions.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-e2e",
                 label="Dashboard browser coverage",
                 command="pnpm run test:e2e:dashboard",
