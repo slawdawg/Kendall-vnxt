@@ -2,6 +2,7 @@ import asyncio
 import sys
 
 from fastapi.testclient import TestClient
+import pytest
 
 
 def _reset_supervisor_modules() -> None:
@@ -677,7 +678,40 @@ def test_ollama_provider_gate_stays_non_executing_when_broad_gate_is_enabled(tmp
     assert ollama["providerSpecificGateEnabled"] is False
     assert ollama["modelIdConfigured"] is False
     assert ollama["adapterReady"] is False
-    assert ollama["registryState"] == "configured_broad_gate_only"
+    assert ollama["registryState"] == "disabled"
+    assert ollama["httpCallsAttempted"] is False
+    assert ollama["modelCallsAttempted"] is False
+
+
+def test_ollama_provider_gate_stays_disabled_when_broad_gate_is_disabled(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "ollama-provider-gate-ollama-only.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "llama3.2:fixture")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/supervisor/execution-configuration-checks")
+        proofs_response = client.get("/supervisor/disabled-provider-proofs")
+
+    assert response.status_code == 200
+    checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
+    assert checks["ollama-provider-gate"]["enabled"] is False
+    assert checks["ollama-provider-gate"]["disabledReason"] == "local_provider_http_calls_not_enabled"
+    assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
+    assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
+
+    proofs = {proof["workerId"]: proof for proof in proofs_response.json()["data"]}
+    ollama = proofs["local.ollama.disabled"]
+    assert ollama["broadGateEnabled"] is False
+    assert ollama["providerSpecificGateEnabled"] is True
+    assert ollama["modelIdConfigured"] is True
+    assert ollama["adapterReady"] is False
+    assert ollama["registryState"] == "disabled"
     assert ollama["httpCallsAttempted"] is False
     assert ollama["modelCallsAttempted"] is False
 
@@ -713,6 +747,17 @@ def test_ollama_provider_gate_requires_model_id_before_adapter_readiness(tmp_pat
     assert ollama["registryState"] == "configured_ollama_gate_missing_model"
 
 
+def test_ollama_timeout_settings_require_positive_values(monkeypatch) -> None:
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_CONNECT_TIMEOUT_SECONDS", "0")
+
+    _reset_supervisor_modules()
+
+    from supervisor.config.settings import Settings
+
+    with pytest.raises(ValueError, match="greater than 0"):
+        Settings()
+
+
 def test_ollama_provider_gate_adapter_ready_still_does_not_call_provider(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "ollama-provider-gate-adapter-ready.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -731,8 +776,8 @@ def test_ollama_provider_gate_adapter_ready_still_does_not_call_provider(tmp_pat
 
     assert response.status_code == 200
     checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
-    assert checks["ollama-provider-gate"]["enabled"] is True
-    assert checks["ollama-provider-gate"]["disabledReason"] is None
+    assert checks["ollama-provider-gate"]["enabled"] is False
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_provider_adapter_not_implemented"
     assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
     assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
 

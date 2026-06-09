@@ -2431,7 +2431,7 @@ class SupervisorService:
             self._execution_configuration_check(
                 check_id="ollama-provider-gate",
                 label="Ollama provider gate",
-                enabled=bool(ollama_state["adapter_ready"]),
+                enabled=False,
                 disabled_reason=ollama_state["disabled_reason"],  # type: ignore[arg-type]
                 affected_workers=["local.ollama.disabled"],
                 evidence=[
@@ -2530,11 +2530,11 @@ class SupervisorService:
             disabled_reason = "ollama_provider_gate_not_enabled"
             adapter_ready = False
         elif broad_gate_enabled and not provider_gate_enabled:
-            registry_state = "configured_broad_gate_only"
+            registry_state = "disabled"
             disabled_reason = "ollama_provider_gate_not_enabled"
             adapter_ready = False
         elif provider_gate_enabled and not broad_gate_enabled:
-            registry_state = "configured_ollama_gate_without_broad_gate"
+            registry_state = "disabled"
             disabled_reason = "local_provider_http_calls_not_enabled"
             adapter_ready = False
         elif not model_id_configured:
@@ -2543,7 +2543,7 @@ class SupervisorService:
             adapter_ready = False
         else:
             registry_state = "adapter_ready_no_call"
-            disabled_reason = None
+            disabled_reason = "ollama_provider_adapter_not_implemented"
             adapter_ready = True
 
         return {

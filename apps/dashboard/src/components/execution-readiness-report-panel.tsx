@@ -114,7 +114,7 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
                       Retained evidence: {proof.retainedEvidenceClasses.join(", ")}
                     </p>
                   ) : null}
-                  {proof.connectTimeoutSeconds && proof.totalTimeoutSeconds ? (
+                  {proof.connectTimeoutSeconds != null && proof.totalTimeoutSeconds != null ? (
                     <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
                       Timeout policy: connect {proof.connectTimeoutSeconds}s, total {proof.totalTimeoutSeconds}s.
                     </p>
