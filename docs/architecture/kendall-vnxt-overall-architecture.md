@@ -262,6 +262,7 @@ The following architecture foundation is implemented or documented:
 - runtime evidence export references for readiness and boundary reports,
 - provider-specific disabled fixture policies,
 - draft Ollama local provider PRD,
+- dashboard runtime evidence export access,
 - recovery/runtime boundary documentation.
 
 ## Intentionally Deferred
@@ -289,5 +290,6 @@ The architecture sequence should be:
 5. maintain queue/attempt boundaries and disabled provider proofs,
 6. maintain process lifecycle design and runtime evidence export references,
 7. maintain provider-specific fixture policies and PRD drafts,
-8. use readiness reports to identify missing evidence before future authority work,
-9. only then implement provider-specific or subscription-agent launch authority.
+8. maintain dashboard access to runtime evidence exports,
+9. use readiness reports to identify missing evidence before future authority work,
+10. only then implement provider-specific or subscription-agent launch authority.

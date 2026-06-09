@@ -1,0 +1,101 @@
+import type { RuntimeEvidenceExportView } from "@kendall/contracts";
+
+function titleCase(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .replaceAll(".", " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function formatTimestamp(value: string): string {
+  return new Date(value).toLocaleString();
+}
+
+export function RuntimeEvidenceExportPanel({ exportView }: { exportView: RuntimeEvidenceExportView }) {
+  const safetyEntries: Array<[string, boolean]> = [
+    ["Process launch", exportView.safety.processLaunchAllowed],
+    ["Provider calls", exportView.safety.providerCallsAllowed],
+    ["Model calls", exportView.safety.modelCallsAllowed],
+    ["Premium execution", exportView.safety.premiumExecutionAllowed],
+    ["Commands", exportView.safety.commandExecutionAllowed],
+    ["Source mutation", exportView.safety.sourceMutationAllowed],
+    ["Network", exportView.safety.networkAllowed],
+    ["Credentials", exportView.safety.credentialAccessAllowed],
+  ];
+
+  return (
+    <section id="runtime-evidence-export" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Runtime export</p>
+          <h3 className="mt-2 text-xl font-semibold">Evidence package</h3>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
+            Read-only export summary for work item evidence, attempts, events, boundaries, and safety flags.
+          </p>
+        </div>
+        <span className="w-fit rounded-full bg-[var(--surface)] px-3 py-1 font-mono text-xs text-[var(--muted)]">
+          {formatTimestamp(exportView.generatedAt)}
+        </span>
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          ["Format", exportView.format],
+          ["Attempts", String(exportView.executionAttempts.length)],
+          ["Events", String(exportView.workflowEvents.length)],
+          ["Export only", exportView.safety.exportOnly ? "Yes" : "No"],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
+            <p className="mt-2 text-sm font-semibold">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <h4 className="text-base font-semibold">Safety flags</h4>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {safetyEntries.map(([label, allowed]) => (
+            <span
+              key={label}
+              className={`rounded-full border px-3 py-1 text-xs ${
+                allowed ? "border-[var(--warn)]/40 text-[var(--warn)]" : "bg-[var(--panel)] text-[var(--muted)]"
+              }`}
+            >
+              {label}: {allowed ? "allowed" : "disabled"}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <h4 className="text-base font-semibold">Related reports</h4>
+          <div className="mt-3 space-y-2">
+            {exportView.boundary.relatedSupervisorReports.map((report) => (
+              <p key={report} className="rounded-[1rem] border bg-[var(--panel)] p-3 font-mono text-xs text-[var(--muted)]">
+                {report}
+              </p>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <h4 className="text-base font-semibold">Boundary evidence</h4>
+          <div className="mt-3 space-y-2">
+            {exportView.boundary.gitBackedEvidence.slice(0, 6).map((path) => (
+              <p key={path} className="rounded-[1rem] border bg-[var(--panel)] p-3 font-mono text-xs text-[var(--muted)]">
+                {path}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-4 break-all font-mono text-xs text-[var(--muted)]">{titleCase(exportView.exportId)}</p>
+    </section>
+  );
+}
