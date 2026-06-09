@@ -494,6 +494,11 @@ async def get_managed_recipe_policy_report():
     return ApiEnvelope(data=service.get_managed_recipe_policy_report())
 
 
+@app.get("/supervisor/github-workflow-policy-report", response_model=ApiEnvelope)
+async def get_github_workflow_policy_report():
+    return ApiEnvelope(data=service.get_github_workflow_policy_report())
+
+
 @app.get("/supervisor/disabled-provider-proofs", response_model=ApiEnvelope)
 async def list_disabled_provider_proofs():
     return ApiEnvelope(data=service.list_disabled_provider_proofs())
