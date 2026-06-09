@@ -63,6 +63,7 @@ export function EvidenceOverviewPanel({
     },
   ];
   const reviewShortcuts = runtimeEvidenceExport.reviewNavigator;
+  const reportShortcuts = runtimeEvidenceExport.boundary.relatedSupervisorReports.slice(0, 4);
 
   return (
     <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
@@ -90,6 +91,33 @@ export function EvidenceOverviewPanel({
             <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{card.detail}</p>
           </a>
         ))}
+      </div>
+      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h4 className="text-base font-semibold">Report shortcuts</h4>
+            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+              Related supervisor reports from the runtime export boundary for cross-checking this item.
+            </p>
+          </div>
+          <a
+            href="/controls"
+            className="w-fit rounded-full border bg-[var(--panel)] px-3 py-1 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          >
+            Open catalog
+          </a>
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {reportShortcuts.map((report) => (
+            <a
+              key={report}
+              href="/controls"
+              className="break-all rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              {report}
+            </a>
+          ))}
+        </div>
       </div>
       <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">

@@ -19,6 +19,7 @@ const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/appl
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
 const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
+const overviewPanel = readWorkspaceFile("apps/dashboard/src/components/evidence-overview-panel.tsx");
 const dashboardSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const routingPreviewTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const storyIndex = readWorkspaceFile("docs/stories/index.md");
@@ -155,6 +156,22 @@ for (const visibleEndpoint of [
   );
 }
 
+for (const overviewText of ["Report shortcuts", "runtimeEvidenceExport.boundary.relatedSupervisorReports", "Open catalog", 'href="/controls"']) {
+  assertCondition(
+    overviewPanel.includes(overviewText),
+    `Evidence overview must surface report catalog shortcut evidence: ${overviewText}`,
+    failures,
+  );
+}
+
+for (const visibleOverviewText of ["Report shortcuts", "Open catalog"]) {
+  assertCondition(
+    dashboardSpec.includes(visibleOverviewText),
+    `Dashboard detail browser coverage must assert overview report shortcut ${visibleOverviewText}`,
+    failures,
+  );
+}
+
 assertCondition(
   serviceSource.includes("pnpm run check:reports"),
   "Verification readiness report must surface pnpm run check:reports",
@@ -168,6 +185,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-28-supervisor-report-catalog-drift-check.md"),
   "Story index must reference Story 3.28 supervisor report catalog drift check",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-34-report-shortcuts-in-evidence-overview.md"),
+  "Story index must reference Story 3.34 report shortcuts in evidence overview",
   failures,
 );
 

@@ -424,6 +424,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(overviewPanel.getByText("No execution controls")).toBeVisible();
     await expect(overviewPanel.getByText("Runtime export", { exact: true })).toBeVisible();
     await expect(overviewPanel.getByText("authority flags disabled")).toBeVisible();
+    await expect(overviewPanel.getByRole("heading", { name: "Report shortcuts" })).toBeVisible();
+    await expect(overviewPanel.getByRole("link", { name: "Open catalog" })).toBeVisible();
+    await expect(overviewPanel.getByRole("link", { name: "GET /supervisor/execution-configuration-checks" })).toBeVisible();
+    await expect(overviewPanel.getByRole("link", { name: "GET /supervisor/threat-boundary" })).toBeVisible();
     await expect(overviewPanel.getByRole("heading", { name: "Review shortcuts" })).toBeVisible();
     await expect(overviewPanel.getByText("3 shortcuts")).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Runtime state/ })).toBeVisible();
