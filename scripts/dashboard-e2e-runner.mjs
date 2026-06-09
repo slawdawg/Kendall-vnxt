@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
-export async function runFocusedDashboardE2E({ databaseName, grep }) {
+export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "dashboard.spec.ts" }) {
   const dataDir = join(rootDir, ".data");
   const tempDir = join(dataDir, "tmp");
   const uvCacheDir = join(dataDir, "uv-cache");
@@ -65,7 +65,7 @@ export async function runFocusedDashboardE2E({ databaseName, grep }) {
 
     const playwright = startProcess(
       process.execPath,
-      [join(rootDir, "node_modules", "@playwright", "test", "cli.js"), "test", "dashboard.spec.ts", "--grep", grep],
+      [join(rootDir, "node_modules", "@playwright", "test", "cli.js"), "test", testFile, "--grep", grep],
       {
         cwd: rootDir,
         env: {

@@ -697,6 +697,7 @@ def test_mobile_execution_recipe_is_exposed_and_selected_event_is_recorded(tmp_p
         assert item["executionRecipe"]["remoteAutomationPolicy"]["status"] == "blocked"
         assert "record explicit local-only waiver" in item["executionRecipe"]["remoteAutomationPolicy"]["allowedOperations"]
         assert "path-scope" in [gate["id"] for gate in item["executionRecipe"]["policyGates"]]
+        assert "pnpm run test:e2e:dashboard:mobile" in item["executionRecipe"]["verificationCommands"]
         assert "pnpm run test:e2e:dashboard" in item["executionRecipe"]["verificationCommands"]
 
         work_item_id = item["id"]
