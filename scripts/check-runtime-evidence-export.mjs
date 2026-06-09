@@ -21,6 +21,7 @@ const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/appl
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const exportPanel = readWorkspaceFile("apps/dashboard/src/components/runtime-evidence-export-panel.tsx");
 const overviewPanel = readWorkspaceFile("apps/dashboard/src/components/evidence-overview-panel.tsx");
+const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const detailSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const storyIndex = readWorkspaceFile("docs/stories/index.md");
@@ -73,16 +74,30 @@ for (const story of [
   assertCondition(existsSync(join(rootDir, story)), `Missing runtime export story evidence ${story}`, failures);
 }
 
-for (const panelText of ["Review navigator", "exportView.reviewNavigator.map", "item.label", "item.stopLines"]) {
+for (const panelText of ["Review navigator", "exportView.reviewNavigator.map", "item.label", "item.stopLines", "reportShortcutHref(report)"]) {
   assertCondition(exportPanel.includes(panelText), `Runtime evidence export panel must render ${panelText}`, failures);
 }
 
-for (const panelText of ["Review shortcuts", "runtimeEvidenceExport.reviewNavigator", "item.target", "item.itemId"]) {
+for (const panelText of ["Review shortcuts", "runtimeEvidenceExport.reviewNavigator", "item.target", "item.itemId", "reportShortcutHref(report)"]) {
   assertCondition(overviewPanel.includes(panelText), `Evidence overview panel must render ${panelText}`, failures);
+}
+
+for (const shortcutText of [
+  "reportAnchorByEndpoint",
+  "reportShortcutHref",
+  "#execution-readiness-report",
+  "#safe-development-backlog",
+  "#supervisor-report-catalog",
+]) {
+  assertCondition(reportShortcuts.includes(shortcutText), `Report shortcut helper must include ${shortcutText}`, failures);
 }
 
 for (const panelText of ["Review navigator", "Runtime state", "Authority boundary", "Git-backed evidence"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert ${panelText}`, failures);
+}
+
+for (const panelText of ["/controls#execution-readiness-report", "/controls#safe-development-backlog"]) {
+  assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert related report link ${panelText}`, failures);
 }
 
 for (const panelText of ["Review shortcuts", "3 shortcuts"]) {
@@ -107,6 +122,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-31-runtime-evidence-export-drift-check.md"),
   "Story index must reference Story 3.31 runtime evidence export drift check",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-40-runtime-report-anchor-links.md"),
+  "Story index must reference Story 3.40 runtime report anchor links",
   failures,
 );
 

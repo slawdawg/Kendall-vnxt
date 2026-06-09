@@ -20,6 +20,8 @@ const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
 const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
 const overviewPanel = readWorkspaceFile("apps/dashboard/src/components/evidence-overview-panel.tsx");
+const exportPanel = readWorkspaceFile("apps/dashboard/src/components/runtime-evidence-export-panel.tsx");
+const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const dashboardSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const routingPreviewTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const storyIndex = readWorkspaceFile("docs/stories/index.md");
@@ -168,11 +170,7 @@ for (const overviewText of [
   "Report shortcuts",
   "runtimeEvidenceExport.boundary.relatedSupervisorReports",
   "Open catalog",
-  "reportAnchorByEndpoint",
-  "reportShortcutHref",
-  "`/controls${reportAnchorByEndpoint[endpoint]",
-  "#execution-readiness-report",
-  "#supervisor-report-catalog",
+  "reportShortcutHref(report)",
 ]) {
   assertCondition(
     overviewPanel.includes(overviewText),
@@ -180,6 +178,26 @@ for (const overviewText of [
     failures,
   );
 }
+
+for (const shortcutText of [
+  "reportAnchorByEndpoint",
+  "reportShortcutHref",
+  "`/controls${reportAnchorByEndpoint[endpoint]",
+  "#execution-readiness-report",
+  "#supervisor-report-catalog",
+]) {
+  assertCondition(
+    reportShortcuts.includes(shortcutText),
+    `Report shortcut helper must include ${shortcutText}`,
+    failures,
+  );
+}
+
+assertCondition(
+  exportPanel.includes("reportShortcutHref(report)"),
+  "Runtime evidence export panel must link related reports through reportShortcutHref",
+  failures,
+);
 
 for (const visibleOverviewText of ["Report shortcuts", "Open catalog", "/controls#execution-readiness-report"]) {
   assertCondition(
@@ -225,6 +243,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-39-report-shortcut-anchor-polish.md"),
   "Story index must reference Story 3.39 report shortcut anchor polish",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-40-runtime-report-anchor-links.md"),
+  "Story index must reference Story 3.40 runtime report anchor links",
   failures,
 );
 
