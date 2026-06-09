@@ -60,6 +60,7 @@ for (const path of currentRunbooks) {
   assertCondition(content.includes("pnpm run check:e2e-report"), `${path} must mention pnpm run check:e2e-report`, failures);
   assertCondition(content.includes("pnpm run check:reports"), `${path} must mention pnpm run check:reports`, failures);
   assertCondition(content.includes("pnpm run check:execution-boundary"), `${path} must mention pnpm run check:execution-boundary`, failures);
+  assertCondition(content.includes("pnpm run check:execution-evidence"), `${path} must mention pnpm run check:execution-evidence`, failures);
   assertCondition(content.includes("pnpm run check:runbooks"), `${path} must mention pnpm run check:runbooks`, failures);
   assertCondition(content.includes("pnpm run check:runtime-export"), `${path} must mention pnpm run check:runtime-export`, failures);
   assertCondition(content.includes("pnpm run check:safe-backlog"), `${path} must mention pnpm run check:safe-backlog`, failures);

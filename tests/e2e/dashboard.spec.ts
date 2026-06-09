@@ -164,6 +164,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:e2e-report", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:reports", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:execution-boundary", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:execution-evidence", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:runbooks", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:runtime-export", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:safe-backlog", { exact: true })).toBeVisible();
@@ -200,6 +201,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/delivery-readiness-policy-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/disabled-provider-proofs")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/execution-state-boundary")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
     await expect(page.locator("#supervisor-report-catalog")).toBeVisible();
 
