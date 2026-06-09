@@ -3564,6 +3564,13 @@ class SupervisorService:
             workspace_plan = attempt.workspace_isolation_plan_json or {}
             if payload.workspacePlanId != workspace_plan.get("planId"):
                 mismatches.append("workspacePlanId")
+            expected_target = self.subscription_launch_registry.get_target(payload.targetId)
+            if payload.targetId != expected_target.target_id:
+                mismatches.append("targetId")
+            if payload.launchPolicyId != expected_target.launch_policy_id:
+                mismatches.append("launchPolicyId")
+            if payload.commandTemplateId != expected_target.command_template_id:
+                mismatches.append("commandTemplateId")
             if payload.expiresAt and payload.expiresAt <= datetime.now(timezone.utc):
                 mismatches.append("expiresAt")
             if mismatches:

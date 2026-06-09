@@ -2950,3 +2950,67 @@ def test_subscription_launch_approval_rejection_records_non_executing_event(tmp_
     history = history_response.json()["data"]
     assert history[0]["status"] == "planned"
     assert history[0]["eventRefs"][-1]["eventType"] == "execution_attempt.approval_rejected"
+
+
+def test_subscription_launch_approval_rejects_stale_policy_and_command_template(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-launch-stale-policy.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Reject stale subscription launch approval",
+                "requestedOutcome": "Record stale launch policy and command template approval as non-executing evidence.",
+                "source": "operator-dashboard:test",
+                "riskLevel": "medium",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        assert created.status_code == 200
+        work_item_id = created.json()["data"]["id"]
+        attempt = client.post(f"/work-items/{work_item_id}/execution-attempts", json={}).json()["data"]
+
+        rejection_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "stale launch approval",
+                "workItemId": work_item_id,
+                "attemptId": attempt["attemptId"],
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+                "workspacePlanId": attempt["workspaceIsolationPlan"]["planId"],
+                "launchPolicyId": "subscription-launch-policy-stale-v1",
+                "targetId": "codex.subscription.disabled",
+                "commandTemplateId": "codex-subscription-cli-template-stale-v1",
+                "actorId": "operator-1",
+                "approvalTimestamp": "2026-06-09T12:00:00Z",
+                "expiresAt": "2026-06-09T12:05:00Z",
+            },
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert rejection_response.status_code == 409
+    rejection_message = rejection_response.json()["detail"]["error"]["message"]
+    assert "launchPolicyId" in rejection_message
+    assert "commandTemplateId" in rejection_message
+
+    events = events_response.json()["data"]
+    rejection_event = next(event for event in events if event["eventType"] == "execution_attempt.approval_rejected")
+    assert rejection_event["payload"]["processLaunchAttempted"] is False
+    assert rejection_event["payload"]["providedBinding"]["launchPolicyId"] == "subscription-launch-policy-stale-v1"
+    assert rejection_event["payload"]["providedBinding"]["commandTemplateId"] == "codex-subscription-cli-template-stale-v1"
+
+    history = history_response.json()["data"]
+    assert history[0]["status"] == "planned"
