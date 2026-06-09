@@ -767,6 +767,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-reports",
         "check-execution-boundary",
         "check-execution-evidence",
+        "check-provider-fixtures",
         "check-runbooks",
         "check-runtime-export",
         "check-safe-backlog",
@@ -1010,6 +1011,13 @@ def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path
         "local.lmstudio.disabled",
         "local.vllm.disabled",
         "local.llamacpp.disabled",
+    }
+    endpoint_families = {proof["workerId"]: proof["endpointFamily"] for proof in proofs}
+    assert endpoint_families == {
+        "local.ollama.disabled": "ollama_openai_compatible_localhost",
+        "local.lmstudio.disabled": "lm_studio_openai_compatible_localhost",
+        "local.vllm.disabled": "vllm_openai_compatible_localhost",
+        "local.llamacpp.disabled": "llamacpp_openai_compatible_localhost",
     }
     for proof in proofs:
         assert proof["disabledReason"].endswith("_local_provider_not_enabled")
@@ -1800,6 +1808,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-47-core-readiness-drift-checks.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-48-execution-boundary-report-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-49-execution-evidence-boundary-drift-check.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-50-provider-fixture-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]

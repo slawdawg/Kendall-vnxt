@@ -162,6 +162,7 @@ pnpm run check:e2e-report
 pnpm run check:reports
 pnpm run check:execution-boundary
 pnpm run check:execution-evidence
+pnpm run check:provider-fixtures
 pnpm run check:runbooks
 pnpm run check:runtime-export
 pnpm run check:safe-backlog
