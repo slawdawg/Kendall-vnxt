@@ -268,6 +268,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("verification-runbook-hardening-slice")).toBeVisible();
     await expect(runwayPanel.getByText("authority-blocker-maintenance-slice")).toBeVisible();
+    await expect(runwayPanel.getByText("Readiness checks").first()).toBeVisible();
+    await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByText("handoff-checkpoint-coverage", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByText("authority-families-blocked", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:development-runway", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByRole("link", { name: "/controls#development-runway-report" })).toBeVisible();
     await expect(runwayPanel.getByText("Development runway slices are not execution-authority approvals.")).toBeVisible();

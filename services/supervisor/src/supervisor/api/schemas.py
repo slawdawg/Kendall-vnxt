@@ -756,6 +756,17 @@ class MaintenanceActionPlanReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class DevelopmentRunwayReadinessCheckView(BaseModel):
+    checkId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str] = Field(default_factory=list)
+    requiredCommandIds: list[str] = Field(default_factory=list)
+    relatedReports: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
 class DevelopmentRunwaySliceView(BaseModel):
     sliceId: str
     label: str
@@ -767,6 +778,7 @@ class DevelopmentRunwaySliceView(BaseModel):
     requiredVerification: list[str] = Field(default_factory=list)
     relatedReports: list[str] = Field(default_factory=list)
     dashboardAnchors: list[str] = Field(default_factory=list)
+    readinessChecks: list[DevelopmentRunwayReadinessCheckView] = Field(default_factory=list)
     blockedBy: list[str] = Field(default_factory=list)
     nextAction: str
 

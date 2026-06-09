@@ -20,6 +20,7 @@ from supervisor.api.schemas import (
     DeliveryReadinessPolicyItemView,
     DeliveryReadinessPolicyReportView,
     DevelopmentRunwayReportView,
+    DevelopmentRunwayReadinessCheckView,
     DevelopmentRunwaySliceView,
     DocumentationAuthorityBlockedStoryView,
     DocumentationAuthorityDocumentView,
@@ -1629,6 +1630,9 @@ class SupervisorService:
         verification_chain = [command.command for command in verification.requiredCommands]
         ready_items = [item for item in backlog.items if item.status == "ready"]
         blocked_families = [family.familyId for family in authority_matrix.families if "blocked" in family.status]
+        ready_backlog_item_ids = {item.itemId for item in backlog.items if item.status == "ready"}
+        action_step_ids = {step.stepId for step in action_plan.steps}
+        verification_command_ids = {command.commandId for command in verification.requiredCommands + verification.optionalCommands}
 
         slices = [
             DevelopmentRunwaySliceView(
@@ -1656,6 +1660,40 @@ class SupervisorService:
                     "/controls#supervisor-report-catalog",
                     "/controls#safe-development-backlog",
                     "/controls#maintenance-action-plan-report",
+                ],
+                readinessChecks=[
+                    DevelopmentRunwayReadinessCheckView(
+                        checkId="ready-backlog-item",
+                        label="Ready backlog item",
+                        status="ready" if "safe-backlog-report-alignment" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the slice maps to a safe backlog item that is not authority-blocked.",
+                        evidence=["safe-backlog-report-alignment"],
+                        requiredCommandIds=["check-safe-backlog"],
+                        relatedReports=["GET /supervisor/safe-development-backlog"],
+                        nextAction="Keep the safe backlog item ready before starting report/evidence navigation work.",
+                    ),
+                    DevelopmentRunwayReadinessCheckView(
+                        checkId="action-plan-coverage",
+                        label="Maintenance action coverage",
+                        status="ready"
+                        if {"select-large-safe-slice", "verify-evidence-surfaces"}.issubset(action_step_ids)
+                        else "missing",
+                        summary="Confirms maintenance action steps cover slice selection and evidence-surface verification.",
+                        evidence=["select-large-safe-slice", "verify-evidence-surfaces"],
+                        requiredCommandIds=["check-maintenance-action-plan"],
+                        relatedReports=["GET /supervisor/maintenance-action-plan-report"],
+                        nextAction="Keep maintenance action plan steps aligned with report/evidence navigation work.",
+                    ),
+                    DevelopmentRunwayReadinessCheckView(
+                        checkId="focused-verification",
+                        label="Focused verification available",
+                        status="ready" if {"check-reports", "check-runtime-export", "check-safe-backlog"}.issubset(verification_command_ids) else "missing",
+                        summary="Confirms focused report, runtime export, and safe backlog verification commands exist.",
+                        evidence=["check-reports", "check-runtime-export", "check-safe-backlog"],
+                        requiredCommandIds=["check-reports", "check-runtime-export", "check-safe-backlog"],
+                        relatedReports=["GET /supervisor/verification-readiness-report"],
+                        nextAction="Run focused checks before the full local gate when this slice changes.",
+                    ),
                 ],
                 blockedBy=[],
                 nextAction="Select this slice for read-only navigation or evidence-surface work, and keep every touched report registered in the catalog and runtime export references.",
@@ -1686,6 +1724,40 @@ class SupervisorService:
                     "/controls#github-workflow-policy-report",
                     "/controls#delivery-readiness-policy-report",
                 ],
+                readinessChecks=[
+                    DevelopmentRunwayReadinessCheckView(
+                        checkId="ready-backlog-items",
+                        label="Ready backlog items",
+                        status="ready"
+                        if {"verification-surface-hardening", "github-delivery-hygiene"}.issubset(ready_backlog_item_ids)
+                        else "missing",
+                        summary="Confirms verification and GitHub delivery hygiene backlog items are safe to work.",
+                        evidence=["verification-surface-hardening", "github-delivery-hygiene"],
+                        requiredCommandIds=["check-safe-backlog", "check-development-runway"],
+                        relatedReports=["GET /supervisor/safe-development-backlog", "GET /supervisor/development-runway-report"],
+                        nextAction="Keep both backlog items ready before changing verification or runbook guidance.",
+                    ),
+                    DevelopmentRunwayReadinessCheckView(
+                        checkId="handoff-checkpoint-coverage",
+                        label="Handoff checkpoint coverage",
+                        status="ready" if verification.handoffCheckpoints else "missing",
+                        summary="Confirms verification readiness includes runbook-backed handoff checkpoints.",
+                        evidence=[checkpoint.checkpointId for checkpoint in verification.handoffCheckpoints],
+                        requiredCommandIds=["check-verification-readiness", "check-runbooks"],
+                        relatedReports=["GET /supervisor/verification-readiness-report"],
+                        nextAction="Keep handoff checkpoints aligned with runbooks whenever verification guidance changes.",
+                    ),
+                    DevelopmentRunwayReadinessCheckView(
+                        checkId="full-gate-available",
+                        label="Full gate available",
+                        status="ready" if "full-check" in verification_command_ids else "missing",
+                        summary="Confirms the full local gate remains available for final verification.",
+                        evidence=["full-check"],
+                        requiredCommandIds=["full-check"],
+                        relatedReports=["GET /supervisor/verification-readiness-report"],
+                        nextAction="Run the full local gate before committing verification/runbook work.",
+                    ),
+                ],
                 blockedBy=[],
                 nextAction="Select this slice when a verification command or runbook changes, and prove the full local chain still names the new command.",
             ),
@@ -1715,6 +1787,38 @@ class SupervisorService:
                     "/controls#authority-readiness-matrix-report",
                     "/controls#execution-readiness-report",
                     "/controls#maintenance-readiness-report",
+                ],
+                readinessChecks=[
+                    DevelopmentRunwayReadinessCheckView(
+                        checkId="authority-families-blocked",
+                        label="Authority families blocked",
+                        status="blocked",
+                        summary="Confirms execution-authority families still require explicit approval before implementation.",
+                        evidence=blocked_families,
+                        requiredCommandIds=["check-authority-readiness"],
+                        relatedReports=["GET /supervisor/authority-readiness-matrix-report"],
+                        nextAction="Keep this slice read-only until explicit operator approval names the authority family and scope.",
+                    ),
+                    DevelopmentRunwayReadinessCheckView(
+                        checkId="approval-checkpoint-indexed",
+                        label="Approval checkpoint indexed",
+                        status="ready",
+                        summary="Confirms blocked authority work is governed by documentation authority and approval checkpoint evidence.",
+                        evidence=["docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"],
+                        requiredCommandIds=["check-docs", "check-documentation-authority"],
+                        relatedReports=["GET /supervisor/documentation-authority-report"],
+                        nextAction="Update approval checkpoint evidence only as read-only governance maintenance.",
+                    ),
+                    DevelopmentRunwayReadinessCheckView(
+                        checkId="boundary-checks-required",
+                        label="Boundary checks required",
+                        status="blocked",
+                        summary="Confirms execution boundary checks remain required before any authority work can move.",
+                        evidence=["check-execution-boundary", "check-process-lifecycle"],
+                        requiredCommandIds=["check-execution-boundary", "check-process-lifecycle"],
+                        relatedReports=["GET /supervisor/execution-readiness-report", "GET /supervisor/maintenance-readiness-report"],
+                        nextAction="Do not treat green boundary checks as approval to implement blocked authority stories.",
+                    ),
                 ],
                 blockedBy=blocked_families,
                 nextAction="Keep this slice limited to read-only authority evidence until explicit operator approval names the authority family and scope.",
@@ -2611,6 +2715,7 @@ class SupervisorService:
             "docs/stories/3-52-maintenance-action-plan-report.md",
             "docs/stories/3-53-authority-readiness-matrix-report.md",
             "docs/stories/3-54-development-runway-safe-slices.md",
+            "docs/stories/3-59-development-runway-readiness-checks.md",
             "docs/stories/3-55-runtime-evidence-review-index.md",
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",

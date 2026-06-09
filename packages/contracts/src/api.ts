@@ -702,6 +702,17 @@ export interface MaintenanceActionPlanReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface DevelopmentRunwayReadinessCheckView {
+  checkId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+  requiredCommandIds: string[];
+  relatedReports: string[];
+  nextAction: string;
+}
+
 export interface DevelopmentRunwaySliceView {
   sliceId: string;
   label: string;
@@ -713,6 +724,7 @@ export interface DevelopmentRunwaySliceView {
   requiredVerification: string[];
   relatedReports: string[];
   dashboardAnchors: string[];
+  readinessChecks: DevelopmentRunwayReadinessCheckView[];
   blockedBy: string[];
   nextAction: string;
 }

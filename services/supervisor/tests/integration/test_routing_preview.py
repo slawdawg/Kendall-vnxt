@@ -1044,11 +1044,29 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
     assert "/controls#supervisor-report-catalog" in report_slice["dashboardAnchors"]
+    assert {check["checkId"] for check in report_slice["readinessChecks"]} == {
+        "ready-backlog-item",
+        "action-plan-coverage",
+        "focused-verification",
+    }
+    assert all(check["status"] == "ready" for check in report_slice["readinessChecks"])
     verification_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "verification-runbook-hardening-slice")
     assert "pnpm run check:runbooks" in verification_slice["requiredVerification"]
     assert "GET /supervisor/verification-readiness-report" in verification_slice["relatedReports"]
+    assert {check["checkId"] for check in verification_slice["readinessChecks"]} == {
+        "ready-backlog-items",
+        "handoff-checkpoint-coverage",
+        "full-gate-available",
+    }
+    assert any("local-development-handoff" in check["evidence"] for check in verification_slice["readinessChecks"])
     authority_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "authority-blocker-maintenance-slice")
     assert authority_slice["status"] == "blocked_pending_explicit_authority_approval"
+    assert {check["checkId"] for check in authority_slice["readinessChecks"]} == {
+        "authority-families-blocked",
+        "approval-checkpoint-indexed",
+        "boundary-checks-required",
+    }
+    assert any(check["status"] == "blocked" for check in authority_slice["readinessChecks"])
     assert "local-provider-execution" in authority_slice["blockedBy"]
     assert "subscription-agent-launch" in authority_slice["blockedBy"]
     assert "GET /supervisor/authority-readiness-matrix-report" in authority_slice["relatedReports"]

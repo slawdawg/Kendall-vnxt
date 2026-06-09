@@ -56,6 +56,35 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
         </div>
       </div>
 
+      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Readiness checks</p>
+        <div className="mt-2 grid gap-2">
+          {slice.readinessChecks.map((check) => (
+            <div key={check.checkId} className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{check.status}</p>
+                  <p className="mt-1 text-sm font-semibold">{check.label}</p>
+                </div>
+                <span className="w-fit rounded-full bg-[var(--surface)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+                  {check.checkId}
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{check.summary}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {check.requiredCommandIds.map((commandId) => (
+                  <span key={commandId} className="rounded-full border bg-[var(--surface)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+                    {commandId}
+                  </span>
+                ))}
+              </div>
+              <p className="mt-2 break-words font-mono text-[11px] text-[var(--muted)]">{check.relatedReports.join(" | ")}</p>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{check.nextAction}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {slice.blockedBy.length > 0 ? (
         <div className="mt-3 space-y-2">
           {slice.blockedBy.map((blocker) => (
