@@ -682,6 +682,7 @@ class WorkflowEventView(BaseModel):
 class RuntimeEvidenceExportBoundaryView(BaseModel):
     localRuntimeState: list[str]
     gitBackedEvidence: list[str]
+    relatedSupervisorReports: list[str] = Field(default_factory=list)
     excludedState: list[str]
 
 

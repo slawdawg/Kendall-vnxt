@@ -24,6 +24,7 @@ This architecture stitches together the current source of truth from:
 - `docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md`
+- `docs/architecture/kendall-vnxt-process-lifecycle-design-2026-06-08.md`
 - `_bmad/memory/knx/profile.md`
 - `_bmad/memory/knx/decisions/governance-coordinator-2026-06-01.md`
 - `_bmad/memory/knx/decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md`
@@ -255,6 +256,8 @@ The following architecture foundation is implemented or documented:
 - execution-readiness report and provider enablement policy,
 - queue lease versus execution attempt boundary,
 - disabled local provider no-call proofs,
+- process lifecycle design for future subscription-agent launch,
+- runtime evidence export references for readiness and boundary reports,
 - recovery/runtime boundary documentation.
 
 ## Intentionally Deferred
@@ -271,7 +274,7 @@ The following require new PRDs or explicit safety decisions before implementatio
 
 ## Recommended Next Architecture Move
 
-The Execution Authority Expansion PRD has produced the current non-executing control-plane spine. Enablement governance is now anchored by the authority dependency graph, dashboard command boundary, execution-readiness report, queue/attempt boundary, and provider no-call proofs.
+The Execution Authority Expansion PRD has produced the current non-executing control-plane spine. Enablement governance is now anchored by the authority dependency graph, dashboard command boundary, execution-readiness report, queue/attempt boundary, provider no-call proofs, and process lifecycle design.
 
 The architecture sequence should be:
 
@@ -280,5 +283,6 @@ The architecture sequence should be:
 3. maintain dashboard read/command/approval boundaries,
 4. maintain the execution-readiness and evidence policy,
 5. maintain queue/attempt boundaries and disabled provider proofs,
-6. use readiness reports to identify missing evidence before future authority work,
-7. only then draft provider-specific or subscription-agent launch PRDs.
+6. maintain process lifecycle design and runtime evidence export references,
+7. use readiness reports to identify missing evidence before future authority work,
+8. only then draft provider-specific or subscription-agent launch PRDs.

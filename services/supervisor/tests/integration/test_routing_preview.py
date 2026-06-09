@@ -1478,6 +1478,11 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
         "runtime-generated export timestamps and identifiers",
     ]
     assert "docs/stories/2-7-runtime-evidence-export-strategy.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-7-execution-readiness-and-evidence-report.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md" in export["boundary"]["gitBackedEvidence"]
+    assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
     assert "environment variables and credential stores" in export["boundary"]["excludedState"]
     assert export["safety"]["exportOnly"] is True
     assert export["safety"]["processLaunchAllowed"] is False
