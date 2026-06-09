@@ -74,6 +74,7 @@ Do not rebuild these as new architecture work:
 - Maintenance readiness report for safe repo hygiene while authority stories remain blocked.
 - Safe development backlog report for selecting larger coherent safe slices while authority stories remain blocked.
 - Runtime evidence review manifest for export counts, retention notes, and stop lines.
+- Runtime evidence review navigator for runtime state, authority boundary, and git-backed evidence shortcuts.
 - Focused dashboard detail e2e runner for runtime export verification.
 - Dashboard e2e report for focused/full browser verification commands, lifecycle posture, cache posture, stop lines, and static drift checking.
 - Supervisor report catalog drift checking for report routes, runtime references, dashboard fetches, browser assertions, and story evidence.

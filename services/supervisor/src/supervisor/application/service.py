@@ -40,6 +40,7 @@ from supervisor.api.schemas import (
     ProviderEnablementPolicyStepView,
     RuntimeEvidenceExportBoundaryView,
     RuntimeEvidenceReviewManifestView,
+    RuntimeEvidenceReviewNavigatorItemView,
     RuntimeEvidenceExportSafetyView,
     RuntimeEvidenceExportView,
     SafeDevelopmentBacklogItemView,
@@ -1403,6 +1404,7 @@ class SupervisorService:
             "docs/stories/3-27-safe-development-backlog-report.md",
             "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
             "docs/stories/3-29-runbook-verification-alignment.md",
+            "docs/stories/3-30-runtime-evidence-review-navigator.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
@@ -1463,6 +1465,67 @@ class SupervisorService:
                     "Export review must not grant worker commands, source mutation, network access, or credential access.",
                 ],
             ),
+            reviewNavigator=[
+                RuntimeEvidenceReviewNavigatorItemView(
+                    itemId="review-runtime-state",
+                    label="Runtime state",
+                    priority="P0",
+                    target="Confirm work item, attempts, and workflow event evidence.",
+                    summary="Start with runtime state before reading report references or changing the work item.",
+                    evidence=[
+                        f"{len(attempts)} execution attempts included.",
+                        f"{len(events)} workflow events included.",
+                        "Local runtime state is limited to supervisor database rows and generated export identifiers.",
+                    ],
+                    relatedReports=["GET /work-items/{id}/runtime-evidence-export"],
+                    relatedDocs=["docs/stories/2-7-runtime-evidence-export-strategy.md"],
+                    dashboardAnchors=["#execution-attempts", "#workflow-history"],
+                ),
+                RuntimeEvidenceReviewNavigatorItemView(
+                    itemId="review-authority-boundary",
+                    label="Authority boundary",
+                    priority="P0",
+                    target="Confirm the export does not approve provider calls, process launch, premium execution, commands, source mutation, network, or credentials.",
+                    summary="Use safety flags and related reports to keep review work above the execution-authority line.",
+                    evidence=[
+                        "All runtime evidence export safety authority flags remain disabled.",
+                        f"{len(related_reports)} related supervisor reports are available for cross-checks.",
+                        "Excluded state keeps credentials, provider payloads, and external filesystem snapshots out of the export.",
+                    ],
+                    relatedReports=[
+                        "GET /supervisor/execution-readiness-report",
+                        "GET /supervisor/threat-boundary",
+                        "GET /supervisor/documentation-authority-report",
+                    ],
+                    relatedDocs=[
+                        "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+                        "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
+                    ],
+                    dashboardAnchors=["#runtime-evidence-export"],
+                    stopLines=[
+                        "Review navigation is not execution-authority approval.",
+                        "Do not enable provider/model calls or process launch from runtime export review.",
+                    ],
+                ),
+                RuntimeEvidenceReviewNavigatorItemView(
+                    itemId="review-git-backed-evidence",
+                    label="Git-backed evidence",
+                    priority="P1",
+                    target="Inspect the story, architecture, PRD, and source references that explain the runtime evidence boundary.",
+                    summary="Use git-backed evidence to understand why the export includes or excludes each evidence class.",
+                    evidence=[
+                        f"{len(git_backed_evidence)} git-backed evidence references included.",
+                        "Runtime evidence review manifest and navigator stories are included in the evidence trail.",
+                        "Source references point to supervisor API/service and shared contracts.",
+                    ],
+                    relatedReports=["GET /supervisor/report-catalog", "GET /supervisor/safe-development-backlog"],
+                    relatedDocs=[
+                        "docs/stories/3-20-runtime-evidence-review-manifest.md",
+                        "docs/stories/3-30-runtime-evidence-review-navigator.md",
+                    ],
+                    dashboardAnchors=["#runtime-evidence-export"],
+                ),
+            ],
         )
 
     async def get_execution_readiness_report(self, session: AsyncSession) -> ExecutionReadinessReportView:

@@ -763,6 +763,19 @@ export interface RuntimeEvidenceReviewManifestView {
   executionAuthorityApproved: boolean;
 }
 
+export interface RuntimeEvidenceReviewNavigatorItemView {
+  itemId: string;
+  label: string;
+  priority: string;
+  target: string;
+  summary: string;
+  evidence: string[];
+  relatedReports: string[];
+  relatedDocs: string[];
+  dashboardAnchors: string[];
+  stopLines: string[];
+}
+
 export interface RuntimeEvidenceExportView {
   exportId: string;
   format: "application/json";
@@ -774,6 +787,7 @@ export interface RuntimeEvidenceExportView {
   boundary: RuntimeEvidenceExportBoundaryView;
   safety: RuntimeEvidenceExportSafetyView;
   reviewManifest: RuntimeEvidenceReviewManifestView;
+  reviewNavigator: RuntimeEvidenceReviewNavigatorItemView[];
 }
 
 export interface OperatorProfile {
