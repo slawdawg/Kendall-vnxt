@@ -37,6 +37,7 @@ from supervisor.api.schemas import (
     PremiumApprovalRequestView,
     ProviderEnablementPolicyStepView,
     RuntimeEvidenceExportBoundaryView,
+    RuntimeEvidenceReviewManifestView,
     RuntimeEvidenceExportSafetyView,
     RuntimeEvidenceExportView,
     RoutingDecisionView,
@@ -987,6 +988,35 @@ class SupervisorService:
 
         attempts = await self.list_execution_attempts(session, work_item_id)
         events = [self.to_event_view(event) for event in await self.list_work_item_events(session, work_item_id)]
+        related_reports = [
+            "GET /supervisor/execution-configuration-checks",
+            "GET /supervisor/threat-boundary",
+            "GET /supervisor/execution-readiness-report",
+            "GET /supervisor/documentation-authority-report",
+            "GET /supervisor/verification-readiness-report",
+            "GET /supervisor/report-catalog",
+            "GET /supervisor/maintenance-readiness-report",
+            "GET /supervisor/execution-state-boundary",
+            "GET /supervisor/disabled-provider-proofs",
+        ]
+        git_backed_evidence = [
+            "docs/goals/bmad-architecture-completion-github-progress-goal-2026-06-08.md",
+            "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
+            "docs/stories/2-7-runtime-evidence-export-strategy.md",
+            "docs/stories/3-7-execution-readiness-and-evidence-report.md",
+            "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md",
+            "docs/stories/3-15-documentation-authority-report.md",
+            "docs/stories/3-16-verification-readiness-report.md",
+            "docs/stories/3-18-supervisor-report-catalog.md",
+            "docs/stories/3-19-maintenance-readiness-report.md",
+            "docs/stories/3-20-runtime-evidence-review-manifest.md",
+            "docs/prds/supervisor-execution-authority-expansion.md",
+            "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
+            "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
+            "services/supervisor/src/supervisor/api/main.py",
+            "services/supervisor/src/supervisor/application/service.py",
+            "packages/contracts/src/api.ts",
+        ]
         return RuntimeEvidenceExportView(
             exportId=f"runtime-evidence-export-{work_item_id}",
             format="application/json",
@@ -1002,34 +1032,8 @@ class SupervisorService:
                     "supervisor_database.execution_attempts",
                     "runtime-generated export timestamps and identifiers",
                 ],
-                gitBackedEvidence=[
-                    "docs/goals/bmad-architecture-completion-github-progress-goal-2026-06-08.md",
-                    "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
-                    "docs/stories/2-7-runtime-evidence-export-strategy.md",
-                    "docs/stories/3-7-execution-readiness-and-evidence-report.md",
-                    "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md",
-                    "docs/stories/3-15-documentation-authority-report.md",
-                    "docs/stories/3-16-verification-readiness-report.md",
-                    "docs/stories/3-18-supervisor-report-catalog.md",
-                    "docs/stories/3-19-maintenance-readiness-report.md",
-                    "docs/prds/supervisor-execution-authority-expansion.md",
-                    "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
-                    "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
-                    "services/supervisor/src/supervisor/api/main.py",
-                    "services/supervisor/src/supervisor/application/service.py",
-                    "packages/contracts/src/api.ts",
-                ],
-                relatedSupervisorReports=[
-                    "GET /supervisor/execution-configuration-checks",
-                    "GET /supervisor/threat-boundary",
-                    "GET /supervisor/execution-readiness-report",
-                    "GET /supervisor/documentation-authority-report",
-                    "GET /supervisor/verification-readiness-report",
-                    "GET /supervisor/report-catalog",
-                    "GET /supervisor/maintenance-readiness-report",
-                    "GET /supervisor/execution-state-boundary",
-                    "GET /supervisor/disabled-provider-proofs",
-                ],
+                gitBackedEvidence=git_backed_evidence,
+                relatedSupervisorReports=related_reports,
                 excludedState=[
                     "environment variables and credential stores",
                     "provider HTTP request/response bodies",
@@ -1039,6 +1043,33 @@ class SupervisorService:
                 ],
             ),
             safety=RuntimeEvidenceExportSafetyView(),
+            reviewManifest=RuntimeEvidenceReviewManifestView(
+                manifestId=f"runtime-evidence-review-manifest-{work_item_id}",
+                summary="Review manifest for export contents, evidence counts, retention boundaries, and authority stop lines.",
+                evidenceCounts={
+                    "executionAttempts": len(attempts),
+                    "workflowEvents": len(events),
+                    "relatedSupervisorReports": len(related_reports),
+                    "gitBackedEvidence": len(git_backed_evidence),
+                    "excludedState": 5,
+                },
+                reviewChecklist=[
+                    "Confirm work-item state, attempts, and workflow events match the review question.",
+                    "Review related supervisor reports before changing execution-authority posture.",
+                    "Confirm excluded state is not needed for the current review.",
+                    "Keep the export attached to the work item instead of copying secrets or provider payloads into notes.",
+                ],
+                retentionNotes=[
+                    "Export includes supervisor database evidence and git-backed references.",
+                    "Export excludes credential stores, provider request/response bodies, and external filesystem snapshots.",
+                    "Generated timestamps and identifiers are local runtime evidence, not durable Git state.",
+                ],
+                stopLines=[
+                    "The review manifest is not execution-authority approval.",
+                    "Export review must not enable provider/model calls or process launch.",
+                    "Export review must not grant worker commands, source mutation, network access, or credential access.",
+                ],
+            ),
         )
 
     async def get_execution_readiness_report(self, session: AsyncSession) -> ExecutionReadinessReportView:

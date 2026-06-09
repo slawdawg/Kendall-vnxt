@@ -245,21 +245,21 @@ test.describe("dashboard workflow coverage", () => {
 
     await page.goto(`/work-items/${workItemId}`);
 
-    await page.getByRole("link", { name: "Request detail" }).click();
+    await page.getByRole("link", { name: "Request detail", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#request-detail$`));
     await expect(page.locator("#request-detail")).toBeInViewport();
 
-    await page.getByRole("link", { name: "Retries" }).click();
+    await page.getByRole("link", { name: "Retries", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#retry-history$`));
     await expect(page.locator("#retry-history")).toBeInViewport();
     await expect(page.getByText("Implementation attempts")).toBeVisible();
 
-    await page.getByRole("link", { name: "History" }).click();
+    await page.getByRole("link", { name: "History", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#workflow-history$`));
     await expect(page.locator("#workflow-history")).toBeInViewport();
     await expect(page.getByText("Ready for validation.").first()).toBeVisible();
 
-    await page.getByRole("link", { name: "Move work" }).click();
+    await page.getByRole("link", { name: "Move work", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#workflow-actions$`));
     await expect(page.locator("#workflow-actions")).toBeInViewport();
     await expect(page.getByRole("button", { name: "Approve work" })).toBeVisible();
@@ -358,7 +358,7 @@ test.describe("dashboard workflow coverage", () => {
 
     await page.goto(`/work-items/${workItemId}`);
 
-    await page.getByRole("link", { name: "Routing" }).click();
+    await page.getByRole("link", { name: "Routing", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#routing-decision$`));
 
     const routingPanel = page.locator("#routing-decision");
@@ -395,7 +395,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(overviewPanel.getByText("Runtime export")).toBeVisible();
     await expect(overviewPanel.getByText("authority flags disabled")).toBeVisible();
 
-    await page.getByRole("link", { name: "Attempts" }).click();
+    await page.getByRole("link", { name: "Attempts", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#execution-attempts$`));
 
     const attemptPanel = page.locator("#execution-attempts");
@@ -413,16 +413,21 @@ test.describe("dashboard workflow coverage", () => {
     await expect(attemptPanel.getByText("Credentials: disabled")).toBeVisible();
     await expect(attemptPanel.getByText("_bmad-output/execution-attempts")).toBeVisible();
 
-    await page.getByRole("link", { name: "Export" }).click();
+    await page.getByRole("link", { name: "Export", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#runtime-evidence-export$`));
 
     const exportPanel = page.locator("#runtime-evidence-export");
     await expect(exportPanel).toBeInViewport();
     await expect(exportPanel.getByText("Evidence package")).toBeVisible();
-    await expect(exportPanel.getByText("Safety flags")).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Safety flags" })).toBeVisible();
     await expect(exportPanel.getByText("Provider calls: disabled")).toBeVisible();
     await expect(exportPanel.getByText("Related reports")).toBeVisible();
     await expect(exportPanel.getByText("GET /supervisor/execution-readiness-report")).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Review manifest" })).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Review checklist" })).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Retention notes" })).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Manifest stop lines" })).toBeVisible();
+    await expect(exportPanel.getByText("The review manifest is not execution-authority approval.")).toBeVisible();
   });
 
   test("shows delivery readiness controls for managed recipe work", async ({ page, request }) => {

@@ -794,6 +794,17 @@ class RuntimeEvidenceExportSafetyView(BaseModel):
     credentialAccessAllowed: bool = False
 
 
+class RuntimeEvidenceReviewManifestView(BaseModel):
+    manifestId: str
+    summary: str
+    evidenceCounts: dict[str, int]
+    reviewChecklist: list[str]
+    retentionNotes: list[str]
+    stopLines: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+
+
 class RuntimeEvidenceExportView(BaseModel):
     exportId: str
     format: str
@@ -804,6 +815,7 @@ class RuntimeEvidenceExportView(BaseModel):
     workflowEvents: list[WorkflowEventView]
     boundary: RuntimeEvidenceExportBoundaryView
     safety: RuntimeEvidenceExportSafetyView
+    reviewManifest: RuntimeEvidenceReviewManifestView
 
 
 class WorkItemAssignmentRequest(BaseModel):

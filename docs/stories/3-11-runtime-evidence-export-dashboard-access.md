@@ -26,6 +26,7 @@ so that attempt, event, boundary, safety, and readiness report evidence is revie
 
 - Added dashboard supervisor client access for runtime evidence exports.
 - Added `RuntimeEvidenceExportPanel`.
+- Added review manifest display for export counts, checklist, retention notes, and authority stop lines.
 - Rendered the panel on work-item detail pages near routing and attempt evidence.
 - Added Playwright coverage to the existing execution attempt evidence test.
 

@@ -95,6 +95,57 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
         </div>
       </div>
 
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <h4 className="text-base font-semibold">Review manifest</h4>
+          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{exportView.reviewManifest.summary}</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {Object.entries(exportView.reviewManifest.evidenceCounts).map(([label, value]) => (
+              <div key={label} className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{titleCase(label)}</p>
+                <p className="mt-1 text-sm font-semibold">{value}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 break-all font-mono text-xs text-[var(--muted)]">{exportView.reviewManifest.manifestId}</p>
+        </div>
+
+        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <h4 className="text-base font-semibold">Review checklist</h4>
+          <div className="mt-3 space-y-2">
+            {exportView.reviewManifest.reviewChecklist.map((item) => (
+              <p key={item} className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+                {item}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <h4 className="text-base font-semibold">Retention notes</h4>
+          <div className="mt-3 space-y-2">
+            {exportView.reviewManifest.retentionNotes.map((note) => (
+              <p key={note} className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+                {note}
+              </p>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <h4 className="text-base font-semibold">Manifest stop lines</h4>
+          <div className="mt-3 space-y-2">
+            {exportView.reviewManifest.stopLines.map((stopLine) => (
+              <p key={stopLine} className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+                {stopLine}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+
       <p className="mt-4 break-all font-mono text-xs text-[var(--muted)]">{titleCase(exportView.exportId)}</p>
     </section>
   );

@@ -704,6 +704,17 @@ export interface RuntimeEvidenceExportSafetyView {
   credentialAccessAllowed: boolean;
 }
 
+export interface RuntimeEvidenceReviewManifestView {
+  manifestId: string;
+  summary: string;
+  evidenceCounts: Record<string, number>;
+  reviewChecklist: string[];
+  retentionNotes: string[];
+  stopLines: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+}
+
 export interface RuntimeEvidenceExportView {
   exportId: string;
   format: "application/json";
@@ -714,6 +725,7 @@ export interface RuntimeEvidenceExportView {
   workflowEvents: WorkflowEventView[];
   boundary: RuntimeEvidenceExportBoundaryView;
   safety: RuntimeEvidenceExportSafetyView;
+  reviewManifest: RuntimeEvidenceReviewManifestView;
 }
 
 export interface OperatorProfile {

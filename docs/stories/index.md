@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-20-runtime-evidence-review-manifest.md` | Runtime evidence export review manifest and dashboard panel polish. |
 | `3-19-maintenance-readiness-report.md` | Read-only maintenance readiness map and controls-page safe work panel. |
 | `3-18-supervisor-report-catalog.md` | Read-only supervisor report catalog and controls-page evidence map. |
 | `3-17-dashboard-e2e-reliability-guardrails.md` | Focused controls-page e2e command and repo-local Playwright cache defaults. |

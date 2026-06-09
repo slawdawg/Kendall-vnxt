@@ -1635,6 +1635,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/2-7-runtime-evidence-export-strategy.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-7-execution-readiness-and-evidence-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-20-runtime-evidence-review-manifest.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
@@ -1652,6 +1653,14 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert export["safety"]["sourceMutationAllowed"] is False
     assert export["safety"]["networkAllowed"] is False
     assert export["safety"]["credentialAccessAllowed"] is False
+    assert export["reviewManifest"]["manifestId"] == f"runtime-evidence-review-manifest-{work_item_id}"
+    assert export["reviewManifest"]["evidenceCounts"]["executionAttempts"] == 1
+    assert export["reviewManifest"]["evidenceCounts"]["workflowEvents"] == len(export["workflowEvents"])
+    assert export["reviewManifest"]["evidenceCounts"]["relatedSupervisorReports"] == len(export["boundary"]["relatedSupervisorReports"])
+    assert export["reviewManifest"]["readOnly"] is True
+    assert export["reviewManifest"]["executionAuthorityApproved"] is False
+    assert any("not execution-authority approval" in stop_line for stop_line in export["reviewManifest"]["stopLines"])
+    assert any("credential stores" in note for note in export["reviewManifest"]["retentionNotes"])
     assert before_events_response.json()["data"] == after_events_response.json()["data"]
     assert missing_response.status_code == 404
 
