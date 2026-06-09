@@ -10,7 +10,7 @@ Keep current operator runbooks aligned with the active verification chain so fre
 ## Scope
 
 - Add `pnpm run check:runbooks`.
-- Validate current runbooks mention `pnpm run check`, `check:docs`, `check:e2e-report`, `check:reports`, and `check:runbooks`.
+- Validate current runbooks mention `pnpm run check`, `check:docs`, `check:e2e-report`, `check:reports`, `check:runbooks`, `check:runtime-export`, and `check:safe-backlog`.
 - Validate current runbooks avoid stale fixed supervisor test counts.
 - Update README, fresh VM checklist, bootstrap guide, and current handoff orientation with the active verification chain.
 - Include the runbook check in `pnpm run check`.

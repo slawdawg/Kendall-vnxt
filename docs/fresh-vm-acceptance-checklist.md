@@ -50,6 +50,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 - `pnpm run check:e2e-report` passes.
 - `pnpm run check:reports` passes.
 - `pnpm run check:runbooks` passes.
+- `pnpm run check:runtime-export` passes.
+- `pnpm run check:safe-backlog` passes.
 - `pnpm run check` passes.
 - Bootstrap local-only smoke check passes:
 

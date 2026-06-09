@@ -57,6 +57,9 @@ for (const path of currentRunbooks) {
   assertCondition(content.includes("pnpm run check:docs"), `${path} must mention pnpm run check:docs`, failures);
   assertCondition(content.includes("pnpm run check:e2e-report"), `${path} must mention pnpm run check:e2e-report`, failures);
   assertCondition(content.includes("pnpm run check:reports"), `${path} must mention pnpm run check:reports`, failures);
+  assertCondition(content.includes("pnpm run check:runbooks"), `${path} must mention pnpm run check:runbooks`, failures);
+  assertCondition(content.includes("pnpm run check:runtime-export"), `${path} must mention pnpm run check:runtime-export`, failures);
+  assertCondition(content.includes("pnpm run check:safe-backlog"), `${path} must mention pnpm run check:safe-backlog`, failures);
   assertCondition(
     !content.includes("77 supervisor tests") && !content.includes("70 supervisor tests"),
     `${path} must not carry stale fixed supervisor test counts`,
@@ -77,6 +80,11 @@ assertCondition(
 assertCondition(
   files["docs/stories/index.md"].includes("3-29-runbook-verification-alignment.md"),
   "Story index must reference Story 3.29 runbook verification alignment",
+  failures,
+);
+assertCondition(
+  files["docs/stories/index.md"].includes("3-35-runbook-check-chain-hardening.md"),
+  "Story index must reference Story 3.35 runbook check-chain hardening",
   failures,
 );
 assertCondition(

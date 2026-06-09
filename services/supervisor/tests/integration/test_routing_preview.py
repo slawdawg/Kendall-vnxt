@@ -951,6 +951,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "explicit operator approval naming authority and scope" in blocked_item["blockedBy"]
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
     assert "docs/stories/3-32-safe-development-backlog-drift-check.md" in verification_item["relatedDocs"]
+    assert "docs/stories/3-35-runbook-check-chain-hardening.md" in verification_item["relatedDocs"]
     evidence_item = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish")
     assert "docs/stories/3-33-evidence-overview-review-shortcuts.md" in evidence_item["relatedDocs"]
     assert "docs/stories/3-34-report-shortcuts-in-evidence-overview.md" in evidence_item["relatedDocs"]
@@ -1759,6 +1760,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-32-safe-development-backlog-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-33-evidence-overview-review-shortcuts.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-34-report-shortcuts-in-evidence-overview.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-35-runbook-check-chain-hardening.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
