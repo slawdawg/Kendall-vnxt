@@ -40,7 +40,7 @@ assertCondition(
   failures,
 );
 
-for (const typeName of ["VerificationCommandView", "VerificationReadinessReportView"]) {
+for (const typeName of ["VerificationCommandView", "VerificationCommandGroupView", "VerificationReadinessReportView"]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
   assertCondition(schemaSource.includes(`class ${typeName}`), `Supervisor schemas must include ${typeName}`, failures);
 }
@@ -80,6 +80,10 @@ for (const serviceText of [
   "get_verification_readiness_report",
   "verification-readiness-report-v1",
   "executionAuthorityApproved=False",
+  "commandGroups=command_groups",
+  "static-drift-chain",
+  "dashboard-browser-build",
+  "full-local-gate",
   "docs/stories/3-47-core-readiness-drift-checks.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Verification readiness service must include ${serviceText}`, failures);
@@ -98,13 +102,17 @@ assertCondition(
   failures,
 );
 
-for (const panelText of ["VerificationReadinessReportView", "Required commands", "Optional commands", "Authority stop lines"]) {
+for (const panelText of ["VerificationReadinessReportView", "Execution plan", "commandGroups", "Required commands", "Optional commands", "Authority stop lines"]) {
   assertCondition(verificationPanel.includes(panelText), `Verification readiness panel must render ${panelText}`, failures);
 }
 
 for (const browserText of [
   "Verification readiness",
   "Checks and stop lines",
+  "Execution plan",
+  "static-drift-chain",
+  "dashboard-browser-build",
+  "full-local-gate",
   "pnpm run check:documentation-authority",
   "pnpm run check:verification-readiness",
   "pnpm run check:authority-readiness",

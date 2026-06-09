@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, and runtime evidence review coverage through Story 3.55
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, and verification execution plan coverage through Story 3.56
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -69,6 +69,7 @@ Do not rebuild these as new architecture work:
 - Dashboard evidence overview polish.
 - Documentation authority indexes, drift checks, and controls-page report.
 - Verification readiness commands, stop lines, and controls-page report.
+- Verification execution plan groups for ordered setup, static drift, dashboard/browser, supervisor behavior, full local, and optional remote checks.
 - Dashboard e2e reliability guardrails for focused controls-page verification.
 - Supervisor report catalog for read-only evidence navigation.
 - Maintenance readiness report for safe repo hygiene while authority stories remain blocked.
@@ -104,6 +105,7 @@ Do not rebuild these as new architecture work:
 - Authority readiness matrix drift check for blocked story mapping, approval evidence, report/runtime references, controls-page rendering, and story evidence.
 - Development runway drift check for larger PR-sized safe slices, report/runtime references, controls-page rendering, runbooks, and story evidence.
 - Runtime evidence review drift check for work-item runtime export review indexing, report/runtime references, controls-page rendering, runbooks, and story evidence.
+- Verification readiness drift coverage for command group contracts, service construction, controls-page rendering, and browser assertions.
 
 ## Current Gaps
 

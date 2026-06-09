@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-56-verification-execution-plan-groups.md` | Verification readiness command groups for ordered setup, static drift, dashboard/browser, supervisor, full local, and optional remote checks. |
 | `3-55-runtime-evidence-review-index.md` | Read-only runtime evidence review index for work-item exports, review priority, evidence counts, related reports, and safe review actions. |
 | `3-54-development-runway-safe-slices.md` | Read-only development runway for grouping safe backlog, maintenance action, verification, and authority blocker evidence into larger PR-sized safe slices. |
 | `3-53-authority-readiness-matrix-report.md` | Read-only authority readiness matrix for blocked execution-authority families, approval evidence, related reports, and stop lines. |

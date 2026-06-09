@@ -576,12 +576,23 @@ class VerificationCommandView(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class VerificationCommandGroupView(BaseModel):
+    groupId: str
+    label: str
+    status: str
+    summary: str
+    commandIds: list[str] = Field(default_factory=list)
+    requiredBefore: str
+    nextAction: str
+
+
 class VerificationReadinessReportView(BaseModel):
     reportId: str
     generatedAt: datetime
     summary: str
     requiredCommands: list[VerificationCommandView]
     optionalCommands: list[VerificationCommandView]
+    commandGroups: list[VerificationCommandGroupView]
     stopLines: list[str]
     nextSafeActions: list[str]
     readyForAuthorityEnablement: bool = False
