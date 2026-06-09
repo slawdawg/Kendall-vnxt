@@ -849,6 +849,8 @@ def test_dashboard_e2e_report_lists_focused_runners_without_mutation(tmp_path, m
     assert runner_by_id["dashboard-full-e2e"]["ownsServerLifecycle"] is False
     assert runner_by_id["dashboard-controls-e2e"]["command"] == "pnpm run test:e2e:dashboard:controls"
     assert runner_by_id["dashboard-detail-e2e"]["command"] == "pnpm run test:e2e:dashboard:detail"
+    assert "scripts/dashboard-e2e-runner.mjs" in " ".join(runner_by_id["dashboard-controls-e2e"]["evidence"])
+    assert "scripts/dashboard-e2e-runner.mjs" in " ".join(runner_by_id["dashboard-detail-e2e"]["evidence"])
     assert {command["commandId"] for command in report["setupCommands"]} == {"setup-e2e", "dashboard-build"}
     assert any("provider/model calls" in stop_line for stop_line in report["stopLines"])
     assert any("focused controls and detail runners" in action for action in report["nextSafeActions"])
@@ -1679,6 +1681,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-20-runtime-evidence-review-manifest.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-22-dashboard-e2e-report.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
