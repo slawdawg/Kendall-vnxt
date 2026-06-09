@@ -469,6 +469,11 @@ async def get_verification_readiness_report():
     return ApiEnvelope(data=service.get_verification_readiness_report())
 
 
+@app.get("/supervisor/report-catalog", response_model=ApiEnvelope)
+async def get_supervisor_report_catalog():
+    return ApiEnvelope(data=service.get_supervisor_report_catalog())
+
+
 @app.get("/supervisor/disabled-provider-proofs", response_model=ApiEnvelope)
 async def list_disabled_provider_proofs():
     return ApiEnvelope(data=service.list_disabled_provider_proofs())

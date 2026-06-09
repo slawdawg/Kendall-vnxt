@@ -775,6 +775,44 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "pnpm run check" in " ".join(report["nextSafeActions"])
 
 
+def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "supervisor-report-catalog.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/report-catalog")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    catalog = response.json()["data"]
+    assert catalog["catalogId"] == "supervisor-report-catalog-v1"
+    assert catalog["readOnly"] is True
+    assert catalog["executionAuthorityApproved"] is False
+
+    endpoints = {report["endpoint"] for report in catalog["reports"]}
+    assert endpoints == {
+        "GET /supervisor/execution-configuration-checks",
+        "GET /supervisor/execution-readiness-report",
+        "GET /supervisor/documentation-authority-report",
+        "GET /supervisor/verification-readiness-report",
+        "GET /supervisor/disabled-provider-proofs",
+        "GET /supervisor/execution-state-boundary",
+        "GET /supervisor/threat-boundary",
+    }
+    assert all(report["readOnly"] is True for report in catalog["reports"])
+    assert all(report["executionAuthorityApproved"] is False for report in catalog["reports"])
+    assert any("not approvals" in stop_line for stop_line in catalog["stopLines"])
+
+
 def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "disabled-provider-proofs.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -1562,6 +1600,9 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-7-execution-readiness-and-evidence-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/report-catalog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
     assert "environment variables and credential stores" in export["boundary"]["excludedState"]

@@ -159,6 +159,14 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:controls", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("Passing verification does not approve local provider/model calls.")).toBeVisible();
+
+    const reportCatalogPanel = page.locator("section").filter({ hasText: "Supervisor evidence map" }).first();
+    await expect(reportCatalogPanel.getByText("Report catalog", { exact: true })).toBeVisible();
+    await expect(reportCatalogPanel.getByText("Supervisor evidence map")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/execution-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/verification-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
+
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
     await expect(fleetPanel.getByText("Internal utility worker")).toBeVisible();

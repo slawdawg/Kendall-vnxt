@@ -534,6 +534,29 @@ export interface VerificationReadinessReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface SupervisorReportCatalogEntryView {
+  reportId: string;
+  label: string;
+  endpoint: string;
+  status: string;
+  summary: string;
+  evidenceScope: string[];
+  relatedDocs: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+}
+
+export interface SupervisorReportCatalogView {
+  catalogId: string;
+  generatedAt: string;
+  summary: string;
+  reports: SupervisorReportCatalogEntryView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+}
+
 export interface ThreatBoundaryRuleView {
   ruleId: string;
   label: string;

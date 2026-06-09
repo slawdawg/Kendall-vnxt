@@ -70,6 +70,7 @@ Do not rebuild these as new architecture work:
 - Documentation authority indexes, drift checks, and controls-page report.
 - Verification readiness commands, stop lines, and controls-page report.
 - Dashboard e2e reliability guardrails for focused controls-page verification.
+- Supervisor report catalog for read-only evidence navigation.
 
 ## Current Gaps
 
