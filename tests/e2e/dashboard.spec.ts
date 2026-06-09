@@ -161,11 +161,19 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("Passing verification does not approve local provider/model calls.")).toBeVisible();
 
+    const dashboardE2EPanel = page.locator("section").filter({ hasText: "Browser verification map" }).first();
+    await expect(dashboardE2EPanel.getByText("Dashboard e2e", { exact: true })).toBeVisible();
+    await expect(dashboardE2EPanel.getByRole("heading", { name: "Browser verification map" })).toBeVisible();
+    await expect(dashboardE2EPanel.getByText("pnpm run test:e2e:dashboard:controls", { exact: true })).toBeVisible();
+    await expect(dashboardE2EPanel.getByText("pnpm run test:e2e:dashboard:detail", { exact: true })).toBeVisible();
+    await expect(dashboardE2EPanel.getByText("Browser verification does not approve local provider/model calls.")).toBeVisible();
+
     const reportCatalogPanel = page.locator("section").filter({ hasText: "Supervisor evidence map" }).first();
     await expect(reportCatalogPanel.getByText("Report catalog", { exact: true })).toBeVisible();
     await expect(reportCatalogPanel.getByText("Supervisor evidence map")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/verification-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/dashboard-e2e-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
 
     const maintenancePanel = page.locator("section").filter({ hasText: "Safe work map" }).first();

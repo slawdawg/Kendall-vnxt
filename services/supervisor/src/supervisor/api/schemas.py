@@ -588,6 +588,29 @@ class VerificationReadinessReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class DashboardE2ERunnerView(BaseModel):
+    runnerId: str
+    label: str
+    command: str
+    target: str
+    status: str
+    evidence: list[str] = Field(default_factory=list)
+    ownsServerLifecycle: bool = True
+    usesRepoLocalCaches: bool = True
+
+
+class DashboardE2EReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    runners: list[DashboardE2ERunnerView]
+    setupCommands: list[VerificationCommandView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+
+
 class SupervisorReportCatalogEntryView(BaseModel):
     reportId: str
     label: str

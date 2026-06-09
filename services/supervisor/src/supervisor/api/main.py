@@ -469,6 +469,11 @@ async def get_verification_readiness_report():
     return ApiEnvelope(data=service.get_verification_readiness_report())
 
 
+@app.get("/supervisor/dashboard-e2e-report", response_model=ApiEnvelope)
+async def get_dashboard_e2e_report():
+    return ApiEnvelope(data=service.get_dashboard_e2e_report())
+
+
 @app.get("/supervisor/report-catalog", response_model=ApiEnvelope)
 async def get_supervisor_report_catalog():
     return ApiEnvelope(data=service.get_supervisor_report_catalog())

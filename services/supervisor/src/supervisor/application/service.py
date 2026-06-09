@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
     AuditEventView,
+    DashboardE2EReportView,
+    DashboardE2ERunnerView,
     DocumentationAuthorityBlockedStoryView,
     DocumentationAuthorityDocumentView,
     DocumentationAuthorityReportView,
@@ -517,7 +519,96 @@ class SupervisorService:
             nextSafeActions=[
                 "Run focused tests for the code area changed, then run `pnpm run check` before merge.",
                 "Use Playwright dashboard coverage when UI behavior changes and the local browser stack is healthy.",
+                "Use the dashboard e2e report before changing browser workflow coverage.",
                 "Keep verification reports aligned with README, handoff, and fresh VM checklist commands.",
+            ],
+        )
+
+    def get_dashboard_e2e_report(self) -> DashboardE2EReportView:
+        setup_commands = [
+            VerificationCommandView(
+                commandId="setup-e2e",
+                label="Playwright browser setup",
+                command="pnpm run setup:e2e",
+                status="optional_when_browser_stack_missing",
+                requiredFor=["dashboard browser coverage", "fresh VM browser verification", "focused e2e scripts"],
+                evidence=[
+                    "Installs Chromium for Playwright when the browser cache is missing.",
+                    "Uses the repo-local `.data/ms-playwright` browser cache configured by Playwright.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="dashboard-build",
+                label="Dashboard build and type check",
+                command="pnpm --filter @kendall/dashboard build",
+                status="required_for_dashboard_changes",
+                requiredFor=["dashboard changes", "contract changes", "controls-page report changes"],
+                evidence=[
+                    "Runs the Next.js production build.",
+                    "Validates dashboard TypeScript through the build pipeline.",
+                ],
+            ),
+        ]
+        runners = [
+            DashboardE2ERunnerView(
+                runnerId="dashboard-controls-e2e",
+                label="Controls report slice",
+                command="pnpm run test:e2e:dashboard:controls",
+                target="Controls page report panels and read-only authority summaries.",
+                status="active",
+                evidence=[
+                    "scripts/run-controls-e2e.mjs owns supervisor and dashboard server lifecycle.",
+                    "tests/e2e/dashboard.spec.ts covers controls-page report panels.",
+                    "Uses repo-local database, uv cache, temp, and Playwright browser cache paths.",
+                ],
+            ),
+            DashboardE2ERunnerView(
+                runnerId="dashboard-detail-e2e",
+                label="Work-item detail runtime export slice",
+                command="pnpm run test:e2e:dashboard:detail",
+                target="Work-item detail runtime evidence export and review manifest panels.",
+                status="active",
+                evidence=[
+                    "scripts/run-detail-e2e.mjs owns supervisor and dashboard server lifecycle.",
+                    "tests/e2e/dashboard.spec.ts covers runtime evidence export detail behavior.",
+                    "Runtime evidence review manifest assertions stay isolated from authority enablement.",
+                ],
+            ),
+            DashboardE2ERunnerView(
+                runnerId="dashboard-full-e2e",
+                label="Full dashboard coverage",
+                command="pnpm run test:e2e:dashboard",
+                target="Dashboard intake, controls, queue, audit, and work-item workflows.",
+                status="optional_when_browser_stack_ready",
+                evidence=[
+                    "Runs Playwright coverage through playwright.config.ts web servers.",
+                    "Useful after broad operator workflow or responsive UI changes.",
+                    "May require browser stack and Windows web-server teardown posture to be healthy.",
+                ],
+                ownsServerLifecycle=False,
+            ),
+        ]
+
+        return DashboardE2EReportView(
+            reportId="dashboard-e2e-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only browser verification map for dashboard e2e runners, setup commands, cache posture, "
+                "server lifecycle ownership, and authority stop lines."
+            ),
+            runners=runners,
+            setupCommands=setup_commands,
+            stopLines=[
+                "Browser verification does not approve local provider/model calls.",
+                "Browser verification does not approve subscription-agent process launch.",
+                "Browser verification does not approve premium execution.",
+                "Browser verification does not approve arbitrary shell execution by workers.",
+                "Browser verification does not approve worker source mutation, network access, or credential access.",
+            ],
+            nextSafeActions=[
+                "Use focused controls and detail runners for report or runtime export dashboard changes.",
+                "Run full dashboard e2e only when the browser stack and web-server lifecycle posture are healthy.",
+                "Keep runner commands aligned with the verification readiness report and package scripts.",
             ],
         )
 
@@ -561,6 +652,19 @@ class SupervisorService:
                 summary="Lists required checks, optional checks, and verification stop lines for local delivery readiness.",
                 evidenceScope=["workspace checks", "dashboard build", "supervisor tests", "browser test setup"],
                 relatedDocs=["docs/stories/3-16-verification-readiness-report.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="dashboard-e2e-report-v1",
+                label="Dashboard e2e report",
+                endpoint="GET /supervisor/dashboard-e2e-report",
+                status="active",
+                summary="Maps focused and full dashboard browser verification runners, setup commands, lifecycle notes, and stop lines.",
+                evidenceScope=["Playwright runners", "dashboard browser setup", "repo-local e2e caches", "authority stop lines"],
+                relatedDocs=[
+                    "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
+                    "docs/stories/3-21-dashboard-detail-e2e-runner.md",
+                    "docs/stories/3-22-dashboard-e2e-report.md",
+                ],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="maintenance-readiness-report-v1",
@@ -652,12 +756,13 @@ class SupervisorService:
                 evidence=[
                     f"{len(verification.requiredCommands)} required commands listed.",
                     f"{len(verification.optionalCommands)} optional commands listed.",
-                    "Controls-page e2e coverage is available for report panel changes.",
+                    "Focused controls and detail e2e runners are available for report and runtime export changes.",
                 ],
-                relatedReports=["GET /supervisor/verification-readiness-report"],
+                relatedReports=["GET /supervisor/verification-readiness-report", "GET /supervisor/dashboard-e2e-report"],
                 relatedDocs=[
                     "docs/stories/3-16-verification-readiness-report.md",
                     "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
+                    "docs/stories/3-22-dashboard-e2e-report.md",
                 ],
                 nextAction="Run focused checks for changed areas, then `pnpm run check` before merge.",
             ),
@@ -669,10 +774,10 @@ class SupervisorService:
                 evidence=[
                     f"{active_reports} active supervisor reports indexed.",
                     "Runtime evidence exports reference the report catalog and safety reports.",
-                    "Controls page fetches the report catalog with other read-only reports.",
+                    "Controls page fetches the report catalog and dashboard e2e report with other read-only reports.",
                 ],
-                relatedReports=["GET /supervisor/report-catalog"],
-                relatedDocs=["docs/stories/3-18-supervisor-report-catalog.md"],
+                relatedReports=["GET /supervisor/report-catalog", "GET /supervisor/dashboard-e2e-report"],
+                relatedDocs=["docs/stories/3-18-supervisor-report-catalog.md", "docs/stories/3-22-dashboard-e2e-report.md"],
                 nextAction="Add new read-only reports to the catalog, controls page, tests, and runtime export references together.",
             ),
             MaintenanceReadinessTrackView(
@@ -1005,6 +1110,7 @@ class SupervisorService:
             "GET /supervisor/execution-readiness-report",
             "GET /supervisor/documentation-authority-report",
             "GET /supervisor/verification-readiness-report",
+            "GET /supervisor/dashboard-e2e-report",
             "GET /supervisor/report-catalog",
             "GET /supervisor/maintenance-readiness-report",
             "GET /supervisor/execution-state-boundary",
@@ -1018,9 +1124,12 @@ class SupervisorService:
             "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md",
             "docs/stories/3-15-documentation-authority-report.md",
             "docs/stories/3-16-verification-readiness-report.md",
+            "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
             "docs/stories/3-18-supervisor-report-catalog.md",
             "docs/stories/3-19-maintenance-readiness-report.md",
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
+            "docs/stories/3-21-dashboard-detail-e2e-runner.md",
+            "docs/stories/3-22-dashboard-e2e-report.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
