@@ -12,14 +12,15 @@ if (-not $RepoRoot) {
 
 $dashboardScript = Join-Path $RepoRoot "scripts\windows\Start-KendallNxtDashboard.ps1"
 $supervisorScript = Join-Path $RepoRoot "scripts\windows\Start-KendallNxtSupervisor.ps1"
+$codexScript = Join-Path $RepoRoot "scripts\windows\Start-KendallNxtCodex.ps1"
 
-foreach ($path in @($dashboardScript, $supervisorScript)) {
+foreach ($path in @($dashboardScript, $supervisorScript, $codexScript)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Missing startup script: $path"
     }
 }
 
-$principal = New-ScheduledTaskPrincipal -UserId $UserName -LogonType Interactive -RunLevel Highest
+$principal = New-ScheduledTaskPrincipal -UserId $UserName -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -36,6 +37,9 @@ $dashboardAction = New-ScheduledTaskAction `
 $supervisorAction = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$supervisorScript`" -RepoRoot `"$RepoRoot`""
+$codexAction = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$codexScript`" -RepoRoot `"$RepoRoot`""
 
 Register-ScheduledTask `
     -TaskName "Kendall_Nxt Dashboard" `
@@ -54,3 +58,12 @@ Register-ScheduledTask `
     -Settings $settings `
     -Force `
     -Description "Starts the Kendall_Nxt supervisor API on Windows logon."
+
+Register-ScheduledTask `
+    -TaskName "Kendall_Nxt Codex" `
+    -Action $codexAction `
+    -Trigger $trigger `
+    -Principal $principal `
+    -Settings $settings `
+    -Force `
+    -Description "Starts an interactive Codex session from the Kendall_Nxt repo root on Windows logon."

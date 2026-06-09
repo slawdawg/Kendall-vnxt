@@ -57,9 +57,10 @@ This repo uses a `pnpm` workspace so JS dependencies come from a shared global s
 
 ## Windows startup
 
-- `scripts/windows/Install-KendallNxtStartup.ps1` registers per-user logon tasks for the dashboard and supervisor.
+- `scripts/windows/Install-KendallNxtStartup.ps1` registers per-user logon tasks for the dashboard, supervisor, and an interactive Codex session.
 - `scripts/windows/Start-KendallNxtDashboard.ps1` serves the built dashboard on `0.0.0.0:3000`.
 - `scripts/windows/Start-KendallNxtSupervisor.ps1` serves the supervisor API on `0.0.0.0:8000`.
+- `scripts/windows/Start-KendallNxtCodex.ps1` starts Codex from the repo root and points the terminal at `docs/handoffs/current.md`.
 - `scripts/windows/Launch-KendallNxtAtLogon.vbs` is suitable for the Windows Startup folder when you want a hidden per-user logon launcher.
 - Logs are written to `.data/logs/`.
 

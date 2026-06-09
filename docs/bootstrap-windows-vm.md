@@ -30,6 +30,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 Read docs/handoffs/current.md and continue from it. Use the repo state as source of truth.
 ```
 
+To start the Kendall_Nxt services and Codex automatically whenever this Windows user logs in, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\Install-KendallNxtStartup.ps1
+```
+
+This creates per-user logon tasks for the dashboard, supervisor, and a visible Codex terminal. Codex is interactive, so the supported automatic launch point is Windows logon rather than pre-login boot.
+
 If required tools are already installed and you only want to verify the machine:
 
 ```powershell
