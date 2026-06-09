@@ -6,11 +6,14 @@ Scope: Code-aware reconciliation of architecture and PRD gaps against current im
 
 Source review artifacts:
 
+- `docs/architecture/index.md`
 - `docs/architecture/kendall-vnxt-overall-architecture.md`
 - `docs/architecture/kendall-vnxt-architecture-gap-review-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md`
+- `docs/prds/index.md`
 - `docs/prds/supervisor-execution-authority-expansion.md`
 - `docs/prds/supervisor-dynamic-routing-follow-on-roadmap.md`
+- `docs/stories/index.md`
 - `docs/stories/2-1-execution-attempt-contract-and-state-model.md`
 - `docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md`
 

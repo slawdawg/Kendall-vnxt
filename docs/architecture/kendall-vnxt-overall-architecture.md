@@ -14,6 +14,9 @@ Kendall_vNxt is not a single chatbot and not a separate Bob Supervisor product. 
 
 This architecture stitches together the current source of truth from:
 
+- `docs/architecture/index.md`
+- `docs/prds/index.md`
+- `docs/stories/index.md`
 - `docs/implementation-checkpoint-2026-06-06.md`
 - `docs/environment-recovery-and-runtime-boundary.md`
 - `docs/prds/supervisor-dynamic-routing-mvp-1.md`
