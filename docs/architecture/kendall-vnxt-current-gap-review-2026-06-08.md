@@ -77,6 +77,7 @@ Do not rebuild these as new architecture work:
 - Dashboard e2e report for focused/full browser verification commands, lifecycle posture, cache posture, and stop lines.
 - Shared dashboard e2e runner lifecycle helper for focused browser verification scripts.
 - Focused mobile dashboard e2e runner for phone-sized intake draft verification.
+- Focused managed-recipe e2e runners for dashboard and mobile coverage intake templates.
 
 ## Current Gaps
 

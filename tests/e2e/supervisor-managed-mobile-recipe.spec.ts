@@ -1,6 +1,6 @@
 import { expect, test, devices } from "@playwright/test";
 
-test.use(devices["iPhone 13"]);
+test.use(devices["Pixel 5"]);
 
 async function openHomeWithTemplate(page) {
   const templateButton = page.getByRole("button", { name: "Harden mobile dashboard" });

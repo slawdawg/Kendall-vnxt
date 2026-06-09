@@ -769,6 +769,8 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "dashboard-controls-e2e",
         "dashboard-detail-e2e",
         "dashboard-mobile-e2e",
+        "dashboard-managed-recipe-e2e",
+        "dashboard-managed-mobile-recipe-e2e",
         "dashboard-e2e",
         "github-doctor-remote",
         "bootstrap-run-check",
@@ -843,21 +845,27 @@ def test_dashboard_e2e_report_lists_focused_runners_without_mutation(tmp_path, m
         "dashboard-controls-e2e",
         "dashboard-detail-e2e",
         "dashboard-mobile-e2e",
+        "dashboard-managed-recipe-e2e",
+        "dashboard-managed-mobile-recipe-e2e",
         "dashboard-full-e2e",
     }
     runner_by_id = {runner["runnerId"]: runner for runner in report["runners"]}
     assert runner_by_id["dashboard-controls-e2e"]["ownsServerLifecycle"] is True
     assert runner_by_id["dashboard-detail-e2e"]["ownsServerLifecycle"] is True
     assert runner_by_id["dashboard-mobile-e2e"]["ownsServerLifecycle"] is True
+    assert runner_by_id["dashboard-managed-recipe-e2e"]["ownsServerLifecycle"] is True
+    assert runner_by_id["dashboard-managed-mobile-recipe-e2e"]["ownsServerLifecycle"] is True
     assert runner_by_id["dashboard-full-e2e"]["ownsServerLifecycle"] is False
     assert runner_by_id["dashboard-controls-e2e"]["command"] == "pnpm run test:e2e:dashboard:controls"
     assert runner_by_id["dashboard-detail-e2e"]["command"] == "pnpm run test:e2e:dashboard:detail"
     assert runner_by_id["dashboard-mobile-e2e"]["command"] == "pnpm run test:e2e:dashboard:mobile"
+    assert runner_by_id["dashboard-managed-recipe-e2e"]["command"] == "pnpm run test:e2e:dashboard:managed"
+    assert runner_by_id["dashboard-managed-mobile-recipe-e2e"]["command"] == "pnpm run test:e2e:dashboard:managed:mobile"
     assert "scripts/dashboard-e2e-runner.mjs" in " ".join(runner_by_id["dashboard-controls-e2e"]["evidence"])
     assert "scripts/dashboard-e2e-runner.mjs" in " ".join(runner_by_id["dashboard-detail-e2e"]["evidence"])
     assert {command["commandId"] for command in report["setupCommands"]} == {"setup-e2e", "dashboard-build"}
     assert any("provider/model calls" in stop_line for stop_line in report["stopLines"])
-    assert any("focused controls and detail runners" in action for action in report["nextSafeActions"])
+    assert any("focused runners" in action for action in report["nextSafeActions"])
 
 
 def test_maintenance_readiness_report_tracks_safe_work_without_mutation(tmp_path, monkeypatch) -> None:
@@ -1687,6 +1695,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-22-dashboard-e2e-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-24-dashboard-mobile-e2e-runner.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-25-managed-recipe-e2e-runners.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]

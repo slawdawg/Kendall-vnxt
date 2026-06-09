@@ -477,6 +477,28 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="dashboard-managed-recipe-e2e",
+                label="Dashboard managed recipe browser slice",
+                command="pnpm run test:e2e:dashboard:managed",
+                status="optional_when_browser_stack_ready",
+                requiredFor=["managed dashboard recipe changes", "operator template changes", "recipe intake regression checks"],
+                evidence=[
+                    "Runs the managed dashboard coverage recipe Playwright slice with stable test-file and grep arguments.",
+                    "Uses the shared focused dashboard e2e lifecycle helper with repo-local cache defaults.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="dashboard-managed-mobile-recipe-e2e",
+                label="Dashboard managed mobile recipe browser slice",
+                command="pnpm run test:e2e:dashboard:managed:mobile",
+                status="optional_when_browser_stack_ready",
+                requiredFor=["managed mobile recipe changes", "mobile operator template changes", "phone viewport recipe intake checks"],
+                evidence=[
+                    "Runs the managed mobile dashboard coverage recipe Playwright slice with stable test-file and grep arguments.",
+                    "Uses the shared focused dashboard e2e lifecycle helper with repo-local cache defaults.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-e2e",
                 label="Dashboard browser coverage",
                 command="pnpm run test:e2e:dashboard",
@@ -596,7 +618,33 @@ class SupervisorService:
                 evidence=[
                     "scripts/run-mobile-e2e.mjs declares the mobile intake slice.",
                     "scripts/dashboard-e2e-runner.mjs owns supervisor and dashboard server lifecycle.",
-                    "tests/e2e/dashboard-mobile.spec.ts covers iPhone-sized draft restore behavior.",
+                    "tests/e2e/dashboard-mobile.spec.ts covers phone-sized draft restore behavior.",
+                    "Uses repo-local database, uv cache, temp, and Playwright browser cache paths.",
+                ],
+            ),
+            DashboardE2ERunnerView(
+                runnerId="dashboard-managed-recipe-e2e",
+                label="Managed dashboard recipe slice",
+                command="pnpm run test:e2e:dashboard:managed",
+                target="Desktop operator template intake for dashboard coverage recipe work.",
+                status="active",
+                evidence=[
+                    "scripts/run-managed-recipe-e2e.mjs declares the managed dashboard recipe slice.",
+                    "scripts/dashboard-e2e-runner.mjs owns supervisor and dashboard server lifecycle.",
+                    "tests/e2e/supervisor-managed-recipe.spec.ts covers the dashboard coverage intake template.",
+                    "Uses repo-local database, uv cache, temp, and Playwright browser cache paths.",
+                ],
+            ),
+            DashboardE2ERunnerView(
+                runnerId="dashboard-managed-mobile-recipe-e2e",
+                label="Managed mobile dashboard recipe slice",
+                command="pnpm run test:e2e:dashboard:managed:mobile",
+                target="Phone-sized operator template intake for mobile dashboard coverage recipe work.",
+                status="active",
+                evidence=[
+                    "scripts/run-managed-mobile-recipe-e2e.mjs declares the managed mobile recipe slice.",
+                    "scripts/dashboard-e2e-runner.mjs owns supervisor and dashboard server lifecycle.",
+                    "tests/e2e/supervisor-managed-mobile-recipe.spec.ts covers the mobile coverage intake template.",
                     "Uses repo-local database, uv cache, temp, and Playwright browser cache paths.",
                 ],
             ),
@@ -632,7 +680,7 @@ class SupervisorService:
                 "Browser verification does not approve worker source mutation, network access, or credential access.",
             ],
             nextSafeActions=[
-                "Use focused controls and detail runners for report or runtime export dashboard changes.",
+                "Use focused runners for report, runtime export, mobile, or managed recipe dashboard changes.",
                 "Run full dashboard e2e only when the browser stack and web-server lifecycle posture are healthy.",
                 "Keep runner commands aligned with the verification readiness report and package scripts.",
             ],
@@ -692,6 +740,7 @@ class SupervisorService:
                     "docs/stories/3-22-dashboard-e2e-report.md",
                     "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md",
                     "docs/stories/3-24-dashboard-mobile-e2e-runner.md",
+                    "docs/stories/3-25-managed-recipe-e2e-runners.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -1160,6 +1209,7 @@ class SupervisorService:
             "docs/stories/3-22-dashboard-e2e-report.md",
             "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md",
             "docs/stories/3-24-dashboard-mobile-e2e-runner.md",
+            "docs/stories/3-25-managed-recipe-e2e-runners.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
