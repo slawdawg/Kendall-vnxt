@@ -75,6 +75,7 @@ Do not rebuild these as new architecture work:
 - Runtime evidence review manifest for export counts, retention notes, and stop lines.
 - Focused dashboard detail e2e runner for runtime export verification.
 - Dashboard e2e report for focused/full browser verification commands, lifecycle posture, cache posture, and stop lines.
+- Shared dashboard e2e runner lifecycle helper for focused browser verification scripts.
 
 ## Current Gaps
 

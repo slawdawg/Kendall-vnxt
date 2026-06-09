@@ -557,7 +557,8 @@ class SupervisorService:
                 target="Controls page report panels and read-only authority summaries.",
                 status="active",
                 evidence=[
-                    "scripts/run-controls-e2e.mjs owns supervisor and dashboard server lifecycle.",
+                    "scripts/run-controls-e2e.mjs declares the controls slice.",
+                    "scripts/dashboard-e2e-runner.mjs owns supervisor and dashboard server lifecycle.",
                     "tests/e2e/dashboard.spec.ts covers controls-page report panels.",
                     "Uses repo-local database, uv cache, temp, and Playwright browser cache paths.",
                 ],
@@ -569,7 +570,8 @@ class SupervisorService:
                 target="Work-item detail runtime evidence export and review manifest panels.",
                 status="active",
                 evidence=[
-                    "scripts/run-detail-e2e.mjs owns supervisor and dashboard server lifecycle.",
+                    "scripts/run-detail-e2e.mjs declares the work-item detail slice.",
+                    "scripts/dashboard-e2e-runner.mjs owns supervisor and dashboard server lifecycle.",
                     "tests/e2e/dashboard.spec.ts covers runtime evidence export detail behavior.",
                     "Runtime evidence review manifest assertions stay isolated from authority enablement.",
                 ],
@@ -664,6 +666,7 @@ class SupervisorService:
                     "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
                     "docs/stories/3-21-dashboard-detail-e2e-runner.md",
                     "docs/stories/3-22-dashboard-e2e-report.md",
+                    "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -1130,6 +1133,7 @@ class SupervisorService:
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",
             "docs/stories/3-22-dashboard-e2e-report.md",
+            "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

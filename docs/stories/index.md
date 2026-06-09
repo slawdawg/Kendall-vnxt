@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-23-dashboard-e2e-runner-lifecycle-helper.md` | Shared owned-lifecycle helper for focused dashboard browser runners. |
 | `3-22-dashboard-e2e-report.md` | Read-only dashboard browser verification map for focused/full e2e runners. |
 | `3-21-dashboard-detail-e2e-runner.md` | Focused work-item detail e2e command and owned lifecycle runner. |
 | `3-20-runtime-evidence-review-manifest.md` | Runtime evidence export review manifest and dashboard panel polish. |
