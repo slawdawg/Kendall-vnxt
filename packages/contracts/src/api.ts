@@ -680,6 +680,36 @@ export interface MaintenanceActionPlanReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface DevelopmentRunwaySliceView {
+  sliceId: string;
+  label: string;
+  status: string;
+  recommendedPrScope: string;
+  summary: string;
+  includedBacklogItems: string[];
+  includedActionSteps: string[];
+  requiredVerification: string[];
+  relatedReports: string[];
+  dashboardAnchors: string[];
+  blockedBy: string[];
+  nextAction: string;
+}
+
+export interface DevelopmentRunwayReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  planningRule: string;
+  minimumPrScope: string;
+  slices: DevelopmentRunwaySliceView[];
+  verificationChain: string[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+  remoteAutomationApproved: boolean;
+}
+
 export interface ManagedRecipePolicyReportView {
   reportId: string;
   generatedAt: string;

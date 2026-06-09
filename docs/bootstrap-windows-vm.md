@@ -170,6 +170,7 @@ pnpm run check:runtime-export
 pnpm run check:safe-backlog
 pnpm run check:managed-recipes
 pnpm run check:maintenance-action-plan
+pnpm run check:development-runway
 pnpm run check:delivery-readiness
 pnpm run check:maintenance-readiness
 pnpm run check
