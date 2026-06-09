@@ -137,22 +137,28 @@ test.describe("dashboard workflow coverage", () => {
 
     await page.goto("/controls");
 
-    await expect(page.getByText("Execution readiness")).toBeVisible();
-    await expect(page.getByText("Policy and evidence report")).toBeVisible();
-    await expect(page.getByText("Provider enablement ladder")).toBeVisible();
-    await expect(page.getByText("Authority checks")).toBeVisible();
-    await expect(page.getByText("Provider proofs")).toBeVisible();
-    await expect(page.getByText("Provider no-call proofs")).toBeVisible();
-    await expect(page.getByText("Documentation authority")).toBeVisible();
-    await expect(page.getByText("Indexes and approval stop lines")).toBeVisible();
-    await expect(page.getByText("9 pending approval")).toBeVisible();
-    await expect(page.getByText("docs/architecture/index.md")).toBeVisible();
-    await expect(page.getByText("blocked pending explicit approval").first()).toBeVisible();
-    await expect(page.getByText("Verification readiness")).toBeVisible();
-    await expect(page.getByText("Checks and stop lines")).toBeVisible();
-    await expect(page.getByText("pnpm run check", { exact: true })).toBeVisible();
-    await expect(page.getByText("pnpm run test:e2e:dashboard")).toBeVisible();
-    await expect(page.getByText("Passing verification does not approve local provider/model calls.")).toBeVisible();
+    const readinessPanel = page.locator("section").filter({ hasText: "Policy and evidence report" }).first();
+    await expect(readinessPanel.getByText("Execution readiness", { exact: true })).toBeVisible();
+    await expect(readinessPanel.getByText("Policy and evidence report")).toBeVisible();
+    await expect(readinessPanel.getByText("Provider enablement ladder")).toBeVisible();
+    await expect(readinessPanel.getByText("Authority checks")).toBeVisible();
+    await expect(readinessPanel.getByText("Provider proofs")).toBeVisible();
+    await expect(readinessPanel.getByText("Provider no-call proofs")).toBeVisible();
+
+    const documentationPanel = page.locator("section").filter({ hasText: "Indexes and approval stop lines" }).first();
+    await expect(documentationPanel.getByText("Documentation authority", { exact: true })).toBeVisible();
+    await expect(documentationPanel.getByText("Indexes and approval stop lines")).toBeVisible();
+    await expect(documentationPanel.getByText("9 pending approval")).toBeVisible();
+    await expect(documentationPanel.getByText("docs/architecture/index.md", { exact: true })).toBeVisible();
+    await expect(documentationPanel.getByText("blocked pending explicit approval").first()).toBeVisible();
+
+    const verificationPanel = page.locator("section").filter({ hasText: "Checks and stop lines" }).first();
+    await expect(verificationPanel.getByText("Verification readiness", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("Checks and stop lines")).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:controls", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("Passing verification does not approve local provider/model calls.")).toBeVisible();
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
     await expect(fleetPanel.getByText("Internal utility worker")).toBeVisible();

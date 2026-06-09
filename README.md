@@ -37,9 +37,12 @@ Important environment variables:
 - `pnpm run check` builds the dashboard and runs supervisor integration tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - `pnpm run test:e2e:dashboard` runs browser coverage for intake drafts, workflow actions, and detail navigation
+- `pnpm run test:e2e:dashboard:controls` runs the focused controls-page browser slice with repo-local Playwright cache defaults
 - `pnpm run lint:dashboard` runs the dashboard lint pass
 - `pnpm run preflight` checks that shared JS deps and the supervisor virtualenv are ready
 - `pnpm run doctor` is an alias for `preflight`
+
+Playwright starts the dashboard with `next dev` for faster browser-test startup. `pnpm run check` remains the production-build gate.
 
 ## Planning
 
@@ -57,6 +60,7 @@ This repo uses a `pnpm` workspace so JS dependencies come from a shared global s
 - `pnpm run setup` installs workspace dependencies and syncs the supervisor virtualenv
 - `pnpm run setup:js` installs the JS workspace only
 - `pnpm run setup:py` syncs the supervisor virtualenv only
+- `pnpm run setup:e2e` installs the Chromium browser used by Playwright
 - `pnpm run doctor` confirms the local Node/dependency/runtime setup is usable
 
 ## Windows startup
