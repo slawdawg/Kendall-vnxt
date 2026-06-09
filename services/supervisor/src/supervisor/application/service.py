@@ -2743,6 +2743,7 @@ class SupervisorService:
             "docs/stories/3-18-supervisor-report-catalog.md",
             "docs/stories/3-19-maintenance-readiness-report.md",
             "docs/stories/3-52-maintenance-action-plan-report.md",
+            "docs/stories/3-61-maintenance-action-evidence-links.md",
             "docs/stories/3-53-authority-readiness-matrix-report.md",
             "docs/stories/3-54-development-runway-safe-slices.md",
             "docs/stories/3-59-development-runway-readiness-checks.md",

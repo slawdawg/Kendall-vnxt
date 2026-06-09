@@ -999,9 +999,12 @@ def test_maintenance_action_plan_report_consolidates_next_safe_steps_without_mut
     assert safe_slice_step["status"] == "ready"
     assert "pnpm run check:safe-backlog" in safe_slice_step["verificationCommands"]
     assert "/controls#safe-development-backlog" in safe_slice_step["dashboardAnchors"]
+    assert "GET /supervisor/safe-development-backlog" in safe_slice_step["relatedReports"]
+    assert "docs/stories/3-27-safe-development-backlog-report.md" in safe_slice_step["relatedDocs"]
     authority_step = next(step for step in report["steps"] if step["stepId"] == "preserve-authority-stop-lines")
     assert authority_step["status"] == "blocked_pending_explicit_approval"
     assert "pnpm run check:process-lifecycle" in authority_step["verificationCommands"]
+    assert "GET /supervisor/execution-readiness-report" in authority_step["relatedReports"]
     assert "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md" in authority_step["relatedDocs"]
     assert "pnpm run check" in report["verificationChain"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])

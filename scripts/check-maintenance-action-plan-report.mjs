@@ -88,6 +88,11 @@ for (const panelText of [
   "Plan steps",
   "step.verificationCommands",
   "step.dashboardAnchors",
+  "step.relatedReports",
+  "step.relatedDocs",
+  "reportShortcutHref",
+  "Related reports",
+  "Related docs",
   "verificationChain",
   "stopLines",
   "nextSafeActions",
@@ -100,6 +105,10 @@ for (const browserText of [
   "Next safe work plan",
   "select-large-safe-slice",
   "verify-evidence-surfaces",
+  "Related reports",
+  "GET /supervisor/safe-development-backlog",
+  "Related docs",
+  "docs/stories/3-27-safe-development-backlog-report.md",
   "preserve-authority-stop-lines",
   "pnpm run check:process-lifecycle",
   "/controls#safe-development-backlog",
@@ -113,6 +122,8 @@ for (const testText of [
   '"/supervisor/maintenance-action-plan-report"',
   '"select-large-safe-slice"',
   '"verify-evidence-surfaces"',
+  '"relatedReports"',
+  '"relatedDocs"',
   '"preserve-authority-stop-lines"',
   "docs/stories/3-52-maintenance-action-plan-report.md",
 ]) {
@@ -137,14 +148,21 @@ assertCondition(
 
 const storyPath = "docs/stories/3-52-maintenance-action-plan-report.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing maintenance action plan story ${storyPath}`, failures);
+const linksStoryPath = "docs/stories/3-61-maintenance-action-evidence-links.md";
+assertCondition(existsSync(join(rootDir, linksStoryPath)), `Missing maintenance action evidence links story ${linksStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-52-maintenance-action-plan-report.md"),
   "Story index must reference Story 3.52 maintenance action plan report",
   failures,
 );
 assertCondition(
-  reconciliation.includes("Maintenance action plan report"),
-  "Implementation reconciliation must track the maintenance action plan report",
+  storyIndex.includes("3-61-maintenance-action-evidence-links.md"),
+  "Story index must reference Story 3.61 maintenance action evidence links",
+  failures,
+);
+assertCondition(
+  reconciliation.includes("Maintenance action plan report") && reconciliation.includes("Maintenance action evidence links"),
+  "Implementation reconciliation must track the maintenance action plan report and evidence links",
   failures,
 );
 
