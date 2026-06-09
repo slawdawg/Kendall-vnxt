@@ -78,6 +78,7 @@ for (const story of [
   "docs/stories/3-53-authority-readiness-matrix-report.md",
   "docs/stories/3-54-development-runway-safe-slices.md",
   "docs/stories/3-55-runtime-evidence-review-index.md",
+  "docs/stories/3-65-runtime-review-evidence-links.md",
   "docs/stories/3-57-work-item-review-queue-shortcuts.md",
   "docs/stories/3-59-development-runway-readiness-checks.md",
   "docs/stories/3-63-development-runway-pr-batching-policy.md",
@@ -239,6 +240,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-55-runtime-evidence-review-index.md"),
   "Story index must reference Story 3.55 runtime evidence review index",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-65-runtime-review-evidence-links.md"),
+  "Story index must reference Story 3.65 runtime review evidence links",
   failures,
 );
 assertCondition(

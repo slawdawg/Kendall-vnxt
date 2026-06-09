@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, maintenance readiness evidence-link coverage, development runway PR batching policy coverage, and development runway evidence links through Story 3.64
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, maintenance readiness evidence-link coverage, development runway PR batching policy coverage, development runway evidence links, and runtime review evidence links through Story 3.65
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -29,6 +29,7 @@ Source review artifacts:
 - `docs/stories/3-62-maintenance-readiness-evidence-links.md`
 - `docs/stories/3-63-development-runway-pr-batching-policy.md`
 - `docs/stories/3-64-development-runway-evidence-links.md`
+- `docs/stories/3-65-runtime-review-evidence-links.md`
 
 Implementation areas checked:
 
@@ -110,6 +111,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Development runway evidence links | Implemented | `DevelopmentRunwaySliceView.relatedDocs`, Story 3.64 | Renders related report, document, and dashboard anchor evidence for each larger safe slice and readiness check without adding execution controls. |
 | Runtime evidence review report | Implemented | `GET /supervisor/runtime-evidence-review-report`, Story 3.55 | Indexes the work-item runtime evidence review queue, export links, evidence counts, related reports, and safe review actions without changing approval state. |
 | Work-item review queue shortcuts | Implemented | `EvidenceOverviewPanel`, Story 3.57 | Links work-item detail evidence overview to runtime evidence review queue priority, evidence counts, recommended action, runtime export navigation, and the controls-page review index without changing approval state. |
+| Runtime review evidence links | Implemented | `RuntimeEvidenceReviewWorkItemView.relatedDocs`, Story 3.65 | Renders related report, document, and dashboard anchor evidence for each queued runtime review work item without adding execution controls. |
 | Documentation authority drift check | Implemented | `pnpm run check:documentation-authority`, Story 3.47 | Keeps documentation authority contracts, schemas, API route, service report, dashboard rendering, browser assertions, tests, runbooks, and story evidence aligned. |
 | Verification readiness drift check | Implemented | `pnpm run check:verification-readiness`, Story 3.47 | Keeps verification readiness contracts, schemas, API route, command inventory, dashboard rendering, browser assertions, tests, runbooks, and story evidence aligned. |
 | Execution boundary report drift check | Implemented | `pnpm run check:execution-boundary`, Story 3.48 | Keeps execution configuration, execution readiness, and threat-boundary contracts, schemas, API routes, service evidence, dashboard shortcuts, browser assertions, supervisor assertions, runtime evidence, runbooks, and story evidence aligned. |

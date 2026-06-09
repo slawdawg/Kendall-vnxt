@@ -1130,6 +1130,7 @@ def test_runtime_evidence_review_report_indexes_work_item_exports_without_mutati
     assert report["readOnly"] is True
     assert report["executionAuthorityApproved"] is False
     assert "GET /supervisor/runtime-evidence-review-report" in report["relatedReports"]
+    assert "docs/stories/3-65-runtime-review-evidence-links.md" in report["relatedDocs"]
     assert "/controls#runtime-evidence-review-report" in report["dashboardAnchors"]
     assert "reviewQueue" in report
     assert report["reviewQueue"]
@@ -1138,6 +1139,9 @@ def test_runtime_evidence_review_report_indexes_work_item_exports_without_mutati
     assert review_item["attemptCount"] == 1
     assert review_item["eventCount"] >= 2
     assert review_item["relatedReportCount"] == len(report["relatedReports"])
+    assert "GET /supervisor/runtime-evidence-review-report" in review_item["relatedReports"]
+    assert "docs/stories/3-65-runtime-review-evidence-links.md" in review_item["relatedDocs"]
+    assert "/controls#runtime-evidence-review-report" in review_item["dashboardAnchors"]
     assert review_item["runtimeExportHref"] == f"/work-items/{work_item_id}#runtime-evidence-export"
     assert review_item["reviewPriority"] in {"P0", "P1"}
     assert "Runtime evidence" in review_item["reviewReason"]
@@ -2090,6 +2094,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-63-development-runway-pr-batching-policy.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-64-development-runway-evidence-links.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-55-runtime-evidence-review-index.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-65-runtime-review-evidence-links.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]

@@ -814,6 +814,9 @@ class RuntimeEvidenceReviewWorkItemView(BaseModel):
     attemptCount: int
     eventCount: int
     relatedReportCount: int
+    relatedReports: list[str] = Field(default_factory=list)
+    relatedDocs: list[str] = Field(default_factory=list)
+    dashboardAnchors: list[str] = Field(default_factory=list)
     latestEventAt: datetime | None = None
     runtimeExportHref: str
     reviewPriority: str
@@ -828,6 +831,7 @@ class RuntimeEvidenceReviewReportView(BaseModel):
     workItems: list[RuntimeEvidenceReviewWorkItemView]
     reviewQueue: list[RuntimeEvidenceReviewWorkItemView]
     relatedReports: list[str]
+    relatedDocs: list[str]
     dashboardAnchors: list[str]
     stopLines: list[str]
     nextSafeActions: list[str]
