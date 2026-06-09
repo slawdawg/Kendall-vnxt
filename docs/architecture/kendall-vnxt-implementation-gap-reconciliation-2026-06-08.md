@@ -71,6 +71,8 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Provider-specific disabled adapter proofs | Implemented | `GET /supervisor/disabled-provider-proofs`, readiness report provider proofs | Ollama, LM Studio, vLLM, and llama.cpp expose no-call proof evidence. |
 | Process lifecycle design | Documented | `docs/architecture/kendall-vnxt-process-lifecycle-design-2026-06-08.md`, Story 3.9 | Defines future process supervisor, lifecycle, workspace, output, session, approval, rollback, and stop-line requirements. |
 | Runtime evidence export readiness references | Implemented | `RuntimeEvidenceExportBoundaryView.relatedSupervisorReports`, Story 3.9 | Work-item exports now point to readiness, boundary, disabled provider proof, config, and threat reports. |
+| Provider disabled adapter fixture expansion | Implemented | `docs/architecture/kendall-vnxt-provider-disabled-fixtures-2026-06-08.md`, provider proof contract, Story 3.10 | Provider proofs now include endpoint family, redaction, timeout, cancellation, and retention policy fields. |
+| First local provider PRD draft | Documented | `docs/prds/local-provider-ollama-disabled-to-limited-execution.md`, Story 3.10 | Drafts Ollama gates, endpoint policy, prompt/retention policy, future acceptance criteria, rollback, and open questions without approving implementation. |
 | Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
 | Direct subscription-agent process launch | Deferred | Launch stub is disabled | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
 | Premium execution | Deferred | Approval request artifacts only | Requires premium provider boundary and explicit approval policy. |
@@ -83,17 +85,17 @@ The architecture gap has moved from missing execution-attempt primitives to miss
 The highest-value next work should:
 
 1. Keep architecture docs aligned with the implemented non-executing control plane.
-2. Expand provider-specific disabled adapter fixtures for redaction, timeout, cancellation, and retention.
-3. Draft provider-specific PRDs from readiness and no-call proof evidence.
+2. Add dashboard access to runtime evidence exports.
+3. Resolve the Ollama PRD open questions and split implementation only after explicit approval.
 4. Use execution-readiness reports to decide when a provider-specific PRD has enough evidence.
 5. Only then implement the next controlled worker execution capability.
 
 ## Recommended Next Backlog
 
-1. **Provider Disabled Adapter Fixture Expansion**: add provider-specific redaction, timeout, cancellation, and retention fixture cases before any HTTP adapter.
-2. **Provider-Specific PRD Drafting**: draft the first local-provider PRD from disabled provider proofs and readiness evidence.
-3. **Runtime Evidence Export Dashboard Access**: expose export links or summaries in the dashboard if useful for operator review.
-4. **Subscription-Agent Launch PRD**: draft launch requirements from the process lifecycle design before implementation.
+1. **Runtime Evidence Export Dashboard Access**: expose export links or summaries in the dashboard for operator review.
+2. **Ollama PRD Review And Story Breakdown**: resolve open questions and split implementation only after explicit approval.
+3. **Subscription-Agent Launch PRD**: draft launch requirements from the process lifecycle design before implementation.
+4. **Provider PRD Review Loop**: decide whether Ollama remains first or another local provider should be prioritized.
 
 ## Stop Conditions
 

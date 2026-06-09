@@ -501,12 +501,16 @@ class DisabledProviderProofView(BaseModel):
     workerId: str
     providerLabel: str
     disabledReason: str
+    endpointFamily: str
     endpointPolicy: str
     httpCallsAttempted: bool = False
     modelCallsAttempted: bool = False
     networkAccessAttempted: bool = False
     credentialAccessAttempted: bool = False
     redactionChecks: list[str] = Field(default_factory=list)
+    timeoutPolicy: str
+    cancellationPolicy: str
+    retentionPolicy: str
 
 
 class ExecutionStateBoundaryView(BaseModel):

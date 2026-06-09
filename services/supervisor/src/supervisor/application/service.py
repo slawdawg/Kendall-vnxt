@@ -649,12 +649,16 @@ class SupervisorService:
                         workerId=proof.worker_id,
                         providerLabel=proof.provider_label,
                         disabledReason=proof.disabled_reason,
+                        endpointFamily=proof.endpoint_family,
                         endpointPolicy=proof.endpoint_policy,
                         httpCallsAttempted=proof.http_calls_attempted,
                         modelCallsAttempted=proof.model_calls_attempted,
                         networkAccessAttempted=proof.network_access_attempted,
                         credentialAccessAttempted=proof.credential_access_attempted,
                         redactionChecks=list(proof.redaction_checks),
+                        timeoutPolicy=proof.timeout_policy,
+                        cancellationPolicy=proof.cancellation_policy,
+                        retentionPolicy=proof.retention_policy,
                     )
                 )
         return proofs

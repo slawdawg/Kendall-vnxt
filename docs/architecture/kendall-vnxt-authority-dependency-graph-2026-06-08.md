@@ -66,13 +66,15 @@ The following work is safe to continue with conservative defaults:
 - non-executing mock/disabled adapter contracts,
 - queue lease and execution attempt boundary reports,
 - process lifecycle design records,
+- provider-specific disabled fixture policies,
+- draft provider PRDs,
 - reporting-only outcome evidence,
 - tests proving disabled defaults and no side effects,
 - dashboard and runtime evidence polish that does not add execution controls.
 
 ## Next Architecture Stories
 
-1. Provider disabled adapter fixture expansion.
-2. Provider-specific PRDs only after readiness and no-call proof evidence are complete.
-3. Runtime evidence export dashboard access.
-4. Subscription-agent launch PRD.
+1. Runtime evidence export dashboard access.
+2. Ollama PRD review and story breakdown only after explicit approval.
+3. Subscription-agent launch PRD.
+4. Provider PRD review loop.

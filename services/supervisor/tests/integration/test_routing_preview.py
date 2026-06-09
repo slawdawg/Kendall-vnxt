@@ -725,12 +725,16 @@ def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path
     }
     for proof in proofs:
         assert proof["disabledReason"].endswith("_local_provider_not_enabled")
+        assert proof["endpointFamily"].endswith("_openai_compatible_localhost")
         assert proof["endpointPolicy"].startswith("deny_all")
         assert proof["httpCallsAttempted"] is False
         assert proof["modelCallsAttempted"] is False
         assert proof["networkAccessAttempted"] is False
         assert proof["credentialAccessAttempted"] is False
-        assert "no_secrets_in_prompt_fixture" in proof["redactionChecks"]
+        assert any(check.endswith("_prompt_fixture_excludes_env_values") for check in proof["redactionChecks"])
+        assert proof["timeoutPolicy"].startswith("disabled_fixture_requires")
+        assert proof["cancellationPolicy"].startswith("disabled_fixture_requires")
+        assert proof["retentionPolicy"].startswith("disabled_fixture_forbids")
 
 
 def test_execution_state_boundary_keeps_queue_leases_separate_from_attempt_authority(tmp_path, monkeypatch) -> None:
