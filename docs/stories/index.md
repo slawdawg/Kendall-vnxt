@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-58-verification-handoff-checkpoints.md` | Verification readiness handoff checkpoints for local delivery, dashboard changes, fresh-VM setup, and authority-boundary gates. |
 | `3-57-work-item-review-queue-shortcuts.md` | Work-item evidence overview shortcuts for runtime evidence review queue position, evidence counts, recommended action, and controls-page review index navigation. |
 | `3-56-verification-execution-plan-groups.md` | Verification readiness command groups for ordered setup, static drift, dashboard/browser, supervisor, full local, and optional remote checks. |
 | `3-55-runtime-evidence-review-index.md` | Read-only runtime evidence review index for work-item exports, review priority, evidence counts, related reports, and safe review actions. |

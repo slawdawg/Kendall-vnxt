@@ -586,6 +586,16 @@ class VerificationCommandGroupView(BaseModel):
     nextAction: str
 
 
+class VerificationHandoffCheckpointView(BaseModel):
+    checkpointId: str
+    label: str
+    status: str
+    summary: str
+    requiredCommandIds: list[str] = Field(default_factory=list)
+    relatedRunbooks: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
 class VerificationReadinessReportView(BaseModel):
     reportId: str
     generatedAt: datetime
@@ -593,6 +603,7 @@ class VerificationReadinessReportView(BaseModel):
     requiredCommands: list[VerificationCommandView]
     optionalCommands: list[VerificationCommandView]
     commandGroups: list[VerificationCommandGroupView]
+    handoffCheckpoints: list[VerificationHandoffCheckpointView]
     stopLines: list[str]
     nextSafeActions: list[str]
     readyForAuthorityEnablement: bool = False

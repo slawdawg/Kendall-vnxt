@@ -72,6 +72,7 @@ from supervisor.api.schemas import (
     ThreatBoundaryView,
     VerificationCommandView,
     VerificationCommandGroupView,
+    VerificationHandoffCheckpointView,
     VerificationReadinessReportView,
     RejectedRoutingLaneView,
     RunStatusView,
@@ -839,6 +840,50 @@ class SupervisorService:
                 nextAction="Run optional checks only when the relevant auth, browser, or fresh-VM target is available.",
             ),
         ]
+        handoff_checkpoints = [
+            VerificationHandoffCheckpointView(
+                checkpointId="local-development-handoff",
+                label="Local development handoff",
+                status="required_before_pr",
+                summary="Confirm the changed surfaces have focused verification, then run the full local gate before commit and PR.",
+                requiredCommandIds=["preflight", "full-check"],
+                relatedRunbooks=["README.md", "docs/handoffs/current.md"],
+                nextAction="Record focused checks and `pnpm run check` in the PR body before requesting merge.",
+            ),
+            VerificationHandoffCheckpointView(
+                checkpointId="dashboard-change-handoff",
+                label="Dashboard change handoff",
+                status="required_when_dashboard_changes",
+                summary="Pair dashboard UI changes with focused browser coverage and a production dashboard build.",
+                requiredCommandIds=["dashboard-controls-e2e", "dashboard-detail-e2e", "dashboard-build"],
+                relatedRunbooks=["docs/handoffs/current.md", "docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md"],
+                nextAction="Run the focused browser runner for the changed page, then keep `pnpm run check` green.",
+            ),
+            VerificationHandoffCheckpointView(
+                checkpointId="fresh-vm-handoff",
+                label="Fresh VM handoff",
+                status="required_for_bootstrap_changes",
+                summary="Use bootstrap verification and redacted readiness reports when Windows setup, startup, or toolchain assumptions change.",
+                requiredCommandIds=["bootstrap-run-check", "github-doctor-remote", "setup-e2e"],
+                relatedRunbooks=["docs/bootstrap-windows-vm.md", "docs/fresh-vm-acceptance-checklist.md"],
+                nextAction="Run optional fresh-VM checks only from an appropriate interactive context with healthy credentials.",
+            ),
+            VerificationHandoffCheckpointView(
+                checkpointId="authority-boundary-handoff",
+                label="Authority boundary handoff",
+                status="always_blocking_without_explicit_approval",
+                summary="Treat green verification as repo-health evidence only; execution-authority stories remain blocked without explicit operator approval.",
+                requiredCommandIds=["check-authority-readiness", "check-execution-boundary", "check-process-lifecycle"],
+                relatedRunbooks=[
+                    "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+                    "docs/stories/index.md",
+                ],
+                nextAction=(
+                    "Do not start provider calls, process launch, shell execution, source mutation, network, "
+                    "credential, premium, or remote automation work from verification results."
+                ),
+            ),
+        ]
 
         return VerificationReadinessReportView(
             reportId="verification-readiness-report-v1",
@@ -850,6 +895,7 @@ class SupervisorService:
             requiredCommands=required_commands,
             optionalCommands=optional_commands,
             commandGroups=command_groups,
+            handoffCheckpoints=handoff_checkpoints,
             stopLines=[
                 "Passing verification does not approve local provider/model calls.",
                 "Passing verification does not approve subscription-agent process launch.",

@@ -532,6 +532,16 @@ export interface VerificationCommandGroupView {
   nextAction: string;
 }
 
+export interface VerificationHandoffCheckpointView {
+  checkpointId: string;
+  label: string;
+  status: string;
+  summary: string;
+  requiredCommandIds: string[];
+  relatedRunbooks: string[];
+  nextAction: string;
+}
+
 export interface VerificationReadinessReportView {
   reportId: string;
   generatedAt: string;
@@ -539,6 +549,7 @@ export interface VerificationReadinessReportView {
   requiredCommands: VerificationCommandView[];
   optionalCommands: VerificationCommandView[];
   commandGroups: VerificationCommandGroupView[];
+  handoffCheckpoints: VerificationHandoffCheckpointView[];
   stopLines: string[];
   nextSafeActions: string[];
   readyForAuthorityEnablement: boolean;

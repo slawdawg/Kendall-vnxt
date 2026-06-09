@@ -40,7 +40,12 @@ assertCondition(
   failures,
 );
 
-for (const typeName of ["VerificationCommandView", "VerificationCommandGroupView", "VerificationReadinessReportView"]) {
+for (const typeName of [
+  "VerificationCommandView",
+  "VerificationCommandGroupView",
+  "VerificationHandoffCheckpointView",
+  "VerificationReadinessReportView",
+]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
   assertCondition(schemaSource.includes(`class ${typeName}`), `Supervisor schemas must include ${typeName}`, failures);
 }
@@ -81,9 +86,14 @@ for (const serviceText of [
   "verification-readiness-report-v1",
   "executionAuthorityApproved=False",
   "commandGroups=command_groups",
+  "handoffCheckpoints=handoff_checkpoints",
   "static-drift-chain",
   "dashboard-browser-build",
   "full-local-gate",
+  "local-development-handoff",
+  "dashboard-change-handoff",
+  "fresh-vm-handoff",
+  "authority-boundary-handoff",
   "docs/stories/3-47-core-readiness-drift-checks.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Verification readiness service must include ${serviceText}`, failures);
@@ -102,7 +112,16 @@ assertCondition(
   failures,
 );
 
-for (const panelText of ["VerificationReadinessReportView", "Execution plan", "commandGroups", "Required commands", "Optional commands", "Authority stop lines"]) {
+for (const panelText of [
+  "VerificationReadinessReportView",
+  "Execution plan",
+  "commandGroups",
+  "Handoff checkpoints",
+  "handoffCheckpoints",
+  "Required commands",
+  "Optional commands",
+  "Authority stop lines",
+]) {
   assertCondition(verificationPanel.includes(panelText), `Verification readiness panel must render ${panelText}`, failures);
 }
 
@@ -113,6 +132,11 @@ for (const browserText of [
   "static-drift-chain",
   "dashboard-browser-build",
   "full-local-gate",
+  "Handoff checkpoints",
+  "local-development-handoff",
+  "dashboard-change-handoff",
+  "fresh-vm-handoff",
+  "authority-boundary-handoff",
   "pnpm run check:documentation-authority",
   "pnpm run check:verification-readiness",
   "pnpm run check:authority-readiness",
@@ -129,14 +153,21 @@ for (const browserText of [
 
 const storyPath = "docs/stories/3-47-core-readiness-drift-checks.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing core readiness drift story ${storyPath}`, failures);
+const handoffStoryPath = "docs/stories/3-58-verification-handoff-checkpoints.md";
+assertCondition(existsSync(join(rootDir, handoffStoryPath)), `Missing verification handoff checkpoint story ${handoffStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-47-core-readiness-drift-checks.md"),
   "Story index must reference Story 3.47 core readiness drift checks",
   failures,
 );
 assertCondition(
-  reconciliation.includes("Verification readiness drift check"),
-  "Implementation reconciliation must track the verification readiness drift check",
+  storyIndex.includes("3-58-verification-handoff-checkpoints.md"),
+  "Story index must reference Story 3.58 verification handoff checkpoints",
+  failures,
+);
+assertCondition(
+  reconciliation.includes("Verification readiness drift check") && reconciliation.includes("Verification handoff checkpoints"),
+  "Implementation reconciliation must track the verification readiness drift check and handoff checkpoints",
   failures,
 );
 
