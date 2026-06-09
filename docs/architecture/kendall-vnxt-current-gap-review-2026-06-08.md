@@ -71,6 +71,7 @@ Do not rebuild these as new architecture work:
 - Verification readiness commands, stop lines, and controls-page report.
 - Dashboard e2e reliability guardrails for focused controls-page verification.
 - Supervisor report catalog for read-only evidence navigation.
+- Maintenance readiness report for safe repo hygiene while authority stories remain blocked.
 
 ## Current Gaps
 

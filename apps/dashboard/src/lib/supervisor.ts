@@ -3,6 +3,7 @@ import type {
   DocumentationAuthorityReportView,
   ExecutionAttemptView,
   ExecutionReadinessReportView,
+  MaintenanceReadinessReportView,
   RuntimeEvidenceExportView,
   RoutingLaneEvidenceProfileView,
   RoutingPreviewView,
@@ -101,6 +102,10 @@ export async function getVerificationReadinessReport(): Promise<VerificationRead
 
 export async function getSupervisorReportCatalog(): Promise<SupervisorReportCatalogView> {
   return requestJson<SupervisorReportCatalogView>("/supervisor/report-catalog");
+}
+
+export async function getMaintenanceReadinessReport(): Promise<MaintenanceReadinessReportView> {
+  return requestJson<MaintenanceReadinessReportView>("/supervisor/maintenance-readiness-report");
 }
 
 export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {

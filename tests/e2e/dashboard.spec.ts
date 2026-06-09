@@ -167,6 +167,14 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/verification-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
 
+    const maintenancePanel = page.locator("section").filter({ hasText: "Safe work map" }).first();
+    await expect(maintenancePanel.getByText("Maintenance readiness", { exact: true })).toBeVisible();
+    await expect(maintenancePanel.getByText("Safe work map")).toBeVisible();
+    await expect(maintenancePanel.getByText("documentation-hygiene")).toBeVisible();
+    await expect(maintenancePanel.getByText("verification-hygiene")).toBeVisible();
+    await expect(maintenancePanel.getByText("authority-blocker-watch")).toBeVisible();
+    await expect(maintenancePanel.getByText("Maintenance work must not approve local provider/model calls.")).toBeVisible();
+
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
     await expect(fleetPanel.getByText("Internal utility worker")).toBeVisible();

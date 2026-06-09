@@ -86,6 +86,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Verification readiness report | Implemented | `GET /supervisor/verification-readiness-report`, `VerificationReadinessReportPanel`, Story 3.16 | Surfaces required checks, optional checks, and authority stop lines without changing approval state. |
 | Dashboard e2e reliability guardrails | Implemented | `playwright.config.ts`, `pnpm run test:e2e:dashboard:controls`, Story 3.17 | Keeps Playwright web-server cache paths repo-local and adds a focused controls-page browser verification command. |
 | Supervisor report catalog | Implemented | `GET /supervisor/report-catalog`, `SupervisorReportCatalogPanel`, Story 3.18 | Indexes read-only supervisor evidence reports and stop lines without changing approval state. |
+| Maintenance readiness report | Implemented | `GET /supervisor/maintenance-readiness-report`, `MaintenanceReadinessReportPanel`, Story 3.19 | Tracks safe maintenance lanes, report alignment, and blocked authority posture without changing approval state. |
 | Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
 | Direct subscription-agent process launch | Deferred | Launch stub is disabled | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
 | Premium execution | Deferred | Approval request artifacts only | Requires premium provider boundary and explicit approval policy. |
