@@ -167,6 +167,7 @@ pnpm run check:provider-fixtures
 pnpm run check:process-lifecycle
 pnpm run check:runbooks
 pnpm run check:runtime-export
+pnpm run check:runtime-review
 pnpm run check:safe-backlog
 pnpm run check:managed-recipes
 pnpm run check:maintenance-action-plan

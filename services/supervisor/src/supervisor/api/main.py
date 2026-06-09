@@ -504,6 +504,11 @@ async def get_development_runway_report():
     return ApiEnvelope(data=service.get_development_runway_report())
 
 
+@app.get("/supervisor/runtime-evidence-review-report", response_model=ApiEnvelope)
+async def get_runtime_evidence_review_report(session: AsyncSession = Depends(get_session)):
+    return ApiEnvelope(data=await service.get_runtime_evidence_review_report(session))
+
+
 @app.get("/supervisor/managed-recipe-policy-report", response_model=ApiEnvelope)
 async def get_managed_recipe_policy_report():
     return ApiEnvelope(data=service.get_managed_recipe_policy_report())

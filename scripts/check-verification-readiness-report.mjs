@@ -63,6 +63,7 @@ for (const commandText of [
   "check-process-lifecycle",
   "check-runbooks",
   "check-runtime-export",
+  "check-runtime-review",
   "check-safe-backlog",
   "check-managed-recipes",
   "check-maintenance-action-plan",
@@ -112,6 +113,7 @@ for (const browserText of [
   "pnpm run check:provider-fixtures",
   "pnpm run check:process-lifecycle",
   "pnpm run check:maintenance-action-plan",
+  "pnpm run check:runtime-review",
   "pnpm run check:development-runway",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert ${browserText}`, failures);

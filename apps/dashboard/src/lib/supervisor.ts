@@ -11,6 +11,7 @@ import type {
   ManagedRecipePolicyReportView,
   MaintenanceActionPlanReportView,
   MaintenanceReadinessReportView,
+  RuntimeEvidenceReviewReportView,
   RuntimeEvidenceExportView,
   RoutingLaneEvidenceProfileView,
   RoutingPreviewView,
@@ -134,6 +135,10 @@ export async function getSafeDevelopmentBacklogReport(): Promise<SafeDevelopment
 
 export async function getDevelopmentRunwayReport(): Promise<DevelopmentRunwayReportView> {
   return requestJson<DevelopmentRunwayReportView>("/supervisor/development-runway-report");
+}
+
+export async function getRuntimeEvidenceReviewReport(): Promise<RuntimeEvidenceReviewReportView> {
+  return requestJson<RuntimeEvidenceReviewReportView>("/supervisor/runtime-evidence-review-report");
 }
 
 export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolicyReportView> {

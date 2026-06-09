@@ -710,6 +710,36 @@ export interface DevelopmentRunwayReportView {
   remoteAutomationApproved: boolean;
 }
 
+export interface RuntimeEvidenceReviewWorkItemView {
+  workItemId: string;
+  title: string;
+  state: string;
+  riskLevel: string;
+  needsAttention: boolean;
+  attemptCount: number;
+  eventCount: number;
+  relatedReportCount: number;
+  latestEventAt: string | null;
+  runtimeExportHref: string;
+  reviewPriority: string;
+  reviewReason: string;
+  recommendedAction: string;
+}
+
+export interface RuntimeEvidenceReviewReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  workItems: RuntimeEvidenceReviewWorkItemView[];
+  reviewQueue: RuntimeEvidenceReviewWorkItemView[];
+  relatedReports: string[];
+  dashboardAnchors: string[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+}
+
 export interface ManagedRecipePolicyReportView {
   reportId: string;
   generatedAt: string;

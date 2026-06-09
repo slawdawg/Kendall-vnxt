@@ -170,6 +170,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:process-lifecycle", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:runbooks", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:runtime-export", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:runtime-review", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:safe-backlog", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:managed-recipes", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:maintenance-action-plan", { exact: true })).toBeVisible();
@@ -216,6 +217,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/dashboard-e2e-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/maintenance-action-plan-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/development-runway-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/runtime-evidence-review-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
@@ -259,6 +261,14 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByRole("link", { name: "/controls#development-runway-report" })).toBeVisible();
     await expect(runwayPanel.getByText("Development runway slices are not execution-authority approvals.")).toBeVisible();
     await expect(page.locator("#development-runway-report")).toBeVisible();
+
+    const runtimeReviewPanel = page.locator("section").filter({ hasText: "Work-item evidence queue" }).first();
+    await expect(runtimeReviewPanel.getByText("Runtime evidence review", { exact: true })).toBeVisible();
+    await expect(runtimeReviewPanel.getByText("Work-item evidence queue")).toBeVisible();
+    await expect(runtimeReviewPanel.getByText("GET /supervisor/runtime-evidence-review-report")).toBeVisible();
+    await expect(runtimeReviewPanel.getByRole("link", { name: "/controls#runtime-evidence-review-report" })).toBeVisible();
+    await expect(runtimeReviewPanel.getByText("Runtime evidence review is not execution-authority approval.")).toBeVisible();
+    await expect(page.locator("#runtime-evidence-review-report")).toBeVisible();
 
     const safeBacklogPanel = page.locator("section").filter({ hasText: "Large-slice development map" }).first();
     await expect(safeBacklogPanel.getByText("Safe backlog", { exact: true })).toBeVisible();

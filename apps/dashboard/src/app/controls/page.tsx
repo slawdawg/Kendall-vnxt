@@ -12,6 +12,7 @@ import { ManagedRecipePolicyReportPanel } from "../../components/managed-recipe-
 import { OperatorProfilePanel } from "../../components/operator-profile-panel";
 import { PageIntro } from "../../components/page-intro";
 import { RoutingFleetPanel } from "../../components/routing-fleet-panel";
+import { RuntimeEvidenceReviewReportPanel } from "../../components/runtime-evidence-review-report-panel";
 import { SafeDevelopmentBacklogPanel } from "../../components/safe-development-backlog-panel";
 import { Shell } from "../../components/shell";
 import { SupervisorReportCatalogPanel } from "../../components/supervisor-report-catalog-panel";
@@ -30,6 +31,7 @@ import {
   getManagedRecipePolicyReport,
   getRoutingLaneProfiles,
   getRunStatus,
+  getRuntimeEvidenceReviewReport,
   getSafeDevelopmentBacklogReport,
   getSupervisorReportCatalog,
   getVerificationReadinessReport,
@@ -52,6 +54,7 @@ export default async function ControlsPage() {
     maintenanceReadinessReport,
     maintenanceActionPlanReport,
     developmentRunwayReport,
+    runtimeEvidenceReviewReport,
     safeDevelopmentBacklog,
     managedRecipePolicyReport,
     githubWorkflowPolicyReport,
@@ -70,6 +73,7 @@ export default async function ControlsPage() {
     getMaintenanceReadinessReport(),
     getMaintenanceActionPlanReport(),
     getDevelopmentRunwayReport(),
+    getRuntimeEvidenceReviewReport(),
     getSafeDevelopmentBacklogReport(),
     getManagedRecipePolicyReport(),
     getGitHubWorkflowPolicyReport(),
@@ -118,6 +122,9 @@ export default async function ControlsPage() {
       </div>
       <div id="development-runway-report" className="scroll-mt-28">
         <DevelopmentRunwayReportPanel report={developmentRunwayReport} />
+      </div>
+      <div id="runtime-evidence-review-report" className="scroll-mt-28">
+        <RuntimeEvidenceReviewReportPanel report={runtimeEvidenceReviewReport} />
       </div>
       <div id="safe-development-backlog" className="scroll-mt-28">
         <SafeDevelopmentBacklogPanel report={safeDevelopmentBacklog} />
