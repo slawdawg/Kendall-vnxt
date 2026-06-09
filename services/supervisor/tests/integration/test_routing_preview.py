@@ -735,6 +735,44 @@ def test_documentation_authority_report_surfaces_indexes_and_blocked_stories_wit
     assert "pnpm run check:docs" in " ".join(report["nextSafeActions"])
 
 
+def test_verification_readiness_report_surfaces_required_checks_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "verification-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/verification-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "verification-readiness-report-v1"
+    assert report["readyForAuthorityEnablement"] is False
+    assert report["executionAuthorityApproved"] is False
+    assert {command["commandId"] for command in report["requiredCommands"]} == {
+        "preflight",
+        "check-docs",
+        "dashboard-build",
+        "supervisor-tests",
+        "full-check",
+    }
+    assert {command["commandId"] for command in report["optionalCommands"]} == {
+        "dashboard-e2e",
+        "github-doctor-remote",
+        "bootstrap-run-check",
+    }
+    assert any("provider/model calls" in stop_line for stop_line in report["stopLines"])
+    assert "pnpm run check" in " ".join(report["nextSafeActions"])
+
+
 def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "disabled-provider-proofs.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

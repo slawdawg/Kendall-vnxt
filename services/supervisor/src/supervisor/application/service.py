@@ -47,6 +47,8 @@ from supervisor.api.schemas import (
     SubscriptionHandoffPackageView,
     ThreatBoundaryRuleView,
     ThreatBoundaryView,
+    VerificationCommandView,
+    VerificationReadinessReportView,
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
@@ -361,6 +363,123 @@ class SupervisorService:
                 "Keep blocked authority stories blocked unless explicit operator approval names authority and scope.",
                 "Run `pnpm run check:docs` after changing architecture, PRD, story, or approval checkpoint references.",
                 "Use the documentation indexes before starting new execution-authority work.",
+            ],
+        )
+
+    def get_verification_readiness_report(self) -> VerificationReadinessReportView:
+        required_commands = [
+            VerificationCommandView(
+                commandId="preflight",
+                label="Workspace preflight",
+                command="pnpm run preflight",
+                status="required",
+                requiredFor=["local dependency readiness", "fresh VM acceptance", "full check"],
+                evidence=[
+                    "Confirms JavaScript workspace dependencies are installed.",
+                    "Confirms the supervisor Python virtualenv is ready.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-docs",
+                label="Documentation authority drift",
+                command="pnpm run check:docs",
+                status="required",
+                requiredFor=["architecture changes", "PRD changes", "story changes", "authority checkpoint changes"],
+                evidence=[
+                    "Validates documentation indexes reference existing files.",
+                    "Validates blocked execution-authority stories remain consistent with the approval checkpoint.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="dashboard-build",
+                label="Dashboard build and type check",
+                command="pnpm --filter @kendall/dashboard build",
+                status="required",
+                requiredFor=["dashboard changes", "contract changes", "controls-page report changes", "full check"],
+                evidence=[
+                    "Runs the Next.js production build.",
+                    "Runs dashboard TypeScript validation through the build pipeline.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="supervisor-tests",
+                label="Supervisor integration tests",
+                command="pnpm run test:supervisor",
+                status="required",
+                requiredFor=["supervisor API changes", "domain/service changes", "contract-affecting behavior", "full check"],
+                evidence=[
+                    "Runs supervisor integration tests through uv and pytest.",
+                    "Covers routing, execution evidence, configuration gates, and report endpoints.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="full-check",
+                label="Full local verification",
+                command="pnpm run check",
+                status="required",
+                requiredFor=["pre-merge confidence", "local handoff", "fresh VM acceptance"],
+                evidence=[
+                    "Runs preflight, documentation checks, dashboard build, and supervisor integration tests.",
+                    "Does not grant execution authority by passing.",
+                ],
+            ),
+        ]
+        optional_commands = [
+            VerificationCommandView(
+                commandId="dashboard-e2e",
+                label="Dashboard browser coverage",
+                command="pnpm run test:e2e:dashboard",
+                status="optional_when_browser_stack_ready",
+                requiredFor=["dashboard interaction changes", "responsive UI changes", "operator workflow changes"],
+                evidence=[
+                    "Runs Playwright coverage for dashboard intake, controls, and work-item workflows.",
+                    "May require local browser/web-server cache posture to be healthy.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="github-doctor-remote",
+                label="GitHub remote readiness",
+                command="pnpm run doctor:github -- --remote",
+                status="optional_before_live_delivery",
+                requiredFor=["fresh VM acceptance", "interactive credential proof", "remote delivery debugging"],
+                evidence=[
+                    "Checks Git/GCM/GitHub delivery readiness.",
+                    "Live remote checks should be run from an approved interactive context when needed.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="bootstrap-run-check",
+                label="Fresh VM remote proof",
+                command="powershell -ExecutionPolicy Bypass -File .\\scripts\\bootstrap-windows.ps1 -VerifyRemote -RunCheck -WriteReport",
+                status="optional_for_fresh_vm_acceptance",
+                requiredFor=["fresh Windows VM acceptance", "bootstrap readiness report"],
+                evidence=[
+                    "Writes a redacted readiness report under .data/bootstrap.",
+                    "Proves local checks and live remote checks when credentials are healthy.",
+                ],
+            ),
+        ]
+
+        return VerificationReadinessReportView(
+            reportId="verification-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Verification readiness is local and evidence-oriented: checks prove repo health, dashboard buildability, "
+                "supervisor behavior, and documentation consistency without approving worker execution."
+            ),
+            requiredCommands=required_commands,
+            optionalCommands=optional_commands,
+            stopLines=[
+                "Passing verification does not approve local provider/model calls.",
+                "Passing verification does not approve subscription-agent process launch.",
+                "Passing verification does not approve premium execution.",
+                "Passing verification does not approve arbitrary shell execution by workers.",
+                "Passing verification does not approve worker source mutation, network access, or credential access.",
+            ],
+            nextSafeActions=[
+                "Run focused tests for the code area changed, then run `pnpm run check` before merge.",
+                "Use Playwright dashboard coverage when UI behavior changes and the local browser stack is healthy.",
+                "Keep verification reports aligned with README, handoff, and fresh VM checklist commands.",
             ],
         )
 

@@ -68,6 +68,7 @@ Do not rebuild these as new architecture work:
 - Execution authority approval checkpoint rules.
 - Dashboard evidence overview polish.
 - Documentation authority indexes, drift checks, and controls-page report.
+- Verification readiness commands, stop lines, and controls-page report.
 
 ## Current Gaps
 
