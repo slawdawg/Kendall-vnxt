@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-15-documentation-authority-report.md` | Read-only documentation authority report and controls panel. |
 | `3-14-dashboard-evidence-overview-polish.md` | Read-only dashboard evidence overview. |
 | `3-13-execution-authority-approval-checkpoints.md` | Approval checkpoint governance. |
 | `3-12-subscription-agent-launch-prd.md` | Launch PRD drafting. |

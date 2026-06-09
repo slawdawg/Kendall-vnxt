@@ -6,12 +6,16 @@ import subprocess
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
     AuditEventView,
+    DocumentationAuthorityBlockedStoryView,
+    DocumentationAuthorityDocumentView,
+    DocumentationAuthorityReportView,
     ExecutionConfigurationCheckView,
     ExecutionConfigurationChecksView,
     ExecutionAttemptView,
@@ -268,6 +272,97 @@ class SupervisorService:
 
     def list_worker_registry(self) -> list[WorkerRegistryEntryView]:
         return [self._to_worker_registry_entry_view(worker) for worker in self.worker_registry.list_workers()]
+
+    def get_documentation_authority_report(self) -> DocumentationAuthorityReportView:
+        root_dir = Path(__file__).resolve().parents[5]
+        index_documents = [
+            ("docs/architecture/index.md", "Architecture index"),
+            ("docs/prds/index.md", "PRD index"),
+            ("docs/stories/index.md", "Story index"),
+        ]
+        approval_checkpoint_path = "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"
+        blocked_stories = [
+            ("4.1", "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md", "Ollama local provider"),
+            ("4.2", "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md", "Ollama local provider"),
+            ("4.3", "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md", "Ollama local provider"),
+            ("4.4", "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md", "Ollama local provider"),
+            ("5.1", "docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md", "Subscription-agent launch"),
+            ("5.2", "docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md", "Subscription-agent launch"),
+            ("5.3", "docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md", "Subscription-agent launch"),
+            ("5.4", "docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md", "Subscription-agent launch"),
+            ("5.5", "docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md", "Subscription-agent launch"),
+        ]
+
+        def document_view(path: str, label: str, extra_evidence: list[str] | None = None) -> DocumentationAuthorityDocumentView:
+            exists = (root_dir / path).exists()
+            evidence = [f"{path} is tracked in the repository." if exists else f"{path} is missing from the repository."]
+            if extra_evidence:
+                evidence.extend(extra_evidence)
+            return DocumentationAuthorityDocumentView(
+                path=path,
+                label=label,
+                status="present" if exists else "missing",
+                evidence=evidence,
+            )
+
+        required_documents = index_documents + [(approval_checkpoint_path, "Execution authority approval checkpoints")]
+        missing_paths = [path for path, _label in required_documents if not (root_dir / path).exists()]
+        missing_paths.extend(path for _story_id, path, _family in blocked_stories if not (root_dir / path).exists())
+        authority_story_count = len(blocked_stories)
+        drift_status = "passed" if not missing_paths else "blocked"
+
+        return DocumentationAuthorityReportView(
+            reportId="documentation-authority-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Documentation authority indexes are present and blocked execution-authority stories remain explicit."
+                if not missing_paths
+                else "Documentation authority evidence is missing one or more required files."
+            ),
+            indexes=[document_view(path, label) for path, label in index_documents],
+            approvalCheckpoint=document_view(
+                approval_checkpoint_path,
+                "Execution authority approval checkpoints",
+                ["Generic continuation language is not execution-authority approval."],
+            ),
+            blockedStories=[
+                DocumentationAuthorityBlockedStoryView(
+                    storyId=story_id,
+                    path=path,
+                    authorityFamily=family,
+                    status="blocked_pending_explicit_approval",
+                )
+                for story_id, path, family in blocked_stories
+            ],
+            driftChecks=[
+                ProviderEnablementPolicyStepView(
+                    stepId="required-documents-present",
+                    label="Required authority documents",
+                    status=drift_status,
+                    summary="Architecture, PRD, story, and approval checkpoint documents must be present.",
+                    requiredEvidence=[path for path, _label in required_documents],
+                ),
+                ProviderEnablementPolicyStepView(
+                    stepId="blocked-story-count",
+                    label="Blocked execution-authority stories",
+                    status="passed" if authority_story_count == 9 else "blocked",
+                    summary=f"{authority_story_count} blocked stories are represented for Ollama and subscription-agent launch authority.",
+                    requiredEvidence=[path for _story_id, path, _family in blocked_stories],
+                ),
+                ProviderEnablementPolicyStepView(
+                    stepId="check-docs-command",
+                    label="Documentation drift command",
+                    status="required",
+                    summary="Run `pnpm run check:docs` or the full `pnpm run check` before merging authority documentation changes.",
+                    requiredEvidence=["scripts/check-doc-indexes.mjs", "package.json"],
+                ),
+            ],
+            nextSafeActions=[
+                "Keep blocked authority stories blocked unless explicit operator approval names authority and scope.",
+                "Run `pnpm run check:docs` after changing architecture, PRD, story, or approval checkpoint references.",
+                "Use the documentation indexes before starting new execution-authority work.",
+            ],
+        )
 
     def get_execution_configuration_checks(self) -> ExecutionConfigurationChecksView:
         workers = self.worker_registry.list_workers()

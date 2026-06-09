@@ -1,5 +1,6 @@
 import type {
   ApiEnvelope,
+  DocumentationAuthorityReportView,
   ExecutionAttemptView,
   ExecutionReadinessReportView,
   RuntimeEvidenceExportView,
@@ -86,6 +87,10 @@ export async function getRoutingLaneProfiles(): Promise<RoutingLaneEvidenceProfi
 
 export async function getExecutionReadinessReport(): Promise<ExecutionReadinessReportView> {
   return requestJson<ExecutionReadinessReportView>("/supervisor/execution-readiness-report");
+}
+
+export async function getDocumentationAuthorityReport(): Promise<DocumentationAuthorityReportView> {
+  return requestJson<DocumentationAuthorityReportView>("/supervisor/documentation-authority-report");
 }
 
 export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {

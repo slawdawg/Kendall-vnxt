@@ -143,6 +143,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Authority checks")).toBeVisible();
     await expect(page.getByText("Provider proofs")).toBeVisible();
     await expect(page.getByText("Provider no-call proofs")).toBeVisible();
+    await expect(page.getByText("Documentation authority")).toBeVisible();
+    await expect(page.getByText("Indexes and approval stop lines")).toBeVisible();
+    await expect(page.getByText("9 pending approval")).toBeVisible();
+    await expect(page.getByText("docs/architecture/index.md")).toBeVisible();
+    await expect(page.getByText("blocked pending explicit approval").first()).toBeVisible();
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
     await expect(fleetPanel.getByText("Internal utility worker")).toBeVisible();

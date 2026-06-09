@@ -487,6 +487,32 @@ export interface ExecutionReadinessReportView {
   sourceMutationAllowed: boolean;
 }
 
+export interface DocumentationAuthorityDocumentView {
+  path: string;
+  label: string;
+  status: string;
+  evidence: string[];
+}
+
+export interface DocumentationAuthorityBlockedStoryView {
+  storyId: string;
+  path: string;
+  authorityFamily: string;
+  status: string;
+}
+
+export interface DocumentationAuthorityReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  indexes: DocumentationAuthorityDocumentView[];
+  approvalCheckpoint: DocumentationAuthorityDocumentView;
+  blockedStories: DocumentationAuthorityBlockedStoryView[];
+  driftChecks: ProviderEnablementPolicyStepView[];
+  nextSafeActions: string[];
+  executionAuthorityApproved: boolean;
+}
+
 export interface ThreatBoundaryRuleView {
   ruleId: string;
   label: string;

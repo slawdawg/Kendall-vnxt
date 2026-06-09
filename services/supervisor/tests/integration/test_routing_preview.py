@@ -698,6 +698,43 @@ def test_execution_readiness_report_compacts_policy_attempt_and_outcome_evidence
     assert report["nextSafeActions"]
 
 
+def test_documentation_authority_report_surfaces_indexes_and_blocked_stories_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "documentation-authority-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/documentation-authority-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "documentation-authority-report-v1"
+    assert report["executionAuthorityApproved"] is False
+    assert {document["path"] for document in report["indexes"]} == {
+        "docs/architecture/index.md",
+        "docs/prds/index.md",
+        "docs/stories/index.md",
+    }
+    assert report["approvalCheckpoint"]["path"].endswith("kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md")
+    assert {story["storyId"] for story in report["blockedStories"]} == {"4.1", "4.2", "4.3", "4.4", "5.1", "5.2", "5.3", "5.4", "5.5"}
+    assert all(story["status"] == "blocked_pending_explicit_approval" for story in report["blockedStories"])
+    assert {check["stepId"] for check in report["driftChecks"]} == {
+        "required-documents-present",
+        "blocked-story-count",
+        "check-docs-command",
+    }
+    assert "pnpm run check:docs" in " ".join(report["nextSafeActions"])
+
+
 def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "disabled-provider-proofs.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
