@@ -534,6 +534,33 @@ export interface VerificationReadinessReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface AuthorityReadinessFamilyView {
+  familyId: string;
+  label: string;
+  status: string;
+  summary: string;
+  blockedStories: string[];
+  requiredApprovals: string[];
+  requiredEvidence: string[];
+  relatedReports: string[];
+  relatedDocs: string[];
+  dashboardAnchors: string[];
+  stopLines: string[];
+  nextAction: string;
+}
+
+export interface AuthorityReadinessMatrixReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  families: AuthorityReadinessFamilyView[];
+  readinessLadder: ProviderEnablementPolicyStepView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+}
+
 export interface DashboardE2ERunnerView {
   runnerId: string;
   label: string;

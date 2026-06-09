@@ -1,5 +1,6 @@
 import type {
   ApiEnvelope,
+  AuthorityReadinessMatrixReportView,
   DashboardE2EReportView,
   DeliveryReadinessPolicyReportView,
   DocumentationAuthorityReportView,
@@ -104,6 +105,10 @@ export async function getDocumentationAuthorityReport(): Promise<DocumentationAu
 
 export async function getVerificationReadinessReport(): Promise<VerificationReadinessReportView> {
   return requestJson<VerificationReadinessReportView>("/supervisor/verification-readiness-report");
+}
+
+export async function getAuthorityReadinessMatrixReport(): Promise<AuthorityReadinessMatrixReportView> {
+  return requestJson<AuthorityReadinessMatrixReportView>("/supervisor/authority-readiness-matrix-report");
 }
 
 export async function getDashboardE2EReport(): Promise<DashboardE2EReportView> {

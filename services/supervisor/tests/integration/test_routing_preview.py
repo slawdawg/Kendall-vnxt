@@ -763,6 +763,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-docs",
         "check-documentation-authority",
         "check-verification-readiness",
+        "check-authority-readiness",
         "check-e2e-report",
         "check-reports",
         "check-execution-boundary",
@@ -824,6 +825,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/execution-readiness-report",
         "GET /supervisor/documentation-authority-report",
         "GET /supervisor/verification-readiness-report",
+        "GET /supervisor/authority-readiness-matrix-report",
         "GET /supervisor/dashboard-e2e-report",
         "GET /supervisor/maintenance-readiness-report",
         "GET /supervisor/maintenance-action-plan-report",
@@ -970,6 +972,56 @@ def test_maintenance_action_plan_report_consolidates_next_safe_steps_without_mut
     assert "pnpm run check" in report["verificationChain"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("one PR" in action for action in report["nextSafeActions"])
+
+
+def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "authority-readiness-matrix-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/authority-readiness-matrix-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "authority-readiness-matrix-report-v1"
+    assert report["readOnly"] is True
+    assert report["executionAuthorityApproved"] is False
+    assert {family["familyId"] for family in report["families"]} == {
+        "local-provider-execution",
+        "subscription-agent-launch",
+        "premium-execution",
+        "worker-command-source-network-credentials",
+        "remote-delivery-automation",
+    }
+    provider_family = next(family for family in report["families"] if family["familyId"] == "local-provider-execution")
+    assert provider_family["status"] == "blocked_pending_explicit_approval"
+    assert "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md" in provider_family["blockedStories"]
+    assert "GET /supervisor/disabled-provider-proofs" in provider_family["relatedReports"]
+    launch_family = next(family for family in report["families"] if family["familyId"] == "subscription-agent-launch")
+    assert "docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md" in launch_family["blockedStories"]
+    assert "/controls#maintenance-action-plan-report" in launch_family["dashboardAnchors"]
+    command_family = next(family for family in report["families"] if family["familyId"] == "worker-command-source-network-credentials")
+    assert command_family["status"] == "blocked_by_default"
+    assert any("Blocked command classes" in evidence for evidence in command_family["requiredEvidence"])
+    remote_family = next(family for family in report["families"] if family["familyId"] == "remote-delivery-automation")
+    assert "GET /supervisor/delivery-readiness-policy-report" in remote_family["relatedReports"]
+    assert {step["stepId"] for step in report["readinessLadder"]} == {
+        "explicit-authority-approval",
+        "evidence-surface-alignment",
+        "implementation-remains-disabled",
+    }
+    assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
+    assert any("explicit operator approval" in action for action in report["nextSafeActions"])
 
 
 def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_mutation(tmp_path, monkeypatch) -> None:
@@ -1856,9 +1908,11 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-50-provider-fixture-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-51-process-lifecycle-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-52-maintenance-action-plan-report.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-53-authority-readiness-matrix-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/authority-readiness-matrix-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/dashboard-e2e-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/report-catalog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/maintenance-readiness-report" in export["boundary"]["relatedSupervisorReports"]

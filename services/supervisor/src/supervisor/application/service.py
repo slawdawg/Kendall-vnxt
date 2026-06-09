@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
     AuditEventView,
+    AuthorityReadinessFamilyView,
+    AuthorityReadinessMatrixReportView,
     DashboardE2EReportView,
     DashboardE2ERunnerView,
     DeliveryReadinessPolicyItemView,
@@ -438,6 +440,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-authority-readiness",
+                label="Authority readiness matrix drift",
+                command="pnpm run check:authority-readiness",
+                status="required",
+                requiredFor=["authority readiness matrix changes", "blocked story reference changes", "controls-page report changes"],
+                evidence=[
+                    "Validates authority readiness matrix contracts, schemas, API route, service families, dashboard rendering, report anchors, runtime evidence, browser assertions, and story evidence stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-e2e-report",
                 label="Dashboard e2e report drift",
                 command="pnpm run check:e2e-report",
@@ -609,7 +622,7 @@ class SupervisorService:
                 status="required",
                 requiredFor=["pre-merge confidence", "local handoff", "fresh VM acceptance"],
                 evidence=[
-                    "Runs preflight, documentation checks, core readiness/report/runtime/safe-backlog/managed recipe policy/delivery readiness policy/maintenance readiness drift checks, runbook checks, dashboard build, and supervisor integration tests.",
+                    "Runs preflight, documentation checks, core readiness/report/authority readiness/runtime/safe-backlog/managed recipe policy/delivery readiness policy/maintenance readiness drift checks, runbook checks, dashboard build, and supervisor integration tests.",
                     "Does not grant execution authority by passing.",
                 ],
             ),
@@ -737,6 +750,244 @@ class SupervisorService:
                 "Use Playwright dashboard coverage when UI behavior changes and the local browser stack is healthy.",
                 "Use the dashboard e2e report before changing browser workflow coverage.",
                 "Keep verification reports aligned with README, handoff, and fresh VM checklist commands.",
+            ],
+        )
+
+    def get_authority_readiness_matrix_report(self) -> AuthorityReadinessMatrixReportView:
+        documentation = self.get_documentation_authority_report()
+        verification = self.get_verification_readiness_report()
+        threat_boundary = self.get_threat_boundary()
+
+        blocked_by_family = {
+            "Ollama local provider": [
+                story.path for story in documentation.blockedStories if story.authorityFamily == "Ollama local provider"
+            ],
+            "Subscription-agent launch": [
+                story.path for story in documentation.blockedStories if story.authorityFamily == "Subscription-agent launch"
+            ],
+        }
+        required_commands = [command.command for command in verification.requiredCommands]
+
+        families = [
+            AuthorityReadinessFamilyView(
+                familyId="local-provider-execution",
+                label="Local provider execution",
+                status="blocked_pending_explicit_approval",
+                summary="Ollama and other local provider calls remain disabled until provider-specific approval, no-call proofs, settings gates, prompt policy, and rollback evidence are accepted.",
+                blockedStories=blocked_by_family["Ollama local provider"],
+                requiredApprovals=[
+                    "Explicit operator approval naming the local provider, endpoint, model, authority scope, and rollback plan.",
+                    "Approved provider PRD or decision record for the exact provider lane.",
+                ],
+                requiredEvidence=[
+                    "Disabled provider no-call proofs for Ollama, LM Studio, vLLM, and llama.cpp.",
+                    "Execution readiness provider enablement policy remains unsatisfied.",
+                    "Prompt redaction, retention, timeout, cancellation, and credential policies are reviewed before enablement.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/execution-readiness-report",
+                    "GET /supervisor/disabled-provider-proofs",
+                    "GET /supervisor/threat-boundary",
+                    "GET /supervisor/documentation-authority-report",
+                ],
+                relatedDocs=[
+                    "docs/prds/local-provider-ollama-disabled-to-limited-execution.md",
+                    "docs/prds/local-provider-ollama-prd-review-2026-06-08.md",
+                    "docs/architecture/kendall-vnxt-provider-disabled-fixtures-2026-06-08.md",
+                ],
+                dashboardAnchors=["/controls#execution-readiness-report", "/controls#documentation-authority-report"],
+                stopLines=[
+                    "Do not call local provider HTTP endpoints.",
+                    "Do not construct prompts for a local model from work-item evidence.",
+                    "Do not read provider credentials or model server secrets.",
+                ],
+                nextAction="Keep provider execution blocked until explicit approval names the provider authority and scope.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="subscription-agent-launch",
+                label="Subscription-agent launch",
+                status="blocked_pending_explicit_approval",
+                summary="Direct subscription-agent process launch remains disabled until process lifecycle, workspace, output, session, approval, and rollback requirements are approved.",
+                blockedStories=blocked_by_family["Subscription-agent launch"],
+                requiredApprovals=[
+                    "Explicit operator approval naming the agent launch target, lifecycle scope, workspace policy, and rollback plan.",
+                    "Approved subscription-agent launch PRD or decision record for supervised execution.",
+                ],
+                requiredEvidence=[
+                    "Process lifecycle policy requires route-bound approval and disabled launch evidence.",
+                    "Execution attempts record lifecycle state without launching a process.",
+                    "Workspace isolation and artifact output policies remain review-only.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/maintenance-action-plan-report",
+                    "GET /supervisor/execution-readiness-report",
+                    "GET /supervisor/execution-state-boundary",
+                    "GET /supervisor/threat-boundary",
+                ],
+                relatedDocs=[
+                    "docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md",
+                    "docs/prds/subscription-agent-launch-prd-review-2026-06-08.md",
+                    "docs/architecture/kendall-vnxt-process-lifecycle-design-2026-06-08.md",
+                ],
+                dashboardAnchors=["/controls#maintenance-action-plan-report", "/controls#execution-readiness-report"],
+                stopLines=[
+                    "Do not launch subscription-agent processes.",
+                    "Do not allocate supervised runtime sessions.",
+                    "Do not attach OS process IDs or live process supervisors to execution attempts.",
+                ],
+                nextAction="Keep launch stories blocked until explicit approval names process launch authority and scope.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="premium-execution",
+                label="Premium execution",
+                status="blocked_pending_explicit_approval",
+                summary="Premium provider execution remains limited to approval request artifacts and may not run paid model calls from maintenance or generic continuation work.",
+                blockedStories=[],
+                requiredApprovals=[
+                    "Explicit operator approval naming premium provider, cost ceiling, data policy, and audit requirements.",
+                    "Approved premium execution policy before any paid call is made.",
+                ],
+                requiredEvidence=[
+                    "Premium approval artifacts are request-only.",
+                    "Execution configuration checks keep premiumExecutionAllowed false.",
+                    "Verification passing does not approve premium execution.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/execution-readiness-report",
+                    "GET /supervisor/threat-boundary",
+                    "GET /supervisor/managed-recipe-policy-report",
+                ],
+                relatedDocs=[
+                    "docs/stories/1-18-premium-approval-request-artifacts.md",
+                    "docs/prds/supervisor-execution-authority-expansion.md",
+                ],
+                dashboardAnchors=["/controls#execution-readiness-report", "/controls#managed-recipe-policy-report"],
+                stopLines=[
+                    "Do not run premium provider calls.",
+                    "Do not treat approval request artifacts as approval to execute.",
+                ],
+                nextAction="Leave premium execution deferred until a premium-specific policy and approval exist.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="worker-command-source-network-credentials",
+                label="Worker command, source, network, and credential authority",
+                status="blocked_by_default",
+                summary="Worker shell commands, source mutation, network access, and credential access remain denied by the threat boundary and workspace isolation plan.",
+                blockedStories=[],
+                requiredApprovals=[
+                    "Explicit operator approval naming allowed command classes, write roots, network destinations, and credential boundary.",
+                    "Threat-boundary update with tests before any worker receives broader capabilities.",
+                ],
+                requiredEvidence=[
+                    f"Blocked command classes: {', '.join(threat_boundary.blockedCommandClasses)}.",
+                    "Workspace isolation plans keep sourceMutationAllowed, commandsAllowed, networkAllowed, and credentialAccessAllowed false.",
+                    "Runtime evidence exports exclude credentials, provider payloads, and external filesystem snapshots.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/threat-boundary",
+                    "GET /supervisor/execution-configuration-checks",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                ],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-worker-threat-boundary-2026-06-08.md",
+                    "docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md",
+                    "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
+                ],
+                dashboardAnchors=["/controls#execution-readiness-report"],
+                stopLines=[
+                    "Do not permit arbitrary worker shell commands.",
+                    "Do not grant worker source mutation, network access, or credential access.",
+                    "Do not weaken runtime evidence export exclusions to include secrets.",
+                ],
+                nextAction="Keep worker authority disabled while improving read-only evidence and review surfaces.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="remote-delivery-automation",
+                label="Remote delivery automation",
+                status="blocked_pending_explicit_approval",
+                summary="Automated remote delivery remains blocked for managed recipes; Codex may use approved Git/GCM or connector workflows, but workers may not automate remote operations.",
+                blockedStories=[],
+                requiredApprovals=[
+                    "Explicit operator approval naming allowed remote operations and scope before worker-run remote automation.",
+                    "Delivery readiness evidence for PR, CI, merge, and waiver state before review approval.",
+                ],
+                requiredEvidence=[
+                    "Managed recipe policy blocks git push, pull request creation, CI wait, merge, release, and deployment.",
+                    "GitHub workflow policy requires Git/GCM or connector-backed authentication and rejects persistent plaintext token storage.",
+                    "Delivery readiness report keeps remote automation approval false.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/delivery-readiness-policy-report",
+                    "GET /supervisor/managed-recipe-policy-report",
+                ],
+                relatedDocs=[
+                    "docs/github-connector-workflow.md",
+                    "docs/stories/3-43-safe-delivery-hygiene.md",
+                    "docs/stories/3-44-delivery-readiness-policy-report.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#github-workflow-policy-report",
+                    "/controls#delivery-readiness-policy-report",
+                    "/controls#managed-recipe-policy-report",
+                ],
+                stopLines=[
+                    "Do not give managed workers remote delivery automation.",
+                    "Do not persist plaintext GitHub tokens.",
+                    "Do not treat delivery readiness records as approval to deploy.",
+                ],
+                nextAction="Keep remote delivery policy visible while human/connector-backed PR work remains separate from worker automation.",
+            ),
+        ]
+
+        return AuthorityReadinessMatrixReportView(
+            reportId="authority-readiness-matrix-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary="Read-only matrix of execution-authority families, approval evidence, blocked stories, related reports, and stop lines before any real worker execution can be enabled.",
+            families=families,
+            readinessLadder=[
+                ProviderEnablementPolicyStepView(
+                    stepId="explicit-authority-approval",
+                    label="Explicit authority approval",
+                    status="blocked",
+                    summary="No authority family may move from blocked to ready without operator approval naming the authority and scope.",
+                    requiredEvidence=[
+                        "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+                        "docs/stories/index.md",
+                    ],
+                ),
+                ProviderEnablementPolicyStepView(
+                    stepId="evidence-surface-alignment",
+                    label="Evidence surface alignment",
+                    status="ready",
+                    summary="Read-only reports, runtime exports, dashboard anchors, and static drift checks are available for review before approval decisions.",
+                    requiredEvidence=[
+                        "GET /supervisor/report-catalog",
+                        "GET /supervisor/maintenance-action-plan-report",
+                        f"{len(required_commands)} required verification commands listed.",
+                    ],
+                ),
+                ProviderEnablementPolicyStepView(
+                    stepId="implementation-remains-disabled",
+                    label="Implementation remains disabled",
+                    status="blocked",
+                    summary="Provider calls, process launch, premium execution, worker commands, source mutation, network access, and credentials remain disabled.",
+                    requiredEvidence=[
+                        "GET /supervisor/execution-readiness-report",
+                        "GET /supervisor/threat-boundary",
+                        "GET /supervisor/execution-configuration-checks",
+                    ],
+                ),
+            ],
+            stopLines=[
+                "Authority readiness matrix entries are not execution-authority approvals.",
+                "Do not start blocked Ollama provider stories or subscription-agent launch stories from this report.",
+                "Do not enable process launch, provider/model calls, premium execution, worker commands, source mutation, network access, credential access, or worker remote automation from this report.",
+            ],
+            nextSafeActions=[
+                "Use this matrix before changing any authority-adjacent report, PRD, story, or dashboard surface.",
+                "Keep blocked story status and approval checkpoint language aligned with documentation authority checks.",
+                "Continue safe maintenance and evidence navigation until explicit operator approval names an authority family and scope.",
             ],
         )
 
@@ -921,6 +1172,15 @@ class SupervisorService:
                 summary="Lists required checks, optional checks, and verification stop lines for local delivery readiness.",
                 evidenceScope=["workspace checks", "dashboard build", "supervisor tests", "browser test setup"],
                 relatedDocs=["docs/stories/3-16-verification-readiness-report.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="authority-readiness-matrix-report-v1",
+                label="Authority readiness matrix report",
+                endpoint="GET /supervisor/authority-readiness-matrix-report",
+                status="active",
+                summary="Maps execution-authority families to blocked stories, approval evidence, related reports, dashboard anchors, and stop lines.",
+                evidenceScope=["authority families", "blocked stories", "required approvals", "authority stop lines"],
+                relatedDocs=["docs/stories/3-53-authority-readiness-matrix-report.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="dashboard-e2e-report-v1",
@@ -1930,6 +2190,7 @@ class SupervisorService:
             "GET /supervisor/execution-readiness-report",
             "GET /supervisor/documentation-authority-report",
             "GET /supervisor/verification-readiness-report",
+            "GET /supervisor/authority-readiness-matrix-report",
             "GET /supervisor/dashboard-e2e-report",
             "GET /supervisor/report-catalog",
             "GET /supervisor/maintenance-readiness-report",
@@ -1953,6 +2214,7 @@ class SupervisorService:
             "docs/stories/3-18-supervisor-report-catalog.md",
             "docs/stories/3-19-maintenance-readiness-report.md",
             "docs/stories/3-52-maintenance-action-plan-report.md",
+            "docs/stories/3-53-authority-readiness-matrix-report.md",
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",
             "docs/stories/3-22-dashboard-e2e-report.md",

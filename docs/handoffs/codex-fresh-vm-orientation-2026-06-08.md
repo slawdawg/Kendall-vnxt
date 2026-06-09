@@ -137,6 +137,7 @@ pnpm run doctor:github -- --remote
 pnpm run check:docs
 pnpm run check:documentation-authority
 pnpm run check:verification-readiness
+pnpm run check:authority-readiness
 pnpm run check:e2e-report
 pnpm run check:reports
 pnpm run check:execution-boundary
@@ -154,7 +155,7 @@ pnpm run check
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -LocalOnly
 ```
 
-`pnpm run check` is expected to run preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, delivery readiness policy drift checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests through the repo-local uv cache wrapper. A known intermittent `aiosqlite` event-loop warning may appear after tests pass.
+`pnpm run check` is expected to run preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, delivery readiness policy drift checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests through the repo-local uv cache wrapper. A known intermittent `aiosqlite` event-loop warning may appear after tests pass.
 
 ## Connector Check
 

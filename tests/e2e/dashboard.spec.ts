@@ -161,6 +161,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:authority-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:e2e-report", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:reports", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:execution-boundary", { exact: true })).toBeVisible();
@@ -183,6 +184,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("Passing verification does not approve local provider/model calls.")).toBeVisible();
     await expect(page.locator("#verification-readiness-report")).toBeVisible();
 
+    const authorityMatrixPanel = page.locator("section").filter({ hasText: "Execution authority matrix" }).first();
+    await expect(authorityMatrixPanel.getByText("Authority readiness", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("Execution authority matrix")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("local-provider-execution")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("subscription-agent-launch")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("worker-command-source-network-credentials")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("remote-delivery-automation")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("explicit-authority-approval")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("Authority readiness matrix entries are not execution-authority approvals.")).toBeVisible();
+    await expect(page.locator("#authority-readiness-matrix-report")).toBeVisible();
+
     const dashboardE2EPanel = page.locator("section").filter({ hasText: "Browser verification map" }).first();
     await expect(dashboardE2EPanel.getByText("Dashboard e2e", { exact: true })).toBeVisible();
     await expect(dashboardE2EPanel.getByRole("heading", { name: "Browser verification map" })).toBeVisible();
@@ -199,6 +211,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("Supervisor evidence map")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/verification-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/authority-readiness-matrix-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/dashboard-e2e-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/maintenance-action-plan-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
@@ -255,7 +268,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(managedRecipePolicyPanel.getByText("Managed recipe policies are not execution-authority approvals.")).toBeVisible();
     await expect(page.locator("#managed-recipe-policy-report")).toBeVisible();
 
-    const githubPolicyPanel = page.locator("section").filter({ hasText: "Delivery policy" }).first();
+    const githubPolicyPanel = page.locator("section").filter({ hasText: "Git Credential Manager" }).first();
     await expect(githubPolicyPanel.getByText("GitHub workflow", { exact: true })).toBeVisible();
     await expect(githubPolicyPanel.getByText("Git remotes use Git Credential Manager")).toBeVisible();
     await expect(githubPolicyPanel.getByText("Codex GitHub connector handles PR work")).toBeVisible();

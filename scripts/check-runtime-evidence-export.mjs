@@ -75,6 +75,7 @@ for (const story of [
   "docs/stories/3-50-provider-fixture-policy-drift-check.md",
   "docs/stories/3-51-process-lifecycle-policy-drift-check.md",
   "docs/stories/3-52-maintenance-action-plan-report.md",
+  "docs/stories/3-53-authority-readiness-matrix-report.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing runtime export story evidence ${story}`, failures);
 }
@@ -91,6 +92,7 @@ for (const shortcutText of [
   "reportAnchorByEndpoint",
   "reportShortcutHref",
   "#execution-readiness-report",
+  "#authority-readiness-matrix-report",
   "#maintenance-action-plan-report",
   "#safe-development-backlog",
   "#github-workflow-policy-report",
@@ -111,6 +113,11 @@ for (const panelText of ["/controls#execution-readiness-report", "/controls#safe
 assertCondition(
   serviceSource.includes("GET /supervisor/maintenance-action-plan-report"),
   "Runtime evidence export related reports must include maintenance action plan report",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("GET /supervisor/authority-readiness-matrix-report"),
+  "Runtime evidence export related reports must include authority readiness matrix report",
   failures,
 );
 
@@ -196,6 +203,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-52-maintenance-action-plan-report.md"),
   "Story index must reference Story 3.52 maintenance action plan report",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-53-authority-readiness-matrix-report.md"),
+  "Story index must reference Story 3.53 authority readiness matrix report",
   failures,
 );
 

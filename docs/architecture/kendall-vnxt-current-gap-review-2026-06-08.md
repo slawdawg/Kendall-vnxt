@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, and maintenance action plan coverage through Story 3.52
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, and authority readiness matrix coverage through Story 3.53
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -82,6 +82,7 @@ Do not rebuild these as new architecture work:
 - Runbook verification alignment for current operator setup, bootstrap, and handoff instructions.
 - Runbook managed recipe check-chain alignment for the active `check:managed-recipes` verification command.
 - Maintenance action plan report for selecting larger safe slices with verification commands, evidence links, dashboard anchors, and authority stop lines.
+- Authority readiness matrix report for blocked execution-authority families, approval evidence, related reports, and stop lines.
 - Shared dashboard e2e runner lifecycle helper for focused browser verification scripts.
 - Focused mobile dashboard e2e runner for phone-sized intake draft verification.
 - Focused managed-recipe e2e runners for dashboard and mobile coverage intake templates.
@@ -98,6 +99,7 @@ Do not rebuild these as new architecture work:
 - Provider fixture policy drift check for disabled local-provider fixture baselines.
 - Process lifecycle policy drift check for future subscription-agent process launch planning and disabled launch evidence.
 - Maintenance action plan drift check for safe slice selection, report/runtime references, controls-page rendering, and story evidence.
+- Authority readiness matrix drift check for blocked story mapping, approval evidence, report/runtime references, controls-page rendering, and story evidence.
 
 ## Current Gaps
 
