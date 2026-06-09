@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-08 after execution-authority Stories 2.1-2.8
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, and report-anchor polish through Story 3.40
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -80,9 +80,12 @@ Do not rebuild these as new architecture work:
 - Dashboard e2e report for focused/full browser verification commands, lifecycle posture, cache posture, stop lines, and static drift checking.
 - Supervisor report catalog drift checking for report routes, runtime references, dashboard fetches, browser assertions, and story evidence.
 - Runbook verification alignment for current operator setup, bootstrap, and handoff instructions.
+- Runbook managed recipe check-chain alignment for the active `check:managed-recipes` verification command.
 - Shared dashboard e2e runner lifecycle helper for focused browser verification scripts.
 - Focused mobile dashboard e2e runner for phone-sized intake draft verification.
 - Focused managed-recipe e2e runners for dashboard and mobile coverage intake templates.
+- Managed recipe policy report and dedicated drift checking for recipe gates, path policies, command evidence, and blocked remote automation.
+- Evidence overview report shortcuts and runtime export report links that jump to stable controls-page report anchors.
 
 ## Current Gaps
 
@@ -112,16 +115,10 @@ Recommendation: keep docs, tests, evidence surfaces, and blocked-story status cu
 
 ## Recommended Build Order
 
-1. Refresh architecture docs with the current Story 2.1-2.8 state.
-2. Add the deferred authority dependency graph.
-3. Add a dashboard command/read boundary contract.
-4. Add execution-readiness report, provider enablement policy, attempt evidence reporting, and outcome evidence reporting.
-5. Clarify queue lease versus execution attempt boundaries and add provider-specific disabled adapter proofs.
-6. Draft process lifecycle design and polish runtime evidence exports.
-7. Add provider-specific disabled fixture expansion and the first provider PRD draft.
-8. Add dashboard access to runtime evidence exports.
-9. Draft subscription-agent launch PRD.
-10. Only then implement real local provider calls or direct subscription-agent launch after explicit approval.
+1. Keep safe maintenance and evidence-navigation slices current while execution authority remains blocked.
+2. Keep architecture, handoffs, runbooks, static drift checks, and story indexes aligned with the active verification chain.
+3. Review provider-specific PRDs only when the operator explicitly wants to move an authority lane toward approval.
+4. Only then implement real local provider calls or direct subscription-agent launch after explicit approval naming authority and scope.
 
 ## Recommended Immediate Story
 
@@ -133,7 +130,7 @@ Acceptance outline:
 
 - Run and document relevant checks.
 - Keep blocked authority stories blocked unless explicit approval is present.
-- Improve docs/tests/read-only evidence surfaces where useful.
+- Improve docs/tests/read-only evidence surfaces where useful, preferably in larger coherent slices.
 - Keep all current execution authority disabled.
 
 ## Stop Conditions

@@ -1770,6 +1770,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-38-runbook-managed-recipe-check-chain.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-39-report-shortcut-anchor-polish.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-40-runtime-report-anchor-links.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-41-current-gap-review-refresh.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]

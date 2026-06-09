@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-41-current-gap-review-refresh.md` | Current gap review and continuation handoff refresh with static documentation drift coverage. |
 | `3-40-runtime-report-anchor-links.md` | Runtime evidence export related reports use shared controls-page report anchor links. |
 | `3-39-report-shortcut-anchor-polish.md` | Work-item evidence overview links related supervisor reports to specific controls-page report anchors. |
 | `3-38-runbook-managed-recipe-check-chain.md` | Runbook verification guard for the active check chain after adding managed recipe policy drift checks. |
