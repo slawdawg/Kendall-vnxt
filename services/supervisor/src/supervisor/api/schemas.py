@@ -691,6 +691,7 @@ class MaintenanceReadinessTrackView(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     relatedReports: list[str] = Field(default_factory=list)
     relatedDocs: list[str] = Field(default_factory=list)
+    dashboardAnchors: list[str] = Field(default_factory=list)
     nextAction: str
 
 

@@ -1,4 +1,6 @@
 import type { MaintenanceReadinessReportView, MaintenanceReadinessTrackView } from "@kendall/contracts";
+import Link from "next/link";
+import { reportShortcutHref } from "../lib/report-shortcuts";
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
@@ -24,9 +26,37 @@ function TrackCard({ track }: { track: MaintenanceReadinessTrackView }) {
           </p>
         ))}
       </div>
-      <p className="mt-3 break-words rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
-        {track.relatedReports.join(" | ")}
-      </p>
+      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
+        <div className="mt-2 grid gap-2">
+          {track.relatedReports.map((report) => (
+            <Link
+              key={report}
+              href={reportShortcutHref(report)}
+              className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              {report}
+            </Link>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
+        <div className="mt-2 grid gap-2">
+          {track.relatedDocs.map((doc) => (
+            <span key={doc} className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+              {doc}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {track.dashboardAnchors.map((anchor) => (
+          <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
+            {anchor}
+          </Link>
+        ))}
+      </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{track.nextAction}</p>
     </article>
   );

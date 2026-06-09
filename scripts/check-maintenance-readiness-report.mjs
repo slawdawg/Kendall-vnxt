@@ -75,7 +75,18 @@ assertCondition(
   failures,
 );
 
-for (const panelText of ["MaintenanceReadinessReportView", "Maintenance tracks", "track.relatedReports", "stopLines", "nextSafeActions"]) {
+for (const panelText of [
+  "MaintenanceReadinessReportView",
+  "Maintenance tracks",
+  "track.relatedReports",
+  "track.relatedDocs",
+  "track.dashboardAnchors",
+  "reportShortcutHref",
+  "Related reports",
+  "Related docs",
+  "stopLines",
+  "nextSafeActions",
+]) {
   assertCondition(maintenancePanel.includes(panelText), `Maintenance readiness panel must render ${panelText}`, failures);
 }
 
@@ -83,6 +94,11 @@ for (const browserText of [
   "Maintenance readiness",
   "Safe work map",
   "documentation-hygiene",
+  "Related reports",
+  "GET /supervisor/documentation-authority-report",
+  "Related docs",
+  "docs/stories/index.md",
+  "/controls#dashboard-e2e-report",
   "verification-hygiene",
   "authority-blocker-watch",
   "Maintenance work must not approve local provider/model calls.",
@@ -96,6 +112,8 @@ for (const testText of [
   '"/supervisor/maintenance-readiness-report"',
   '"documentation-hygiene"',
   '"verification-hygiene"',
+  '"dashboardAnchors"',
+  '"relatedDocs"',
   '"authority-blocker-watch"',
   "docs/stories/3-46-maintenance-readiness-drift-check.md",
 ]) {
@@ -104,14 +122,21 @@ for (const testText of [
 
 const storyPath = "docs/stories/3-46-maintenance-readiness-drift-check.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing maintenance readiness drift story ${storyPath}`, failures);
+const linksStoryPath = "docs/stories/3-62-maintenance-readiness-evidence-links.md";
+assertCondition(existsSync(join(rootDir, linksStoryPath)), `Missing maintenance readiness evidence links story ${linksStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-46-maintenance-readiness-drift-check.md"),
   "Story index must reference Story 3.46 maintenance readiness drift check",
   failures,
 );
 assertCondition(
-  reconciliation.includes("Maintenance readiness drift check"),
-  "Implementation reconciliation must track the maintenance readiness drift check",
+  storyIndex.includes("3-62-maintenance-readiness-evidence-links.md"),
+  "Story index must reference Story 3.62 maintenance readiness evidence links",
+  failures,
+);
+assertCondition(
+  reconciliation.includes("Maintenance readiness drift check") && reconciliation.includes("Maintenance readiness evidence links"),
+  "Implementation reconciliation must track the maintenance readiness drift check and evidence links",
   failures,
 );
 assertCondition(

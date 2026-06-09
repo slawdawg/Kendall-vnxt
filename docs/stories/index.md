@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-62-maintenance-readiness-evidence-links.md` | Maintenance readiness related report, document, and dashboard anchor links for safe-lane evidence review. |
 | `3-61-maintenance-action-evidence-links.md` | Maintenance action plan related report and document links for safe-step evidence review. |
 | `3-60-safe-backlog-report-anchors.md` | Safe backlog related-report links and dashboard anchors for faster read-only evidence navigation. |
 | `3-59-development-runway-readiness-checks.md` | Development runway per-slice readiness checks for ready and blocked larger PR slice selection. |

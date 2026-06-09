@@ -244,6 +244,14 @@ test.describe("dashboard workflow coverage", () => {
     await expect(maintenancePanel.getByText("documentation-hygiene")).toBeVisible();
     await expect(maintenancePanel.getByText("verification-hygiene")).toBeVisible();
     await expect(maintenancePanel.getByText("authority-blocker-watch")).toBeVisible();
+    await expect(maintenancePanel.getByText("Related reports").first()).toBeVisible();
+    await expect(maintenancePanel.getByRole("link", { name: "GET /supervisor/documentation-authority-report" }).first()).toHaveAttribute(
+      "href",
+      "/controls#documentation-authority-report",
+    );
+    await expect(maintenancePanel.getByText("Related docs").first()).toBeVisible();
+    await expect(maintenancePanel.getByText("docs/stories/index.md", { exact: true }).first()).toBeVisible();
+    await expect(maintenancePanel.getByRole("link", { name: "/controls#dashboard-e2e-report" }).first()).toBeVisible();
     await expect(maintenancePanel.getByText("Maintenance work must not approve local provider/model calls.")).toBeVisible();
 
     const actionPlanPanel = page.locator("section").filter({ hasText: "Next safe work plan" }).first();

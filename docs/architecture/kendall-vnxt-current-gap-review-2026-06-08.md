@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, and maintenance action evidence-link coverage through Story 3.61
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, and maintenance readiness evidence-link coverage through Story 3.62
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -74,6 +74,7 @@ Do not rebuild these as new architecture work:
 - Dashboard e2e reliability guardrails for focused controls-page verification.
 - Supervisor report catalog for read-only evidence navigation.
 - Maintenance readiness report for safe repo hygiene while authority stories remain blocked.
+- Maintenance readiness evidence links for reviewing related reports, docs, and anchors from each safe maintenance lane.
 - Safe development backlog report for selecting larger coherent safe slices while authority stories remain blocked.
 - Safe backlog report anchors for jumping from backlog items to supporting controls-page report evidence.
 - Runtime evidence review manifest for export counts, retention notes, and stop lines.

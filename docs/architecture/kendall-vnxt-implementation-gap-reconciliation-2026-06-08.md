@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, and maintenance action evidence-link coverage through Story 3.61
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, and maintenance readiness evidence-link coverage through Story 3.62
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -26,6 +26,7 @@ Source review artifacts:
 - `docs/stories/3-59-development-runway-readiness-checks.md`
 - `docs/stories/3-60-safe-backlog-report-anchors.md`
 - `docs/stories/3-61-maintenance-action-evidence-links.md`
+- `docs/stories/3-62-maintenance-readiness-evidence-links.md`
 
 Implementation areas checked:
 
@@ -144,6 +145,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Current gap review refresh | Implemented | `pnpm run check:docs`, Story 3.41 | Keeps the current gap review and continuation handoff aligned with the Story 3.40 safe-work state and larger coherent safe-slice guidance. |
 | Supervisor report catalog | Implemented | `GET /supervisor/report-catalog`, `SupervisorReportCatalogPanel`, Story 3.18 | Indexes read-only supervisor evidence reports and stop lines without changing approval state. |
 | Maintenance readiness report | Implemented | `GET /supervisor/maintenance-readiness-report`, `MaintenanceReadinessReportPanel`, Story 3.19 | Tracks safe maintenance lanes, report alignment, and blocked authority posture without changing approval state. |
+| Maintenance readiness evidence links | Implemented | `MaintenanceReadinessTrackView.dashboardAnchors`, Story 3.62 | Renders related report, document, and dashboard anchor evidence for each safe maintenance lane without adding execution controls. |
 | Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
 | Direct subscription-agent process launch | Deferred | Launch stub is disabled | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
 | Premium execution | Deferred | Approval request artifacts only | Requires premium provider boundary and explicit approval policy. |

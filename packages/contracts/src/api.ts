@@ -637,6 +637,7 @@ export interface MaintenanceReadinessTrackView {
   evidence: string[];
   relatedReports: string[];
   relatedDocs: string[];
+  dashboardAnchors: string[];
   nextAction: string;
 }
 
