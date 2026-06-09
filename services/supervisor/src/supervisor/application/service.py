@@ -472,6 +472,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-delivery-readiness",
+                label="Delivery readiness policy drift",
+                command="pnpm run check:delivery-readiness",
+                status="required",
+                requiredFor=["delivery readiness policy changes", "controls-page report changes", "work-item delivery gate changes"],
+                evidence=[
+                    "Validates delivery readiness policy contracts, schemas, API route, service report, dashboard rendering, browser assertions, and story evidence stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-build",
                 label="Dashboard build and type check",
                 command="pnpm --filter @kendall/dashboard build",
@@ -500,7 +511,7 @@ class SupervisorService:
                 status="required",
                 requiredFor=["pre-merge confidence", "local handoff", "fresh VM acceptance"],
                 evidence=[
-                    "Runs preflight, documentation checks, report/runtime/safe-backlog/managed recipe policy drift checks, runbook checks, dashboard build, and supervisor integration tests.",
+                    "Runs preflight, documentation checks, report/runtime/safe-backlog/managed recipe policy/delivery readiness policy drift checks, runbook checks, dashboard build, and supervisor integration tests.",
                     "Does not grant execution authority by passing.",
                 ],
             ),
@@ -1074,7 +1085,7 @@ class SupervisorService:
                 recommendedSliceSize="large",
                 evidence=[
                     f"{len(required_verification)} required verification commands are surfaced.",
-                    "Dashboard e2e, supervisor report catalog, runtime evidence export, safe backlog, and managed recipe policy drift checks now run inside the full local check.",
+                    "Dashboard e2e, supervisor report catalog, runtime evidence export, safe backlog, managed recipe policy, and delivery readiness policy drift checks now run inside the full local check.",
                     "Focused dashboard e2e runners cover controls, detail, mobile, and managed recipe slices.",
                     "Future PRs should batch related API, dashboard, docs, and tests into larger coherent slices.",
                 ],
@@ -1091,6 +1102,7 @@ class SupervisorService:
                     "docs/stories/3-35-runbook-check-chain-hardening.md",
                     "docs/stories/3-37-managed-recipe-policy-drift-check.md",
                     "docs/stories/3-38-runbook-managed-recipe-check-chain.md",
+                    "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
                 ],
                 nextAction="Add or extend static drift checks in larger coherent PR slices whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
             ),
@@ -1723,6 +1735,7 @@ class SupervisorService:
             "docs/stories/3-42-github-workflow-policy-report.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
+            "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

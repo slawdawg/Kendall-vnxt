@@ -22,4 +22,4 @@ Recommended prompt:
 Read docs/handoffs/current.md and continue from it. Use the repo state as source of truth.
 ```
 
-The date-specific handoff contains the current fresh-VM bootstrap contract, auth policy, required BMAD/KNX module surface, safety gates, and verification commands. `pnpm run check` includes `pnpm run check:docs`, `pnpm run check:e2e-report`, `pnpm run check:reports`, `pnpm run check:runbooks` for runbook verification, `pnpm run check:runtime-export`, `pnpm run check:safe-backlog`, `pnpm run check:managed-recipes`, dashboard build verification, and supervisor integration tests.
+The date-specific handoff contains the current fresh-VM bootstrap contract, auth policy, required BMAD/KNX module surface, safety gates, and verification commands. `pnpm run check` includes `pnpm run check:docs`, `pnpm run check:e2e-report`, `pnpm run check:reports`, `pnpm run check:runbooks` for runbook verification, `pnpm run check:runtime-export`, `pnpm run check:safe-backlog`, `pnpm run check:managed-recipes`, `pnpm run check:delivery-readiness`, dashboard build verification, and supervisor integration tests.

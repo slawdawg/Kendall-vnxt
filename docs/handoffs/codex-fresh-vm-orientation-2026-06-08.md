@@ -141,11 +141,12 @@ pnpm run check:runbooks
 pnpm run check:runtime-export
 pnpm run check:safe-backlog
 pnpm run check:managed-recipes
+pnpm run check:delivery-readiness
 pnpm run check
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -LocalOnly
 ```
 
-`pnpm run check` is expected to run preflight, documentation drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, dashboard build, and supervisor integration tests through the repo-local uv cache wrapper. A known intermittent `aiosqlite` event-loop warning may appear after tests pass.
+`pnpm run check` is expected to run preflight, documentation drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, runbook verification checks, runtime evidence export drift checks, safe backlog drift checks, managed recipe policy drift checks, delivery readiness policy drift checks, dashboard build, and supervisor integration tests through the repo-local uv cache wrapper. A known intermittent `aiosqlite` event-loop warning may appear after tests pass.
 
 ## Connector Check
 

@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, and delivery readiness policy through Story 3.44
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, and delivery readiness drift coverage through Story 3.45
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -89,6 +89,7 @@ Do not rebuild these as new architecture work:
 - GitHub workflow policy report for Git/GCM, Codex GitHub connector, optional gh auth, doctor commands, connector probe, and plaintext-token stop lines.
 - Safe backlog delivery-hygiene guidance for larger PR slices, Git/GCM or connector-backed remote work, and plaintext-token stop lines.
 - Delivery readiness policy report for PR, CI, merge, and local-only waiver rules without remote automation approval.
+- Delivery readiness policy drift check in the active verification chain and current runbooks.
 
 ## Current Gaps
 
