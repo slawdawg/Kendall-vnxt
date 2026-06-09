@@ -6,7 +6,7 @@ baseline_commit: 2bab713c87972dd8468bc159624781b6e4c00f8e
 
 ## Status
 
-review
+done
 
 ## Story
 
@@ -50,6 +50,11 @@ Approved on 2026-06-09 for non-executing Ollama preparation only. Do not add or 
   - [x] Prove broad-gate-only and missing-model states remain non-executing.
   - [x] Update story/index evidence as needed.
 
+### Review Findings
+
+- [x] [Review][Patch] Ollama gate must not report execution enabled before Story 4.4 approval.
+- [x] [Review][Patch] Disabling either the broad local-provider gate or the Ollama-specific gate must return Ollama proof evidence to disabled/no-call state.
+
 ## Dev Agent Record
 
 ### Debug Log
@@ -61,6 +66,7 @@ Approved on 2026-06-09 for non-executing Ollama preparation only. Do not add or 
 - Added `SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS`, `SUPERVISOR_OLLAMA_MODEL_ID`, and timeout settings with disabled/no-call defaults.
 - Added Ollama registry state evidence for disabled, broad-gate-only, missing-model, and adapter-ready-no-call states.
 - Kept provider/model calls disabled even when the Ollama metadata gate is fully configured; Story 4.4 remains required for any real adapter.
+- BMad code review findings resolved: Ollama configuration checks stay disabled until a real adapter story is approved, and either gate-off rollback reports disabled/no-call evidence.
 
 ### Implementation Plan
 
@@ -86,3 +92,4 @@ Approved on 2026-06-09 for non-executing Ollama preparation only. Do not add or 
 
 - 2026-06-09: Story moved to in-progress after explicit non-executing approval.
 - 2026-06-09: Implemented disabled-default Ollama gate, registry evidence, no-call tests, and dashboard/report/export evidence; moved to review.
+- 2026-06-09: Resolved BMad code review findings and moved to done.

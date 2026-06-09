@@ -6,7 +6,7 @@ baseline_commit: 2bab713c87972dd8468bc159624781b6e4c00f8e
 
 ## Status
 
-review
+done
 
 ## Story
 
@@ -82,3 +82,4 @@ Approved on 2026-06-09 for non-executing Ollama preparation only. Do not add or 
 
 - 2026-06-09: Story moved to in-progress after explicit non-executing approval.
 - 2026-06-09: Implemented prompt-source, rejected-source, redaction, retention, dashboard/report/export, and no-call fixture evidence; moved to review.
+- 2026-06-09: BMad code review raised no unresolved Story 4.2 acceptance issues; moved to done.

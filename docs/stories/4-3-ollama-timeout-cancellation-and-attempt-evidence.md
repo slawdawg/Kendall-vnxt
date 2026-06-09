@@ -6,7 +6,7 @@ baseline_commit: 2bab713c87972dd8468bc159624781b6e4c00f8e
 
 ## Status
 
-review
+done
 
 ## Story
 
@@ -47,6 +47,10 @@ Approved on 2026-06-09 for non-executing Ollama preparation only. Do not add or 
   - [x] Prove timeout, cancellation, terminal-state, and retry evidence through no-call fixtures.
   - [x] Render dashboard evidence without implying execution is enabled.
 
+### Review Findings
+
+- [x] [Review][Patch] Ollama timeout settings must reject zero or negative values and dashboard rendering must not hide explicit zero evidence.
+
 ## Dev Agent Record
 
 ### Debug Log
@@ -58,6 +62,7 @@ Approved on 2026-06-09 for non-executing Ollama preparation only. Do not add or 
 - Added connect and total timeout settings and surfaced them in Ollama no-call provider proof evidence.
 - Added attempt-state mapping and retry-policy evidence for cancellation, timeout, failure, terminal states, and retry review.
 - Runtime export and dashboard evidence now include timeout/cancellation summaries while provider/model calls remain disabled.
+- BMad code review finding resolved: timeout settings require positive values and dashboard renders configured timeout evidence using null checks.
 
 ### Implementation Plan
 
@@ -83,3 +88,4 @@ Approved on 2026-06-09 for non-executing Ollama preparation only. Do not add or 
 
 - 2026-06-09: Story moved to in-progress after explicit non-executing approval.
 - 2026-06-09: Implemented timeout, cancellation, retry, dashboard/report/export, and no-call fixture evidence; moved to review.
+- 2026-06-09: Resolved BMad code review timeout finding and moved to done.
