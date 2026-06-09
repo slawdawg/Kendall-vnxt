@@ -557,6 +557,28 @@ export interface SupervisorReportCatalogView {
   executionAuthorityApproved: boolean;
 }
 
+export interface MaintenanceReadinessTrackView {
+  trackId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+  relatedReports: string[];
+  relatedDocs: string[];
+  nextAction: string;
+}
+
+export interface MaintenanceReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  tracks: MaintenanceReadinessTrackView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+}
+
 export interface ThreatBoundaryRuleView {
   ruleId: string;
   label: string;

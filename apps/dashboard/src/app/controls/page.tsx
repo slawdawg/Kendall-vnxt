@@ -1,6 +1,7 @@
 import { ControlPanel } from "../../components/control-panel";
 import { DocumentationAuthorityReportPanel } from "../../components/documentation-authority-report-panel";
 import { ExecutionReadinessReportPanel } from "../../components/execution-readiness-report-panel";
+import { MaintenanceReadinessReportPanel } from "../../components/maintenance-readiness-report-panel";
 import { OperatorProfilePanel } from "../../components/operator-profile-panel";
 import { PageIntro } from "../../components/page-intro";
 import { RoutingFleetPanel } from "../../components/routing-fleet-panel";
@@ -11,6 +12,7 @@ import { buildNavStats } from "../../lib/nav-stats";
 import {
   getDocumentationAuthorityReport,
   getExecutionReadinessReport,
+  getMaintenanceReadinessReport,
   getRoutingLaneProfiles,
   getRunStatus,
   getSupervisorReportCatalog,
@@ -20,7 +22,17 @@ import {
 } from "../../lib/supervisor";
 
 export default async function ControlsPage() {
-  const [status, items, workers, laneProfiles, readinessReport, documentationAuthorityReport, verificationReadinessReport, reportCatalog] = await Promise.all([
+  const [
+    status,
+    items,
+    workers,
+    laneProfiles,
+    readinessReport,
+    documentationAuthorityReport,
+    verificationReadinessReport,
+    reportCatalog,
+    maintenanceReadinessReport,
+  ] = await Promise.all([
     getRunStatus(),
     getWorkItems(),
     getWorkerRegistry(),
@@ -29,6 +41,7 @@ export default async function ControlsPage() {
     getDocumentationAuthorityReport(),
     getVerificationReadinessReport(),
     getSupervisorReportCatalog(),
+    getMaintenanceReadinessReport(),
   ]);
   const navStats = buildNavStats(items);
 
@@ -51,6 +64,7 @@ export default async function ControlsPage() {
       <DocumentationAuthorityReportPanel report={documentationAuthorityReport} />
       <VerificationReadinessReportPanel report={verificationReadinessReport} />
       <SupervisorReportCatalogPanel catalog={reportCatalog} />
+      <MaintenanceReadinessReportPanel report={maintenanceReadinessReport} />
       <RoutingFleetPanel workers={workers} laneProfiles={laneProfiles} />
     </Shell>
   );

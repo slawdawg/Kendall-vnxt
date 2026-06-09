@@ -611,6 +611,28 @@ class SupervisorReportCatalogView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class MaintenanceReadinessTrackView(BaseModel):
+    trackId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str] = Field(default_factory=list)
+    relatedReports: list[str] = Field(default_factory=list)
+    relatedDocs: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
+class MaintenanceReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    tracks: list[MaintenanceReadinessTrackView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+
+
 class ThreatBoundaryRuleView(BaseModel):
     ruleId: str
     label: str

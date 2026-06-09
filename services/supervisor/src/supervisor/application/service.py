@@ -29,6 +29,8 @@ from supervisor.api.schemas import (
     LocalEvidencePacketItemView,
     LocalEvidencePacketView,
     LocalReadonlyWorkerPreviewView,
+    MaintenanceReadinessReportView,
+    MaintenanceReadinessTrackView,
     OperatorViewCreate,
     OperatorViewResponse,
     PremiumApprovalEvidenceView,
@@ -549,6 +551,15 @@ class SupervisorService:
                 relatedDocs=["docs/stories/3-16-verification-readiness-report.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="maintenance-readiness-report-v1",
+                label="Maintenance readiness report",
+                endpoint="GET /supervisor/maintenance-readiness-report",
+                status="active",
+                summary="Aggregates safe maintenance tracks for docs, verification, reports, and blocked authority posture.",
+                evidenceScope=["maintenance tracks", "safe next actions", "authority stop lines"],
+                relatedDocs=["docs/stories/3-19-maintenance-readiness-report.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="disabled-provider-proofs",
                 label="Disabled provider proofs",
                 endpoint="GET /supervisor/disabled-provider-proofs",
@@ -591,6 +602,104 @@ class SupervisorService:
                 "Use the catalog before reviewing work that touches execution authority, verification, or report surfaces.",
                 "Keep report endpoints, dashboard panels, and runtime evidence export references aligned.",
                 "Add new read-only reports to this catalog before relying on them in operator workflows.",
+            ],
+        )
+
+    def get_maintenance_readiness_report(self) -> MaintenanceReadinessReportView:
+        documentation = self.get_documentation_authority_report()
+        verification = self.get_verification_readiness_report()
+        catalog = self.get_supervisor_report_catalog()
+
+        missing_docs = sum(1 for document in [*documentation.indexes, documentation.approvalCheckpoint] if document.status != "present")
+        active_reports = sum(1 for report in catalog.reports if report.status == "active")
+
+        tracks = [
+            MaintenanceReadinessTrackView(
+                trackId="documentation-hygiene",
+                label="Documentation hygiene",
+                status="ready",
+                summary="Documentation indexes, approval checkpoints, and blocked authority story references are the first maintenance lane.",
+                evidence=[
+                    f"{len(documentation.indexes)} documentation indexes tracked.",
+                    f"{len(documentation.blockedStories)} blocked authority stories represented.",
+                    f"{missing_docs} required authority documents missing.",
+                ],
+                relatedReports=["GET /supervisor/documentation-authority-report"],
+                relatedDocs=[
+                    "docs/architecture/index.md",
+                    "docs/prds/index.md",
+                    "docs/stories/index.md",
+                ],
+                nextAction="Run `pnpm run check:docs` after every architecture, PRD, story, or approval-checkpoint change.",
+            ),
+            MaintenanceReadinessTrackView(
+                trackId="verification-hygiene",
+                label="Verification hygiene",
+                status="ready",
+                summary="Focused and full verification commands are available for safe delivery without granting execution authority.",
+                evidence=[
+                    f"{len(verification.requiredCommands)} required commands listed.",
+                    f"{len(verification.optionalCommands)} optional commands listed.",
+                    "Controls-page e2e coverage is available for report panel changes.",
+                ],
+                relatedReports=["GET /supervisor/verification-readiness-report"],
+                relatedDocs=[
+                    "docs/stories/3-16-verification-readiness-report.md",
+                    "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
+                ],
+                nextAction="Run focused checks for changed areas, then `pnpm run check` before merge.",
+            ),
+            MaintenanceReadinessTrackView(
+                trackId="report-surface-alignment",
+                label="Report surface alignment",
+                status="ready",
+                summary="Read-only report endpoints, dashboard panels, and runtime evidence references should stay aligned as surfaces grow.",
+                evidence=[
+                    f"{active_reports} active supervisor reports indexed.",
+                    "Runtime evidence exports reference the report catalog and safety reports.",
+                    "Controls page fetches the report catalog with other read-only reports.",
+                ],
+                relatedReports=["GET /supervisor/report-catalog"],
+                relatedDocs=["docs/stories/3-18-supervisor-report-catalog.md"],
+                nextAction="Add new read-only reports to the catalog, controls page, tests, and runtime export references together.",
+            ),
+            MaintenanceReadinessTrackView(
+                trackId="authority-blocker-watch",
+                label="Authority blocker watch",
+                status="blocked_pending_explicit_approval",
+                summary="Provider calls and subscription-agent launch stay blocked while maintenance work continues above the execution line.",
+                evidence=[
+                    "Ollama local provider stories 4.1-4.4 remain blocked.",
+                    "Subscription-agent launch stories 5.1-5.5 remain blocked.",
+                    "Generic continuation language is not execution-authority approval.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/execution-readiness-report",
+                ],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+                    "docs/stories/index.md",
+                ],
+                nextAction="Wait for explicit operator approval naming authority and scope before moving blocked stories into implementation.",
+            ),
+        ]
+
+        return MaintenanceReadinessReportView(
+            reportId="maintenance-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary="Read-only maintenance map for safe repo hygiene while execution-authority stories remain blocked.",
+            tracks=tracks,
+            stopLines=[
+                "Maintenance work must not approve local provider/model calls.",
+                "Maintenance work must not approve subscription-agent process launch.",
+                "Maintenance work must not approve premium execution.",
+                "Maintenance work must not grant worker commands, source mutation, network access, or credential access.",
+            ],
+            nextSafeActions=[
+                "Batch maintenance changes into coherent PRs covering API, dashboard, docs, and tests when surfaces are related.",
+                "Keep documentation, verification, report catalog, and runtime export references synchronized.",
+                "Prefer read-only evidence improvements until explicit execution-authority approval is recorded.",
             ],
         )
 
@@ -902,6 +1011,7 @@ class SupervisorService:
                     "docs/stories/3-15-documentation-authority-report.md",
                     "docs/stories/3-16-verification-readiness-report.md",
                     "docs/stories/3-18-supervisor-report-catalog.md",
+                    "docs/stories/3-19-maintenance-readiness-report.md",
                     "docs/prds/supervisor-execution-authority-expansion.md",
                     "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
                     "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
@@ -916,6 +1026,7 @@ class SupervisorService:
                     "GET /supervisor/documentation-authority-report",
                     "GET /supervisor/verification-readiness-report",
                     "GET /supervisor/report-catalog",
+                    "GET /supervisor/maintenance-readiness-report",
                     "GET /supervisor/execution-state-boundary",
                     "GET /supervisor/disabled-provider-proofs",
                 ],

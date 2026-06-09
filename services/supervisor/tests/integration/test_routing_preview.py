@@ -804,6 +804,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/execution-readiness-report",
         "GET /supervisor/documentation-authority-report",
         "GET /supervisor/verification-readiness-report",
+        "GET /supervisor/maintenance-readiness-report",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
         "GET /supervisor/threat-boundary",
@@ -811,6 +812,41 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
     assert all(report["readOnly"] is True for report in catalog["reports"])
     assert all(report["executionAuthorityApproved"] is False for report in catalog["reports"])
     assert any("not approvals" in stop_line for stop_line in catalog["stopLines"])
+
+
+def test_maintenance_readiness_report_tracks_safe_work_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "maintenance-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/maintenance-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "maintenance-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["executionAuthorityApproved"] is False
+    assert {track["trackId"] for track in report["tracks"]} == {
+        "documentation-hygiene",
+        "verification-hygiene",
+        "report-surface-alignment",
+        "authority-blocker-watch",
+    }
+    blocker_track = next(track for track in report["tracks"] if track["trackId"] == "authority-blocker-watch")
+    assert blocker_track["status"] == "blocked_pending_explicit_approval"
+    assert "GET /supervisor/execution-readiness-report" in blocker_track["relatedReports"]
+    assert any("must not approve local provider/model calls" in stop_line for stop_line in report["stopLines"])
+    assert any("coherent PRs" in action for action in report["nextSafeActions"])
 
 
 def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path, monkeypatch) -> None:
@@ -1603,6 +1639,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/report-catalog" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/maintenance-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
     assert "environment variables and credential stores" in export["boundary"]["excludedState"]
