@@ -72,14 +72,30 @@ export default async function ControlsPage() {
       />
       <OperatorProfilePanel />
       <ControlPanel />
-      <ExecutionReadinessReportPanel report={readinessReport} />
-      <DocumentationAuthorityReportPanel report={documentationAuthorityReport} />
-      <VerificationReadinessReportPanel report={verificationReadinessReport} />
-      <DashboardE2EReportPanel report={dashboardE2EReport} />
-      <SupervisorReportCatalogPanel catalog={reportCatalog} />
-      <MaintenanceReadinessReportPanel report={maintenanceReadinessReport} />
-      <SafeDevelopmentBacklogPanel report={safeDevelopmentBacklog} />
-      <ManagedRecipePolicyReportPanel report={managedRecipePolicyReport} />
+      <div id="execution-readiness-report" className="scroll-mt-28">
+        <ExecutionReadinessReportPanel report={readinessReport} />
+      </div>
+      <div id="documentation-authority-report" className="scroll-mt-28">
+        <DocumentationAuthorityReportPanel report={documentationAuthorityReport} />
+      </div>
+      <div id="verification-readiness-report" className="scroll-mt-28">
+        <VerificationReadinessReportPanel report={verificationReadinessReport} />
+      </div>
+      <div id="dashboard-e2e-report" className="scroll-mt-28">
+        <DashboardE2EReportPanel report={dashboardE2EReport} />
+      </div>
+      <div id="supervisor-report-catalog" className="scroll-mt-28">
+        <SupervisorReportCatalogPanel catalog={reportCatalog} />
+      </div>
+      <div id="maintenance-readiness-report" className="scroll-mt-28">
+        <MaintenanceReadinessReportPanel report={maintenanceReadinessReport} />
+      </div>
+      <div id="safe-development-backlog" className="scroll-mt-28">
+        <SafeDevelopmentBacklogPanel report={safeDevelopmentBacklog} />
+      </div>
+      <div id="managed-recipe-policy-report" className="scroll-mt-28">
+        <ManagedRecipePolicyReportPanel report={managedRecipePolicyReport} />
+      </div>
       <RoutingFleetPanel workers={workers} laneProfiles={laneProfiles} />
     </Shell>
   );
