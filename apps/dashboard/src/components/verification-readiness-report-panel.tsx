@@ -87,6 +87,44 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
         </div>
       </div>
 
+      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <h4 className="text-base font-semibold">Handoff checkpoints</h4>
+        <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+          Runbook-backed gates for local delivery, dashboard changes, fresh-VM setup, and authority boundaries.
+        </p>
+        <div className="mt-3 grid gap-3 xl:grid-cols-2">
+          {report.handoffCheckpoints.map((checkpoint) => (
+            <article key={checkpoint.checkpointId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{checkpoint.status}</p>
+                  <h5 className="mt-1 text-sm font-semibold">{checkpoint.label}</h5>
+                </div>
+                <span className="w-fit rounded-full bg-[var(--surface)] px-3 py-1 font-mono text-[11px] text-[var(--muted)]">
+                  {checkpoint.checkpointId}
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{checkpoint.summary}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {checkpoint.requiredCommandIds.map((commandId) => (
+                  <span key={commandId} className="rounded-full border bg-[var(--surface)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+                    {commandLabelById.get(commandId) ?? commandId}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {checkpoint.relatedRunbooks.map((runbook) => (
+                  <span key={runbook} className="break-all rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+                    {runbook}
+                  </span>
+                ))}
+              </div>
+              <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{checkpoint.nextAction}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Required commands</h4>

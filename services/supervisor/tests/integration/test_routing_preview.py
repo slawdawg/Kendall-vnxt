@@ -810,6 +810,20 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "dashboard-build" in dashboard_group["commandIds"]
     full_gate = next(group for group in report["commandGroups"] if group["groupId"] == "full-local-gate")
     assert full_gate["commandIds"] == ["full-check"]
+    assert {checkpoint["checkpointId"] for checkpoint in report["handoffCheckpoints"]} == {
+        "local-development-handoff",
+        "dashboard-change-handoff",
+        "fresh-vm-handoff",
+        "authority-boundary-handoff",
+    }
+    local_handoff = next(checkpoint for checkpoint in report["handoffCheckpoints"] if checkpoint["checkpointId"] == "local-development-handoff")
+    assert local_handoff["requiredCommandIds"] == ["preflight", "full-check"]
+    assert "README.md" in local_handoff["relatedRunbooks"]
+    fresh_vm_handoff = next(checkpoint for checkpoint in report["handoffCheckpoints"] if checkpoint["checkpointId"] == "fresh-vm-handoff")
+    assert "bootstrap-run-check" in fresh_vm_handoff["requiredCommandIds"]
+    assert "docs/bootstrap-windows-vm.md" in fresh_vm_handoff["relatedRunbooks"]
+    authority_handoff = next(checkpoint for checkpoint in report["handoffCheckpoints"] if checkpoint["checkpointId"] == "authority-boundary-handoff")
+    assert "explicit operator approval" in authority_handoff["summary"]
     assert any("provider/model calls" in stop_line for stop_line in report["stopLines"])
     assert "pnpm run check" in " ".join(report["nextSafeActions"])
 

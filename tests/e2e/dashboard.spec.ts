@@ -162,6 +162,13 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("static-drift-chain")).toBeVisible();
     await expect(verificationPanel.getByText("dashboard-browser-build")).toBeVisible();
     await expect(verificationPanel.getByText("full-local-gate")).toBeVisible();
+    await expect(verificationPanel.getByText("Handoff checkpoints")).toBeVisible();
+    await expect(verificationPanel.getByText("local-development-handoff")).toBeVisible();
+    await expect(verificationPanel.getByText("dashboard-change-handoff")).toBeVisible();
+    await expect(verificationPanel.getByText("fresh-vm-handoff")).toBeVisible();
+    await expect(verificationPanel.getByText("authority-boundary-handoff")).toBeVisible();
+    await expect(verificationPanel.getByText("docs/bootstrap-windows-vm.md", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("docs/fresh-vm-acceptance-checklist.md", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();

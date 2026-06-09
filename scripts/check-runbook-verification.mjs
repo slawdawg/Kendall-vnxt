@@ -111,8 +111,23 @@ assertCondition(
   failures,
 );
 assertCondition(
+  files["services/supervisor/src/supervisor/application/service.py"].includes("handoffCheckpoints=handoff_checkpoints"),
+  "Verification readiness report must surface handoff checkpoints",
+  failures,
+);
+assertCondition(
+  files["services/supervisor/src/supervisor/application/service.py"].includes("fresh-vm-handoff"),
+  "Verification readiness report must include a fresh VM handoff checkpoint",
+  failures,
+);
+assertCondition(
   files["services/supervisor/src/supervisor/application/service.py"].includes("core readiness/report"),
   "Verification readiness report must describe core readiness checks in full verification evidence",
+  failures,
+);
+assertCondition(
+  files["docs/stories/index.md"].includes("3-58-verification-handoff-checkpoints.md"),
+  "Story index must reference Story 3.58 verification handoff checkpoints",
   failures,
 );
 assertCondition(

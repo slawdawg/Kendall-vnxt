@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, and work-item review queue shortcut coverage through Story 3.57
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, and verification handoff checkpoint coverage through Story 3.58
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -70,6 +70,7 @@ Do not rebuild these as new architecture work:
 - Documentation authority indexes, drift checks, and controls-page report.
 - Verification readiness commands, stop lines, and controls-page report.
 - Verification execution plan groups for ordered setup, static drift, dashboard/browser, supervisor behavior, full local, and optional remote checks.
+- Verification handoff checkpoints for local delivery, dashboard changes, fresh-VM setup, and authority-boundary gates.
 - Dashboard e2e reliability guardrails for focused controls-page verification.
 - Supervisor report catalog for read-only evidence navigation.
 - Maintenance readiness report for safe repo hygiene while authority stories remain blocked.
