@@ -252,6 +252,13 @@ test.describe("dashboard workflow coverage", () => {
     await expect(actionPlanPanel.getByText("select-large-safe-slice")).toBeVisible();
     await expect(actionPlanPanel.getByText("verify-evidence-surfaces")).toBeVisible();
     await expect(actionPlanPanel.getByText("preserve-authority-stop-lines")).toBeVisible();
+    await expect(actionPlanPanel.getByText("Related reports").first()).toBeVisible();
+    await expect(actionPlanPanel.getByRole("link", { name: "GET /supervisor/safe-development-backlog" })).toHaveAttribute(
+      "href",
+      "/controls#safe-development-backlog",
+    );
+    await expect(actionPlanPanel.getByText("Related docs").first()).toBeVisible();
+    await expect(actionPlanPanel.getByText("docs/stories/3-27-safe-development-backlog-report.md", { exact: true })).toBeVisible();
     await expect(
       actionPlanPanel
         .locator("article")

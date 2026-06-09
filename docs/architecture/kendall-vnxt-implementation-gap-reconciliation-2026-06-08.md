@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, and safe backlog report-anchor coverage through Story 3.60
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, and maintenance action evidence-link coverage through Story 3.61
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -25,6 +25,7 @@ Source review artifacts:
 - `docs/stories/3-58-verification-handoff-checkpoints.md`
 - `docs/stories/3-59-development-runway-readiness-checks.md`
 - `docs/stories/3-60-safe-backlog-report-anchors.md`
+- `docs/stories/3-61-maintenance-action-evidence-links.md`
 
 Implementation areas checked:
 
@@ -98,6 +99,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Delivery readiness policy drift check | Implemented | `pnpm run check:delivery-readiness`, Story 3.45 | Keeps delivery readiness policy contracts, schemas, API route, service report, dashboard rendering, report shortcut, browser assertions, runbooks, and story evidence aligned. |
 | Maintenance readiness drift check | Implemented | `pnpm run check:maintenance-readiness`, Story 3.46 | Keeps maintenance readiness contracts, schemas, API route, service tracks, dashboard rendering, browser assertions, runbooks, and story evidence aligned. |
 | Maintenance action plan report | Implemented | `GET /supervisor/maintenance-action-plan-report`, Story 3.52 | Consolidates larger safe slice selection, evidence-surface verification, verification chain, dashboard anchors, and authority stop lines without changing approval state. |
+| Maintenance action evidence links | Implemented | `MaintenanceActionPlanReportPanel`, Story 3.61 | Renders related report and document evidence for each safe action step without adding execution controls. |
 | Authority readiness matrix report | Implemented | `GET /supervisor/authority-readiness-matrix-report`, Story 3.53 | Maps blocked execution-authority families to required approvals, evidence, blocked stories, related reports, dashboard anchors, and stop lines without changing approval state. |
 | Development runway report | Implemented | `GET /supervisor/development-runway-report`, Story 3.54 | Groups safe backlog, maintenance action, verification readiness, and authority blocker evidence into larger PR-sized safe slices without changing approval state. |
 | Development runway readiness checks | Implemented | `DevelopmentRunwaySliceView.readinessChecks`, Story 3.59 | Shows ready and blocked evidence for each larger PR slice before implementation starts without changing approval state. |

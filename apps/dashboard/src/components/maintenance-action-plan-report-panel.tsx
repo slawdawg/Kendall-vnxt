@@ -1,5 +1,6 @@
 import type { MaintenanceActionPlanReportView, MaintenanceActionPlanStepView } from "@kendall/contracts";
 import Link from "next/link";
+import { reportShortcutHref } from "../lib/report-shortcuts";
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
@@ -45,6 +46,32 @@ function StepCard({ step }: { step: MaintenanceActionPlanStepView }) {
             {anchor}
           </Link>
         ))}
+      </div>
+
+      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
+        <div className="mt-2 grid gap-2">
+          {step.relatedReports.map((report) => (
+            <Link
+              key={report}
+              href={reportShortcutHref(report)}
+              className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              {report}
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
+        <div className="mt-2 grid gap-2">
+          {step.relatedDocs.map((doc) => (
+            <span key={doc} className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+              {doc}
+            </span>
+          ))}
+        </div>
       </div>
 
       <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{step.nextAction}</p>
