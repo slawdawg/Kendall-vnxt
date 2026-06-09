@@ -534,6 +534,29 @@ export interface VerificationReadinessReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface DashboardE2ERunnerView {
+  runnerId: string;
+  label: string;
+  command: string;
+  target: string;
+  status: string;
+  evidence: string[];
+  ownsServerLifecycle: boolean;
+  usesRepoLocalCaches: boolean;
+}
+
+export interface DashboardE2EReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  runners: DashboardE2ERunnerView[];
+  setupCommands: VerificationCommandView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+}
+
 export interface SupervisorReportCatalogEntryView {
   reportId: string;
   label: string;
