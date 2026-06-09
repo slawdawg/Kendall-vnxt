@@ -31,6 +31,7 @@ from supervisor.api.schemas import (
     LocalEvidencePacketItemView,
     LocalEvidencePacketView,
     LocalReadonlyWorkerPreviewView,
+    ManagedRecipePolicyReportView,
     MaintenanceReadinessReportView,
     MaintenanceReadinessTrackView,
     OperatorViewCreate,
@@ -835,6 +836,18 @@ class SupervisorService:
                 ],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="managed-recipe-policy-report-v1",
+                label="Managed recipe policy report",
+                endpoint="GET /supervisor/managed-recipe-policy-report",
+                status="active",
+                summary="Catalogs supervisor-managed recipe gates, allowed paths, commands, checkpoints, and blocked remote automation posture.",
+                evidenceScope=["managed recipes", "policy gates", "allowed paths", "remote automation stop lines"],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md",
+                    "docs/stories/3-36-managed-recipe-policy-report.md",
+                ],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="disabled-provider-proofs",
                 label="Disabled provider proofs",
                 endpoint="GET /supervisor/disabled-provider-proofs",
@@ -933,9 +946,9 @@ class SupervisorService:
                 evidence=[
                     f"{active_reports} active supervisor reports indexed.",
                     "Runtime evidence exports reference the report catalog and safety reports.",
-                    "Controls page fetches the report catalog and dashboard e2e report with other read-only reports.",
+                    "Controls page fetches the report catalog, dashboard e2e report, managed recipe policy report, and other read-only reports.",
                 ],
-                relatedReports=["GET /supervisor/report-catalog", "GET /supervisor/dashboard-e2e-report"],
+                relatedReports=["GET /supervisor/report-catalog", "GET /supervisor/dashboard-e2e-report", "GET /supervisor/managed-recipe-policy-report"],
                 relatedDocs=["docs/stories/3-18-supervisor-report-catalog.md", "docs/stories/3-22-dashboard-e2e-report.md"],
                 nextAction="Add new read-only reports to the catalog, controls page, tests, and runtime export references together.",
             ),
@@ -1054,6 +1067,7 @@ class SupervisorService:
                     "GET /work-items/{id}/runtime-evidence-export",
                     "GET /supervisor/documentation-authority-report",
                     "GET /supervisor/maintenance-readiness-report",
+                    "GET /supervisor/managed-recipe-policy-report",
                 ],
                 relatedDocs=[
                     "docs/stories/2-7-runtime-evidence-export-strategy.md",
@@ -1061,6 +1075,7 @@ class SupervisorService:
                     "docs/stories/3-30-runtime-evidence-review-navigator.md",
                     "docs/stories/3-33-evidence-overview-review-shortcuts.md",
                     "docs/stories/3-34-report-shortcuts-in-evidence-overview.md",
+                    "docs/stories/3-36-managed-recipe-policy-report.md",
                 ],
                 nextAction="Prefer review shortcuts that reduce operator navigation across existing read-only evidence.",
             ),
@@ -1112,6 +1127,35 @@ class SupervisorService:
                 "Use required verification commands and focused e2e runners as acceptance evidence for each slice.",
                 "Keep blocked authority work visible but outside implementation until explicit approval arrives.",
             ],
+        )
+
+    def get_managed_recipe_policy_report(self) -> ManagedRecipePolicyReportView:
+        recipes = [self._to_execution_recipe_view(recipe) for recipe in EXECUTION_RECIPES.values()]
+        blocked_remote_operations = sorted(
+            {operation for recipe in EXECUTION_RECIPES.values() for operation in recipe.remote_automation_policy.blocked_operations}
+        )
+        return ManagedRecipePolicyReportView(
+            reportId="managed-recipe-policy-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only catalog of supervisor-managed recipe gates, allowed paths, verification commands, "
+                "operator checkpoints, and blocked remote automation posture."
+            ),
+            recipes=recipes,
+            stopLines=[
+                "Managed recipe policies are not execution-authority approvals.",
+                "Remote operations remain blocked unless explicit operator approval names allowed remote operations and scope.",
+                "Implementation automation remains limited to declared recipe commands, branch gates, path scopes, and verification evidence.",
+                "Do not use managed recipes to launch provider/model calls, subscription-agent processes, premium execution, arbitrary worker shell commands, network access, or credential access.",
+            ],
+            nextSafeActions=[
+                "Review managed recipe policy before changing recipe commands, allowed paths, branch gates, or dashboard recipe controls.",
+                "Keep recipe policy, dashboard panels, browser coverage, and report catalog references aligned when recipe behavior changes.",
+                f"Blocked remote operations: {', '.join(blocked_remote_operations)}.",
+            ],
+            readOnly=True,
+            executionAuthorityApproved=False,
+            remoteAutomationApproved=False,
         )
 
     def get_execution_configuration_checks(self) -> ExecutionConfigurationChecksView:
@@ -1408,6 +1452,7 @@ class SupervisorService:
             "GET /supervisor/report-catalog",
             "GET /supervisor/maintenance-readiness-report",
             "GET /supervisor/safe-development-backlog",
+            "GET /supervisor/managed-recipe-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
         ]
@@ -1438,6 +1483,7 @@ class SupervisorService:
             "docs/stories/3-33-evidence-overview-review-shortcuts.md",
             "docs/stories/3-34-report-shortcuts-in-evidence-overview.md",
             "docs/stories/3-35-runbook-check-chain-hardening.md",
+            "docs/stories/3-36-managed-recipe-policy-report.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

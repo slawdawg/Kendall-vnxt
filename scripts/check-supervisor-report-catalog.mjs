@@ -74,6 +74,13 @@ const reports = [
     dashboardFetch: "getSafeDevelopmentBacklogReport",
   },
   {
+    reportId: "managed-recipe-policy-report-v1",
+    endpoint: "GET /supervisor/managed-recipe-policy-report",
+    apiPath: "/supervisor/managed-recipe-policy-report",
+    story: "docs/stories/3-36-managed-recipe-policy-report.md",
+    dashboardFetch: "getManagedRecipePolicyReport",
+  },
+  {
     reportId: "disabled-provider-proofs",
     endpoint: "GET /supervisor/disabled-provider-proofs",
     apiPath: "/supervisor/disabled-provider-proofs",
@@ -148,6 +155,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/verification-readiness-report",
   "GET /supervisor/dashboard-e2e-report",
   "GET /supervisor/safe-development-backlog",
+  "GET /supervisor/managed-recipe-policy-report",
 ]) {
   assertCondition(
     dashboardSpec.includes(visibleEndpoint),

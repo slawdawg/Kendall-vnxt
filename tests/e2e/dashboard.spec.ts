@@ -187,6 +187,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/verification-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/dashboard-e2e-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
 
     const maintenancePanel = page.locator("section").filter({ hasText: "Safe work map" }).first();
@@ -204,6 +205,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(safeBacklogPanel.getByText("Verification surface hardening")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
+
+    const managedRecipePolicyPanel = page
+      .locator("section")
+      .filter({ hasText: "Managed recipe policies are not execution-authority approvals." })
+      .first();
+    await expect(managedRecipePolicyPanel.getByText("Policy report")).toBeVisible();
+    await expect(managedRecipePolicyPanel.getByText("Dashboard test coverage")).toBeVisible();
+    await expect(managedRecipePolicyPanel.getByText("Dashboard mobile coverage")).toBeVisible();
+    await expect(managedRecipePolicyPanel.getByText("Remote automation", { exact: true })).toBeVisible();
+    await expect(managedRecipePolicyPanel.getByText("Managed recipe policies are not execution-authority approvals.")).toBeVisible();
 
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();

@@ -740,6 +740,18 @@ class WorkItemExecutionRecipeView(BaseModel):
     remoteAutomationPolicy: WorkItemRemoteAutomationPolicyView
 
 
+class ManagedRecipePolicyReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    recipes: list[WorkItemExecutionRecipeView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+    remoteAutomationApproved: bool = False
+
+
 class WorkItemView(BaseModel):
     id: str
     title: str
