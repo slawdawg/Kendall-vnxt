@@ -46,6 +46,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 ## Verification
 
 - `pnpm run doctor:github -- --remote` passes.
+- `pnpm run check:docs` passes.
 - `pnpm run check` passes.
 - Bootstrap local-only smoke check passes:
 

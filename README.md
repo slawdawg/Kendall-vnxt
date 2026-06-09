@@ -35,6 +35,7 @@ Important environment variables:
 ## Verification
 
 - `pnpm run check` builds the dashboard and runs supervisor integration tests
+- `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - `pnpm run test:e2e:dashboard` runs browser coverage for intake drafts, workflow actions, and detail navigation
 - `pnpm run lint:dashboard` runs the dashboard lint pass
 - `pnpm run preflight` checks that shared JS deps and the supervisor virtualenv are ready
@@ -42,7 +43,10 @@ Important environment variables:
 
 ## Planning
 
-- Current implementation checkpoint: [docs/implementation-checkpoint-2026-06-06.md](docs/implementation-checkpoint-2026-06-06.md)
+- Current architecture index: [docs/architecture/index.md](docs/architecture/index.md)
+- Current PRD index: [docs/prds/index.md](docs/prds/index.md)
+- Current story index: [docs/stories/index.md](docs/stories/index.md)
+- Current implementation checkpoint: [docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md](docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md)
 
 ## Why pnpm
 
