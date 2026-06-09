@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-47-core-readiness-drift-checks.md` | Dedicated static drift checks for documentation authority and verification readiness report alignment. |
 | `3-46-maintenance-readiness-drift-check.md` | Dedicated static drift check for maintenance readiness report alignment across code, dashboard, tests, docs, and runbooks. |
 | `3-45-delivery-readiness-policy-drift-check.md` | Dedicated static drift check for delivery readiness policy report alignment across code, dashboard, tests, docs, and runbooks. |
 | `3-44-delivery-readiness-policy-report.md` | Read-only controls-page report for PR, CI, merge, and local-only waiver rules in managed recipe delivery readiness. |
