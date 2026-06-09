@@ -449,8 +449,13 @@ test.describe("dashboard workflow coverage", () => {
     await expect(exportPanel.getByText("Evidence package")).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Safety flags" })).toBeVisible();
     await expect(exportPanel.getByText("Provider calls: disabled")).toBeVisible();
-    await expect(exportPanel.getByText("Related reports")).toBeVisible();
-    await expect(exportPanel.getByText("GET /supervisor/execution-readiness-report")).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Review navigator" })).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Runtime state" })).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Authority boundary" })).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Git-backed evidence" })).toBeVisible();
+    await expect(exportPanel.getByText("Review navigation is not execution-authority approval.")).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Related reports" })).toBeVisible();
+    await expect(exportPanel.getByText("GET /supervisor/execution-readiness-report", { exact: true })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Review manifest" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Review checklist" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Retention notes" })).toBeVisible();

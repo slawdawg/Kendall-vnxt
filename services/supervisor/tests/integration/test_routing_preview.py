@@ -1747,6 +1747,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-27-safe-development-backlog-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-28-supervisor-report-catalog-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-29-runbook-verification-alignment.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-30-runtime-evidence-review-navigator.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
@@ -1774,6 +1775,15 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert export["reviewManifest"]["executionAuthorityApproved"] is False
     assert any("not execution-authority approval" in stop_line for stop_line in export["reviewManifest"]["stopLines"])
     assert any("credential stores" in note for note in export["reviewManifest"]["retentionNotes"])
+    assert {item["itemId"] for item in export["reviewNavigator"]} == {
+        "review-runtime-state",
+        "review-authority-boundary",
+        "review-git-backed-evidence",
+    }
+    authority_item = next(item for item in export["reviewNavigator"] if item["itemId"] == "review-authority-boundary")
+    assert authority_item["priority"] == "P0"
+    assert "GET /supervisor/threat-boundary" in authority_item["relatedReports"]
+    assert any("not execution-authority approval" in stop_line for stop_line in authority_item["stopLines"])
     assert before_events_response.json()["data"] == after_events_response.json()["data"]
     assert missing_response.status_code == 404
 

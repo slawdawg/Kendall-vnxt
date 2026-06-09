@@ -853,6 +853,19 @@ class RuntimeEvidenceReviewManifestView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class RuntimeEvidenceReviewNavigatorItemView(BaseModel):
+    itemId: str
+    label: str
+    priority: str
+    target: str
+    summary: str
+    evidence: list[str] = Field(default_factory=list)
+    relatedReports: list[str] = Field(default_factory=list)
+    relatedDocs: list[str] = Field(default_factory=list)
+    dashboardAnchors: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
+
+
 class RuntimeEvidenceExportView(BaseModel):
     exportId: str
     format: str
@@ -864,6 +877,7 @@ class RuntimeEvidenceExportView(BaseModel):
     boundary: RuntimeEvidenceExportBoundaryView
     safety: RuntimeEvidenceExportSafetyView
     reviewManifest: RuntimeEvidenceReviewManifestView
+    reviewNavigator: list[RuntimeEvidenceReviewNavigatorItemView] = Field(default_factory=list)
 
 
 class WorkItemAssignmentRequest(BaseModel):
