@@ -192,6 +192,14 @@ test.describe("dashboard workflow coverage", () => {
     await expect(maintenancePanel.getByText("authority-blocker-watch")).toBeVisible();
     await expect(maintenancePanel.getByText("Maintenance work must not approve local provider/model calls.")).toBeVisible();
 
+    const safeBacklogPanel = page.locator("section").filter({ hasText: "Large-slice development map" }).first();
+    await expect(safeBacklogPanel.getByText("Safe backlog", { exact: true })).toBeVisible();
+    await expect(safeBacklogPanel.getByText("Large-slice development map")).toBeVisible();
+    await expect(safeBacklogPanel.getByText("Report-aligned backlog governance")).toBeVisible();
+    await expect(safeBacklogPanel.getByText("Verification surface hardening")).toBeVisible();
+    await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
+    await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
+
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
     await expect(fleetPanel.getByText("Internal utility worker")).toBeVisible();

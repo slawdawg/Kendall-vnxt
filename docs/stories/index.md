@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-27-safe-development-backlog-report.md` | Read-only safe backlog map for larger coherent development slices while execution authority remains blocked. |
 | `3-26-dashboard-e2e-report-drift-check.md` | Required static drift check for dashboard e2e report commands, browser assertions, and story references. |
 | `3-25-managed-recipe-e2e-runners.md` | Focused managed-recipe browser runners using shared lifecycle helper. |
 | `3-24-dashboard-mobile-e2e-runner.md` | Focused mobile dashboard browser runner using shared lifecycle helper. |

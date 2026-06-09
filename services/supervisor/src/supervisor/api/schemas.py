@@ -656,6 +656,31 @@ class MaintenanceReadinessReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class SafeDevelopmentBacklogItemView(BaseModel):
+    itemId: str
+    label: str
+    priority: str
+    status: str
+    summary: str
+    recommendedSliceSize: str
+    evidence: list[str] = Field(default_factory=list)
+    relatedReports: list[str] = Field(default_factory=list)
+    relatedDocs: list[str] = Field(default_factory=list)
+    blockedBy: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
+class SafeDevelopmentBacklogReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    items: list[SafeDevelopmentBacklogItemView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+
+
 class ThreatBoundaryRuleView(BaseModel):
     ruleId: str
     label: str

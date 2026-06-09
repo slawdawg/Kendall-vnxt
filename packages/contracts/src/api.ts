@@ -602,6 +602,31 @@ export interface MaintenanceReadinessReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface SafeDevelopmentBacklogItemView {
+  itemId: string;
+  label: string;
+  priority: string;
+  status: string;
+  summary: string;
+  recommendedSliceSize: string;
+  evidence: string[];
+  relatedReports: string[];
+  relatedDocs: string[];
+  blockedBy: string[];
+  nextAction: string;
+}
+
+export interface SafeDevelopmentBacklogReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  items: SafeDevelopmentBacklogItemView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+}
+
 export interface ThreatBoundaryRuleView {
   ruleId: string;
   label: string;

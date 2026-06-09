@@ -484,6 +484,11 @@ async def get_maintenance_readiness_report():
     return ApiEnvelope(data=service.get_maintenance_readiness_report())
 
 
+@app.get("/supervisor/safe-development-backlog", response_model=ApiEnvelope)
+async def get_safe_development_backlog_report():
+    return ApiEnvelope(data=service.get_safe_development_backlog_report())
+
+
 @app.get("/supervisor/disabled-provider-proofs", response_model=ApiEnvelope)
 async def list_disabled_provider_proofs():
     return ApiEnvelope(data=service.list_disabled_provider_proofs())

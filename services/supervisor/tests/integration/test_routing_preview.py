@@ -811,6 +811,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/verification-readiness-report",
         "GET /supervisor/dashboard-e2e-report",
         "GET /supervisor/maintenance-readiness-report",
+        "GET /supervisor/safe-development-backlog",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
         "GET /supervisor/threat-boundary",
@@ -908,6 +909,45 @@ def test_maintenance_readiness_report_tracks_safe_work_without_mutation(tmp_path
     assert "GET /supervisor/dashboard-e2e-report" in verification_track["relatedReports"]
     assert any("must not approve local provider/model calls" in stop_line for stop_line in report["stopLines"])
     assert any("coherent PRs" in action for action in report["nextSafeActions"])
+
+
+def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "safe-development-backlog.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/safe-development-backlog")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "safe-development-backlog-report-v1"
+    assert report["readOnly"] is True
+    assert report["executionAuthorityApproved"] is False
+    assert {item["itemId"] for item in report["items"]} == {
+        "safe-backlog-report-alignment",
+        "verification-surface-hardening",
+        "read-only-evidence-polish",
+        "authority-blocked-work",
+    }
+    ready_items = [item for item in report["items"] if item["status"] == "ready"]
+    assert all(item["recommendedSliceSize"] in {"large", "medium_to_large"} for item in ready_items)
+    blocked_item = next(item for item in report["items"] if item["itemId"] == "authority-blocked-work")
+    assert blocked_item["status"] == "blocked_pending_explicit_approval"
+    assert blocked_item["recommendedSliceSize"] == "do_not_start"
+    assert "explicit operator approval naming authority and scope" in blocked_item["blockedBy"]
+    assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
+    assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
+    assert any("large enough" in action for action in report["nextSafeActions"])
 
 
 def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path, monkeypatch) -> None:
@@ -1702,12 +1742,14 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-24-dashboard-mobile-e2e-runner.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-25-managed-recipe-e2e-runners.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-26-dashboard-e2e-report-drift-check.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-27-safe-development-backlog-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/dashboard-e2e-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/report-catalog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/maintenance-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/safe-development-backlog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
     assert "environment variables and credential stores" in export["boundary"]["excludedState"]

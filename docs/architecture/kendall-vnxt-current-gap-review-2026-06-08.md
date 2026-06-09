@@ -72,6 +72,7 @@ Do not rebuild these as new architecture work:
 - Dashboard e2e reliability guardrails for focused controls-page verification.
 - Supervisor report catalog for read-only evidence navigation.
 - Maintenance readiness report for safe repo hygiene while authority stories remain blocked.
+- Safe development backlog report for selecting larger coherent safe slices while authority stories remain blocked.
 - Runtime evidence review manifest for export counts, retention notes, and stop lines.
 - Focused dashboard detail e2e runner for runtime export verification.
 - Dashboard e2e report for focused/full browser verification commands, lifecycle posture, cache posture, stop lines, and static drift checking.

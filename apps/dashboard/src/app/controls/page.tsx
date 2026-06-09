@@ -6,6 +6,7 @@ import { MaintenanceReadinessReportPanel } from "../../components/maintenance-re
 import { OperatorProfilePanel } from "../../components/operator-profile-panel";
 import { PageIntro } from "../../components/page-intro";
 import { RoutingFleetPanel } from "../../components/routing-fleet-panel";
+import { SafeDevelopmentBacklogPanel } from "../../components/safe-development-backlog-panel";
 import { Shell } from "../../components/shell";
 import { SupervisorReportCatalogPanel } from "../../components/supervisor-report-catalog-panel";
 import { VerificationReadinessReportPanel } from "../../components/verification-readiness-report-panel";
@@ -17,6 +18,7 @@ import {
   getMaintenanceReadinessReport,
   getRoutingLaneProfiles,
   getRunStatus,
+  getSafeDevelopmentBacklogReport,
   getSupervisorReportCatalog,
   getVerificationReadinessReport,
   getWorkerRegistry,
@@ -35,6 +37,7 @@ export default async function ControlsPage() {
     dashboardE2EReport,
     reportCatalog,
     maintenanceReadinessReport,
+    safeDevelopmentBacklog,
   ] = await Promise.all([
     getRunStatus(),
     getWorkItems(),
@@ -46,6 +49,7 @@ export default async function ControlsPage() {
     getDashboardE2EReport(),
     getSupervisorReportCatalog(),
     getMaintenanceReadinessReport(),
+    getSafeDevelopmentBacklogReport(),
   ]);
   const navStats = buildNavStats(items);
 
@@ -70,6 +74,7 @@ export default async function ControlsPage() {
       <DashboardE2EReportPanel report={dashboardE2EReport} />
       <SupervisorReportCatalogPanel catalog={reportCatalog} />
       <MaintenanceReadinessReportPanel report={maintenanceReadinessReport} />
+      <SafeDevelopmentBacklogPanel report={safeDevelopmentBacklog} />
       <RoutingFleetPanel workers={workers} laneProfiles={laneProfiles} />
     </Shell>
   );
