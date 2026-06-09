@@ -83,6 +83,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Execution authority approval checkpoints | Documented | `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`, Story 3.13 | Defines approval language, non-approval language, evidence requirements, and currently blocked authority stories. |
 | Dashboard evidence overview polish | Implemented | `EvidenceOverviewPanel`, Story 3.14 | Work-item detail pages show read-only shortcuts and summaries for routing, attempts, exports, and history. |
 | Documentation authority report | Implemented | `GET /supervisor/documentation-authority-report`, `DocumentationAuthorityReportPanel`, Story 3.15 | Surfaces architecture, PRD, story, approval checkpoint, blocked-story, and drift-check status without changing approval state. |
+| Verification readiness report | Implemented | `GET /supervisor/verification-readiness-report`, `VerificationReadinessReportPanel`, Story 3.16 | Surfaces required checks, optional checks, and authority stop lines without changing approval state. |
 | Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
 | Direct subscription-agent process launch | Deferred | Launch stub is disabled | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
 | Premium execution | Deferred | Approval request artifacts only | Requires premium provider boundary and explicit approval policy. |

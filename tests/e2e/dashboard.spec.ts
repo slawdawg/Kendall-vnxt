@@ -148,6 +148,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("9 pending approval")).toBeVisible();
     await expect(page.getByText("docs/architecture/index.md")).toBeVisible();
     await expect(page.getByText("blocked pending explicit approval").first()).toBeVisible();
+    await expect(page.getByText("Verification readiness")).toBeVisible();
+    await expect(page.getByText("Checks and stop lines")).toBeVisible();
+    await expect(page.getByText("pnpm run check", { exact: true })).toBeVisible();
+    await expect(page.getByText("pnpm run test:e2e:dashboard")).toBeVisible();
+    await expect(page.getByText("Passing verification does not approve local provider/model calls.")).toBeVisible();
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
     await expect(fleetPanel.getByText("Internal utility worker")).toBeVisible();

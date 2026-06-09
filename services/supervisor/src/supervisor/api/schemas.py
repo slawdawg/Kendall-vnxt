@@ -567,6 +567,27 @@ class DocumentationAuthorityReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class VerificationCommandView(BaseModel):
+    commandId: str
+    label: str
+    command: str
+    status: str
+    requiredFor: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+
+
+class VerificationReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    requiredCommands: list[VerificationCommandView]
+    optionalCommands: list[VerificationCommandView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readyForAuthorityEnablement: bool = False
+    executionAuthorityApproved: bool = False
+
+
 class ThreatBoundaryRuleView(BaseModel):
     ruleId: str
     label: str

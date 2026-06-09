@@ -15,6 +15,7 @@ import type {
   WorkItemExecutionRecipeView,
   WorkItemManagedActionPayload,
   WorkItemRecipeGateAuditView,
+  VerificationReadinessReportView,
   WorkflowEventView,
   WorkItemView,
   WorkerRegistryEntryView,
@@ -91,6 +92,10 @@ export async function getExecutionReadinessReport(): Promise<ExecutionReadinessR
 
 export async function getDocumentationAuthorityReport(): Promise<DocumentationAuthorityReportView> {
   return requestJson<DocumentationAuthorityReportView>("/supervisor/documentation-authority-report");
+}
+
+export async function getVerificationReadinessReport(): Promise<VerificationReadinessReportView> {
+  return requestJson<VerificationReadinessReportView>("/supervisor/verification-readiness-report");
 }
 
 export async function getWorkerRegistry(): Promise<WorkerRegistryEntryView[]> {

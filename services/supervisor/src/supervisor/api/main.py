@@ -464,6 +464,11 @@ async def get_documentation_authority_report():
     return ApiEnvelope(data=service.get_documentation_authority_report())
 
 
+@app.get("/supervisor/verification-readiness-report", response_model=ApiEnvelope)
+async def get_verification_readiness_report():
+    return ApiEnvelope(data=service.get_verification_readiness_report())
+
+
 @app.get("/supervisor/disabled-provider-proofs", response_model=ApiEnvelope)
 async def list_disabled_provider_proofs():
     return ApiEnvelope(data=service.list_disabled_provider_proofs())

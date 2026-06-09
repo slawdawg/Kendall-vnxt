@@ -513,6 +513,27 @@ export interface DocumentationAuthorityReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface VerificationCommandView {
+  commandId: string;
+  label: string;
+  command: string;
+  status: string;
+  requiredFor: string[];
+  evidence: string[];
+}
+
+export interface VerificationReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  requiredCommands: VerificationCommandView[];
+  optionalCommands: VerificationCommandView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readyForAuthorityEnablement: boolean;
+  executionAuthorityApproved: boolean;
+}
+
 export interface ThreatBoundaryRuleView {
   ruleId: string;
   label: string;
