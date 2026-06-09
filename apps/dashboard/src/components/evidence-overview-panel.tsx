@@ -11,6 +11,25 @@ function titleCase(value: string): string {
     .join(" ");
 }
 
+const reportAnchorByEndpoint: Record<string, string> = {
+  "GET /supervisor/execution-configuration-checks": "#execution-readiness-report",
+  "GET /supervisor/threat-boundary": "#execution-readiness-report",
+  "GET /supervisor/execution-readiness-report": "#execution-readiness-report",
+  "GET /supervisor/documentation-authority-report": "#documentation-authority-report",
+  "GET /supervisor/verification-readiness-report": "#verification-readiness-report",
+  "GET /supervisor/dashboard-e2e-report": "#dashboard-e2e-report",
+  "GET /supervisor/report-catalog": "#supervisor-report-catalog",
+  "GET /supervisor/maintenance-readiness-report": "#maintenance-readiness-report",
+  "GET /supervisor/safe-development-backlog": "#safe-development-backlog",
+  "GET /supervisor/managed-recipe-policy-report": "#managed-recipe-policy-report",
+  "GET /supervisor/execution-state-boundary": "#execution-readiness-report",
+  "GET /supervisor/disabled-provider-proofs": "#execution-readiness-report",
+};
+
+function reportShortcutHref(endpoint: string): string {
+  return `/controls${reportAnchorByEndpoint[endpoint] ?? "#supervisor-report-catalog"}`;
+}
+
 export function EvidenceOverviewPanel({
   routingPreview,
   attempts,
@@ -111,7 +130,7 @@ export function EvidenceOverviewPanel({
           {reportShortcuts.map((report) => (
             <a
               key={report}
-              href="/controls"
+              href={reportShortcutHref(report)}
               className="break-all rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
               {report}

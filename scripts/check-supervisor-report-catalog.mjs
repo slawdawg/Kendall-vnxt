@@ -164,7 +164,16 @@ for (const visibleEndpoint of [
   );
 }
 
-for (const overviewText of ["Report shortcuts", "runtimeEvidenceExport.boundary.relatedSupervisorReports", "Open catalog", 'href="/controls"']) {
+for (const overviewText of [
+  "Report shortcuts",
+  "runtimeEvidenceExport.boundary.relatedSupervisorReports",
+  "Open catalog",
+  "reportAnchorByEndpoint",
+  "reportShortcutHref",
+  "`/controls${reportAnchorByEndpoint[endpoint]",
+  "#execution-readiness-report",
+  "#supervisor-report-catalog",
+]) {
   assertCondition(
     overviewPanel.includes(overviewText),
     `Evidence overview must surface report catalog shortcut evidence: ${overviewText}`,
@@ -172,10 +181,23 @@ for (const overviewText of ["Report shortcuts", "runtimeEvidenceExport.boundary.
   );
 }
 
-for (const visibleOverviewText of ["Report shortcuts", "Open catalog"]) {
+for (const visibleOverviewText of ["Report shortcuts", "Open catalog", "/controls#execution-readiness-report"]) {
   assertCondition(
     dashboardSpec.includes(visibleOverviewText),
     `Dashboard detail browser coverage must assert overview report shortcut ${visibleOverviewText}`,
+    failures,
+  );
+}
+
+for (const controlsAnchor of [
+  'id="execution-readiness-report"',
+  'id="verification-readiness-report"',
+  'id="supervisor-report-catalog"',
+  'id="managed-recipe-policy-report"',
+]) {
+  assertCondition(
+    controlsPage.includes(controlsAnchor),
+    `Controls page must expose stable report anchor ${controlsAnchor}`,
     failures,
   );
 }
@@ -198,6 +220,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-34-report-shortcuts-in-evidence-overview.md"),
   "Story index must reference Story 3.34 report shortcuts in evidence overview",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-39-report-shortcut-anchor-polish.md"),
+  "Story index must reference Story 3.39 report shortcut anchor polish",
   failures,
 );
 

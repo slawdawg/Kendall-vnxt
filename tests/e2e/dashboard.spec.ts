@@ -141,7 +141,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(readinessPanel.getByText("Execution readiness", { exact: true })).toBeVisible();
     await expect(readinessPanel.getByText("Policy and evidence report")).toBeVisible();
     await expect(readinessPanel.getByText("Provider enablement ladder")).toBeVisible();
-    await expect(readinessPanel.getByText("Authority checks")).toBeVisible();
+    await expect(readinessPanel.getByText("Authority checks", { exact: true })).toBeVisible();
     await expect(readinessPanel.getByText("Provider proofs")).toBeVisible();
     await expect(readinessPanel.getByText("Provider no-call proofs")).toBeVisible();
 
@@ -169,6 +169,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:managed:mobile", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("Passing verification does not approve local provider/model calls.")).toBeVisible();
+    await expect(page.locator("#verification-readiness-report")).toBeVisible();
 
     const dashboardE2EPanel = page.locator("section").filter({ hasText: "Browser verification map" }).first();
     await expect(dashboardE2EPanel.getByText("Dashboard e2e", { exact: true })).toBeVisible();
@@ -190,6 +191,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
+    await expect(page.locator("#supervisor-report-catalog")).toBeVisible();
 
     const maintenancePanel = page.locator("section").filter({ hasText: "Safe work map" }).first();
     await expect(maintenancePanel.getByText("Maintenance readiness", { exact: true })).toBeVisible();
@@ -216,6 +218,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(managedRecipePolicyPanel.getByText("Dashboard mobile coverage")).toBeVisible();
     await expect(managedRecipePolicyPanel.getByText("Remote automation", { exact: true })).toBeVisible();
     await expect(managedRecipePolicyPanel.getByText("Managed recipe policies are not execution-authority approvals.")).toBeVisible();
+    await expect(page.locator("#managed-recipe-policy-report")).toBeVisible();
 
     const fleetPanel = page.locator("#routing-fleet");
     await expect(fleetPanel.getByText("Routing Fleet")).toBeVisible();
@@ -440,6 +443,14 @@ test.describe("dashboard workflow coverage", () => {
     await expect(overviewPanel.getByRole("link", { name: "Open catalog" })).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: "GET /supervisor/execution-configuration-checks" })).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: "GET /supervisor/threat-boundary" })).toBeVisible();
+    await expect(overviewPanel.getByRole("link", { name: "GET /supervisor/execution-configuration-checks" })).toHaveAttribute(
+      "href",
+      "/controls#execution-readiness-report",
+    );
+    await expect(overviewPanel.getByRole("link", { name: "GET /supervisor/threat-boundary" })).toHaveAttribute(
+      "href",
+      "/controls#execution-readiness-report",
+    );
     await expect(overviewPanel.getByRole("heading", { name: "Review shortcuts" })).toBeVisible();
     await expect(overviewPanel.getByText("3 shortcuts")).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Runtime state/ })).toBeVisible();
