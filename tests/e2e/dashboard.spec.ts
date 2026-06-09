@@ -156,6 +156,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("Verification readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("Checks and stop lines")).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:e2e-report", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:controls", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:detail", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:mobile", { exact: true })).toBeVisible();
@@ -172,6 +173,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(dashboardE2EPanel.getByText("pnpm run test:e2e:dashboard:mobile", { exact: true })).toBeVisible();
     await expect(dashboardE2EPanel.getByText("pnpm run test:e2e:dashboard:managed", { exact: true })).toBeVisible();
     await expect(dashboardE2EPanel.getByText("pnpm run test:e2e:dashboard:managed:mobile", { exact: true })).toBeVisible();
+    await expect(dashboardE2EPanel.getByText("pnpm run check:e2e-report", { exact: true })).toBeVisible();
     await expect(dashboardE2EPanel.getByText("Browser verification does not approve local provider/model calls.")).toBeVisible();
 
     const reportCatalogPanel = page.locator("section").filter({ hasText: "Supervisor evidence map" }).first();

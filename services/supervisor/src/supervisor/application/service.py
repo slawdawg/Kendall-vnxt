@@ -398,6 +398,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-e2e-report",
+                label="Dashboard e2e report drift",
+                command="pnpm run check:e2e-report",
+                status="required",
+                requiredFor=["dashboard e2e runner changes", "verification report changes", "browser coverage documentation"],
+                evidence=[
+                    "Validates dashboard e2e package scripts, supervisor reports, browser assertions, and story references stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-build",
                 label="Dashboard build and type check",
                 command="pnpm --filter @kendall/dashboard build",
@@ -426,7 +437,7 @@ class SupervisorService:
                 status="required",
                 requiredFor=["pre-merge confidence", "local handoff", "fresh VM acceptance"],
                 evidence=[
-                    "Runs preflight, documentation checks, dashboard build, and supervisor integration tests.",
+                    "Runs preflight, documentation checks, dashboard e2e report drift checks, dashboard build, and supervisor integration tests.",
                     "Does not grant execution authority by passing.",
                 ],
             ),
@@ -581,6 +592,17 @@ class SupervisorService:
                     "Validates dashboard TypeScript through the build pipeline.",
                 ],
             ),
+            VerificationCommandView(
+                commandId="check-e2e-report",
+                label="Dashboard e2e report drift",
+                command="pnpm run check:e2e-report",
+                status="required_for_runner_changes",
+                requiredFor=["dashboard e2e runner changes", "verification report changes", "browser coverage documentation"],
+                evidence=[
+                    "Validates package scripts, supervisor report command metadata, browser assertions, and story index coverage.",
+                    "Runs as part of `pnpm run check` before merge.",
+                ],
+            ),
         ]
         runners = [
             DashboardE2ERunnerView(
@@ -681,6 +703,7 @@ class SupervisorService:
             ],
             nextSafeActions=[
                 "Use focused runners for report, runtime export, mobile, or managed recipe dashboard changes.",
+                "Run `pnpm run check:e2e-report` after changing dashboard e2e runner commands or report metadata.",
                 "Run full dashboard e2e only when the browser stack and web-server lifecycle posture are healthy.",
                 "Keep runner commands aligned with the verification readiness report and package scripts.",
             ],
@@ -1210,6 +1233,7 @@ class SupervisorService:
             "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md",
             "docs/stories/3-24-dashboard-mobile-e2e-runner.md",
             "docs/stories/3-25-managed-recipe-e2e-runners.md",
+            "docs/stories/3-26-dashboard-e2e-report-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",

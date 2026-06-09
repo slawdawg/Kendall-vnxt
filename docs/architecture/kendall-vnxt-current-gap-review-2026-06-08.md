@@ -74,7 +74,7 @@ Do not rebuild these as new architecture work:
 - Maintenance readiness report for safe repo hygiene while authority stories remain blocked.
 - Runtime evidence review manifest for export counts, retention notes, and stop lines.
 - Focused dashboard detail e2e runner for runtime export verification.
-- Dashboard e2e report for focused/full browser verification commands, lifecycle posture, cache posture, and stop lines.
+- Dashboard e2e report for focused/full browser verification commands, lifecycle posture, cache posture, stop lines, and static drift checking.
 - Shared dashboard e2e runner lifecycle helper for focused browser verification scripts.
 - Focused mobile dashboard e2e runner for phone-sized intake draft verification.
 - Focused managed-recipe e2e runners for dashboard and mobile coverage intake templates.
