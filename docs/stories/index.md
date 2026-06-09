@@ -9,9 +9,6 @@ These stories must not be implemented until the operator explicitly approves the
 
 ### Ollama Local Provider
 
-- `4-1-ollama-provider-settings-and-registry-gates.md`
-- `4-2-ollama-prompt-redaction-and-retention-contract.md`
-- `4-3-ollama-timeout-cancellation-and-attempt-evidence.md`
 - `4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
 
 ### Subscription-Agent Launch
@@ -26,6 +23,9 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `4-3-ollama-timeout-cancellation-and-attempt-evidence.md` | Ollama timeout, cancellation, terminal-state, retry, dashboard, and export evidence using no-call fixtures only. |
+| `4-2-ollama-prompt-redaction-and-retention-contract.md` | Ollama prompt-source, rejected-source, redaction, retention, dashboard, and export evidence without raw prompt or completion retention. |
+| `4-1-ollama-provider-settings-and-registry-gates.md` | Ollama-specific disabled-default settings, registry gate evidence, dashboard/report updates, and no-call fixture tests. |
 | `3-65-runtime-review-evidence-links.md` | Runtime evidence review related report, document, and dashboard anchor links for queued work-item evidence review. |
 | `3-64-development-runway-evidence-links.md` | Development runway related report, document, and dashboard anchor links for larger safe slice evidence review. |
 | `3-63-development-runway-pr-batching-policy.md` | Development runway batching policy and checklist for larger reviewable PR slices. |

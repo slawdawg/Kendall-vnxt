@@ -89,6 +89,34 @@ for (const provider of providers) {
   );
 }
 
+for (const ollamaText of [
+  "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS",
+  "SUPERVISOR_OLLAMA_MODEL_ID",
+  "ollama-provider-gate",
+  "configured_broad_gate_only",
+  "configured_ollama_gate_missing_model",
+  "adapter_ready_no_call",
+  "ollama_provider_adapter_not_implemented",
+]) {
+  assertCondition(
+    serviceSource.includes(ollamaText) || supervisorTests.includes(ollamaText),
+    `Ollama gate evidence must include ${ollamaText}`,
+    failures,
+  );
+}
+
+for (const ollamaFixtureText of [
+  "prompt_construction_sources",
+  "rejected_prompt_sources",
+  "retained_evidence_classes",
+  "raw_prompt_retention_allowed",
+  "raw_completion_retention_allowed",
+  "attempt_state_mapping",
+  "retry_requires_new_route_decision_and_fresh_approval",
+]) {
+  assertCondition(adapterSource.includes(ollamaFixtureText), `Ollama no-call fixture must include ${ollamaFixtureText}`, failures);
+}
+
 for (const policyText of [
   "deny_all_local_provider_endpoints_until_provider_specific_policy_approval",
   "http_calls_attempted: bool = False",
@@ -123,6 +151,9 @@ for (const testText of [
 for (const story of [
   "docs/stories/3-10-provider-fixtures-and-ollama-prd-draft.md",
   "docs/stories/3-50-provider-fixture-policy-drift-check.md",
+  "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
+  "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
+  "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing provider fixture story evidence ${story}`, failures);
   assertCondition(storyIndex.includes(story.split("/").pop()), `Story index must reference ${story}`, failures);

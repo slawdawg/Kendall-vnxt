@@ -10,13 +10,12 @@ Kendall_vNxt now has reviewed PRDs and blocked implementation stories for future
 
 Generic continuation instructions do not approve execution authority.
 
+On 2026-06-09, the operator explicitly approved Stories 4.1-4.3 for non-executing Ollama preparation only. That approval allows disabled-default settings, registry evidence, prompt redaction/retention contracts, timeout/cancellation evidence, dashboard/report/export updates, and no-call fixture tests. It does not approve Story 4.4, Ollama HTTP calls, endpoint discovery, model discovery, provider/model calls, process launch, shell command execution, source mutation, credential access, premium execution, external sends, or subscription-agent launch.
+
 ## Current Blocked Execution Stories
 
 ### Ollama Local Provider
 
-- `docs/stories/4-1-ollama-provider-settings-and-registry-gates.md`
-- `docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md`
-- `docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md`
 - `docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
 
 ### Subscription-Agent Launch
@@ -81,7 +80,7 @@ Before a blocked execution story can move to ready, the implementer must inspect
 
 ## Current Decision
 
-No blocked execution-authority story is approved.
+Stories 4.1-4.3 are approved only for non-executing Ollama preparation and no-call fixture evidence.
 
 Current status remains:
 

@@ -81,11 +81,49 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
                     </span>
                   </div>
                   <p className="mt-2 text-sm text-[var(--warn)]">{proof.disabledReason}</p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {[
+                      ["Registry", proof.registryState],
+                      ["Broad gate", proof.broadGateEnabled ? "enabled" : "disabled"],
+                      ["Provider gate", proof.providerSpecificGateEnabled ? "enabled" : "disabled"],
+                      ["Model id", proof.modelIdConfigured ? "configured" : "missing"],
+                      ["Adapter", proof.adapterReady ? "ready no-call" : "not ready"],
+                    ].map(([label, value]) => (
+                      <p key={label} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-[11px] leading-5 text-[var(--muted)]">
+                        <span className="font-semibold text-[var(--text)]">{label}:</span> {value}
+                      </p>
+                    ))}
+                  </div>
                   <p className="mt-2 font-mono text-xs text-[var(--muted)]">{proof.endpointFamily}</p>
                   <p className="mt-2 break-all text-xs leading-5 text-[var(--muted)]">{proof.endpointPolicy}</p>
                   <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
                     {proof.timeoutPolicy}. {proof.cancellationPolicy}. {proof.retentionPolicy}.
                   </p>
+                  {proof.promptConstructionSources.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                      Prompt sources: {proof.promptConstructionSources.join(", ")}
+                    </p>
+                  ) : null}
+                  {proof.rejectedPromptSources.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-[var(--warn)]">
+                      Rejected prompt sources: {proof.rejectedPromptSources.join(", ")}
+                    </p>
+                  ) : null}
+                  {proof.retainedEvidenceClasses.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                      Retained evidence: {proof.retainedEvidenceClasses.join(", ")}
+                    </p>
+                  ) : null}
+                  {proof.connectTimeoutSeconds && proof.totalTimeoutSeconds ? (
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                      Timeout policy: connect {proof.connectTimeoutSeconds}s, total {proof.totalTimeoutSeconds}s.
+                    </p>
+                  ) : null}
+                  {proof.attemptStateMapping.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                      Attempt mapping: {proof.attemptStateMapping.join(" | ")}
+                    </p>
+                  ) : null}
                 </article>
               ))}
             </div>

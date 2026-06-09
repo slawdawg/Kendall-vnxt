@@ -144,12 +144,18 @@ test.describe("dashboard workflow coverage", () => {
     await expect(readinessPanel.getByText("Authority checks", { exact: true })).toBeVisible();
     await expect(readinessPanel.getByText("Provider proofs")).toBeVisible();
     await expect(readinessPanel.getByText("Provider no-call proofs")).toBeVisible();
+    await expect(readinessPanel.getByText("Ollama OpenAI-compatible local worker")).toBeVisible();
+    await expect(readinessPanel.getByText("Registry: disabled")).toBeVisible();
+    await expect(readinessPanel.getByText("Provider gate: disabled")).toBeVisible();
+    await expect(readinessPanel.getByText("Prompt sources: work_item_title")).toBeVisible();
+    await expect(readinessPanel.getByText("Timeout policy: connect 5s, total 30s.")).toBeVisible();
+    await expect(readinessPanel.getByText("cancel_requested -> request_abort_recorded")).toBeVisible();
 
     const documentationPanel = page.locator("section").filter({ hasText: "Indexes and approval stop lines" }).first();
     await expect(documentationPanel.getByText("Documentation authority", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("Indexes and approval stop lines")).toBeVisible();
     await expect(documentationPanel.getByText("Blocked authority stories")).toBeVisible();
-    await expect(documentationPanel.getByText("9 pending approval")).toBeVisible();
+    await expect(documentationPanel.getByText("6 pending approval")).toBeVisible();
     await expect(documentationPanel.getByText("docs/architecture/index.md", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("blocked pending explicit approval").first()).toBeVisible();
     await expect(documentationPanel.getByText("Documentation drift command")).toBeVisible();
@@ -605,10 +611,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(overviewPanel.getByText("Recommended action")).toBeVisible();
     await expect(overviewPanel.getByText("Review queue shortcuts are not execution-authority approvals.")).toBeVisible();
     await expect(overviewPanel.getByRole("heading", { name: "Review shortcuts" })).toBeVisible();
-    await expect(overviewPanel.getByText("3 shortcuts")).toBeVisible();
+    await expect(overviewPanel.getByText("4 shortcuts")).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Runtime state/ })).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Authority boundary/ })).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Git-backed evidence/ })).toBeVisible();
+    await expect(overviewPanel.getByRole("link", { name: /Ollama no-call preparation/ })).toBeVisible();
 
     await page.getByRole("link", { name: "Attempts", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#execution-attempts$`));
@@ -640,6 +647,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(exportPanel.getByRole("heading", { name: "Runtime state" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Authority boundary" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Git-backed evidence" })).toBeVisible();
+    await expect(exportPanel.getByRole("heading", { name: "Ollama no-call preparation" })).toBeVisible();
+    await expect(exportPanel.getByText("Raw Ollama prompts and completions are excluded from workflow events and runtime exports.")).toBeVisible();
+    await expect(exportPanel.getByText("cancel_requested -> request_abort_recorded")).toBeVisible();
     await expect(exportPanel.getByText("Review navigation is not execution-authority approval.")).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Related reports" })).toBeVisible();
     await expect(exportPanel.getByText("GET /supervisor/execution-readiness-report", { exact: true })).toBeVisible();

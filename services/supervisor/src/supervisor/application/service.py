@@ -310,9 +310,6 @@ class SupervisorService:
         ]
         approval_checkpoint_path = "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"
         blocked_stories = [
-            ("4.1", "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md", "Ollama local provider"),
-            ("4.2", "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md", "Ollama local provider"),
-            ("4.3", "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md", "Ollama local provider"),
             ("4.4", "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md", "Ollama local provider"),
             ("5.1", "docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md", "Subscription-agent launch"),
             ("5.2", "docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md", "Subscription-agent launch"),
@@ -373,8 +370,8 @@ class SupervisorService:
                 ProviderEnablementPolicyStepView(
                     stepId="blocked-story-count",
                     label="Blocked execution-authority stories",
-                    status="passed" if authority_story_count == 9 else "blocked",
-                    summary=f"{authority_story_count} blocked stories are represented for Ollama and subscription-agent launch authority.",
+                    status="passed" if authority_story_count == 6 else "blocked",
+                    summary=f"{authority_story_count} blocked stories are represented for remaining Ollama execution and subscription-agent launch authority.",
                     requiredEvidence=[path for _story_id, path, _family in blocked_stories],
                 ),
                 ProviderEnablementPolicyStepView(
@@ -1580,7 +1577,8 @@ class SupervisorService:
                 summary="Keep provider execution, process launch, premium execution, commands, network, source mutation, and credential access outside maintenance work.",
                 evidence=[
                     f"{len(blocked_backlog_items)} safe backlog items remain blocked pending explicit approval.",
-                    "Ollama stories 4.1-4.4 remain blocked.",
+                    "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
+                    "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
                     "Subscription-agent stories 5.1-5.5 remain blocked.",
                 ],
                 verificationCommands=["pnpm run check:docs", "pnpm run check:execution-boundary", "pnpm run check:process-lifecycle"],
@@ -2158,7 +2156,8 @@ class SupervisorService:
                 summary="Ollama provider execution and subscription-agent process launch remain outside the safe backlog.",
                 recommendedSliceSize="do_not_start",
                 evidence=[
-                    "Ollama stories 4.1-4.4 remain blocked pending explicit approval.",
+                    "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
+                    "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
                     "Subscription-agent stories 5.1-5.5 remain blocked pending explicit approval.",
                     f"Blocked maintenance tracks: {', '.join(blocked_maintenance_tracks) or 'none'}.",
                 ],
@@ -2393,6 +2392,7 @@ class SupervisorService:
 
     def get_execution_configuration_checks(self) -> ExecutionConfigurationChecksView:
         workers = self.worker_registry.list_workers()
+        ollama_state = self._ollama_provider_gate_state()
 
         def affected_by_adapter(adapter_type: str) -> list[str]:
             return [worker.worker_id for worker in workers if worker.adapter_type.value == adapter_type]
@@ -2423,9 +2423,26 @@ class SupervisorService:
                 evidence=[
                     "Ollama, LM Studio, vLLM, and llama.cpp registry entries remain disabled.",
                     "Mock local read-only evidence does not call provider HTTP endpoints or model APIs.",
+                    "Provider-specific gates must be satisfied before any local provider can become adapter-ready.",
                 ],
-                provider_calls_allowed=self.settings.allow_local_provider_calls,
-                model_calls_allowed=self.settings.allow_local_provider_calls,
+                provider_calls_allowed=False,
+                model_calls_allowed=False,
+            ),
+            self._execution_configuration_check(
+                check_id="ollama-provider-gate",
+                label="Ollama provider gate",
+                enabled=bool(ollama_state["adapter_ready"]),
+                disabled_reason=ollama_state["disabled_reason"],  # type: ignore[arg-type]
+                affected_workers=["local.ollama.disabled"],
+                evidence=[
+                    "SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS is the broad local-provider gate.",
+                    "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to false and gates only Ollama.",
+                    "SUPERVISOR_OLLAMA_MODEL_ID is required before adapter readiness; there is no hardcoded default model.",
+                    f"Registry state: {ollama_state['registry_state']}.",
+                    "Story 4.4 is still required before any Ollama HTTP call can exist.",
+                ],
+                provider_calls_allowed=False,
+                model_calls_allowed=False,
             ),
             self._execution_configuration_check(
                 check_id="premium-execution",
@@ -2502,6 +2519,41 @@ class SupervisorService:
             generatedAt=datetime.now(timezone.utc),
             checks=checks,
         )
+
+    def _ollama_provider_gate_state(self) -> dict[str, object]:
+        broad_gate_enabled = self.settings.allow_local_provider_calls
+        provider_gate_enabled = self.settings.allow_ollama_provider_calls
+        model_id_configured = bool((self.settings.ollama_model_id or "").strip())
+
+        if not broad_gate_enabled and not provider_gate_enabled:
+            registry_state = "disabled"
+            disabled_reason = "ollama_provider_gate_not_enabled"
+            adapter_ready = False
+        elif broad_gate_enabled and not provider_gate_enabled:
+            registry_state = "configured_broad_gate_only"
+            disabled_reason = "ollama_provider_gate_not_enabled"
+            adapter_ready = False
+        elif provider_gate_enabled and not broad_gate_enabled:
+            registry_state = "configured_ollama_gate_without_broad_gate"
+            disabled_reason = "local_provider_http_calls_not_enabled"
+            adapter_ready = False
+        elif not model_id_configured:
+            registry_state = "configured_ollama_gate_missing_model"
+            disabled_reason = "ollama_model_id_not_configured"
+            adapter_ready = False
+        else:
+            registry_state = "adapter_ready_no_call"
+            disabled_reason = None
+            adapter_ready = True
+
+        return {
+            "broad_gate_enabled": broad_gate_enabled,
+            "provider_gate_enabled": provider_gate_enabled,
+            "model_id_configured": model_id_configured,
+            "registry_state": registry_state,
+            "disabled_reason": disabled_reason,
+            "adapter_ready": adapter_ready,
+        }
 
     def get_threat_boundary(self) -> ThreatBoundaryView:
         redaction_boundary = [
@@ -2851,6 +2903,9 @@ class SupervisorService:
             "docs/stories/3-48-execution-boundary-report-drift-check.md",
             "docs/stories/3-49-execution-evidence-boundary-drift-check.md",
             "docs/stories/3-50-provider-fixture-policy-drift-check.md",
+            "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
+            "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
+            "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
             "docs/stories/3-51-process-lifecycle-policy-drift-check.md",
             "docs/prds/supervisor-execution-authority-expansion.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
@@ -2880,6 +2935,7 @@ class SupervisorService:
                     "environment variables and credential stores",
                     "provider HTTP request/response bodies",
                     "model prompts or completions from external providers",
+                    "raw Ollama prompts and completions",
                     "filesystem snapshots outside recorded artifact references",
                     "background process output not recorded as workflow events",
                 ],
@@ -2893,7 +2949,7 @@ class SupervisorService:
                     "workflowEvents": len(events),
                     "relatedSupervisorReports": len(related_reports),
                     "gitBackedEvidence": len(git_backed_evidence),
-                    "excludedState": 5,
+                    "excludedState": 6,
                 },
                 reviewChecklist=[
                     "Confirm work-item state, attempts, and workflow events match the review question.",
@@ -2904,6 +2960,7 @@ class SupervisorService:
                 retentionNotes=[
                     "Export includes supervisor database evidence and git-backed references.",
                     "Export excludes credential stores, provider request/response bodies, and external filesystem snapshots.",
+                    "Ollama timeout and cancellation summaries are metadata-only; raw prompts and completions remain excluded.",
                     "Generated timestamps and identifiers are local runtime evidence, not durable Git state.",
                 ],
                 stopLines=[
@@ -2978,6 +3035,34 @@ class SupervisorService:
                     ],
                     dashboardAnchors=["#runtime-evidence-export"],
                 ),
+                RuntimeEvidenceReviewNavigatorItemView(
+                    itemId="review-ollama-no-call-prep",
+                    label="Ollama no-call preparation",
+                    priority="P1",
+                    target="Review Ollama gate, prompt-retention, timeout, and cancellation evidence without approving provider calls.",
+                    summary="Stories 4.1-4.3 add Ollama-specific non-executing evidence only; Story 4.4 remains required for any HTTP adapter.",
+                    evidence=[
+                        "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to false.",
+                        "Raw Ollama prompts and completions are excluded from workflow events and runtime exports.",
+                        "cancel_requested -> request_abort_recorded",
+                        "retry_requires_new_route_decision_and_fresh_approval",
+                    ],
+                    relatedReports=[
+                        "GET /supervisor/execution-configuration-checks",
+                        "GET /supervisor/disabled-provider-proofs",
+                        "GET /supervisor/threat-boundary",
+                    ],
+                    relatedDocs=[
+                        "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
+                        "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
+                        "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
+                    ],
+                    dashboardAnchors=["#runtime-evidence-export", "/controls#execution-readiness-report"],
+                    stopLines=[
+                        "Ollama no-call preparation keeps no provider/model calls allowed.",
+                        "Do not add an HTTP adapter, endpoint discovery, model discovery, or raw payload retention before Story 4.4 approval.",
+                    ],
+                ),
             ],
         )
 
@@ -3019,6 +3104,7 @@ class SupervisorService:
 
     def list_disabled_provider_proofs(self) -> list[DisabledProviderProofView]:
         proofs = []
+        ollama_state = self._ollama_provider_gate_state()
         for worker in self.worker_registry.list_workers():
             if (
                 worker.adapter_type == WorkerAdapterType.LOCAL_OPENAI_COMPATIBLE
@@ -3026,11 +3112,33 @@ class SupervisorService:
                 and worker.disabled_reason
             ):
                 proof = self.disabled_provider_adapter.prove_disabled(worker)
+                registry_state = proof.registry_state
+                broad_gate_enabled = proof.broad_gate_enabled
+                provider_specific_gate_enabled = proof.provider_specific_gate_enabled
+                model_id_configured = proof.model_id_configured
+                adapter_ready = proof.adapter_ready
+                disabled_reason = proof.disabled_reason
+                connect_timeout_seconds = proof.connect_timeout_seconds
+                total_timeout_seconds = proof.total_timeout_seconds
+                if worker.worker_id == "local.ollama.disabled":
+                    registry_state = str(ollama_state["registry_state"])
+                    broad_gate_enabled = bool(ollama_state["broad_gate_enabled"])
+                    provider_specific_gate_enabled = bool(ollama_state["provider_gate_enabled"])
+                    model_id_configured = bool(ollama_state["model_id_configured"])
+                    adapter_ready = bool(ollama_state["adapter_ready"])
+                    disabled_reason = "ollama_provider_adapter_not_implemented" if adapter_ready else proof.disabled_reason
+                    connect_timeout_seconds = self.settings.ollama_connect_timeout_seconds
+                    total_timeout_seconds = self.settings.ollama_total_timeout_seconds
                 proofs.append(
                     DisabledProviderProofView(
                         workerId=proof.worker_id,
                         providerLabel=proof.provider_label,
-                        disabledReason=proof.disabled_reason,
+                        disabledReason=disabled_reason,
+                        registryState=registry_state,
+                        broadGateEnabled=broad_gate_enabled,
+                        providerSpecificGateEnabled=provider_specific_gate_enabled,
+                        modelIdConfigured=model_id_configured,
+                        adapterReady=adapter_ready,
                         endpointFamily=proof.endpoint_family,
                         endpointPolicy=proof.endpoint_policy,
                         httpCallsAttempted=proof.http_calls_attempted,
@@ -3038,6 +3146,15 @@ class SupervisorService:
                         networkAccessAttempted=proof.network_access_attempted,
                         credentialAccessAttempted=proof.credential_access_attempted,
                         redactionChecks=list(proof.redaction_checks),
+                        promptConstructionSources=list(proof.prompt_construction_sources),
+                        rejectedPromptSources=list(proof.rejected_prompt_sources),
+                        retainedEvidenceClasses=list(proof.retained_evidence_classes),
+                        rawPromptRetentionAllowed=proof.raw_prompt_retention_allowed,
+                        rawCompletionRetentionAllowed=proof.raw_completion_retention_allowed,
+                        connectTimeoutSeconds=connect_timeout_seconds,
+                        totalTimeoutSeconds=total_timeout_seconds,
+                        attemptStateMapping=list(proof.attempt_state_mapping),
+                        retryPolicy=proof.retry_policy,
                         timeoutPolicy=proof.timeout_policy,
                         cancellationPolicy=proof.cancellation_policy,
                         retentionPolicy=proof.retention_policy,

@@ -75,7 +75,8 @@ for (const itemId of [
 for (const safetyText of [
   "blocked_pending_explicit_approval",
   "do_not_start",
-  "Ollama stories 4.1-4.4 remain blocked",
+  "Ollama Story 4.4 remains blocked",
+  "Ollama Stories 4.1-4.3 are non-executing no-call preparation only",
   "Subscription-agent stories 5.1-5.5 remain blocked",
   "provider/model calls",
   "worker shell commands",

@@ -16,6 +16,7 @@ Current safe posture:
 - Routing and attempt evidence are inspectable.
 - Real process launch remains disabled.
 - Local provider/model calls remain disabled.
+- Ollama Stories 4.1-4.3 now add non-executing settings, registry, prompt/retention, timeout/cancellation, dashboard, export, and no-call fixture evidence.
 - Premium execution remains disabled.
 - Arbitrary shell execution remains disabled.
 - Worker source mutation, network access, and credential access remain disabled.
@@ -61,7 +62,7 @@ Do not rebuild these as new architecture work:
 - Runtime evidence export references for readiness and boundary reports.
 - Provider-specific disabled fixture policies.
 - Draft Ollama local provider PRD.
-- Ollama PRD review decisions and blocked implementation story breakdown.
+- Ollama PRD review decisions, non-executing Stories 4.1-4.3, and blocked Story 4.4 execution adapter boundary.
 - Dashboard runtime evidence export access.
 - Draft subscription-agent launch PRD.
 - Subscription-agent launch PRD review decisions and blocked implementation story breakdown.
@@ -128,11 +129,11 @@ Recommendation: draft provider-specific or subscription-agent PRDs only after th
 
 ### 2. Provider PRD Approval And Story Breakdown
 
-The Ollama provider PRD exists as a draft, but no executable lane has been approved or broken into implementation stories.
+The Ollama provider PRD exists as a draft. Stories 4.1-4.3 now cover non-executing preparation, but no executable lane has been approved.
 
 Risk: generic OpenAI-compatible assumptions could hide provider differences in endpoints, auth, timeouts, model selection, retention, and cancellation behavior.
 
-Recommendation: review the Ollama PRD, resolve open questions, then split it into implementation stories only if explicit approval is granted.
+Recommendation: review the no-call evidence from Stories 4.1-4.3 before considering Story 4.4. Only implement real local provider calls after explicit approval names the endpoint, model id, scope, and rollback plan.
 
 ### 3. Maintenance And Hygiene
 

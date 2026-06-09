@@ -1,23 +1,26 @@
 # Kendall_vNxt Execution Authority Approval Packet
 
 Date: 2026-06-09
-Status: draft approval packet
+Status: approval packet with Option A approved for non-executing implementation
 Scope: Operator approval choices for blocked Ollama local-provider and subscription-agent launch stories
 
 ## Purpose
 
 This packet converts the current blocked execution-authority work into explicit approval choices.
 
-It does not approve implementation by itself. The operator must still approve one of the approval statements below before a blocked story can move from `Blocked Pending Explicit Approval` to implementation.
+The operator approved Option A on 2026-06-09 for Stories 4.1-4.3 only. The remaining options still require explicit approval before a blocked story can move from `Blocked Pending Explicit Approval` to implementation.
 
 ## Current Blocked Families
 
 ### Ollama Local Provider
 
+- `docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
+
+### Ollama Non-Executing Preparation Approved For Review
+
 - `docs/stories/4-1-ollama-provider-settings-and-registry-gates.md`
 - `docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md`
 - `docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md`
-- `docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
 
 ### Subscription-Agent Launch
 
@@ -38,7 +41,7 @@ Approve non-executing setup before approving real calls or process launch.
 
 ## Approval Option A: Ollama Non-Executing Preparation
 
-Use this if the operator wants to clear the Ollama setup blockers without allowing provider calls.
+Approved on 2026-06-09 to clear the Ollama setup blockers without allowing provider calls.
 
 ```text
 Approve Stories 4.1-4.3 only: implement Ollama-specific disabled-default settings, registry evidence, prompt redaction/retention contracts, timeout/cancellation evidence, dashboard/report/export updates, and no-call fixture tests. Do not add or perform Ollama HTTP calls, endpoint discovery, model discovery, provider/model calls, process launch, shell command execution, source mutation, credential access, premium execution, external sends, or subscription-agent launch. Review point: stop after Stories 4.1-4.3 are implemented, verified, committed, pushed, and PR-ready. Rollback expectation: disabling the broad local-provider gate or the Ollama-specific gate returns all Ollama evidence to disabled/no-call state.
@@ -139,4 +142,3 @@ Those phrases allow only planning, documentation, tests, dashboard evidence disp
 - `docs/prds/local-provider-ollama-prd-review-2026-06-08.md`
 - `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`
 - `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`
-

@@ -623,6 +623,16 @@ def test_execution_configuration_checks_report_disabled_defaults_without_mutatio
         "local.vllm.disabled",
         "local.llamacpp.disabled",
     }
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_provider_gate_not_enabled"
+    assert checks["ollama-provider-gate"]["affectedWorkers"] == ["local.ollama.disabled"]
+    assert any(
+        "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to false" in evidence
+        for evidence in checks["ollama-provider-gate"]["evidence"]
+    )
+    assert any(
+        "SUPERVISOR_OLLAMA_MODEL_ID is required before adapter readiness" in evidence
+        for evidence in checks["ollama-provider-gate"]["evidence"]
+    )
     assert checks["premium-execution"]["disabledReason"] == "premium_execution_not_enabled"
     assert checks["premium-execution"]["affectedWorkers"] == ["premium.approval"]
 
@@ -638,6 +648,104 @@ def test_execution_configuration_checks_report_disabled_defaults_without_mutatio
         assert check["networkAllowed"] is False
         assert check["credentialAccessAllowed"] is False
         assert check["evidence"]
+
+
+def test_ollama_provider_gate_stays_non_executing_when_broad_gate_is_enabled(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "ollama-provider-gate-broad-only.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/supervisor/execution-configuration-checks")
+        proofs_response = client.get("/supervisor/disabled-provider-proofs")
+
+    assert response.status_code == 200
+    checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
+    assert checks["ollama-provider-gate"]["enabled"] is False
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_provider_gate_not_enabled"
+    assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
+    assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
+
+    proofs = {proof["workerId"]: proof for proof in proofs_response.json()["data"]}
+    ollama = proofs["local.ollama.disabled"]
+    assert ollama["broadGateEnabled"] is True
+    assert ollama["providerSpecificGateEnabled"] is False
+    assert ollama["modelIdConfigured"] is False
+    assert ollama["adapterReady"] is False
+    assert ollama["registryState"] == "configured_broad_gate_only"
+    assert ollama["httpCallsAttempted"] is False
+    assert ollama["modelCallsAttempted"] is False
+
+
+def test_ollama_provider_gate_requires_model_id_before_adapter_readiness(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "ollama-provider-gate-missing-model.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/supervisor/execution-configuration-checks")
+        proofs_response = client.get("/supervisor/disabled-provider-proofs")
+
+    assert response.status_code == 200
+    checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
+    assert checks["ollama-provider-gate"]["enabled"] is False
+    assert checks["ollama-provider-gate"]["disabledReason"] == "ollama_model_id_not_configured"
+    assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
+    assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
+
+    proofs = {proof["workerId"]: proof for proof in proofs_response.json()["data"]}
+    ollama = proofs["local.ollama.disabled"]
+    assert ollama["broadGateEnabled"] is True
+    assert ollama["providerSpecificGateEnabled"] is True
+    assert ollama["modelIdConfigured"] is False
+    assert ollama["adapterReady"] is False
+    assert ollama["registryState"] == "configured_ollama_gate_missing_model"
+
+
+def test_ollama_provider_gate_adapter_ready_still_does_not_call_provider(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "ollama-provider-gate-adapter-ready.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "llama3.2:fixture")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/supervisor/execution-configuration-checks")
+        proofs_response = client.get("/supervisor/disabled-provider-proofs")
+
+    assert response.status_code == 200
+    checks = {check["checkId"]: check for check in response.json()["data"]["checks"]}
+    assert checks["ollama-provider-gate"]["enabled"] is True
+    assert checks["ollama-provider-gate"]["disabledReason"] is None
+    assert checks["ollama-provider-gate"]["providerCallsAllowed"] is False
+    assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
+
+    proofs = {proof["workerId"]: proof for proof in proofs_response.json()["data"]}
+    ollama = proofs["local.ollama.disabled"]
+    assert ollama["broadGateEnabled"] is True
+    assert ollama["providerSpecificGateEnabled"] is True
+    assert ollama["modelIdConfigured"] is True
+    assert ollama["adapterReady"] is True
+    assert ollama["registryState"] == "adapter_ready_no_call"
+    assert ollama["disabledReason"] == "ollama_provider_adapter_not_implemented"
+    assert ollama["httpCallsAttempted"] is False
+    assert ollama["modelCallsAttempted"] is False
 
 
 def test_execution_readiness_report_compacts_policy_attempt_and_outcome_evidence_without_mutation(tmp_path, monkeypatch) -> None:
@@ -725,7 +833,7 @@ def test_documentation_authority_report_surfaces_indexes_and_blocked_stories_wit
         "docs/stories/index.md",
     }
     assert report["approvalCheckpoint"]["path"].endswith("kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md")
-    assert {story["storyId"] for story in report["blockedStories"]} == {"4.1", "4.2", "4.3", "4.4", "5.1", "5.2", "5.3", "5.4", "5.5"}
+    assert {story["storyId"] for story in report["blockedStories"]} == {"4.4", "5.1", "5.2", "5.3", "5.4", "5.5"}
     assert all(story["status"] == "blocked_pending_explicit_approval" for story in report["blockedStories"])
     assert {check["stepId"] for check in report["driftChecks"]} == {
         "required-documents-present",
@@ -1180,7 +1288,9 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     }
     provider_family = next(family for family in report["families"] if family["familyId"] == "local-provider-execution")
     assert provider_family["status"] == "blocked_pending_explicit_approval"
-    assert "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md" in provider_family["blockedStories"]
+    assert provider_family["blockedStories"] == [
+        "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md"
+    ]
     assert "GET /supervisor/disabled-provider-proofs" in provider_family["relatedReports"]
     launch_family = next(family for family in report["families"] if family["familyId"] == "subscription-agent-launch")
     assert "docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md" in launch_family["blockedStories"]
@@ -1309,6 +1419,33 @@ def test_disabled_provider_proofs_are_provider_specific_and_non_calling(tmp_path
         assert proof["timeoutPolicy"].startswith("disabled_fixture_requires")
         assert proof["cancellationPolicy"].startswith("disabled_fixture_requires")
         assert proof["retentionPolicy"].startswith("disabled_fixture_forbids")
+
+    ollama = next(proof for proof in proofs if proof["workerId"] == "local.ollama.disabled")
+    assert ollama["registryState"] == "disabled"
+    assert ollama["broadGateEnabled"] is False
+    assert ollama["providerSpecificGateEnabled"] is False
+    assert ollama["modelIdConfigured"] is False
+    assert ollama["adapterReady"] is False
+    assert ollama["rawPromptRetentionAllowed"] is False
+    assert ollama["rawCompletionRetentionAllowed"] is False
+    assert ollama["promptConstructionSources"] == [
+        "work_item_title",
+        "requested_outcome",
+        "routing_decision_summary",
+        "workflow_event_summaries",
+        "local_evidence_packet_summaries",
+        "execution_attempt_metadata",
+        "workspace_isolation_summary",
+    ]
+    assert "environment_variables" in ollama["rejectedPromptSources"]
+    assert "credential_paths" in ollama["rejectedPromptSources"]
+    assert "raw_prompt_text" not in ollama["retainedEvidenceClasses"]
+    assert "raw_completion_text" not in ollama["retainedEvidenceClasses"]
+    assert "redaction_state" in ollama["retainedEvidenceClasses"]
+    assert ollama["connectTimeoutSeconds"] == 5
+    assert ollama["totalTimeoutSeconds"] == 30
+    assert "cancel_requested -> request_abort_recorded" in ollama["attemptStateMapping"]
+    assert ollama["retryPolicy"] == "retry_requires_new_route_decision_and_fresh_approval"
 
 
 def test_execution_state_boundary_keeps_queue_leases_separate_from_attempt_authority(tmp_path, monkeypatch) -> None:
@@ -2087,6 +2224,9 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-48-execution-boundary-report-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-49-execution-evidence-boundary-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-50-provider-fixture-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-51-process-lifecycle-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-52-maintenance-action-plan-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-53-authority-readiness-matrix-report.md" in export["boundary"]["gitBackedEvidence"]
@@ -2112,6 +2252,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
     assert "environment variables and credential stores" in export["boundary"]["excludedState"]
+    assert "raw Ollama prompts and completions" in export["boundary"]["excludedState"]
     assert export["safety"]["exportOnly"] is True
     assert export["safety"]["processLaunchAllowed"] is False
     assert export["safety"]["providerCallsAllowed"] is False
@@ -2129,15 +2270,24 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert export["reviewManifest"]["executionAuthorityApproved"] is False
     assert any("not execution-authority approval" in stop_line for stop_line in export["reviewManifest"]["stopLines"])
     assert any("credential stores" in note for note in export["reviewManifest"]["retentionNotes"])
+    assert any(
+        "Ollama timeout and cancellation summaries are metadata-only" in note
+        for note in export["reviewManifest"]["retentionNotes"]
+    )
     assert {item["itemId"] for item in export["reviewNavigator"]} == {
         "review-runtime-state",
         "review-authority-boundary",
         "review-git-backed-evidence",
+        "review-ollama-no-call-prep",
     }
     authority_item = next(item for item in export["reviewNavigator"] if item["itemId"] == "review-authority-boundary")
     assert authority_item["priority"] == "P0"
     assert "GET /supervisor/threat-boundary" in authority_item["relatedReports"]
     assert any("not execution-authority approval" in stop_line for stop_line in authority_item["stopLines"])
+    ollama_item = next(item for item in export["reviewNavigator"] if item["itemId"] == "review-ollama-no-call-prep")
+    assert "GET /supervisor/disabled-provider-proofs" in ollama_item["relatedReports"]
+    assert "cancel_requested -> request_abort_recorded" in ollama_item["evidence"]
+    assert any("no provider/model calls" in stop_line for stop_line in ollama_item["stopLines"])
     assert before_events_response.json()["data"] == after_events_response.json()["data"]
     assert missing_response.status_code == 404
 

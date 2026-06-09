@@ -501,6 +501,11 @@ class DisabledProviderProofView(BaseModel):
     workerId: str
     providerLabel: str
     disabledReason: str
+    registryState: str = "disabled"
+    broadGateEnabled: bool = False
+    providerSpecificGateEnabled: bool = False
+    modelIdConfigured: bool = False
+    adapterReady: bool = False
     endpointFamily: str
     endpointPolicy: str
     httpCallsAttempted: bool = False
@@ -508,6 +513,15 @@ class DisabledProviderProofView(BaseModel):
     networkAccessAttempted: bool = False
     credentialAccessAttempted: bool = False
     redactionChecks: list[str] = Field(default_factory=list)
+    promptConstructionSources: list[str] = Field(default_factory=list)
+    rejectedPromptSources: list[str] = Field(default_factory=list)
+    retainedEvidenceClasses: list[str] = Field(default_factory=list)
+    rawPromptRetentionAllowed: bool = False
+    rawCompletionRetentionAllowed: bool = False
+    connectTimeoutSeconds: int | None = None
+    totalTimeoutSeconds: int | None = None
+    attemptStateMapping: list[str] = Field(default_factory=list)
+    retryPolicy: str = ""
     timeoutPolicy: str
     cancellationPolicy: str
     retentionPolicy: str

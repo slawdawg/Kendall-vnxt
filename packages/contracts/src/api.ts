@@ -447,6 +447,11 @@ export interface DisabledProviderProofView {
   workerId: string;
   providerLabel: string;
   disabledReason: string;
+  registryState: string;
+  broadGateEnabled: boolean;
+  providerSpecificGateEnabled: boolean;
+  modelIdConfigured: boolean;
+  adapterReady: boolean;
   endpointFamily: string;
   endpointPolicy: string;
   httpCallsAttempted: boolean;
@@ -454,6 +459,15 @@ export interface DisabledProviderProofView {
   networkAccessAttempted: boolean;
   credentialAccessAttempted: boolean;
   redactionChecks: string[];
+  promptConstructionSources: string[];
+  rejectedPromptSources: string[];
+  retainedEvidenceClasses: string[];
+  rawPromptRetentionAllowed: boolean;
+  rawCompletionRetentionAllowed: boolean;
+  connectTimeoutSeconds?: number | null;
+  totalTimeoutSeconds?: number | null;
+  attemptStateMapping: string[];
+  retryPolicy: string;
   timeoutPolicy: string;
   cancellationPolicy: string;
   retentionPolicy: string;

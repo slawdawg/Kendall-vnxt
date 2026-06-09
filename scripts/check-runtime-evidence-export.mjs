@@ -64,6 +64,16 @@ for (const itemId of ["review-runtime-state", "review-authority-boundary", "revi
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Runtime export must include navigator item ${itemId}`, failures);
   assertCondition(supervisorTests.includes(`"${itemId}"`), `Supervisor tests must assert navigator item ${itemId}`, failures);
 }
+assertCondition(
+  serviceSource.includes('itemId="review-ollama-no-call-prep"'),
+  "Runtime export must include Ollama no-call preparation navigator item",
+  failures,
+);
+assertCondition(
+  supervisorTests.includes('"review-ollama-no-call-prep"'),
+  "Supervisor tests must assert Ollama no-call preparation navigator item",
+  failures,
+);
 
 for (const story of [
   "docs/stories/2-7-runtime-evidence-export-strategy.md",
@@ -86,6 +96,9 @@ for (const story of [
   "docs/stories/3-60-safe-backlog-report-anchors.md",
   "docs/stories/3-61-maintenance-action-evidence-links.md",
   "docs/stories/3-62-maintenance-readiness-evidence-links.md",
+  "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
+  "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
+  "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing runtime export story evidence ${story}`, failures);
 }
@@ -114,7 +127,7 @@ for (const shortcutText of [
   assertCondition(reportShortcuts.includes(shortcutText), `Report shortcut helper must include ${shortcutText}`, failures);
 }
 
-for (const panelText of ["Review navigator", "Runtime state", "Authority boundary", "Git-backed evidence"]) {
+for (const panelText of ["Review navigator", "Runtime state", "Authority boundary", "Git-backed evidence", "Ollama no-call preparation"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert ${panelText}`, failures);
 }
 
@@ -143,7 +156,7 @@ assertCondition(
   failures,
 );
 
-for (const panelText of ["Review shortcuts", "3 shortcuts"]) {
+for (const panelText of ["Review shortcuts", "4 shortcuts"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert overview ${panelText}`, failures);
 }
 
