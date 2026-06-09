@@ -175,6 +175,12 @@ docs/handoffs/current.md
 
 The current handoff points at the active date-specific orientation file. It summarizes current commits, auth policy, BMAD/KNX requirements, safety gates, verification commands, and the connector-backed GitHub workflow expectation.
 
+For connector-backed PR inspection or creation, use:
+
+```text
+docs/github-connector-workflow.md
+```
+
 ## Acceptance Checklist
 
 Before doing product work on a fresh VM, complete:

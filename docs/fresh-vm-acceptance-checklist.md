@@ -41,6 +41,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 - No persistent `gh auth login --insecure-storage` token is kept.
 - If local `gh` is logged in, the operator intentionally approved that for a workflow that shells out to `gh`.
 - Codex GitHub connector/app can inspect the repository or recent PRs.
+- Connector probe result is recorded using `docs/github-connector-workflow.md`.
 
 ## Verification
 
@@ -63,6 +64,6 @@ Read docs/handoffs/current.md and continue from it. Use the repo state as source
 
 ## Acceptance Decision
 
-The VM is accepted only when local setup, remote proof, workspace check, GitHub connector inspection, and Codex orientation have all succeeded.
+The VM is accepted only when local setup, remote proof, workspace check, GitHub connector inspection, connector workflow orientation, and Codex orientation have all succeeded.
 
 If any item fails, keep the VM in setup/debug mode and do not start new product work from it yet.

@@ -144,10 +144,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -LocalO
 
 Local shell bootstrap cannot verify the Codex GitHub connector/app. In Codex, use the GitHub connector to list recent PRs or inspect the repository before relying on connector-backed PR automation.
 
+Use this workflow for the connector probe and PR handoff expectations:
+
+```text
+docs/github-connector-workflow.md
+```
+
 If the connector is unavailable, do not fall back to plaintext `gh` token storage. Either use Git/GCM for ordinary pushes or pause and ask the operator which GitHub path to use.
 
 ## Next Recommended Work
 
 Continue with bootstrap/readiness hardening only if a concrete gap appears from a fresh VM test.
 
-Otherwise, return to product work. The next likely product slice remains connector-backed GitHub workflow polish or the next explicit BMad story chosen by the operator.
+Otherwise, return to product work. Connector-backed GitHub workflow polish is captured in Story 3.4; the next product slice should be the next explicit BMad story chosen by the operator.
