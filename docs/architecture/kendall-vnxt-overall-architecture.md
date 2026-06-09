@@ -27,6 +27,7 @@ This architecture stitches together the current source of truth from:
 - `docs/architecture/kendall-vnxt-process-lifecycle-design-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-provider-disabled-fixtures-2026-06-08.md`
 - `docs/prds/local-provider-ollama-disabled-to-limited-execution.md`
+- `docs/prds/local-provider-ollama-prd-review-2026-06-08.md`
 - `_bmad/memory/knx/profile.md`
 - `_bmad/memory/knx/decisions/governance-coordinator-2026-06-01.md`
 - `_bmad/memory/knx/decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md`
@@ -262,6 +263,7 @@ The following architecture foundation is implemented or documented:
 - runtime evidence export references for readiness and boundary reports,
 - provider-specific disabled fixture policies,
 - draft Ollama local provider PRD,
+- Ollama PRD review and blocked story breakdown,
 - dashboard runtime evidence export access,
 - recovery/runtime boundary documentation.
 

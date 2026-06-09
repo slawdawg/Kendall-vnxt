@@ -68,6 +68,7 @@ The following work is safe to continue with conservative defaults:
 - process lifecycle design records,
 - provider-specific disabled fixture policies,
 - draft provider PRDs,
+- approval-gated provider story breakdowns,
 - dashboard runtime evidence export access,
 - reporting-only outcome evidence,
 - tests proving disabled defaults and no side effects,
@@ -75,7 +76,7 @@ The following work is safe to continue with conservative defaults:
 
 ## Next Architecture Stories
 
-1. Ollama PRD review and story breakdown only after explicit approval.
-2. Subscription-agent launch PRD.
+1. Subscription-agent launch PRD.
+2. Provider approval checkpoint before any Ollama execution story moves to ready.
 3. Provider PRD review loop.
 4. Dashboard evidence polish.

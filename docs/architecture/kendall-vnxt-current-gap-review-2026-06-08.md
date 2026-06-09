@@ -53,6 +53,7 @@ Do not rebuild these as new architecture work:
 - Runtime evidence export references for readiness and boundary reports.
 - Provider-specific disabled fixture policies.
 - Draft Ollama local provider PRD.
+- Ollama PRD review decisions and blocked implementation story breakdown.
 - Dashboard runtime evidence export access.
 
 ## Current Gaps
@@ -73,13 +74,13 @@ Risk: generic OpenAI-compatible assumptions could hide provider differences in e
 
 Recommendation: review the Ollama PRD, resolve open questions, then split it into implementation stories only if explicit approval is granted.
 
-### 3. Ollama PRD Review Loop
+### 3. Subscription-Agent Launch PRD
 
-The Ollama PRD is drafted, but it has not been reviewed, approved, or split into implementation stories.
+The process lifecycle design exists, but subscription-agent launch has not been converted into a PRD.
 
-Risk: implementation could begin before open questions about provider-specific settings, default model, retention size, and summarization policy are resolved.
+Risk: future launch work could begin from lifecycle notes without a product-level approval boundary.
 
-Recommendation: review the PRD explicitly and produce implementation stories only after approval.
+Recommendation: draft launch requirements from the process lifecycle design while keeping launch disabled.
 
 ## Recommended Build Order
 
@@ -95,15 +96,15 @@ Recommendation: review the PRD explicitly and produce implementation stories onl
 
 ## Recommended Immediate Story
 
-Title: Ollama PRD Review And Story Breakdown
+Title: Subscription-Agent Launch PRD
 
-Goal: Resolve the Ollama PRD open questions and split approved implementation work into small safety-gated stories.
+Goal: Draft subscription-agent launch requirements from the process lifecycle design before any launch implementation.
 
 Acceptance outline:
 
-- Confirm whether Ollama remains the first local provider target.
-- Resolve provider-specific setting, default model, retention, and summarization questions.
-- Create implementation stories only if explicit approval is granted.
+- Define launch target scope and non-goals.
+- Define approval binding, process lifecycle, workspace, output, session, cancellation, timeout, rollback, and dashboard requirements.
+- Keep launch implementation and process execution disabled.
 - Keep all current execution authority disabled.
 
 ## Stop Conditions
