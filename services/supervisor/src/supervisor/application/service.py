@@ -36,6 +36,8 @@ from supervisor.api.schemas import (
     LocalEvidencePacketView,
     LocalReadonlyWorkerPreviewView,
     ManagedRecipePolicyReportView,
+    MaintenanceActionPlanReportView,
+    MaintenanceActionPlanStepView,
     MaintenanceReadinessReportView,
     MaintenanceReadinessTrackView,
     OperatorViewCreate,
@@ -546,6 +548,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-maintenance-action-plan",
+                label="Maintenance action plan drift",
+                command="pnpm run check:maintenance-action-plan",
+                status="required",
+                requiredFor=["maintenance action plan changes", "safe backlog changes", "controls-page report changes"],
+                evidence=[
+                    "Validates maintenance action plan contracts, schemas, API route, service steps, dashboard rendering, report anchors, runtime evidence, browser assertions, and story evidence stay aligned.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-delivery-readiness",
                 label="Delivery readiness policy drift",
                 command="pnpm run check:delivery-readiness",
@@ -935,6 +948,15 @@ class SupervisorService:
                 relatedDocs=["docs/stories/3-19-maintenance-readiness-report.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="maintenance-action-plan-report-v1",
+                label="Maintenance action plan report",
+                endpoint="GET /supervisor/maintenance-action-plan-report",
+                status="active",
+                summary="Consolidates the next safe maintenance actions, verification chain, evidence links, and authority stop lines into one operator plan.",
+                evidenceScope=["maintenance action steps", "verification chain", "dashboard anchors", "authority stop lines"],
+                relatedDocs=["docs/stories/3-52-maintenance-action-plan-report.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="safe-development-backlog-report-v1",
                 label="Safe development backlog report",
                 endpoint="GET /supervisor/safe-development-backlog",
@@ -1026,6 +1048,139 @@ class SupervisorService:
                 "Use the catalog before reviewing work that touches execution authority, verification, or report surfaces.",
                 "Keep report endpoints, dashboard panels, and runtime evidence export references aligned.",
                 "Add new read-only reports to this catalog before relying on them in operator workflows.",
+            ],
+        )
+
+    def get_maintenance_action_plan_report(self) -> MaintenanceActionPlanReportView:
+        maintenance = self.get_maintenance_readiness_report()
+        backlog = self.get_safe_development_backlog_report()
+        verification = self.get_verification_readiness_report()
+        catalog = self.get_supervisor_report_catalog()
+
+        verification_chain = [command.command for command in verification.requiredCommands]
+        ready_backlog_items = [item for item in backlog.items if item.status == "ready"]
+        blocked_backlog_items = [item for item in backlog.items if "blocked" in item.status]
+        active_report_count = sum(1 for report in catalog.reports if report.status == "active")
+
+        steps = [
+            MaintenanceActionPlanStepView(
+                stepId="select-large-safe-slice",
+                label="Select a larger safe slice",
+                priority="P0",
+                status="ready",
+                summary="Use safe backlog and maintenance readiness evidence to select one coherent API, dashboard, docs, tests, and drift-check slice.",
+                evidence=[
+                    f"{len(ready_backlog_items)} ready safe backlog items are available.",
+                    "Safe backlog guidance prefers larger coherent slices over many small PRs.",
+                    "Maintenance readiness tracks documentation, verification, report alignment, and blocked authority posture.",
+                ],
+                verificationCommands=["pnpm run check:safe-backlog", "pnpm run check:maintenance-readiness"],
+                relatedReports=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/maintenance-readiness-report",
+                ],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md",
+                    "docs/stories/3-27-safe-development-backlog-report.md",
+                    "docs/stories/3-19-maintenance-readiness-report.md",
+                ],
+                dashboardAnchors=["/controls#safe-development-backlog", "/controls#maintenance-readiness-report"],
+                nextAction="Start with one ready safe backlog item and include all related contracts, service, dashboard, docs, tests, and drift checks in one PR.",
+            ),
+            MaintenanceActionPlanStepView(
+                stepId="verify-evidence-surfaces",
+                label="Verify evidence surfaces",
+                priority="P0",
+                status="ready",
+                summary="Keep supervisor reports, runtime evidence exports, and dashboard anchors aligned before relying on a surface for operator review.",
+                evidence=[
+                    f"{active_report_count} active supervisor reports are cataloged.",
+                    "Runtime evidence exports include related supervisor reports and git-backed evidence.",
+                    "Controls page report anchors provide stable navigation for review.",
+                ],
+                verificationCommands=["pnpm run check:reports", "pnpm run check:runtime-export", "pnpm run test:e2e:dashboard:controls"],
+                relatedReports=[
+                    "GET /supervisor/report-catalog",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/verification-readiness-report",
+                ],
+                relatedDocs=[
+                    "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
+                    "docs/stories/3-31-runtime-evidence-export-drift-check.md",
+                    "docs/stories/3-40-runtime-report-anchor-links.md",
+                ],
+                dashboardAnchors=["/controls#supervisor-report-catalog", "/controls#verification-readiness-report"],
+                nextAction="When an evidence surface changes, update report catalog entries, runtime export references, dashboard links, and browser assertions together.",
+            ),
+            MaintenanceActionPlanStepView(
+                stepId="run-verification-chain",
+                label="Run verification chain",
+                priority="P1",
+                status="ready",
+                summary="Use focused checks first, then the full local verification command before delivery.",
+                evidence=[
+                    f"{len(verification.requiredCommands)} required verification commands are listed.",
+                    "Verification readiness report includes command-specific requiredFor and evidence guidance.",
+                    "Full verification remains local and does not approve provider calls or process launch.",
+                ],
+                verificationCommands=["pnpm run check:verification-readiness", "pnpm run check"],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/dashboard-e2e-report",
+                ],
+                relatedDocs=[
+                    "docs/stories/3-16-verification-readiness-report.md",
+                    "docs/stories/3-22-dashboard-e2e-report.md",
+                ],
+                dashboardAnchors=["/controls#verification-readiness-report", "/controls#dashboard-e2e-report"],
+                nextAction="Run focused checks matching the changed surfaces, then `pnpm run check` before commit.",
+            ),
+            MaintenanceActionPlanStepView(
+                stepId="preserve-authority-stop-lines",
+                label="Preserve authority stop lines",
+                priority="P0",
+                status="blocked_pending_explicit_approval",
+                summary="Keep provider execution, process launch, premium execution, commands, network, source mutation, and credential access outside maintenance work.",
+                evidence=[
+                    f"{len(blocked_backlog_items)} safe backlog items remain blocked pending explicit approval.",
+                    "Ollama stories 4.1-4.4 remain blocked.",
+                    "Subscription-agent stories 5.1-5.5 remain blocked.",
+                ],
+                verificationCommands=["pnpm run check:docs", "pnpm run check:execution-boundary", "pnpm run check:process-lifecycle"],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/execution-readiness-report",
+                    "GET /supervisor/maintenance-readiness-report",
+                ],
+                relatedDocs=[
+                    "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+                    "docs/stories/index.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#documentation-authority-report",
+                    "/controls#execution-readiness-report",
+                    "/controls#maintenance-readiness-report",
+                ],
+                nextAction="Do not move blocked authority stories into implementation from generic continuation or maintenance language.",
+            ),
+        ]
+
+        return MaintenanceActionPlanReportView(
+            reportId="maintenance-action-plan-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary="Read-only operator plan for choosing, verifying, and delivering larger safe maintenance slices while authority work remains blocked.",
+            steps=steps,
+            verificationChain=verification_chain,
+            stopLines=[
+                "Maintenance action plans are not execution-authority approvals.",
+                "Do not launch subscription-agent processes from this plan.",
+                "Do not call local or remote model/provider endpoints from this plan.",
+                "Do not enable premium execution, arbitrary worker commands, source mutation, network access, or credential access from this plan.",
+            ],
+            nextSafeActions=[
+                "Use this report to choose the next larger coherent safe slice.",
+                "Keep report catalog, runtime export, dashboard anchors, story evidence, and drift checks aligned.",
+                "Record completed work as one PR when the related surfaces form one reviewable unit.",
             ],
         )
 
@@ -1778,6 +1933,7 @@ class SupervisorService:
             "GET /supervisor/dashboard-e2e-report",
             "GET /supervisor/report-catalog",
             "GET /supervisor/maintenance-readiness-report",
+            "GET /supervisor/maintenance-action-plan-report",
             "GET /supervisor/safe-development-backlog",
             "GET /supervisor/managed-recipe-policy-report",
             "GET /supervisor/github-workflow-policy-report",
@@ -1796,6 +1952,7 @@ class SupervisorService:
             "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
             "docs/stories/3-18-supervisor-report-catalog.md",
             "docs/stories/3-19-maintenance-readiness-report.md",
+            "docs/stories/3-52-maintenance-action-plan-report.md",
             "docs/stories/3-20-runtime-evidence-review-manifest.md",
             "docs/stories/3-21-dashboard-detail-e2e-runner.md",
             "docs/stories/3-22-dashboard-e2e-report.md",
@@ -1941,7 +2098,11 @@ class SupervisorService:
                         "Runtime evidence review manifest and navigator stories are included in the evidence trail.",
                         "Source references point to supervisor API/service and shared contracts.",
                     ],
-                    relatedReports=["GET /supervisor/report-catalog", "GET /supervisor/safe-development-backlog"],
+                    relatedReports=[
+                        "GET /supervisor/report-catalog",
+                        "GET /supervisor/maintenance-action-plan-report",
+                        "GET /supervisor/safe-development-backlog",
+                    ],
                     relatedDocs=[
                         "docs/stories/3-20-runtime-evidence-review-manifest.md",
                         "docs/stories/3-30-runtime-evidence-review-navigator.md",

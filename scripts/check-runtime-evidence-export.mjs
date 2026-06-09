@@ -74,6 +74,7 @@ for (const story of [
   "docs/stories/3-49-execution-evidence-boundary-drift-check.md",
   "docs/stories/3-50-provider-fixture-policy-drift-check.md",
   "docs/stories/3-51-process-lifecycle-policy-drift-check.md",
+  "docs/stories/3-52-maintenance-action-plan-report.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing runtime export story evidence ${story}`, failures);
 }
@@ -90,6 +91,7 @@ for (const shortcutText of [
   "reportAnchorByEndpoint",
   "reportShortcutHref",
   "#execution-readiness-report",
+  "#maintenance-action-plan-report",
   "#safe-development-backlog",
   "#github-workflow-policy-report",
   "#delivery-readiness-policy-report",
@@ -105,6 +107,12 @@ for (const panelText of ["Review navigator", "Runtime state", "Authority boundar
 for (const panelText of ["/controls#execution-readiness-report", "/controls#safe-development-backlog"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert related report link ${panelText}`, failures);
 }
+
+assertCondition(
+  serviceSource.includes("GET /supervisor/maintenance-action-plan-report"),
+  "Runtime evidence export related reports must include maintenance action plan report",
+  failures,
+);
 
 for (const panelText of ["Review shortcuts", "3 shortcuts"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert overview ${panelText}`, failures);
@@ -183,6 +191,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-51-process-lifecycle-policy-drift-check.md"),
   "Story index must reference Story 3.51 process lifecycle policy drift check",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-52-maintenance-action-plan-report.md"),
+  "Story index must reference Story 3.52 maintenance action plan report",
   failures,
 );
 

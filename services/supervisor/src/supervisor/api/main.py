@@ -484,6 +484,11 @@ async def get_maintenance_readiness_report():
     return ApiEnvelope(data=service.get_maintenance_readiness_report())
 
 
+@app.get("/supervisor/maintenance-action-plan-report", response_model=ApiEnvelope)
+async def get_maintenance_action_plan_report():
+    return ApiEnvelope(data=service.get_maintenance_action_plan_report())
+
+
 @app.get("/supervisor/safe-development-backlog", response_model=ApiEnvelope)
 async def get_safe_development_backlog_report():
     return ApiEnvelope(data=service.get_safe_development_backlog_report())

@@ -773,6 +773,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-runtime-export",
         "check-safe-backlog",
         "check-managed-recipes",
+        "check-maintenance-action-plan",
         "check-delivery-readiness",
         "check-maintenance-readiness",
         "dashboard-build",
@@ -825,6 +826,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/verification-readiness-report",
         "GET /supervisor/dashboard-e2e-report",
         "GET /supervisor/maintenance-readiness-report",
+        "GET /supervisor/maintenance-action-plan-report",
         "GET /supervisor/safe-development-backlog",
         "GET /supervisor/managed-recipe-policy-report",
         "GET /supervisor/github-workflow-policy-report",
@@ -926,6 +928,48 @@ def test_maintenance_readiness_report_tracks_safe_work_without_mutation(tmp_path
     assert "GET /supervisor/dashboard-e2e-report" in verification_track["relatedReports"]
     assert any("must not approve local provider/model calls" in stop_line for stop_line in report["stopLines"])
     assert any("coherent PRs" in action for action in report["nextSafeActions"])
+
+
+def test_maintenance_action_plan_report_consolidates_next_safe_steps_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "maintenance-action-plan-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/maintenance-action-plan-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "maintenance-action-plan-report-v1"
+    assert report["readOnly"] is True
+    assert report["executionAuthorityApproved"] is False
+    assert {step["stepId"] for step in report["steps"]} == {
+        "select-large-safe-slice",
+        "verify-evidence-surfaces",
+        "run-verification-chain",
+        "preserve-authority-stop-lines",
+    }
+    safe_slice_step = next(step for step in report["steps"] if step["stepId"] == "select-large-safe-slice")
+    assert safe_slice_step["priority"] == "P0"
+    assert safe_slice_step["status"] == "ready"
+    assert "pnpm run check:safe-backlog" in safe_slice_step["verificationCommands"]
+    assert "/controls#safe-development-backlog" in safe_slice_step["dashboardAnchors"]
+    authority_step = next(step for step in report["steps"] if step["stepId"] == "preserve-authority-stop-lines")
+    assert authority_step["status"] == "blocked_pending_explicit_approval"
+    assert "pnpm run check:process-lifecycle" in authority_step["verificationCommands"]
+    assert "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md" in authority_step["relatedDocs"]
+    assert "pnpm run check" in report["verificationChain"]
+    assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
+    assert any("one PR" in action for action in report["nextSafeActions"])
 
 
 def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_mutation(tmp_path, monkeypatch) -> None:
@@ -1811,12 +1855,14 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-49-execution-evidence-boundary-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-50-provider-fixture-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-51-process-lifecycle-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/3-52-maintenance-action-plan-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/dashboard-e2e-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/report-catalog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/maintenance-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/maintenance-action-plan-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/safe-development-backlog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/managed-recipe-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/github-workflow-policy-report" in export["boundary"]["relatedSupervisorReports"]
