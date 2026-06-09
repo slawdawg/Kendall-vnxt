@@ -1,7 +1,7 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, and development runway readiness-check coverage through Story 3.59
+Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, and safe backlog report-anchor coverage through Story 3.60
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -75,6 +75,7 @@ Do not rebuild these as new architecture work:
 - Supervisor report catalog for read-only evidence navigation.
 - Maintenance readiness report for safe repo hygiene while authority stories remain blocked.
 - Safe development backlog report for selecting larger coherent safe slices while authority stories remain blocked.
+- Safe backlog report anchors for jumping from backlog items to supporting controls-page report evidence.
 - Runtime evidence review manifest for export counts, retention notes, and stop lines.
 - Runtime evidence review navigator for runtime state, authority boundary, and git-backed evidence shortcuts.
 - Runtime evidence export drift checking for contracts, schemas, navigator items, dashboard rendering, and story evidence.

@@ -661,6 +661,7 @@ export interface SafeDevelopmentBacklogItemView {
   evidence: string[];
   relatedReports: string[];
   relatedDocs: string[];
+  dashboardAnchors: string[];
   blockedBy: string[];
   nextAction: string;
 }

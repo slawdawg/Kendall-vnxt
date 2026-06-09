@@ -1,4 +1,6 @@
 import type { SafeDevelopmentBacklogItemView, SafeDevelopmentBacklogReportView } from "@kendall/contracts";
+import Link from "next/link";
+import { reportShortcutHref } from "../lib/report-shortcuts";
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
@@ -36,9 +38,27 @@ function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
           ))}
         </div>
       ) : null}
-      <p className="mt-3 break-words rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
-        {item.relatedReports.join(" | ")}
-      </p>
+      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related report links</p>
+        <div className="mt-2 grid gap-2">
+          {item.relatedReports.map((report) => (
+            <Link
+              key={report}
+              href={reportShortcutHref(report)}
+              className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              {report}
+            </Link>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {item.dashboardAnchors.map((anchor) => (
+          <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
+            {anchor}
+          </Link>
+        ))}
+      </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{item.nextAction}</p>
     </article>
   );

@@ -290,6 +290,12 @@ test.describe("dashboard workflow coverage", () => {
     await expect(safeBacklogPanel.getByText("Large-slice development map")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Report-aligned backlog governance")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Verification surface hardening")).toBeVisible();
+    await expect(safeBacklogPanel.getByText("Related report links").first()).toBeVisible();
+    await expect(safeBacklogPanel.getByRole("link", { name: "GET /supervisor/maintenance-readiness-report" }).first()).toHaveAttribute(
+      "href",
+      "/controls#maintenance-readiness-report",
+    );
+    await expect(safeBacklogPanel.getByRole("link", { name: "/controls#github-workflow-policy-report" })).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "GitHub delivery hygiene" })).toBeVisible();
     await expect(safeBacklogPanel.getByText("persistent plaintext gh token storage")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();

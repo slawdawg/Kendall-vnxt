@@ -1214,6 +1214,8 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert blocked_item["recommendedSliceSize"] == "do_not_start"
     assert "explicit operator approval naming authority and scope" in blocked_item["blockedBy"]
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
+    assert "/controls#verification-readiness-report" in verification_item["dashboardAnchors"]
+    assert "/controls#development-runway-report" in verification_item["dashboardAnchors"]
     assert "docs/stories/3-32-safe-development-backlog-drift-check.md" in verification_item["relatedDocs"]
     assert "docs/stories/3-35-runbook-check-chain-hardening.md" in verification_item["relatedDocs"]
     assert "docs/stories/3-37-managed-recipe-policy-drift-check.md" in verification_item["relatedDocs"]
@@ -1224,15 +1226,19 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert github_item["recommendedSliceSize"] == "large"
     assert "GET /supervisor/github-workflow-policy-report" in github_item["relatedReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in github_item["relatedReports"]
+    assert "/controls#github-workflow-policy-report" in github_item["dashboardAnchors"]
+    assert "/controls#delivery-readiness-policy-report" in github_item["dashboardAnchors"]
     assert "docs/stories/3-42-github-workflow-policy-report.md" in github_item["relatedDocs"]
     assert "docs/stories/3-43-safe-delivery-hygiene.md" in github_item["relatedDocs"]
     assert "docs/stories/3-44-delivery-readiness-policy-report.md" in github_item["relatedDocs"]
     assert any("plaintext gh token" in evidence for evidence in github_item["evidence"])
     evidence_item = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish")
+    assert "/controls#supervisor-report-catalog" in evidence_item["dashboardAnchors"]
     assert "docs/stories/3-33-evidence-overview-review-shortcuts.md" in evidence_item["relatedDocs"]
     assert "docs/stories/3-34-report-shortcuts-in-evidence-overview.md" in evidence_item["relatedDocs"]
     assert "docs/stories/3-39-report-shortcut-anchor-polish.md" in evidence_item["relatedDocs"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
+    assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("large enough" in action for action in report["nextSafeActions"])
     assert any("GitHub delivery hygiene" in action for action in report["nextSafeActions"])
