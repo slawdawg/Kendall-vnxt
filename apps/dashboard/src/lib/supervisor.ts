@@ -2,6 +2,7 @@ import type {
   ApiEnvelope,
   ExecutionAttemptView,
   ExecutionReadinessReportView,
+  RuntimeEvidenceExportView,
   RoutingLaneEvidenceProfileView,
   RoutingPreviewView,
   RunStatusView,
@@ -61,6 +62,10 @@ export async function getWorkItemEvents(id: string): Promise<WorkflowEventView[]
 
 export async function getExecutionAttempts(workItemId: string): Promise<ExecutionAttemptView[]> {
   return requestJson<ExecutionAttemptView[]>(`/work-items/${workItemId}/execution-attempts`);
+}
+
+export async function getRuntimeEvidenceExport(workItemId: string): Promise<RuntimeEvidenceExportView> {
+  return requestJson<RuntimeEvidenceExportView>(`/work-items/${workItemId}/runtime-evidence-export`);
 }
 
 export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView[]> {

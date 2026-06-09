@@ -374,6 +374,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(attemptPanel.getByText("Commands: disabled")).toBeVisible();
     await expect(attemptPanel.getByText("Credentials: disabled")).toBeVisible();
     await expect(attemptPanel.getByText("_bmad-output/execution-attempts")).toBeVisible();
+
+    await page.getByRole("link", { name: "Export" }).click();
+    await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#runtime-evidence-export$`));
+
+    const exportPanel = page.locator("#runtime-evidence-export");
+    await expect(exportPanel).toBeInViewport();
+    await expect(exportPanel.getByText("Evidence package")).toBeVisible();
+    await expect(exportPanel.getByText("Safety flags")).toBeVisible();
+    await expect(exportPanel.getByText("Provider calls: disabled")).toBeVisible();
+    await expect(exportPanel.getByText("Related reports")).toBeVisible();
+    await expect(exportPanel.getByText("GET /supervisor/execution-readiness-report")).toBeVisible();
   });
 
   test("shows delivery readiness controls for managed recipe work", async ({ page, request }) => {

@@ -53,6 +53,7 @@ Do not rebuild these as new architecture work:
 - Runtime evidence export references for readiness and boundary reports.
 - Provider-specific disabled fixture policies.
 - Draft Ollama local provider PRD.
+- Dashboard runtime evidence export access.
 
 ## Current Gaps
 
@@ -72,13 +73,13 @@ Risk: generic OpenAI-compatible assumptions could hide provider differences in e
 
 Recommendation: review the Ollama PRD, resolve open questions, then split it into implementation stories only if explicit approval is granted.
 
-### 3. Runtime Evidence Export Dashboard Access
+### 3. Ollama PRD Review Loop
 
-Runtime exports include readiness and boundary report references, but the dashboard does not yet provide an operator shortcut to exports.
+The Ollama PRD is drafted, but it has not been reviewed, approved, or split into implementation stories.
 
-Risk: useful evidence exists but remains API-only during operator review.
+Risk: implementation could begin before open questions about provider-specific settings, default model, retention size, and summarization policy are resolved.
 
-Recommendation: add dashboard access or summaries for runtime exports without adding execution controls.
+Recommendation: review the PRD explicitly and produce implementation stories only after approval.
 
 ## Recommended Build Order
 
@@ -94,15 +95,15 @@ Recommendation: add dashboard access or summaries for runtime exports without ad
 
 ## Recommended Immediate Story
 
-Title: Runtime Evidence Export Dashboard Access
+Title: Ollama PRD Review And Story Breakdown
 
-Goal: Add dashboard access to existing runtime evidence exports so operators can inspect readiness, boundary, attempt, and event evidence from the work-item surface.
+Goal: Resolve the Ollama PRD open questions and split approved implementation work into small safety-gated stories.
 
 Acceptance outline:
 
-- Add a read-only dashboard control or link for runtime evidence export.
-- Display export safety flags and related supervisor report references.
-- Do not add execution controls or provider enablement controls.
+- Confirm whether Ollama remains the first local provider target.
+- Resolve provider-specific setting, default model, retention, and summarization questions.
+- Create implementation stories only if explicit approval is granted.
 - Keep all current execution authority disabled.
 
 ## Stop Conditions

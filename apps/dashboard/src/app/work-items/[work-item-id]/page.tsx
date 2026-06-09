@@ -7,12 +7,21 @@ import { ExecutionAttemptEvidencePanel } from "../../../components/execution-att
 import { ExecutionRecipePanel } from "../../../components/execution-recipe-panel";
 import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
 import { RoutingPreviewPanel } from "../../../components/routing-preview-panel";
+import { RuntimeEvidenceExportPanel } from "../../../components/runtime-evidence-export-panel";
 import { Shell } from "../../../components/shell";
 import { WorkItemActions } from "../../../components/work-item-actions";
 import { WorkItemHistory } from "../../../components/work-item-history";
 import { WorkItemRetryHistory } from "../../../components/work-item-retry-history";
 import { buildNavStats } from "../../../lib/nav-stats";
-import { getExecutionAttempts, getRecipeGateAudit, getRoutingPreview, getWorkItem, getWorkItemEvents, getWorkItems } from "../../../lib/supervisor";
+import {
+  getExecutionAttempts,
+  getRecipeGateAudit,
+  getRoutingPreview,
+  getRuntimeEvidenceExport,
+  getWorkItem,
+  getWorkItemEvents,
+  getWorkItems,
+} from "../../../lib/supervisor";
 import { formatLane, formatWorkflowState } from "../../../lib/workflow-display";
 
 export default async function WorkItemDetailPage({
@@ -21,12 +30,13 @@ export default async function WorkItemDetailPage({
   params: Promise<{ "work-item-id": string }>;
 }) {
   const { "work-item-id": workItemId } = await params;
-  const [item, events, items, routingPreview, executionAttempts] = await Promise.all([
+  const [item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport] = await Promise.all([
     getWorkItem(workItemId),
     getWorkItemEvents(workItemId),
     getWorkItems(),
     getRoutingPreview(workItemId),
     getExecutionAttempts(workItemId),
+    getRuntimeEvidenceExport(workItemId),
   ]);
   const recipeGateAudit = item.executionRecipe ? await getRecipeGateAudit(workItemId) : null;
   const metadata = item.metadata ?? {};
@@ -127,6 +137,12 @@ export default async function WorkItemDetailPage({
               Attempts
             </a>
             <a
+              href="#runtime-evidence-export"
+              className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Export
+            </a>
+            <a
               href="#workflow-history"
               className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
@@ -153,6 +169,7 @@ export default async function WorkItemDetailPage({
           ) : null}
           <RoutingPreviewPanel preview={routingPreview} />
           <ExecutionAttemptEvidencePanel attempts={executionAttempts} />
+          <RuntimeEvidenceExportPanel exportView={runtimeEvidenceExport} />
           {item.executionRecipe ? <ExecutionRecipePanel recipe={item.executionRecipe} /> : null}
           {item.executionRecipe ? (
             <BranchPreparationPanel
