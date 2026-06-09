@@ -1979,6 +1979,11 @@ class SupervisorService:
                     "docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md",
                     "docs/stories/3-27-safe-development-backlog-report.md",
                 ],
+                dashboardAnchors=[
+                    "/controls#maintenance-readiness-report",
+                    "/controls#supervisor-report-catalog",
+                    "/controls#verification-readiness-report",
+                ],
                 nextAction="Batch future maintenance work into coherent report/API/dashboard/docs/test slices.",
             ),
             SafeDevelopmentBacklogItemView(
@@ -2010,6 +2015,12 @@ class SupervisorService:
                     "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
                     "docs/stories/3-46-maintenance-readiness-drift-check.md",
                 ],
+                dashboardAnchors=[
+                    "/controls#verification-readiness-report",
+                    "/controls#dashboard-e2e-report",
+                    "/controls#supervisor-report-catalog",
+                    "/controls#development-runway-report",
+                ],
                 nextAction="Add or extend static drift checks in larger coherent PR slices whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
             ),
             SafeDevelopmentBacklogItemView(
@@ -2036,6 +2047,13 @@ class SupervisorService:
                     "docs/stories/3-42-github-workflow-policy-report.md",
                     "docs/stories/3-43-safe-delivery-hygiene.md",
                     "docs/stories/3-44-delivery-readiness-policy-report.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#github-workflow-policy-report",
+                    "/controls#delivery-readiness-policy-report",
+                    "/controls#supervisor-report-catalog",
+                    "/controls#verification-readiness-report",
+                    "/controls#managed-recipe-policy-report",
                 ],
                 nextAction="Before remote delivery changes, confirm Git/GCM or connector posture and keep the PR scoped as one larger coherent work package.",
             ),
@@ -2067,6 +2085,13 @@ class SupervisorService:
                     "docs/stories/3-39-report-shortcut-anchor-polish.md",
                     "docs/stories/3-36-managed-recipe-policy-report.md",
                 ],
+                dashboardAnchors=[
+                    "/controls#supervisor-report-catalog",
+                    "/controls#documentation-authority-report",
+                    "/controls#maintenance-readiness-report",
+                    "/controls#managed-recipe-policy-report",
+                    "/controls#delivery-readiness-policy-report",
+                ],
                 nextAction="Prefer review shortcuts that reduce operator navigation across existing read-only evidence.",
             ),
             SafeDevelopmentBacklogItemView(
@@ -2088,6 +2113,11 @@ class SupervisorService:
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
                     "docs/stories/index.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#documentation-authority-report",
+                    "/controls#execution-readiness-report",
+                    "/controls#authority-readiness-matrix-report",
                 ],
                 blockedBy=[
                     "explicit operator approval naming authority and scope",
@@ -2727,6 +2757,7 @@ class SupervisorService:
             "docs/stories/3-27-safe-development-backlog-report.md",
             "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
             "docs/stories/3-29-runbook-verification-alignment.md",
+            "docs/stories/3-60-safe-backlog-report-anchors.md",
             "docs/stories/3-30-runtime-evidence-review-navigator.md",
             "docs/stories/3-31-runtime-evidence-export-drift-check.md",
             "docs/stories/3-32-safe-development-backlog-drift-check.md",

@@ -26,6 +26,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `3-60-safe-backlog-report-anchors.md` | Safe backlog related-report links and dashboard anchors for faster read-only evidence navigation. |
 | `3-59-development-runway-readiness-checks.md` | Development runway per-slice readiness checks for ready and blocked larger PR slice selection. |
 | `3-58-verification-handoff-checkpoints.md` | Verification readiness handoff checkpoints for local delivery, dashboard changes, fresh-VM setup, and authority-boundary gates. |
 | `3-57-work-item-review-queue-shortcuts.md` | Work-item evidence overview shortcuts for runtime evidence review queue position, evidence counts, recommended action, and controls-page review index navigation. |

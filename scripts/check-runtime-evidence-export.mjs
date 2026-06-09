@@ -80,6 +80,7 @@ for (const story of [
   "docs/stories/3-55-runtime-evidence-review-index.md",
   "docs/stories/3-57-work-item-review-queue-shortcuts.md",
   "docs/stories/3-59-development-runway-readiness-checks.md",
+  "docs/stories/3-60-safe-backlog-report-anchors.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing runtime export story evidence ${story}`, failures);
 }
@@ -244,6 +245,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-59-development-runway-readiness-checks.md"),
   "Story index must reference Story 3.59 development runway readiness checks",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("3-60-safe-backlog-report-anchors.md"),
+  "Story index must reference Story 3.60 safe backlog report anchors",
   failures,
 );
 

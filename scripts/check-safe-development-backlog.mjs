@@ -87,13 +87,15 @@ for (const safetyText of [
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
 
-for (const panelText of ["recommendedSliceSize", "blockedBy", "nextSafeActions", "stopLines"]) {
+for (const panelText of ["recommendedSliceSize", "blockedBy", "dashboardAnchors", "reportShortcutHref", "Related report links", "nextSafeActions", "stopLines"]) {
   assertCondition(backlogPanel.includes(panelText), `Safe backlog panel must render ${panelText}`, failures);
 }
 
 for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
+  "Related report links",
+  "/controls#github-workflow-policy-report",
   "Verification surface hardening",
   "GitHub delivery hygiene",
   "persistent plaintext gh token storage",
@@ -116,6 +118,8 @@ assertCondition(
 
 const storyPath = "docs/stories/3-32-safe-development-backlog-drift-check.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing safe backlog drift story ${storyPath}`, failures);
+const anchorStoryPath = "docs/stories/3-60-safe-backlog-report-anchors.md";
+assertCondition(existsSync(join(rootDir, anchorStoryPath)), `Missing safe backlog report anchor story ${anchorStoryPath}`, failures);
 const deliveryStoryPath = "docs/stories/3-43-safe-delivery-hygiene.md";
 assertCondition(existsSync(join(rootDir, deliveryStoryPath)), `Missing safe delivery hygiene story ${deliveryStoryPath}`, failures);
 assertCondition(
@@ -129,8 +133,13 @@ assertCondition(
   failures,
 );
 assertCondition(
-  reconciliation.includes("Safe development backlog drift check"),
-  "Implementation reconciliation must track the safe development backlog drift check",
+  storyIndex.includes("3-60-safe-backlog-report-anchors.md"),
+  "Story index must reference Story 3.60 safe backlog report anchors",
+  failures,
+);
+assertCondition(
+  reconciliation.includes("Safe development backlog drift check") && reconciliation.includes("Safe backlog report anchors"),
+  "Implementation reconciliation must track the safe development backlog drift check and report anchors",
   failures,
 );
 assertCondition(
@@ -159,6 +168,11 @@ assertCondition(
   failures,
 );
 assertCondition(
+  serviceSource.includes("docs/stories/3-60-safe-backlog-report-anchors.md"),
+  "Runtime evidence export git-backed evidence must include Story 3.60",
+  failures,
+);
+assertCondition(
   serviceSource.includes("GET /supervisor/github-workflow-policy-report"),
   "Safe backlog must reference the GitHub workflow policy report",
   failures,
@@ -166,6 +180,13 @@ assertCondition(
 assertCondition(
   serviceSource.includes("GET /supervisor/delivery-readiness-policy-report"),
   "Safe backlog must reference the delivery readiness policy report",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("/controls#github-workflow-policy-report") &&
+    serviceSource.includes("/controls#delivery-readiness-policy-report") &&
+    serviceSource.includes("/controls#development-runway-report"),
+  "Safe backlog service must include dashboard anchors for related reports",
   failures,
 );
 assertCondition(

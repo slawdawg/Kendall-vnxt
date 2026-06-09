@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, and development runway readiness-check coverage through Story 3.59
+Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, and safe backlog report-anchor coverage through Story 3.60
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -24,6 +24,7 @@ Source review artifacts:
 - `docs/stories/3-57-work-item-review-queue-shortcuts.md`
 - `docs/stories/3-58-verification-handoff-checkpoints.md`
 - `docs/stories/3-59-development-runway-readiness-checks.md`
+- `docs/stories/3-60-safe-backlog-report-anchors.md`
 
 Implementation areas checked:
 
@@ -133,6 +134,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Managed recipe policy drift check | Implemented | `pnpm run check:managed-recipes`, Story 3.37 | Keeps managed recipe policy contracts, schemas, API route, service construction, dashboard rendering, browser assertions, tests, and story evidence aligned. |
 | Dashboard e2e report drift check | Implemented | `pnpm run check:e2e-report`, `scripts/run-supervisor-tests.mjs`, Story 3.26 | Keeps package scripts, supervisor reports, browser assertions, story references, and repo-local supervisor test cache posture aligned for verification changes. |
 | Safe development backlog report | Implemented | `GET /supervisor/safe-development-backlog`, `SafeDevelopmentBacklogPanel`, Story 3.27 | Prioritizes larger safe maintenance/report/verification slices while keeping execution-authority work blocked. |
+| Safe backlog report anchors | Implemented | `SafeDevelopmentBacklogItemView.dashboardAnchors`, Story 3.60 | Links safe backlog items to supporting controls-page report evidence without adding execution controls. |
 | Supervisor report catalog drift check | Implemented | `pnpm run check:reports`, Story 3.28 | Keeps report catalog entries, API routes, runtime export references, dashboard fetches, browser assertions, and story evidence aligned. |
 | Runbook verification alignment | Implemented | `pnpm run check:runbooks`, Story 3.29 | Keeps README, fresh VM checklist, bootstrap guide, and current handoff language aligned with the active verification chain. |
 | Runbook check-chain hardening | Implemented | `pnpm run check:runbooks`, Story 3.35 | Requires current operator runbooks to name runtime export and safe backlog drift checks in the active verification chain. |
