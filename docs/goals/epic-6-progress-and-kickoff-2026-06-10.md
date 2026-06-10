@@ -62,7 +62,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 
 - Implement Candidate Work model/API.
 - Story 6.3 implemented Candidate Work persistence/API/contracts with no promotion or execution side effects.
-- Implement BMAD import package parser.
+- Story 6.4 implemented BMAD import package parser/contracts with metadata-only artifact summaries.
 - Implement Proposed Work Dev Console view.
 - Implement Candidate priority/order/promote.
 - Implement task packet v0 and orchestrated preview without execution.
@@ -89,3 +89,4 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 ## Implementation Log
 
 - 2026-06-10: Story 6.3 implemented Candidate Work persistence, supervisor API endpoints, shared contracts, and integration tests. Verification passed with `uv run --directory services/supervisor pytest tests/integration/test_candidate_work_api.py -q`, `services/supervisor/.venv/Scripts/python.exe -m pytest services/supervisor/tests/integration -q`, `pnpm.cmd --filter @kendall/dashboard build`, and `pnpm.cmd run check`.
+- 2026-06-10: Story 6.4 implemented a metadata-only BMAD markdown import package parser for supported repo artifact roots, shared package contracts, and focused parser tests. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_bmad_import_parser.py -q` and `pnpm.cmd --filter @kendall/dashboard build`.

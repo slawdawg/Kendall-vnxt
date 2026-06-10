@@ -61,6 +61,22 @@ class CandidateWorkView(BaseModel):
     promotedWorkItemId: str | None = None
 
 
+class BmadImportPackageView(BaseModel):
+    title: str
+    requestedOutcome: str
+    sourceArtifactPath: str
+    sourceArtifactType: CandidateWorkArtifactType
+    artifactTitle: str
+    storyId: str | None = None
+    epicId: str | None = None
+    acceptanceCriteria: str
+    riskLevel: RiskLevel
+    recommendedPriority: CandidateWorkPriority
+    verificationSummary: str
+    allowedScope: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
 class WorkItemActionRequest(BaseModel):
     action: WorkflowAction
     note: str | None = None

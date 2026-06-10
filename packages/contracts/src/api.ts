@@ -53,6 +53,22 @@ export interface CandidateWorkView {
   promotedWorkItemId?: string | null;
 }
 
+export interface BmadImportPackageView {
+  title: string;
+  requestedOutcome: string;
+  sourceArtifactPath: string;
+  sourceArtifactType: CandidateWorkArtifactType;
+  artifactTitle: string;
+  storyId?: string | null;
+  epicId?: string | null;
+  acceptanceCriteria: string;
+  riskLevel: RiskLevel;
+  recommendedPriority: CandidateWorkPriority;
+  verificationSummary: string;
+  allowedScope?: string | null;
+  notes: string[];
+}
+
 export interface WorkItemPolicyGateView {
   id: string;
   label: string;
