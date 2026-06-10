@@ -1154,6 +1154,9 @@ def test_maintenance_readiness_report_tracks_safe_work_without_mutation(tmp_path
     }
     blocker_track = next(track for track in report["tracks"] if track["trackId"] == "authority-blocker-watch")
     assert blocker_track["status"] == "blocked_pending_explicit_approval"
+    assert "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls." in blocker_track["evidence"]
+    assert "Ollama Stories 4.1-4.3 are non-executing no-call preparation only." in blocker_track["evidence"]
+    assert all("4.1-4.4 remain blocked" not in evidence for evidence in blocker_track["evidence"])
     assert "GET /supervisor/execution-readiness-report" in blocker_track["relatedReports"]
     assert "/controls#execution-readiness-report" in blocker_track["dashboardAnchors"]
     verification_track = next(track for track in report["tracks"] if track["trackId"] == "verification-hygiene")
