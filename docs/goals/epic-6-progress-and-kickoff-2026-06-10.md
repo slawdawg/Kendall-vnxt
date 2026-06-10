@@ -30,7 +30,7 @@ Candidate Work
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
-| 1. Candidate Work foundation | In progress | Story 6.3 Candidate Work model/API implemented and verified; Stories 6.4-6.6 remain drafted. |
+| 1. Candidate Work foundation | In progress | Stories 6.3, 6.4, and 6.5 implemented and verified locally; Story 6.6 remains drafted. |
 | 2. Orchestrated preview foundation | Not started | Story 6.7 drafted. |
 | 3. Dev Console live pipeline | Not started | Realtime scope approved. |
 | 4. Proof workflow | Not started | Synthetic first, then real BMAD story. |
@@ -63,7 +63,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - Implement Candidate Work model/API.
 - Story 6.3 implemented Candidate Work persistence/API/contracts with no promotion or execution side effects.
 - Story 6.4 implemented BMAD import package parser/contracts with metadata-only artifact summaries.
-- Implement Proposed Work Dev Console view.
+- Story 6.5 implemented the read-only Proposed Work Dev Console view.
 - Implement Candidate priority/order/promote.
 - Implement task packet v0 and orchestrated preview without execution.
 - Improve docs/tests/scripts when root-cause maintenance is scoped and verified.
@@ -89,4 +89,5 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 ## Implementation Log
 
 - 2026-06-10: Story 6.3 implemented Candidate Work persistence, supervisor API endpoints, shared contracts, and integration tests. Verification passed with `uv run --directory services/supervisor pytest tests/integration/test_candidate_work_api.py -q`, `services/supervisor/.venv/Scripts/python.exe -m pytest services/supervisor/tests/integration -q`, `pnpm.cmd --filter @kendall/dashboard build`, and `pnpm.cmd run check`.
-- 2026-06-10: Story 6.4 implemented a metadata-only BMAD markdown import package parser for supported repo artifact roots, shared package contracts, and focused parser tests. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_bmad_import_parser.py -q` and `pnpm.cmd --filter @kendall/dashboard build`.
+- 2026-06-10: Story 6.4 implemented a metadata-only BMAD markdown import package parser for supported repo artifact roots, shared package contracts, and focused parser tests. Verification passed with `uv run --directory services/supervisor pytest tests/integration/test_bmad_import_parser.py -q`, `uv run --directory services/supervisor pytest tests/integration -q`, `pnpm.cmd --filter @kendall/dashboard build`, and `pnpm.cmd run check`.
+- 2026-06-10: Story 6.5 implemented the read-only Proposed Work route, navigation entry, Candidate Work fetch, empty state, visual cards, and desktop/mobile browser coverage. Verification passed with `pnpm.cmd --filter @kendall/dashboard build`, `PLAYWRIGHT_BROWSERS_PATH=C:\Users\slaw_dawg\Kendall_Nxt\.data\ms-playwright pnpm.cmd exec playwright test tests/e2e/dashboard.spec.ts -g "proposed work"`, `PLAYWRIGHT_BROWSERS_PATH=C:\Users\slaw_dawg\Kendall_Nxt\.data\ms-playwright pnpm.cmd exec playwright test tests/e2e/dashboard-mobile.spec.ts -g "proposed work"`, and `pnpm.cmd run check`.

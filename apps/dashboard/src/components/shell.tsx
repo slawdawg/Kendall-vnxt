@@ -4,6 +4,7 @@ import type { NavStats } from "../lib/nav-stats";
 
 const links = [
   { href: "/", label: "Overview" },
+  { href: "/proposed-work", label: "Proposed Work" },
   { href: "/queue", label: "Queue" },
   { href: "/active-work", label: "Active Work" },
   { href: "/audit", label: "Audit" },
@@ -36,6 +37,9 @@ export function Shell({ children, navStats }: { children: ReactNode; navStats?: 
                   className="inline-flex items-center gap-2 rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
                 >
                   {link.label}
+                  {link.href === "/proposed-work" && typeof navStats?.proposed === "number" ? (
+                    <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{navStats.proposed}</span>
+                  ) : null}
                   {link.href === "/queue" && navStats ? (
                     <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{navStats.queue}</span>
                   ) : null}

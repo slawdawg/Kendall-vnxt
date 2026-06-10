@@ -1,6 +1,7 @@
 import type {
   ApiEnvelope,
   AuthorityReadinessMatrixReportView,
+  CandidateWorkView,
   DashboardE2EReportView,
   DeliveryReadinessPolicyReportView,
   DevelopmentRunwayReportView,
@@ -63,6 +64,10 @@ export async function getRunStatus(): Promise<RunStatusView> {
 
 export async function getWorkItems(): Promise<WorkItemView[]> {
   return requestJson<WorkItemView[]>("/work-items");
+}
+
+export async function getCandidateWork(): Promise<CandidateWorkView[]> {
+  return requestJson<CandidateWorkView[]>("/candidate-work");
 }
 
 export async function getWorkItem(id: string): Promise<WorkItemView> {

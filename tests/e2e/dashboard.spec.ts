@@ -14,6 +14,23 @@ type WorkItemCreatePayload = {
   metadata?: Record<string, string | boolean>;
 };
 
+type CandidateWorkCreatePayload = {
+  title: string;
+  requestedOutcome: string;
+  source: "bmad" | "chief_of_staff" | "operator" | "supervisor";
+  sourceArtifactPath: string;
+  sourceArtifactType: "bmad_story" | "bmad_research" | "bmad_workflow_output" | "chief_of_staff_request" | "manual_note";
+  riskLevel?: "low" | "medium" | "high";
+  priority?: "low" | "normal" | "high" | "urgent";
+};
+
+async function createCandidateWork(request: APIRequestContext, payload: CandidateWorkCreatePayload) {
+  const response = await request.post(`${supervisorUrl}/candidate-work`, { data: payload });
+  expect(response.ok()).toBeTruthy();
+  const body = (await response.json()) as { data: { id: string } };
+  return body.data.id;
+}
+
 async function createWorkItem(request: APIRequestContext, payload: WorkItemCreatePayload) {
   const response = await request.post(`${supervisorUrl}/work-items`, {
     data: {
@@ -110,6 +127,46 @@ function gitOutput(args: string[]) {
 }
 
 test.describe("dashboard workflow coverage", () => {
+  test("shows proposed work empty state and read-only candidate cards", async ({ page, request }) => {
+    await page.goto("/proposed-work");
+
+    await expect(page.getByRole("heading", { name: "Ideas waiting at the front door" })).toBeVisible();
+    await expect(page.getByText("No proposed work yet")).toBeVisible();
+    await expect(page.getByText("BMAD plans, Chief of Staff requests, Dev Console ideas, and system suggestions")).toBeVisible();
+
+    await createCandidateWork(request, {
+      title: "Review Story 6.4 parser",
+      requestedOutcome: "Decide whether the BMAD import parser should enter the active work pipeline.",
+      source: "bmad",
+      sourceArtifactPath: "docs/stories/6-4-bmad-import-package-parser.md",
+      sourceArtifactType: "bmad_story",
+      riskLevel: "medium",
+      priority: "high",
+    });
+
+    await page.reload();
+
+    const candidateCard = page.locator("article").filter({ hasText: "Review Story 6.4 parser" }).first();
+    await expect(candidateCard).toBeVisible();
+    await expect(candidateCard.getByText("Needs review")).toBeVisible();
+    await expect(candidateCard.getByText("BMAD", { exact: true })).toBeVisible();
+    await expect(candidateCard.getByText("Medium risk")).toBeVisible();
+    await expect(candidateCard.getByText("High priority")).toBeVisible();
+    await expect(candidateCard.getByText("docs/stories/6-4-bmad-import-package-parser.md")).toBeVisible();
+    await expect(candidateCard.getByText("Review before active work")).toBeVisible();
+    await expect(page.getByRole("link", { name: /Proposed Work/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Start|Run|Approve|Promote|Route/i })).toHaveCount(0);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(candidateCard).toBeVisible();
+    await expect(candidateCard.getByText("docs/stories/6-4-bmad-import-package-parser.md")).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+      )
+      .toBeTruthy();
+  });
+
   test("shows supervisor-owned recipe details during intake", async ({ page }) => {
     await page.goto("/");
 
