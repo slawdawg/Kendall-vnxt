@@ -1,6 +1,7 @@
 param(
     [switch]$ApplyGitHubProtection,
     [string]$ProtectedBranch = "main",
+    [switch]$RequireApprovingReview,
     [switch]$AllowCodexFullBypass
 )
 
@@ -130,8 +131,8 @@ if ($ApplyGitHubProtection) {
         required_pull_request_reviews = @{
             dismiss_stale_reviews = $true
             require_code_owner_reviews = $false
-            required_approving_review_count = 1
-            require_last_push_approval = $true
+            required_approving_review_count = if ($RequireApprovingReview) { 1 } else { 0 }
+            require_last_push_approval = $RequireApprovingReview.IsPresent
         }
         restrictions = $null
         required_linear_history = $false
