@@ -410,6 +410,25 @@ class LocalEvidenceItemView(BaseModel):
     createdAt: datetime
 
 
+class LocalProviderAttemptMetadataView(BaseModel):
+    status: str
+    modelId: str
+    endpointFamily: str
+    finishReason: str | None = None
+    promptSummary: str
+    responseSummary: str
+    responseCharacterCount: int
+    reasoningCharacterCount: int = 0
+    promptCharacterCount: int
+    completionTokens: int | None = None
+    promptTokens: int | None = None
+    totalTokens: int | None = None
+    redactionApplied: bool = True
+    rawPayloadRetained: bool = False
+    timeoutState: str
+    cancellationState: str
+
+
 class LocalEvidenceExplanationView(BaseModel):
     explanationId: str
     workItemId: str
@@ -423,6 +442,7 @@ class LocalEvidenceExplanationView(BaseModel):
     evidence: list[LocalEvidenceItemView]
     boundaries: list[str]
     nextStepSuggestions: list[str]
+    providerAttempt: LocalProviderAttemptMetadataView | None = None
     writesAllowed: bool = False
     commandsAllowed: bool = False
 

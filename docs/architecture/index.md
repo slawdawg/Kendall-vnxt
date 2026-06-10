@@ -13,6 +13,7 @@ Status: current navigation index
 ## Execution Authority Boundaries
 
 - `kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`: approval language required before blocked authority stories can move to ready.
+- `kendall-vnxt-epic-6-authority-ledger-2026-06-10.md`: authority ledger for the long-running Epic 6 goal, including async approvals and current authority levels.
 - `kendall-vnxt-execution-authority-approval-packet-2026-06-09.md`: explicit operator approval choices for blocked Ollama and subscription-agent authority stories.
 - `kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md`: provider enablement, attempt reporting, and outcome evidence policy.
 - `kendall-vnxt-worker-threat-boundary-2026-06-08.md`: command, prompt, provider, network, credential, and artifact safety boundary.
@@ -21,6 +22,9 @@ Status: current navigation index
 
 ## Provider And Launch Planning
 
+- `kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md`: current LLM orchestration lane model for Ollama API, Codex CLI workers, Claude Code CLI review workers, and GitHub workflow rails.
+- `kendall-vnxt-orchestrator-spec-2026-06-10.md`: draft orchestrator specification with lane contracts, job states, failure handling, and MVP acceptance criteria.
+- `kendall-vnxt-orchestrator-mature-tool-comparison-2026-06-10.md`: mature/self-hosted tool comparison for orchestrator implementation, recommending a LangGraph fake-worker pilot and Prefect fallback before custom runtime code.
 - `kendall-vnxt-provider-disabled-fixtures-2026-06-08.md`: disabled provider fixture policy for Ollama, LM Studio, vLLM, and llama.cpp.
 - `kendall-vnxt-process-lifecycle-design-2026-06-08.md`: future subscription-agent process lifecycle design.
 

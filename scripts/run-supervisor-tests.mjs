@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -6,7 +7,7 @@ import { spawnSync } from "node:child_process";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const dataDir = join(rootDir, ".data");
 const uvCacheDir = join(dataDir, "uv-cache");
-const tempDir = join(dataDir, "tmp");
+const tempDir = join(tmpdir(), "kendall-supervisor-tests");
 
 mkdirSync(uvCacheDir, { recursive: true });
 mkdirSync(tempDir, { recursive: true });

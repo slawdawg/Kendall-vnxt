@@ -348,6 +348,25 @@ export interface LocalEvidenceItemView {
   createdAt: string;
 }
 
+export interface LocalProviderAttemptMetadataView {
+  status: string;
+  modelId: string;
+  endpointFamily: string;
+  finishReason?: string | null;
+  promptSummary: string;
+  responseSummary: string;
+  responseCharacterCount: number;
+  reasoningCharacterCount: number;
+  promptCharacterCount: number;
+  completionTokens?: number | null;
+  promptTokens?: number | null;
+  totalTokens?: number | null;
+  redactionApplied: boolean;
+  rawPayloadRetained: boolean;
+  timeoutState: string;
+  cancellationState: string;
+}
+
 export interface LocalEvidenceExplanationView {
   explanationId: string;
   workItemId: string;
@@ -361,6 +380,7 @@ export interface LocalEvidenceExplanationView {
   evidence: LocalEvidenceItemView[];
   boundaries: string[];
   nextStepSuggestions: string[];
+  providerAttempt?: LocalProviderAttemptMetadataView | null;
   writesAllowed: boolean;
   commandsAllowed: boolean;
 }

@@ -58,8 +58,8 @@ for (const serviceText of [
   "verification-hygiene",
   "report-surface-alignment",
   "authority-blocker-watch",
-  "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
-  "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
+  "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
+  "Raw Ollama prompts, completions, reasoning fields, and provider payloads must not be retained.",
   "Maintenance work must not approve local provider/model calls.",
   "docs/stories/3-46-maintenance-readiness-drift-check.md",
 ]) {
@@ -68,6 +68,11 @@ for (const serviceText of [
 assertCondition(
   !serviceSource.includes("4.1-4.4 remain blocked"),
   "Maintenance readiness service must not use stale Ollama 4.1-4.4 blocked wording",
+  failures,
+);
+assertCondition(
+  !serviceSource.includes("Ollama Story 4.4 remains blocked pending explicit approval for real provider calls."),
+  "Maintenance readiness service must not use stale Ollama Story 4.4 blocked wording after approval",
   failures,
 );
 

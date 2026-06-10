@@ -12,17 +12,25 @@ Generic continuation instructions do not approve execution authority.
 
 On 2026-06-09, the operator explicitly approved Stories 4.1-4.3 for non-executing Ollama preparation only. That approval allows disabled-default settings, registry evidence, prompt redaction/retention contracts, timeout/cancellation evidence, dashboard/report/export updates, and no-call fixture tests. It does not approve Story 4.4, Ollama HTTP calls, endpoint discovery, model discovery, provider/model calls, process launch, shell command execution, source mutation, credential access, premium execution, external sends, or subscription-agent launch.
 
+On 2026-06-10, the operator explicitly approved Story 4.4 for Ollama limited execution only. That approval allows Ollama provider HTTP calls only from the Kendall_vNxt VM at `192.168.1.118` to endpoint `http://192.168.1.128:11434/v1/chat/completions` using model `qwen3:14b`, with a 2 second connect timeout, 120 second total timeout, metadata-only retention, and rollback by disabling either provider gate. It does not approve endpoint discovery, model discovery, raw prompt/completion/reasoning/provider payload retention, alternate endpoints, alternate models, LM Studio, vLLM, llama.cpp, remote providers, process launch, shell command execution, source mutation, credential access, premium execution, external sends, or subscription-agent launch.
+
 On 2026-06-09, the operator explicitly approved subscription-agent launch Stories 5.1-5.4 for non-executing preparation only. That approval allows disabled-default launch settings, target registry evidence, launch approval binding and stale rejection, workspace/output/session contracts, disabled lifecycle adapter evidence, dashboard/report/export updates, and no-process fixture tests. It does not approve Story 5.5, real process launch, command execution, credential/session access, source mutation by workers, external sends, provider/model calls, premium execution, or supervised subscription-agent process execution.
+
+On 2026-06-10, the operator explicitly approved Story 6.1 for a fake-worker orchestrator spike only. That approval allows deterministic lane selection, fake worker adapters, metadata-only evidence, fixture scenarios, and supervisor tests. It does not approve real Codex CLI process launch, real Claude Code CLI process launch, command execution by workers, source mutation by workers, hosted routing gateways, new API billing, credential/session access, autonomous merge, external sends, or raw prompt/completion/provider payload retention.
 
 ## Current Blocked Execution Stories
 
 ### Ollama Local Provider
 
-- `docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
+No currently blocked Ollama local-provider story remains for the approved VM-to-host endpoint/model. Any endpoint, model, provider, or retention expansion still requires explicit successor approval.
 
 ### Subscription-Agent Launch
 
 - `docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md`
+
+### Orchestrator CLI Worker Launch
+
+- `docs/stories/6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md`
 
 ## Approval Language Required
 
@@ -30,7 +38,7 @@ To unblock one of these authority families, the operator must explicitly say whi
 
 Acceptable approval must name:
 
-- authority family: Ollama local provider or subscription-agent launch,
+- authority family: Ollama local provider, subscription-agent launch, or orchestrator CLI worker launch,
 - approved story ids or exact slice,
 - allowed target or provider,
 - allowed settings/feature flags,
@@ -43,6 +51,7 @@ Examples of language that is specific enough:
 - "Approve Story 4.1 only: implement Ollama-specific disabled-default settings and registry evidence. Do not call Ollama."
 - "Approve Stories 5.1-5.2 only: implement launch settings and approval binding. Do not launch a process."
 - "Approve Story 4.4 for local Ollama execution using endpoint X and model Y with the rollback plan in the PRD."
+- "Approve Story 6.1 only: implement fake orchestrator workers and fixture evidence. Do not launch Codex or Claude."
 
 ## Language That Is Not Approval
 
@@ -82,11 +91,13 @@ Stories 4.1-4.3 are approved only for non-executing Ollama preparation and no-ca
 
 Current status remains:
 
-- Ollama provider calls disabled,
+- Ollama provider calls limited to the approved Story 4.4 VM-to-host endpoint/model and disabled unless all exact gates are configured,
 - LM Studio provider calls disabled,
 - vLLM provider calls disabled,
 - llama.cpp provider calls disabled,
 - subscription-agent process launch disabled,
+- orchestrator Codex CLI worker launch disabled,
+- orchestrator Claude Code CLI worker launch disabled,
 - premium execution disabled,
 - arbitrary shell execution disabled,
 - worker source mutation disabled,

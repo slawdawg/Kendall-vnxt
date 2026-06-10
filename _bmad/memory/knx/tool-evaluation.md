@@ -620,6 +620,39 @@ Open questions:
 
 ---
 
+# KNX Mature Tool Review - Orchestrator Lane Architecture
+
+Last updated: 2026-06-10
+
+Status: accepted for pilot; custom full implementation deferred
+
+Capability reviewed: Kendall_vNxt orchestrator-first lane architecture for assigning work across Ollama API, Codex CLI, Claude Code CLI, and GitHub workflow rails.
+
+Recommendation: Pilot LangGraph as the mature orchestration core for the fake-worker spike. Keep existing Git worktree/GitHub CLI workspace protocol as the execution foundation. Keep Prefect as fallback if the problem is better modeled as workflow operations than an agent-state graph. Defer Temporal, CrewAI, OpenHands, Dagger, LiteLLM, n8n, Node-RED, Taskfile/just as core orchestrator choices for the initial spike.
+
+Key finding: the current orchestrator spec is useful product/architecture framing. The first implementation spike should use a mature-tool pilot where practical, with custom code limited to Kendall-specific policy, adapters, evidence, fixtures, and retention enforcement.
+
+Evidence links:
+
+- `decisions/mature-tool-orchestrator-lane-architecture-2026-06-10.md`
+- `docs/architecture/kendall-vnxt-orchestrator-mature-tool-comparison-2026-06-10.md`
+- https://docs.langchain.com/oss/python/langgraph/overview
+- https://docs.langchain.com/oss/python/langgraph/persistence
+- https://docs.crewai.com/
+- https://docs.temporal.io/
+- https://docs.prefect.io/v3/get-started
+- https://docs.prefect.io/v3/concepts/server
+- https://docs.dagger.io/
+- https://docs.openhands.dev/sdk
+- https://docs.litellm.ai/docs/routing
+- https://docs.n8n.io/hosting/
+- https://nodered.org/
+- https://taskfile.dev/
+- https://just.systems/man/en/
+- https://github.com/microsoft/autogen
+
+---
+
 # KNX Mature Tool Review - Codex Workspace Orchestration
 
 Last updated: 2026-06-10

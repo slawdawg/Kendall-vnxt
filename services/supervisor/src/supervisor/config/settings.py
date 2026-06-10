@@ -39,9 +39,15 @@ class Settings(BaseSettings):
     )
     allow_local_provider_calls: bool = Field(default=False, alias="SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS")
     allow_ollama_provider_calls: bool = Field(default=False, alias="SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS")
+    ollama_endpoint_url: str | None = Field(default=None, alias="SUPERVISOR_OLLAMA_ENDPOINT_URL")
+    ollama_approved_endpoint_url: str = Field(
+        default="http://192.168.1.128:11434/v1/chat/completions",
+        alias="SUPERVISOR_OLLAMA_APPROVED_ENDPOINT_URL",
+    )
     ollama_model_id: str | None = Field(default=None, alias="SUPERVISOR_OLLAMA_MODEL_ID")
-    ollama_connect_timeout_seconds: int = Field(default=5, gt=0, alias="SUPERVISOR_OLLAMA_CONNECT_TIMEOUT_SECONDS")
-    ollama_total_timeout_seconds: int = Field(default=30, gt=0, alias="SUPERVISOR_OLLAMA_TOTAL_TIMEOUT_SECONDS")
+    ollama_approved_model_id: str = Field(default="qwen3:14b", alias="SUPERVISOR_OLLAMA_APPROVED_MODEL_ID")
+    ollama_connect_timeout_seconds: int = Field(default=2, gt=0, alias="SUPERVISOR_OLLAMA_CONNECT_TIMEOUT_SECONDS")
+    ollama_total_timeout_seconds: int = Field(default=120, gt=0, alias="SUPERVISOR_OLLAMA_TOTAL_TIMEOUT_SECONDS")
     allow_premium_execution: bool = Field(default=False, alias="SUPERVISOR_ALLOW_PREMIUM_EXECUTION")
     allow_arbitrary_shell_execution: bool = Field(default=False, alias="SUPERVISOR_ALLOW_ARBITRARY_SHELL_EXECUTION")
     allow_worker_source_mutation: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_SOURCE_MUTATION")

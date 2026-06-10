@@ -62,7 +62,7 @@ Do not rebuild these as new architecture work:
 - Runtime evidence export references for readiness and boundary reports.
 - Provider-specific disabled fixture policies.
 - Draft Ollama local provider PRD.
-- Ollama PRD review decisions, non-executing Stories 4.1-4.3, and blocked Story 4.4 execution adapter boundary.
+- Ollama PRD review decisions, non-executing Stories 4.1-4.3, and approved Story 4.4 VM-to-host execution adapter boundary.
 - Dashboard runtime evidence export access.
 - Draft subscription-agent launch PRD.
 - Subscription-agent launch PRD review decisions and blocked implementation story breakdown.
@@ -133,7 +133,7 @@ The Ollama provider PRD exists as a draft. Stories 4.1-4.3 now cover non-executi
 
 Risk: generic OpenAI-compatible assumptions could hide provider differences in endpoints, auth, timeouts, model selection, retention, and cancellation behavior.
 
-Recommendation: review the no-call evidence from Stories 4.1-4.3 before considering Story 4.4. Only implement real local provider calls after explicit approval names the endpoint, model id, scope, and rollback plan.
+Recommendation: keep Story 4.4 limited to the approved VM-to-host endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`. Only expand provider calls after a successor approval names the new endpoint, model id, scope, and rollback plan.
 
 ### 3. Maintenance And Hygiene
 
