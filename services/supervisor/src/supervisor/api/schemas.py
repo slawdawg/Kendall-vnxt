@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field
 from supervisor.domain.types import (
     AuditMode,
     BmadLane,
+    CandidateWorkArtifactType,
+    CandidateWorkPriority,
+    CandidateWorkSource,
+    CandidateWorkStatus,
     ExecutionAttemptStatus,
     ErrorCategory,
     RiskLevel,
@@ -23,6 +27,38 @@ class WorkItemCreate(BaseModel):
     details: str | None = None
     riskLevel: RiskLevel = RiskLevel.LOW
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CandidateWorkCreate(BaseModel):
+    title: str
+    requestedOutcome: str
+    source: CandidateWorkSource
+    sourceArtifactPath: str
+    sourceArtifactType: CandidateWorkArtifactType
+    riskLevel: RiskLevel = RiskLevel.LOW
+    priority: CandidateWorkPriority = CandidateWorkPriority.NORMAL
+
+
+class CandidateWorkUpdate(BaseModel):
+    status: CandidateWorkStatus | None = None
+    priority: CandidateWorkPriority | None = None
+    riskLevel: RiskLevel | None = None
+
+
+class CandidateWorkView(BaseModel):
+    id: str
+    title: str
+    requestedOutcome: str
+    source: CandidateWorkSource
+    sourceArtifactPath: str
+    sourceArtifactType: CandidateWorkArtifactType
+    riskLevel: RiskLevel
+    priority: CandidateWorkPriority
+    status: CandidateWorkStatus
+    createdAt: datetime
+    updatedAt: datetime
+    approvedAt: datetime | None = None
+    promotedWorkItemId: str | None = None
 
 
 class WorkItemActionRequest(BaseModel):

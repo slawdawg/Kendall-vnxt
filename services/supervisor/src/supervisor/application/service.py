@@ -15,6 +15,9 @@ from supervisor.api.schemas import (
     AuditEventView,
     AuthorityReadinessFamilyView,
     AuthorityReadinessMatrixReportView,
+    CandidateWorkCreate,
+    CandidateWorkUpdate,
+    CandidateWorkView,
     DashboardE2EReportView,
     DashboardE2ERunnerView,
     DeliveryReadinessPolicyItemView,
@@ -117,10 +120,10 @@ from supervisor.domain.routing import (
 )
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
 from supervisor.domain.subscription_launch import DisabledSubscriptionLaunchAdapter, SubscriptionLaunchRegistry
-from supervisor.domain.types import AuditMode, BmadLane, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
+from supervisor.domain.types import AuditMode, BmadLane, CandidateWorkStatus, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
-from supervisor.infrastructure.db.models import AuditEvent, ExecutionAttempt, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
+from supervisor.infrastructure.db.models import AuditEvent, CandidateWork, ExecutionAttempt, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
 from supervisor.infrastructure.streaming.bus import EventBus
 
 
@@ -300,6 +303,47 @@ class SupervisorService:
     async def list_work_items(self, session: AsyncSession) -> list[WorkItem]:
         result = await session.execute(select(WorkItem).order_by(WorkItem.created_at.desc()))
         return list(result.scalars())
+
+    async def create_candidate_work(self, session: AsyncSession, payload: CandidateWorkCreate) -> CandidateWork:
+        candidate = CandidateWork(
+            title=payload.title,
+            requested_outcome=payload.requestedOutcome,
+            source=payload.source.value,
+            source_artifact_path=payload.sourceArtifactPath,
+            source_artifact_type=payload.sourceArtifactType.value,
+            risk_level=payload.riskLevel.value,
+            priority=payload.priority.value,
+            status=CandidateWorkStatus.PROPOSED.value,
+        )
+        session.add(candidate)
+        await session.commit()
+        await session.refresh(candidate)
+        return candidate
+
+    async def list_candidate_work(self, session: AsyncSession) -> list[CandidateWork]:
+        result = await session.execute(select(CandidateWork).order_by(CandidateWork.created_at.desc()))
+        return list(result.scalars())
+
+    async def update_candidate_work(self, session: AsyncSession, candidate_work_id: str, payload: CandidateWorkUpdate) -> CandidateWork | None:
+        candidate = await session.get(CandidateWork, candidate_work_id)
+        if not candidate:
+            return None
+
+        if payload.status is not None:
+            candidate.status = payload.status.value
+            if payload.status == CandidateWorkStatus.APPROVED and candidate.approved_at is None:
+                candidate.approved_at = datetime.now(timezone.utc)
+            elif payload.status != CandidateWorkStatus.APPROVED:
+                candidate.approved_at = None
+        if payload.priority is not None:
+            candidate.priority = payload.priority.value
+        if payload.riskLevel is not None:
+            candidate.risk_level = payload.riskLevel.value
+
+        candidate.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+        await session.refresh(candidate)
+        return candidate
 
     def list_execution_recipes(self) -> list[WorkItemExecutionRecipeView]:
         return [self._to_execution_recipe_view(recipe) for recipe in EXECUTION_RECIPES.values()]
@@ -7466,6 +7510,23 @@ class SupervisorService:
             return "general"
 
         return None
+
+    def to_candidate_work_view(self, candidate: CandidateWork) -> CandidateWorkView:
+        return CandidateWorkView(
+            id=candidate.id,
+            title=candidate.title,
+            requestedOutcome=candidate.requested_outcome,
+            source=candidate.source,
+            sourceArtifactPath=candidate.source_artifact_path,
+            sourceArtifactType=candidate.source_artifact_type,
+            riskLevel=candidate.risk_level,
+            priority=candidate.priority,
+            status=candidate.status,
+            createdAt=self._normalize_timestamp(candidate.created_at),
+            updatedAt=self._normalize_timestamp(candidate.updated_at),
+            approvedAt=self._normalize_timestamp(candidate.approved_at) if candidate.approved_at else None,
+            promotedWorkItemId=candidate.promoted_work_item_id,
+        )
 
     def to_work_item_view(self, item: WorkItem) -> WorkItemView:
         age_minutes = self._age_minutes(item)

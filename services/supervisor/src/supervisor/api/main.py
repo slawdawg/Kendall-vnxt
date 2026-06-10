@@ -11,6 +11,8 @@ from supervisor.api.schemas import (
     ApiEnvelope,
     ApiErrorEnvelope,
     ApiErrorShape,
+    CandidateWorkCreate,
+    CandidateWorkUpdate,
     OperatorViewCreate,
     OperatorViewDefaultRequest,
     WorkItemActionRequest,
@@ -86,6 +88,30 @@ async def health() -> dict[str, str]:
 async def create_work_item(payload: WorkItemCreate, session: AsyncSession = Depends(get_session)):
     item = await service.create_work_item(session, payload)
     return ApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.post("/candidate-work", response_model=ApiEnvelope)
+async def create_candidate_work(payload: CandidateWorkCreate, session: AsyncSession = Depends(get_session)):
+    candidate = await service.create_candidate_work(session, payload)
+    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+
+
+@app.get("/candidate-work", response_model=ApiEnvelope)
+async def list_candidate_work(session: AsyncSession = Depends(get_session)):
+    candidates = await service.list_candidate_work(session)
+    return ApiEnvelope(data=[service.to_candidate_work_view(candidate) for candidate in candidates])
+
+
+@app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)
+async def update_candidate_work(
+    candidate_work_id: str,
+    payload: CandidateWorkUpdate,
+    session: AsyncSession = Depends(get_session),
+):
+    candidate = await service.update_candidate_work(session, candidate_work_id, payload)
+    if not candidate:
+        raise HTTPException(status_code=404, detail=error_response("Candidate work not found.", "candidate_work_not_found").model_dump())
+    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
 @app.get("/work-items", response_model=ApiEnvelope)

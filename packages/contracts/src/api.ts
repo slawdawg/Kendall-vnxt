@@ -1,6 +1,10 @@
 ﻿import type {
   AuditFilterMode,
   BmadLane,
+  CandidateWorkArtifactType,
+  CandidateWorkPriority,
+  CandidateWorkSource,
+  CandidateWorkStatus,
   RiskLevel,
   RunMode,
   WorkItemFilterScope,
@@ -15,6 +19,38 @@ export interface WorkItemPayload {
   details?: string | null;
   riskLevel?: RiskLevel;
   metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface CandidateWorkCreatePayload {
+  title: string;
+  requestedOutcome: string;
+  source: CandidateWorkSource;
+  sourceArtifactPath: string;
+  sourceArtifactType: CandidateWorkArtifactType;
+  riskLevel?: RiskLevel;
+  priority?: CandidateWorkPriority;
+}
+
+export interface CandidateWorkUpdatePayload {
+  status?: CandidateWorkStatus | null;
+  priority?: CandidateWorkPriority | null;
+  riskLevel?: RiskLevel | null;
+}
+
+export interface CandidateWorkView {
+  id: string;
+  title: string;
+  requestedOutcome: string;
+  source: CandidateWorkSource;
+  sourceArtifactPath: string;
+  sourceArtifactType: CandidateWorkArtifactType;
+  riskLevel: RiskLevel;
+  priority: CandidateWorkPriority;
+  status: CandidateWorkStatus;
+  createdAt: string;
+  updatedAt: string;
+  approvedAt?: string | null;
+  promotedWorkItemId?: string | null;
 }
 
 export interface WorkItemPolicyGateView {

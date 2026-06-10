@@ -35,6 +35,35 @@ class RiskLevel(StrEnum):
     HIGH = "high"
 
 
+class CandidateWorkSource(StrEnum):
+    BMAD = "bmad"
+    CHIEF_OF_STAFF = "chief_of_staff"
+    OPERATOR = "operator"
+    SUPERVISOR = "supervisor"
+
+
+class CandidateWorkArtifactType(StrEnum):
+    BMAD_STORY = "bmad_story"
+    BMAD_RESEARCH = "bmad_research"
+    BMAD_WORKFLOW_OUTPUT = "bmad_workflow_output"
+    CHIEF_OF_STAFF_REQUEST = "chief_of_staff_request"
+    MANUAL_NOTE = "manual_note"
+
+
+class CandidateWorkPriority(StrEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
+class CandidateWorkStatus(StrEnum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    DEFERRED = "deferred"
+
+
 class AuditMode(StrEnum):
     NONE = "none"
     ADVISORY = "advisory"

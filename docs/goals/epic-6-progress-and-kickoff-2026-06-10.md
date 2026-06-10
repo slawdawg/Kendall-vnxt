@@ -30,7 +30,7 @@ Candidate Work
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
-| 1. Candidate Work foundation | Not started | Stories 6.3-6.6 drafted. |
+| 1. Candidate Work foundation | In progress | Story 6.3 Candidate Work model/API implemented and verified; Stories 6.4-6.6 remain drafted. |
 | 2. Orchestrated preview foundation | Not started | Story 6.7 drafted. |
 | 3. Dev Console live pipeline | Not started | Realtime scope approved. |
 | 4. Proof workflow | Not started | Synthetic first, then real BMAD story. |
@@ -61,6 +61,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 ## Current Safe Work
 
 - Implement Candidate Work model/API.
+- Story 6.3 implemented Candidate Work persistence/API/contracts with no promotion or execution side effects.
 - Implement BMAD import package parser.
 - Implement Proposed Work Dev Console view.
 - Implement Candidate priority/order/promote.
@@ -85,3 +86,6 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - Confirm Dev Console/supervisor startup expectations when touching runtime startup.
 - Start with Story 6.3 unless Bob explicitly changes the first implementation target.
 
+## Implementation Log
+
+- 2026-06-10: Story 6.3 implemented Candidate Work persistence, supervisor API endpoints, shared contracts, and integration tests. Verification passed with `uv run --directory services/supervisor pytest tests/integration/test_candidate_work_api.py -q`, `services/supervisor/.venv/Scripts/python.exe -m pytest services/supervisor/tests/integration -q`, `pnpm.cmd --filter @kendall/dashboard build`, and `pnpm.cmd run check`.

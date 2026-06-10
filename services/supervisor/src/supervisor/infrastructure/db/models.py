@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from supervisor.domain.types import AuditMode, BmadLane, ExecutionAttemptStatus, RiskLevel, RunMode, WorkflowState
+from supervisor.domain.types import AuditMode, CandidateWorkPriority, CandidateWorkStatus, BmadLane, ExecutionAttemptStatus, RiskLevel, RunMode, WorkflowState
 from supervisor.infrastructure.db.database import Base
 
 
@@ -43,6 +43,24 @@ class WorkItem(Base):
     leases: Mapped[list["QueueLease"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
     execution_attempts: Mapped[list["ExecutionAttempt"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
     audits: Mapped[list["AuditEvent"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
+
+
+class CandidateWork(Base):
+    __tablename__ = "candidate_work"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title: Mapped[str] = mapped_column(String(255))
+    requested_outcome: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(64))
+    source_artifact_path: Mapped[str] = mapped_column(Text)
+    source_artifact_type: Mapped[str] = mapped_column(String(64))
+    risk_level: Mapped[str] = mapped_column(String(16), default=RiskLevel.LOW.value)
+    priority: Mapped[str] = mapped_column(String(16), default=CandidateWorkPriority.NORMAL.value)
+    status: Mapped[str] = mapped_column(String(16), default=CandidateWorkStatus.PROPOSED.value)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    promoted_work_item_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
 class WorkflowEvent(Base):
