@@ -72,3 +72,34 @@
 - If command output is needed for diagnosis, prefer concise structured output
   over formatted tables. Use `Select-Object` for properties and only format for
   final human display.
+
+## Codex Workspace Protocol
+
+Use the repo-owned Codex workspace workflow when Bob asks to start, list,
+resume, finish, or clean up mobile/SSH Codex work. The deterministic command
+surface is `node ./scripts/codex-workspace.mjs`.
+
+- When Bob says "start a new task", "create a worktree", or similar, ask at
+  most three quick clarifying questions only if the task intent, base branch,
+  or PR-vs-experiment mode is unclear. Otherwise run
+  `node ./scripts/codex-workspace.mjs start "<task description>"`.
+- When Bob says "list workspaces" or asks what Codex tasks are active, run
+  `node ./scripts/codex-workspace.mjs list`.
+- When Bob says "resume <task>", run
+  `node ./scripts/codex-workspace.mjs resume "<task>"`, then use the reported
+  worktree path for follow-up commands.
+- When Bob says "finish this as a PR", run the smallest relevant verification,
+  then use `node ./scripts/codex-workspace.mjs finish-pr` from the task
+  worktree or pass a task query from another worktree. Do not merge to `main`
+  unless Bob explicitly asks for a merge after seeing the PR state.
+- When Bob says "clean up merged work", run
+  `node ./scripts/codex-workspace.mjs cleanup-merged`. The script must see a
+  merged PR and a clean worktree before it removes anything.
+- Run `node ./scripts/codex-workspace.mjs doctor` when diagnosing workspace
+  protocol readiness.
+
+Default workspace state is local-only under a stable repo key such as
+`%USERPROFILE%\.codex-workspaces\slawdawg-kendall-vnxt`, derived from the
+GitHub remote when available. Do not commit task manifests from that local
+state root. Keep GitHub Actions out of the routine workspace lifecycle unless
+Bob explicitly approves a future workflow change.

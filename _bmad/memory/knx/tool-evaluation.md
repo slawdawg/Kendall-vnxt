@@ -617,3 +617,44 @@ Open questions:
 - Tool acceptance: local evidence and deterministic-first policy.
 - Custom glue acceptance: KNX-specific cross-artifact validation rules.
 - Dependency deferral: local-first, no dependency manifest, custom-code-last policy.
+
+---
+
+# KNX Mature Tool Review - Codex Workspace Orchestration
+
+Last updated: 2026-06-10
+
+## Review Status
+
+Status: accepted with narrow custom glue
+
+Capability reviewed: mobile/SSH-friendly Codex workspace orchestration for starting, resuming, finishing, PR-ing, and cleaning up Git worktrees on a Windows VM without new paid services or routine GitHub Actions usage.
+
+## Job To Be Done
+
+Reduce friction around Codex mobile and SSH development by making worktree creation, branch naming, task tracking, PR creation/status checks, and cleanup conversational and safe.
+
+## Options Considered
+
+| Option | Fit | Risks | Status |
+| --- | --- | --- | --- |
+| Native `git worktree` | Mature local worktree lifecycle | Needs naming/cleanup policy | Accepted |
+| GitHub CLI `gh pr` | Mature PR create/status interface | Requires auth and explicit remote operations | Accepted |
+| Local hooks and GitHub branch protection | Strong guardrails | Local hooks are not universal | Accepted |
+| Git Town | Mature branch lifecycle automation | Branch-centric, not task-manifest/worktree-centric | Deferred optional pilot |
+| GitHub Actions | Could automate remote cleanup signals | Consumes finite Actions minutes | Rejected for routine orchestration |
+| Paid external platforms | Could provide control plane | Adds cost and tool-dependent hygiene | Rejected for core |
+| Thin repo-owned custom glue | Solves remaining task/workspace protocol gaps | Must stay deterministic and small | Accepted narrowly |
+
+## Recommendation
+
+Adopt a Codex Workspace Protocol using Git worktree, GitHub CLI, local hooks, branch protection, `AGENTS.md`, and a thin local task-manifest script layer. Keep Git hygiene repo-owned and portable. Defer Git Town to a later optional pilot if branch workflow friction remains.
+
+## Evidence Links Or Local Source References
+
+- `decisions/mature-tool-codex-workspace-orchestration-2026-06-10.md`
+- https://git-scm.com/docs/git-worktree
+- https://cli.github.com/manual/gh_pr_create
+- https://cli.github.com/manual/gh_pr_status
+- https://www.git-town.com/commands/hack
+- https://github.com/git-town/git-town
