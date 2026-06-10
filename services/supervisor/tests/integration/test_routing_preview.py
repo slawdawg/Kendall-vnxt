@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import sys
 
 from fastapi.testclient import TestClient
@@ -910,7 +911,11 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
     from supervisor.api.main import app
     from supervisor.domain.ollama_provider_adapter import OllamaProviderResult
 
+    captured_provider_prompt = {}
+
     async def fake_explain(self, *, evidence_summary, evidence_count, cancellation_event=None):
+        captured_provider_prompt["evidence_summary"] = evidence_summary
+        captured_provider_prompt["evidence_count"] = evidence_count
         return OllamaProviderResult(
             status="completed",
             model_id="qwen3:14b",
@@ -953,12 +958,52 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
     )
     assert "OK." not in str(explanation)
     assert "Okay, the user wants" not in str(explanation)
+    assert captured_provider_prompt["evidence_count"] == len(explanation["evidence"])
+    assert "Approved workflow event summaries:" in captured_provider_prompt["evidence_summary"]
+    assert "work_item.queued" in captured_provider_prompt["evidence_summary"]
+    assert "recipe.selected" in captured_provider_prompt["evidence_summary"]
 
     events = events_response.json()["data"]
     recorded = next(event for event in events if event["eventType"] == "routing.local_evidence_explained")
     assert recorded["payload"]["providerAttempt"]["rawPayloadRetained"] is False
     assert "OK." not in str(recorded)
     assert "Okay, the user wants" not in str(recorded)
+
+
+def test_ollama_provider_request_uses_connect_timeout_without_global_socket_mutation(monkeypatch) -> None:
+    from supervisor.domain.ollama_provider_adapter import OllamaProviderAdapter
+
+    captured_timeout = {}
+    original_default_timeout = socket.getdefaulttimeout()
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"model":"qwen3:14b","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}],"usage":{"completion_tokens":1,"prompt_tokens":2,"total_tokens":3}}'
+
+    def fake_urlopen(request, timeout):
+        captured_timeout["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    adapter = OllamaProviderAdapter(
+        endpoint_url="http://192.168.1.128:11434/v1/chat/completions",
+        model_id="qwen3:14b",
+        connect_timeout_seconds=2,
+        total_timeout_seconds=120,
+    )
+
+    result = adapter._post_chat_completion("approved evidence", None)
+
+    assert result.status == "completed"
+    assert captured_timeout["timeout"] == 2
+    assert socket.getdefaulttimeout() == original_default_timeout
 
 
 def test_execution_readiness_report_compacts_policy_attempt_and_outcome_evidence_without_mutation(tmp_path, monkeypatch) -> None:

@@ -1,6 +1,5 @@
 import asyncio
 import json
-import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -113,7 +112,6 @@ class OllamaProviderAdapter:
                 timeout_state="not_timed_out",
                 cancellation_state="cancel_requested_before_send",
             )
-        socket.setdefaulttimeout(self.connect_timeout_seconds)
         body = json.dumps(
             {
                 "model": self.model_id,
@@ -133,7 +131,7 @@ class OllamaProviderAdapter:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.total_timeout_seconds) as response:
+        with urllib.request.urlopen(request, timeout=self.connect_timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
         choice = (payload.get("choices") or [{}])[0]
         message = choice.get("message") or {}

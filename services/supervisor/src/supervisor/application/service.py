@@ -4280,9 +4280,10 @@ class SupervisorService:
         provider_attempt = None
         ollama_state = self._ollama_provider_gate_state()
         evidence_summary = self._local_evidence_summary(item, preview, events)
+        provider_evidence_summary = self._local_provider_evidence_summary(item, preview, events)
         if bool(ollama_state["enabled"]):
             provider_result = await self.ollama_provider_adapter.explain(
-                evidence_summary=evidence_summary,
+                evidence_summary=provider_evidence_summary,
                 evidence_count=len(events),
             )
             provider_attempt = LocalProviderAttemptMetadataView(**provider_result.to_metadata())
@@ -4434,6 +4435,16 @@ class SupervisorService:
             f"{item.title}: local read-only evidence review for {preview.profile.taskKind} "
             f"using {evidence_count} recorded workflow event(s)."
         )
+
+    def _local_provider_evidence_summary(self, item: WorkItem, preview: RoutingPreviewView, events: list[WorkflowEvent]) -> str:
+        base_summary = self._local_evidence_summary(item, preview, events)
+        event_lines = [
+            f"- {event.event_type}: {event.summary}"
+            for event in events[:8]
+        ]
+        if not event_lines:
+            return f"{base_summary}\nApproved workflow event summaries: none recorded."
+        return f"{base_summary}\nApproved workflow event summaries:\n" + "\n".join(event_lines)
 
     def _local_evidence_boundaries(self, item: WorkItem) -> list[str]:
         boundaries = [
