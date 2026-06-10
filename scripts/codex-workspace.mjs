@@ -712,9 +712,10 @@ function assertCurrentBranch(manifest) {
 }
 
 function verificationCommand(profile) {
+  const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const profiles = {
     preflight: ["node", "./scripts/preflight.mjs"],
-    check: ["pnpm.cmd", "run", "check"],
+    check: [pnpmExecutable, "run", "check"],
     "codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],
   };
   if (!profiles[profile]) {
