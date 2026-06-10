@@ -1,0 +1,13 @@
+#!/bin/sh
+protected_pattern='^(refs/heads/)?(main|master)$'
+
+while read local_ref local_sha remote_ref remote_sha
+do
+    if echo "$remote_ref" | grep -Eq "$protected_pattern"; then
+        echo "Blocked direct push to protected branch: $remote_ref" >&2
+        echo "Open a pull request instead." >&2
+        exit 1
+    fi
+done
+
+exit 0
