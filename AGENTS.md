@@ -72,3 +72,49 @@
 - If command output is needed for diagnosis, prefer concise structured output
   over formatted tables. Use `Select-Object` for properties and only format for
   final human display.
+- For implemented code changes, route review requests through
+  `bmad-code-review` first. Use individual reviewers such as
+  `bmad-review-adversarial-general`, `bmad-review-edge-case-hunter`, or
+  `knx-safety-validation-review` only as follow-up lenses when the bundled
+  code-review workflow leaves a specific gap.
+
+## Codex Workspace Protocol
+
+Use the repo-owned Codex workspace workflow when Bob asks to start, list,
+resume, finish, or clean up mobile/SSH Codex work. The deterministic command
+surface is `node ./scripts/codex-workspace.mjs`.
+
+- When Bob says "start a new task", "create a worktree", or similar, ask at
+  most three quick clarifying questions only if the task intent, base branch,
+  or PR-vs-experiment mode is unclear. Otherwise run
+  `node ./scripts/codex-workspace.mjs start "<task description>"`.
+  Use `--mode experiment` for scratch work that should not become a PR yet.
+- When Bob says "list workspaces" or asks what Codex tasks are active, run
+  `node ./scripts/codex-workspace.mjs list`.
+- When Bob says "resume <task>", run
+  `node ./scripts/codex-workspace.mjs resume "<task>"`, then use the reported
+  worktree path for follow-up commands.
+- When Bob says "finish this as a PR", run the smallest relevant verification,
+  then use `node ./scripts/codex-workspace.mjs finish-pr` from the task
+  worktree or pass a task query from another worktree. Stage intended files
+  explicitly before `finish-pr`; use `--stage-all` only after confirming the
+  full worktree diff belongs to the task. Do not merge to `main` unless Bob
+  explicitly asks for a merge after seeing the PR state.
+- When Bob says "clean up merged work", run
+  `node ./scripts/codex-workspace.mjs cleanup-merged` first as a dry-run. The
+  script must see a merged PR with the expected base branch and a clean
+  worktree before it removes anything. Re-run with `--apply` only when the
+  dry-run output is correct.
+- When Bob says "recover workspace state" or manifests appear stale, run
+  `node ./scripts/codex-workspace.mjs rebuild-index --dry-run` before applying
+  any rebuilt local manifests.
+- Run `node ./scripts/codex-workspace.mjs doctor` when diagnosing workspace
+  protocol readiness. `gh` availability is required for `finish-pr` and
+  `cleanup-merged`, even if doctor reports it as a warning for read-only
+  commands.
+
+Default workspace state is local-only under a stable repo key such as
+`%USERPROFILE%\.codex-workspaces\slawdawg-kendall-vnxt`, derived from the
+GitHub remote when available. Do not commit task manifests from that local
+state root. Keep GitHub Actions out of the routine workspace lifecycle unless
+Bob explicitly approves a future workflow change.
