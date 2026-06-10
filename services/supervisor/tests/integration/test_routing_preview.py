@@ -12,6 +12,17 @@ def _reset_supervisor_modules() -> None:
             sys.modules.pop(module_name, None)
 
 
+def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
+    db_path = (tmp_path / db_name).as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    return TestClient(app)
+
+
 def test_routing_preview_selects_utility_for_deterministic_checks() -> None:
     from supervisor.domain.routing import RoutingPreviewService, RoutingProfile, TaskKind
 
@@ -173,6 +184,78 @@ def test_supervisor_routing_preview_derives_from_next_managed_action_without_mut
     assert "task.deterministic_check" in preview["decision"]["reasonCodes"]
     assert before_item == after_item
     assert before_events == after_events
+
+
+def test_task_packet_preview_uses_promoted_candidate_metadata_without_execution(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-preview.db") as client:
+        candidate_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Task packet candidate",
+                "requestedOutcome": "Preview how promoted work would be routed.",
+                "source": "bmad",
+                "sourceArtifactPath": "docs/stories/6-7-task-packet-v0-orchestrated-preview.md",
+                "sourceArtifactType": "bmad_story",
+                "riskLevel": "medium",
+                "priority": "high",
+            },
+        )
+        assert candidate_response.status_code == 200
+        candidate_id = candidate_response.json()["data"]["id"]
+        approve_response = client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"})
+        assert approve_response.status_code == 200
+        promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promote_response.status_code == 200
+        work_item_id = promote_response.json()["data"]["workItem"]["id"]
+
+        preview_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
+        assert preview_response.status_code == 200
+        preview = preview_response.json()["data"]
+
+        packet = preview["packet"]
+        assert packet["workItemId"] == work_item_id
+        assert packet["title"] == "Task packet candidate"
+        assert packet["requestedOutcome"] == "Preview how promoted work would be routed."
+        assert packet["source"] == f"candidate_work:{candidate_id}"
+        assert packet["sourceArtifactPath"] == "docs/stories/6-7-task-packet-v0-orchestrated-preview.md"
+        assert packet["taskKind"] == "task_classification"
+        assert packet["riskLevel"] == "medium"
+        assert packet["priority"] == "high"
+        assert packet["approvalMode"] == preview["route"]["authorityMode"]
+        assert packet["verificationSummary"] == "No verification summary recorded yet."
+        assert preview["route"]["selectedLane"] == "local_readonly"
+        assert preview["route"]["rejectedLanes"]
+        assert preview["whyThisPath"] == preview["route"]["humanExplanation"]
+        assert preview["previewOnly"] is True
+        assert preview["executionAttemptCreated"] is False
+        assert preview["providerCallsAllowed"] is False
+        assert preview["commandExecutionAllowed"] is False
+
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+        assert attempts_response.status_code == 200
+        assert attempts_response.json()["data"] == []
+
+
+def test_task_packet_preview_falls_back_for_missing_source_metadata(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-preview-fallback.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Manual work item",
+                "requestedOutcome": "Preview route without candidate metadata.",
+                "source": "operator-dashboard",
+                "riskLevel": "low",
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item_id = work_item_response.json()["data"]["id"]
+
+        preview_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
+        assert preview_response.status_code == 200
+        packet = preview_response.json()["data"]["packet"]
+        assert packet["sourceArtifactPath"] == "not_recorded"
+        assert packet["priority"] == "normal"
+        assert packet["taskKind"] == "task_classification"
 
 
 def test_routing_preview_honors_forbidden_selected_lane() -> None:

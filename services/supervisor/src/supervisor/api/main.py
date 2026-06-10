@@ -238,6 +238,17 @@ async def get_work_item_routing_preview(work_item_id: str, session: AsyncSession
     return ApiEnvelope(data=preview)
 
 
+@app.get("/work-items/{work_item_id}/task-packet-preview", response_model=ApiEnvelope)
+async def get_work_item_task_packet_preview(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    preview = await service.get_task_packet_preview(session, work_item_id)
+    if not preview:
+        raise HTTPException(status_code=404, detail=error_response("Task packet preview not found.", "task_packet_preview_not_found").model_dump())
+    return ApiEnvelope(data=preview)
+
+
 @app.post("/work-items/{work_item_id}/routing-preview", response_model=ApiEnvelope)
 async def create_work_item_routing_preview(
     work_item_id: str,

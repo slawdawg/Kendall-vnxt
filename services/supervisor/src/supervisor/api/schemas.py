@@ -348,6 +348,29 @@ class RoutingPreviewView(BaseModel):
     decision: RoutingDecisionView
 
 
+class TaskPacketV0View(BaseModel):
+    workItemId: str
+    title: str
+    requestedOutcome: str
+    source: str
+    sourceArtifactPath: str
+    taskKind: str
+    riskLevel: str
+    priority: str
+    approvalMode: str
+    verificationSummary: str
+
+
+class TaskPacketPreviewView(BaseModel):
+    packet: TaskPacketV0View
+    route: RoutingDecisionView
+    whyThisPath: str
+    previewOnly: bool = True
+    executionAttemptCreated: bool = False
+    providerCallsAllowed: bool = False
+    commandExecutionAllowed: bool = False
+
+
 class SubscriptionHandoffEvidenceView(BaseModel):
     eventType: str
     summary: str

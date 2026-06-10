@@ -77,6 +77,29 @@ export interface BmadImportPackageView {
   notes: string[];
 }
 
+export interface TaskPacketV0View {
+  workItemId: string;
+  title: string;
+  requestedOutcome: string;
+  source: string;
+  sourceArtifactPath: string;
+  taskKind: string;
+  riskLevel: string;
+  priority: string;
+  approvalMode: string;
+  verificationSummary: string;
+}
+
+export interface TaskPacketPreviewView {
+  packet: TaskPacketV0View;
+  route: RoutingDecisionView;
+  whyThisPath: string;
+  previewOnly: boolean;
+  executionAttemptCreated: boolean;
+  providerCallsAllowed: boolean;
+  commandExecutionAllowed: boolean;
+}
+
 export interface WorkItemPolicyGateView {
   id: string;
   label: string;

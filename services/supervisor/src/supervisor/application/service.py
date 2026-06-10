@@ -73,6 +73,8 @@ from supervisor.api.schemas import (
     SubscriptionHandoffPackageView,
     SupervisorReportCatalogEntryView,
     SupervisorReportCatalogView,
+    TaskPacketPreviewView,
+    TaskPacketV0View,
     ThreatBoundaryRuleView,
     ThreatBoundaryView,
     VerificationCommandView,
@@ -4083,6 +4085,42 @@ class SupervisorService:
             await session.commit()
             await session.refresh(item)
         return preview
+
+    async def get_task_packet_preview(self, session: AsyncSession, work_item_id: str) -> TaskPacketPreviewView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        preview = await self.get_routing_preview(session, work_item_id)
+        if not preview:
+            return None
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        source_artifact_path = metadata.get("sourceArtifactPath")
+        priority = metadata.get("candidatePriority")
+        verification_summary = metadata.get("verificationSummary")
+        packet = TaskPacketV0View(
+            workItemId=item.id,
+            title=item.title,
+            requestedOutcome=item.requested_outcome,
+            source=item.source,
+            sourceArtifactPath=source_artifact_path if isinstance(source_artifact_path, str) and source_artifact_path else "not_recorded",
+            taskKind=preview.profile.taskKind,
+            riskLevel=item.risk_level,
+            priority=priority if isinstance(priority, str) and priority else "normal",
+            approvalMode=preview.decision.authorityMode,
+            verificationSummary=verification_summary
+            if isinstance(verification_summary, str) and verification_summary
+            else "No verification summary recorded yet.",
+        )
+        return TaskPacketPreviewView(
+            packet=packet,
+            route=preview.decision,
+            whyThisPath=preview.decision.humanExplanation,
+            previewOnly=True,
+            executionAttemptCreated=False,
+            providerCallsAllowed=False,
+            commandExecutionAllowed=False,
+        )
 
     async def get_subscription_handoff_package(
         self,
