@@ -72,6 +72,11 @@
 - If command output is needed for diagnosis, prefer concise structured output
   over formatted tables. Use `Select-Object` for properties and only format for
   final human display.
+- For implemented code changes, route review requests through
+  `bmad-code-review` first. Use individual reviewers such as
+  `bmad-review-adversarial-general`, `bmad-review-edge-case-hunter`, or
+  `knx-safety-validation-review` only as follow-up lenses when the bundled
+  code-review workflow leaves a specific gap.
 
 ## Codex Workspace Protocol
 

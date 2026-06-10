@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,41 @@ try {
     const result = run(["start", "bad mode", "--mode", "scratch", "--dry-run", "--state-root", stateRoot]);
     assert(result.code !== 0, "invalid mode unexpectedly passed");
     assert(result.stderr.includes("--mode must be either pr or experiment"));
+  });
+
+  test("start rejects path traversal task ids", () => {
+    const result = run(["start", "bad id", "--task-id", "..\\bad", "--dry-run", "--state-root", stateRoot]);
+    assert(result.code !== 0, "path traversal task id unexpectedly passed");
+    assert(result.stderr.includes("Invalid task id"));
+  });
+
+  test("list skips malformed manifests without aborting", () => {
+    const tasksDir = join(stateRoot, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+    writeFileSync(join(tasksDir, "bad.json"), "{not json");
+    const result = run(["list", "--state-root", stateRoot]);
+    assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stderr.includes("skipping invalid manifest"));
+  });
+
+  test("finish-pr rejects unknown verification profile before mutation", () => {
+    const tasksDir = join(stateRoot, "tasks");
+    const worktreePath = rootDir;
+    mkdirSync(tasksDir, { recursive: true });
+    writeFileSync(
+      join(tasksDir, "verify-profile.json"),
+      `${JSON.stringify({
+        task_id: "verify-profile",
+        branch: "codex/new-work",
+        worktree_path: worktreePath,
+        base_branch: "main",
+        status: "active",
+        mode: "pr",
+      })}\n`,
+    );
+    const result = run(["finish-pr", "verify-profile", "--verify", "anything", "--dry-run", "--state-root", stateRoot]);
+    assert(result.code !== 0, "unknown verification profile unexpectedly passed");
+    assert(result.stderr.includes("Unknown verification profile"));
   });
 } finally {
   rmSync(stateRoot, { recursive: true, force: true });

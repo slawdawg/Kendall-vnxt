@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -83,7 +83,7 @@ start options:
 finish-pr options:
   --message <text>          Commit message. Defaults to task title.
   --stage-all               Stage all current worktree changes before commit.
-  --verify <command>        Verification command to run before commit.
+  --verify <profile>        Verification profile: preflight, check, codex-workspace.
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
@@ -105,7 +105,8 @@ function parseOptions(argv) {
       continue;
     }
 
-    const [rawKey, inlineValue] = arg.slice(2).split("=", 2);
+    const [rawKey, ...inlineParts] = arg.slice(2).split("=");
+    const inlineValue = inlineParts.length > 0 ? inlineParts.join("=") : undefined;
     const key = rawKey.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
     if (inlineValue !== undefined) {
       options[key] = inlineValue;
@@ -139,6 +140,7 @@ function startWorkspace(argv) {
   }
   const slug = slugify(description);
   const taskId = String(options.taskId || `${dateStamp()}-${slug}`);
+  assertSafeTaskId(taskId);
   const branch = String(options.branch || `codex/${slug}`);
   assertSafeBranch(branch);
 
@@ -257,16 +259,18 @@ function finishPr(argv) {
   });
   const { manifest, path: manifestPath } = manifestRecord;
 
+  const verifyProfile = options.noVerify ? "" : String(options.verify || "");
+  const verifyCommand = verifyProfile ? verificationCommand(verifyProfile) : [];
   requireGh("finish-pr");
   if (manifest.mode === "experiment") {
     throw new Error("This workspace is marked as experiment mode. Create a PR only after changing its manifest mode to pr.");
   }
   assertSafeBranch(manifest.branch);
   assertWorktreeExists(manifest);
-  reconcileManifest(manifest);
+  assertCurrentBranch(manifest);
+  reconcileManifest(manifest, { refreshPr: true });
 
-  const worktreeStatus = parseStatus(manifest.worktree_path);
-  const verifyCommand = options.noVerify ? "" : String(options.verify || "");
+  let worktreeStatus = parseStatus(manifest.worktree_path);
   const commitMessage = String(options.message || manifest.title || manifest.description);
   const prTitle = String(options.title || manifest.title || manifest.description);
   const prBody = String(
@@ -288,8 +292,8 @@ function finishPr(argv) {
   }
 
   const plan = [];
-  if (verifyCommand) {
-    plan.push(verifyCommand);
+  if (verifyCommand.length > 0) {
+    plan.push(verifyCommand.join(" "));
   }
   if (worktreeStatus.unstaged && options.stageAll) {
     plan.push("git add --all");
@@ -306,11 +310,26 @@ function finishPr(argv) {
   }
 
   withManifestLock(state, manifest.task_id, () => {
-    if (verifyCommand) {
-      runShellChecked(verifyCommand, { cwd: manifest.worktree_path });
+    const lockedManifest = readManifest(manifestPath);
+    validateManifest(lockedManifest, manifestPath);
+    Object.assign(manifest, lockedManifest);
+    assertCurrentBranch(manifest);
+
+    const existingPr = prView(manifest);
+    if (existingPr?.baseRefName && existingPr.baseRefName !== manifest.base_branch) {
+      throw new Error(`Existing PR base is ${existingPr.baseRefName}, expected ${manifest.base_branch}.`);
+    }
+
+    if (verifyCommand.length > 0) {
+      runChecked(verifyCommand[0], verifyCommand.slice(1), { cwd: manifest.worktree_path });
       manifest.last_verified_at = new Date().toISOString();
-      manifest.last_verification_command = verifyCommand;
-      appendTaskEvent(manifest, "verified", verifyCommand);
+      manifest.last_verification_command = verifyCommand.join(" ");
+      appendTaskEvent(manifest, "verified", verifyCommand.join(" "));
+      worktreeStatus = parseStatus(manifest.worktree_path);
+    }
+
+    if (worktreeStatus.unstaged && !options.stageAll) {
+      throw new Error("Worktree has unstaged/untracked changes after verification. Stage intentionally first or pass --stage-all.");
     }
 
     if (worktreeStatus.unstaged && options.stageAll) {
@@ -327,7 +346,6 @@ function finishPr(argv) {
     runChecked("git", ["push", "-u", "origin", manifest.branch], { cwd: manifest.worktree_path });
     appendTaskEvent(manifest, "pushed", manifest.branch);
 
-    const existingPr = prView(manifest);
     if (existingPr) {
       manifest.pr_url = existingPr.url;
       manifest.pr_number = existingPr.number;
@@ -375,7 +393,7 @@ function cleanupMerged(argv) {
     if (manifest.status === "closed") {
       continue;
     }
-    reconcileManifest(manifest);
+    reconcileManifest(manifest, { refreshPr: true });
 
     const pr = prView(manifest);
     if (!pr || !pr.mergedAt) {
@@ -407,23 +425,32 @@ function cleanupMerged(argv) {
       continue;
     }
 
-    removeWorktree(manifest.worktree_path);
-    const branchDelete = git(["branch", "-d", manifest.branch], { cwd: repoRoot });
-    if (branchDelete.code !== 0 && !/not found/i.test(branchDelete.stderr)) {
-      throw new Error(branchDelete.stderr || branchDelete.stdout);
-    }
-    if (deleteRemote) {
-      runChecked("git", ["push", "origin", "--delete", manifest.branch], { cwd: repoRoot });
-    }
-
     withManifestLock(state, manifest.task_id, () => {
-      manifest.status = "closed";
-      manifest.pr_url = pr.url || manifest.pr_url;
-      manifest.pr_number = pr.number || manifest.pr_number;
-      manifest.merged_at = pr.mergedAt;
-      manifest.closed_at = new Date().toISOString();
-      manifest.updated_at = manifest.closed_at;
-      appendTaskEvent(manifest, "closed", `cleaned merged PR ${manifest.pr_url || manifest.pr_number}`);
+      try {
+        removeWorktree(manifest.worktree_path, state);
+        const branchDelete = git(["branch", "-d", manifest.branch], { cwd: repoRoot });
+        if (branchDelete.code !== 0 && !/not found/i.test(branchDelete.stderr)) {
+          throw new Error(branchDelete.stderr || branchDelete.stdout);
+        }
+        if (deleteRemote) {
+          runChecked("git", ["push", "origin", "--delete", manifest.branch], { cwd: repoRoot });
+        }
+
+        manifest.status = "closed";
+        manifest.pr_url = pr.url || manifest.pr_url;
+        manifest.pr_number = pr.number || manifest.pr_number;
+        manifest.merged_at = pr.mergedAt;
+        manifest.closed_at = new Date().toISOString();
+        manifest.updated_at = manifest.closed_at;
+        appendTaskEvent(manifest, "closed", `cleaned merged PR ${manifest.pr_url || manifest.pr_number}`);
+      } catch (error) {
+        manifest.status = "cleanup_partial";
+        manifest.cleanup_error = error.message;
+        manifest.updated_at = new Date().toISOString();
+        appendTaskEvent(manifest, "cleanup_partial", error.message);
+        writeManifest(manifestPath, manifest);
+        throw error;
+      }
       writeManifest(manifestPath, manifest);
     });
     console.log(`Closed ${manifest.task_id}`);
@@ -451,7 +478,7 @@ function rebuildIndex(argv) {
   for (const record of records) {
     const branch = record.branch.replace(/^refs\/heads\//, "");
     const slug = slugify(branch.replace(/^codex\//, ""));
-    const taskId = `${dateStamp()}-${slug}`;
+    const taskId = uniqueTaskId(state.tasksDir, `${dateStamp()}-${slug}`);
     const manifestPath = join(state.tasksDir, `${taskId}.json`);
     if (existsSync(manifestPath)) {
       console.log(`SKIP ${taskId}: manifest already exists.`);
@@ -480,7 +507,7 @@ function rebuildIndex(argv) {
       last_commit: record.head || null,
       events: [taskEvent("rebuilt", "manifest rebuilt from git worktree list")],
     };
-    reconcileManifest(manifest);
+    reconcileManifest(manifest, { refreshPr: true });
 
     if (options.dryRun) {
       printPlan(`rebuild-index ${taskId}`, [`write ${manifestPath}`]);
@@ -488,7 +515,7 @@ function rebuildIndex(argv) {
       continue;
     }
 
-    writeManifest(manifestPath, manifest);
+    withManifestLock(state, taskId, () => writeManifest(manifestPath, manifest));
     console.log(`Rebuilt manifest ${taskId}`);
   }
 }
@@ -568,12 +595,27 @@ function readManifests(state) {
     .filter((name) => name.endsWith(".json"))
     .map((name) => {
       const path = join(state.tasksDir, name);
-      const manifest = JSON.parse(readFileSync(path, "utf8"));
-      validateManifest(manifest, path);
-      reconcileManifest(manifest);
-      return { path, manifest };
+      try {
+        const manifest = readManifest(path);
+        validateManifest(manifest, path);
+        reconcileManifest(manifest);
+        return { path, manifest };
+      } catch (error) {
+        return { path, error };
+      }
+    })
+    .filter((record) => {
+      if (record.error) {
+        console.error(`WARN: skipping invalid manifest ${record.path}: ${record.error.message}`);
+        return false;
+      }
+      return true;
     })
     .sort((left, right) => left.manifest.task_id.localeCompare(right.manifest.task_id));
+}
+
+function readManifest(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function findManifest(state, query, options = {}) {
@@ -645,6 +687,42 @@ function assertSafeBranch(branch) {
   }
 }
 
+function assertSafeTaskId(taskId) {
+  if (taskId !== basename(taskId) || taskId.includes("..") || !/^[a-zA-Z0-9._-]+$/.test(taskId)) {
+    throw new Error(`Invalid task id: ${taskId}`);
+  }
+}
+
+function uniqueTaskId(tasksDir, baseTaskId) {
+  assertSafeTaskId(baseTaskId);
+  let candidate = baseTaskId;
+  let index = 2;
+  while (existsSync(join(tasksDir, `${candidate}.json`)) || existsSync(join(tasksDir, `${candidate}.lock`))) {
+    candidate = `${baseTaskId}-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function assertCurrentBranch(manifest) {
+  const result = git(["branch", "--show-current"], { cwd: manifest.worktree_path });
+  if (result.code !== 0 || result.stdout.trim() !== manifest.branch) {
+    throw new Error(`Worktree is on ${result.stdout.trim() || "unknown branch"}, expected ${manifest.branch}.`);
+  }
+}
+
+function verificationCommand(profile) {
+  const profiles = {
+    preflight: ["node", "./scripts/preflight.mjs"],
+    check: ["pnpm.cmd", "run", "check"],
+    "codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],
+  };
+  if (!profiles[profile]) {
+    throw new Error(`Unknown verification profile: ${profile}. Use preflight, check, or codex-workspace.`);
+  }
+  return profiles[profile];
+}
+
 function requireGh(commandName) {
   const result = run("gh", ["--version"], { cwd: repoRoot });
   if (result.code !== 0) {
@@ -661,9 +739,13 @@ function validateManifest(manifest, path) {
   assertSafeBranch(manifest.branch);
 }
 
-function reconcileManifest(manifest) {
+function reconcileManifest(manifest, options = {}) {
   if (!manifest.events) {
     manifest.events = [];
+  }
+
+  if (!options.refreshPr) {
+    return manifest;
   }
 
   const pr = manifest.pr_url || manifest.pr_number ? prView(manifest) : prView({ ...manifest, pr_number: null });
@@ -731,10 +813,14 @@ function appendTaskEvent(manifest, type, message) {
   manifest.events.push(taskEvent(type, message));
 }
 
-function removeWorktree(worktreePath) {
+function removeWorktree(worktreePath, state) {
+  assertManagedWorktreePath(worktreePath, state);
   const result = git(["worktree", "remove", worktreePath], { cwd: repoRoot });
   if (result.code === 0) {
-    return;
+    if (existsSync(worktreePath)) {
+      throw new Error(`Git removed worktree metadata but path still exists: ${worktreePath}`);
+    }
+    return true;
   }
 
   if (worktreeListed(worktreePath)) {
@@ -743,6 +829,19 @@ function removeWorktree(worktreePath) {
 
   normalizeAttributes(worktreePath);
   rmSync(worktreePath, { recursive: true, force: true });
+  if (existsSync(worktreePath)) {
+    throw new Error(`Worktree path still exists after fallback removal: ${worktreePath}`);
+  }
+  return true;
+}
+
+function assertManagedWorktreePath(worktreePath, state) {
+  const target = resolve(worktreePath);
+  const managedRoot = resolve(state.worktreesDir);
+  const rel = relative(managedRoot, target);
+  if (!rel || rel.startsWith("..") || resolve(managedRoot, rel) !== target) {
+    throw new Error(`Refusing to remove unmanaged worktree path: ${worktreePath}`);
+  }
 }
 
 function worktreeListed(worktreePath) {
@@ -760,11 +859,14 @@ function normalizeAttributes(targetPath) {
   if (process.platform !== "win32") {
     return;
   }
-  run("powershell.exe", [
+  const result = run("powershell.exe", [
     "-NoProfile",
     "-Command",
     `$target = ${JSON.stringify(targetPath)}; Get-ChildItem -LiteralPath $target -Recurse -Force | ForEach-Object { $_.Attributes = 'Normal' }`,
   ]);
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout || `Could not normalize attributes for ${targetPath}`);
+  }
 }
 
 function parseWorktreePorcelain(value) {
@@ -817,7 +919,11 @@ function prView(manifest) {
   if (result.code !== 0) {
     return null;
   }
-  return JSON.parse(result.stdout);
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`GitHub CLI returned invalid JSON for PR selector ${selector}.`);
+  }
 }
 
 function prNumberFromUrl(url) {

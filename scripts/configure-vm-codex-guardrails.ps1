@@ -143,18 +143,20 @@ if ($ApplyGitHubProtection) {
         allow_fork_syncing = $false
     } | ConvertTo-Json -Depth 10
 
-    Set-Content -LiteralPath $payloadPath -Value $payload -NoNewline
-    gh api `
-        --method PUT `
-        -H "Accept: application/vnd.github+json" `
-        -H "X-GitHub-Api-Version: 2022-11-28" `
-        "/repos/$repoSlug/branches/$ProtectedBranch/protection" `
-        --input $payloadPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to apply GitHub branch protection."
+    try {
+        Set-Content -LiteralPath $payloadPath -Value $payload -NoNewline
+        gh api `
+            --method PUT `
+            -H "Accept: application/vnd.github+json" `
+            -H "X-GitHub-Api-Version: 2022-11-28" `
+            "/repos/$repoSlug/branches/$ProtectedBranch/protection" `
+            --input $payloadPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to apply GitHub branch protection."
+        }
+    } finally {
+        Remove-Item -LiteralPath $payloadPath -Force -ErrorAction SilentlyContinue
     }
-
-    Remove-Item -LiteralPath $payloadPath -Force
     Write-Host "Applied GitHub protection to $repoSlug branch $ProtectedBranch"
 } else {
     Write-Host "Skipped GitHub branch protection. Re-run with -ApplyGitHubProtection to apply it."
