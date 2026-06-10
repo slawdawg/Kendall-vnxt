@@ -8,7 +8,7 @@ Scope: Operator approval choices for blocked Ollama local-provider and subscript
 
 This packet converts the current blocked execution-authority work into explicit approval choices.
 
-The operator approved Option A on 2026-06-09 for Stories 4.1-4.3 only. The operator approved Option B on 2026-06-09 for Stories 5.1-5.4 only. Real execution options still require explicit approval before a blocked story can move from `Blocked Pending Explicit Approval` to implementation.
+The operator approved Option A on 2026-06-09 for Stories 4.1-4.3 only. The operator approved Option B on 2026-06-09 for Stories 5.1-5.4 only. The operator approved Option C on 2026-06-10 for Story 4.4 only, scoped to the VM-to-host Ollama endpoint and model listed below. Other real execution options still require explicit approval before a blocked story can move from `Blocked Pending Explicit Approval` to implementation.
 
 ## Current Blocked Families
 
@@ -88,7 +88,23 @@ Still blocked:
 
 ## Approval Option C: Ollama Limited Execution
 
-Do not use this until Option A is complete and verified.
+Approved on 2026-06-10 after Option A was completed and verified.
+
+```text
+Approve Story 4.4 for Ollama limited execution.
+
+Authority family: Ollama local provider only.
+Approved endpoint: http://192.168.1.128:11434/v1/chat/completions
+Approved model id: qwen3:14b
+Approved caller/source: Kendall_vNxt VM at 192.168.1.118 only.
+Connect timeout: 2 seconds
+Total timeout: 120 seconds
+Cancellation behavior: cancellation must abort the in-flight provider request and mark the execution attempt cancelled.
+Artifact retention limits: retain prompt summary, response summary, model id, endpoint family, timeout/cancellation outcome, redaction result, finish reason, token counts, and artifact references only; do not retain raw prompts, raw completions, raw reasoning fields, or raw provider payloads.
+Dashboard enabled-state copy: show Ollama enabled only for the approved host endpoint and qwen3:14b model, while LM Studio, vLLM, llama.cpp, premium, command, source mutation, credentials, remote provider, and subscription-agent launch remain disabled.
+Review point: stop after Story 4.4 is implemented, verified, committed, pushed, and PR-ready.
+Rollback expectation: disabling either SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS or the Ollama-specific gate returns Ollama registry/check evidence to disabled/no-call state and rejects new Ollama execution.
+```
 
 Required operator-supplied values:
 

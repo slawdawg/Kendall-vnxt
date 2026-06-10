@@ -12,13 +12,15 @@ Generic continuation instructions do not approve execution authority.
 
 On 2026-06-09, the operator explicitly approved Stories 4.1-4.3 for non-executing Ollama preparation only. That approval allows disabled-default settings, registry evidence, prompt redaction/retention contracts, timeout/cancellation evidence, dashboard/report/export updates, and no-call fixture tests. It does not approve Story 4.4, Ollama HTTP calls, endpoint discovery, model discovery, provider/model calls, process launch, shell command execution, source mutation, credential access, premium execution, external sends, or subscription-agent launch.
 
+On 2026-06-10, the operator explicitly approved Story 4.4 for Ollama limited execution only. That approval allows Ollama provider HTTP calls only from the Kendall_vNxt VM at `192.168.1.118` to endpoint `http://192.168.1.128:11434/v1/chat/completions` using model `qwen3:14b`, with a 2 second connect timeout, 120 second total timeout, metadata-only retention, and rollback by disabling either provider gate. It does not approve endpoint discovery, model discovery, raw prompt/completion/reasoning/provider payload retention, alternate endpoints, alternate models, LM Studio, vLLM, llama.cpp, remote providers, process launch, shell command execution, source mutation, credential access, premium execution, external sends, or subscription-agent launch.
+
 On 2026-06-09, the operator explicitly approved subscription-agent launch Stories 5.1-5.4 for non-executing preparation only. That approval allows disabled-default launch settings, target registry evidence, launch approval binding and stale rejection, workspace/output/session contracts, disabled lifecycle adapter evidence, dashboard/report/export updates, and no-process fixture tests. It does not approve Story 5.5, real process launch, command execution, credential/session access, source mutation by workers, external sends, provider/model calls, premium execution, or supervised subscription-agent process execution.
 
 ## Current Blocked Execution Stories
 
 ### Ollama Local Provider
 
-- `docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
+No currently blocked Ollama local-provider story remains for the approved VM-to-host endpoint/model. Any endpoint, model, provider, or retention expansion still requires explicit successor approval.
 
 ### Subscription-Agent Launch
 
@@ -82,7 +84,7 @@ Stories 4.1-4.3 are approved only for non-executing Ollama preparation and no-ca
 
 Current status remains:
 
-- Ollama provider calls disabled,
+- Ollama provider calls limited to the approved Story 4.4 VM-to-host endpoint/model and disabled unless all exact gates are configured,
 - LM Studio provider calls disabled,
 - vLLM provider calls disabled,
 - llama.cpp provider calls disabled,

@@ -96,8 +96,11 @@ for (const ollamaText of [
   "test_ollama_provider_gate_stays_disabled_when_broad_gate_is_disabled",
   "test_ollama_timeout_settings_require_positive_values",
   "configured_ollama_gate_missing_model",
-  "adapter_ready_no_call",
-  "ollama_provider_adapter_not_implemented",
+  "configured_ollama_gate_missing_endpoint",
+  "enabled_approved_host_endpoint",
+  "ollama_provider_enabled_for_approved_host_endpoint",
+  "http://192.168.1.128:11434/v1/chat/completions",
+  "qwen3:14b",
 ]) {
   assertCondition(
     serviceSource.includes(ollamaText) || supervisorTests.includes(ollamaText),

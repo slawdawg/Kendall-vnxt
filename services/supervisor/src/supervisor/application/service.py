@@ -39,6 +39,7 @@ from supervisor.api.schemas import (
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
     LocalEvidencePacketView,
+    LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
     ManagedRecipePolicyReportView,
     MaintenanceActionPlanReportView,
@@ -104,6 +105,7 @@ from supervisor.api.schemas import (
 from supervisor.config.settings import Settings
 from supervisor.domain.disabled_provider_adapter import DisabledLocalProviderAdapter
 from supervisor.domain.local_readonly_worker import MockLocalReadonlyWorkerAdapter
+from supervisor.domain.ollama_provider_adapter import OllamaProviderAdapter
 from supervisor.domain.recipes import EXECUTION_RECIPES, ExecutionRecipe, RecipeCommand
 from supervisor.domain.routing import (
     ExecutionLane,
@@ -228,6 +230,12 @@ class SupervisorService:
         self.worker_registry = StaticWorkerRegistry()
         self.local_readonly_worker = MockLocalReadonlyWorkerAdapter()
         self.disabled_provider_adapter = DisabledLocalProviderAdapter()
+        self.ollama_provider_adapter = OllamaProviderAdapter(
+            endpoint_url=self.settings.ollama_endpoint_url or self.settings.ollama_approved_endpoint_url,
+            model_id=self.settings.ollama_model_id or self.settings.ollama_approved_model_id,
+            connect_timeout_seconds=self.settings.ollama_connect_timeout_seconds,
+            total_timeout_seconds=self.settings.ollama_total_timeout_seconds,
+        )
         self.subscription_launch_registry = SubscriptionLaunchRegistry()
         self.disabled_subscription_launch_adapter = DisabledSubscriptionLaunchAdapter()
 
@@ -1573,11 +1581,11 @@ class SupervisorService:
                 label="Preserve authority stop lines",
                 priority="P0",
                 status="blocked_pending_explicit_approval",
-                summary="Keep provider execution, process launch, premium execution, commands, network, source mutation, and credential access outside maintenance work.",
+                summary="Keep unapproved provider execution, process launch, premium execution, commands, network, source mutation, and credential access outside maintenance work.",
                 evidence=[
                     f"{len(blocked_backlog_items)} safe backlog items remain blocked pending explicit approval.",
-                    "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
-                    "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
+                    "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
+                    "Ollama Stories 4.1-4.3 remain the required gate, redaction, retention, timeout, and no-call preparation evidence.",
                     "Subscription-agent Story 5.5 remains blocked.",
                 ],
                 verificationCommands=["pnpm run check:docs", "pnpm run check:execution-boundary", "pnpm run check:process-lifecycle"],
@@ -1964,10 +1972,10 @@ class SupervisorService:
                 trackId="authority-blocker-watch",
                 label="Authority blocker watch",
                 status="blocked_pending_explicit_approval",
-                summary="Provider calls and subscription-agent launch stay blocked while maintenance work continues above the execution line.",
+                summary="Only the approved Ollama host endpoint/model may cross the provider boundary; all other provider calls and subscription-agent launch stay blocked.",
                 evidence=[
-                    "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
-                    "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
+                    "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
+                    "Raw Ollama prompts, completions, reasoning fields, and provider payloads must not be retained.",
                     "Subscription-agent launch Story 5.5 remains blocked.",
                     "Generic continuation language is not execution-authority approval.",
                 ],
@@ -2153,11 +2161,11 @@ class SupervisorService:
                 label="Execution-authority stories",
                 priority="blocked",
                 status="blocked_pending_explicit_approval",
-                summary="Ollama provider execution and subscription-agent process launch remain outside the safe backlog.",
+                summary="Unapproved provider execution and subscription-agent process launch remain outside the safe backlog.",
                 recommendedSliceSize="do_not_start",
                 evidence=[
-                    "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
-                    "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
+                    "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
+                    "LM Studio, vLLM, llama.cpp, remote providers, premium execution, commands, source mutation, credentials, and unapproved network access remain blocked.",
                     "Subscription-agent Story 5.5 remains blocked pending explicit process-launch approval.",
                     f"Blocked maintenance tracks: {', '.join(blocked_maintenance_tracks) or 'none'}.",
                 ],
@@ -2442,24 +2450,27 @@ class SupervisorService:
                     "Mock local read-only evidence does not call provider HTTP endpoints or model APIs.",
                     "Provider-specific gates must be satisfied before any local provider can become adapter-ready.",
                 ],
-                provider_calls_allowed=False,
-                model_calls_allowed=False,
+                provider_calls_allowed=bool(ollama_state["provider_calls_allowed"]),
+                model_calls_allowed=bool(ollama_state["model_calls_allowed"]),
             ),
             self._execution_configuration_check(
                 check_id="ollama-provider-gate",
                 label="Ollama provider gate",
-                enabled=False,
+                enabled=bool(ollama_state["enabled"]),
                 disabled_reason=ollama_state["disabled_reason"],  # type: ignore[arg-type]
                 affected_workers=["local.ollama.disabled"],
                 evidence=[
                     "SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS is the broad local-provider gate.",
                     "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to false and gates only Ollama.",
                     "SUPERVISOR_OLLAMA_MODEL_ID is required before adapter readiness; there is no hardcoded default model.",
+                    "SUPERVISOR_OLLAMA_ENDPOINT_URL must match the approved VM-to-host endpoint exactly.",
+                    f"Approved endpoint: {self.settings.ollama_approved_endpoint_url}.",
+                    f"Approved model id: {self.settings.ollama_approved_model_id}.",
                     f"Registry state: {ollama_state['registry_state']}.",
-                    "Story 4.4 is still required before any Ollama HTTP call can exist.",
+                    "Story 4.4 approval allows only this Ollama endpoint/model; LM Studio, vLLM, llama.cpp, remote providers, premium, commands, source mutation, credentials, and subscription launch remain disabled.",
                 ],
-                provider_calls_allowed=False,
-                model_calls_allowed=False,
+                provider_calls_allowed=bool(ollama_state["provider_calls_allowed"]),
+                model_calls_allowed=bool(ollama_state["model_calls_allowed"]),
             ),
             self._execution_configuration_check(
                 check_id="premium-execution",
@@ -2540,7 +2551,14 @@ class SupervisorService:
     def _ollama_provider_gate_state(self) -> dict[str, object]:
         broad_gate_enabled = self.settings.allow_local_provider_calls
         provider_gate_enabled = self.settings.allow_ollama_provider_calls
-        model_id_configured = bool((self.settings.ollama_model_id or "").strip())
+        endpoint_url = (self.settings.ollama_endpoint_url or "").strip()
+        approved_endpoint_url = self.settings.ollama_approved_endpoint_url.strip()
+        model_id = (self.settings.ollama_model_id or "").strip()
+        approved_model_id = self.settings.ollama_approved_model_id.strip()
+        endpoint_configured = bool(endpoint_url)
+        endpoint_approved = endpoint_url == approved_endpoint_url
+        model_id_configured = bool(model_id)
+        model_id_approved = model_id == approved_model_id
 
         if not broad_gate_enabled and not provider_gate_enabled:
             registry_state = "disabled"
@@ -2554,22 +2572,41 @@ class SupervisorService:
             registry_state = "disabled"
             disabled_reason = "local_provider_http_calls_not_enabled"
             adapter_ready = False
+        elif not endpoint_configured:
+            registry_state = "configured_ollama_gate_missing_endpoint"
+            disabled_reason = "ollama_endpoint_not_configured"
+            adapter_ready = False
+        elif not endpoint_approved:
+            registry_state = "configured_ollama_gate_unapproved_endpoint"
+            disabled_reason = "ollama_endpoint_not_approved"
+            adapter_ready = False
         elif not model_id_configured:
             registry_state = "configured_ollama_gate_missing_model"
             disabled_reason = "ollama_model_id_not_configured"
             adapter_ready = False
+        elif not model_id_approved:
+            registry_state = "configured_ollama_gate_unapproved_model"
+            disabled_reason = "ollama_model_id_not_approved"
+            adapter_ready = False
         else:
-            registry_state = "adapter_ready_no_call"
-            disabled_reason = "ollama_provider_adapter_not_implemented"
+            registry_state = "enabled_approved_host_endpoint"
+            disabled_reason = None
             adapter_ready = True
+        enabled = adapter_ready and disabled_reason is None
 
         return {
             "broad_gate_enabled": broad_gate_enabled,
             "provider_gate_enabled": provider_gate_enabled,
+            "endpoint_configured": endpoint_configured,
+            "endpoint_approved": endpoint_approved,
             "model_id_configured": model_id_configured,
+            "model_id_approved": model_id_approved,
             "registry_state": registry_state,
             "disabled_reason": disabled_reason,
             "adapter_ready": adapter_ready,
+            "enabled": enabled,
+            "provider_calls_allowed": enabled,
+            "model_calls_allowed": enabled,
         }
 
     def _subscription_launch_target_views(self) -> list[dict[str, object]]:
@@ -2988,7 +3025,7 @@ class SupervisorService:
                     "environment variables and credential stores",
                     "provider HTTP request/response bodies",
                     "model prompts or completions from external providers",
-                    "raw Ollama prompts and completions",
+                    "raw Ollama prompts, completions, reasoning fields, and provider payloads",
                     "raw subscription-agent stdout and stderr",
                     "subscription-agent inherited environment values",
                     "filesystem snapshots outside recorded artifact references",
@@ -3093,13 +3130,15 @@ class SupervisorService:
                 ),
                 RuntimeEvidenceReviewNavigatorItemView(
                     itemId="review-ollama-no-call-prep",
-                    label="Ollama no-call preparation",
+                    label="Ollama approved host provider lane",
                     priority="P1",
-                    target="Review Ollama gate, prompt-retention, timeout, and cancellation evidence without approving provider calls.",
-                    summary="Stories 4.1-4.3 add Ollama-specific non-executing evidence only; Story 4.4 remains required for any HTTP adapter.",
+                    target="Review Ollama gate, approved endpoint/model, prompt-retention, timeout, and cancellation evidence.",
+                    summary="Stories 4.1-4.4 now allow only the approved VM-to-host Ollama endpoint/model with metadata-only retention.",
                     evidence=[
                         "SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS defaults to false.",
-                        "Raw Ollama prompts and completions are excluded from workflow events and runtime exports.",
+                        "Approved endpoint: http://192.168.1.128:11434/v1/chat/completions.",
+                        "Approved model id: qwen3:14b.",
+                        "Raw Ollama prompts, completions, reasoning fields, and provider payloads are excluded from workflow events and runtime exports.",
                         "cancel_requested -> request_abort_recorded",
                         "retry_requires_new_route_decision_and_fresh_approval",
                     ],
@@ -3112,11 +3151,12 @@ class SupervisorService:
                         "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
                         "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
                         "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
+                        "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md",
                     ],
                     dashboardAnchors=["#runtime-evidence-export", "/controls#execution-readiness-report"],
                     stopLines=[
-                        "Ollama no-call preparation keeps no provider/model calls allowed.",
-                        "Do not add an HTTP adapter, endpoint discovery, model discovery, or raw payload retention before Story 4.4 approval.",
+                        "Ollama provider/model calls are allowed only for the approved host endpoint and qwen3:14b model.",
+                        "Do not add endpoint discovery, model discovery, raw payload retention, or any other provider/model authority without a successor approval.",
                     ],
                 ),
                 RuntimeEvidenceReviewNavigatorItemView(
@@ -3203,6 +3243,9 @@ class SupervisorService:
                 model_id_configured = proof.model_id_configured
                 adapter_ready = proof.adapter_ready
                 disabled_reason = proof.disabled_reason
+                http_calls_attempted = proof.http_calls_attempted
+                model_calls_attempted = proof.model_calls_attempted
+                network_access_attempted = proof.network_access_attempted
                 connect_timeout_seconds = proof.connect_timeout_seconds
                 total_timeout_seconds = proof.total_timeout_seconds
                 if worker.worker_id == "local.ollama.disabled":
@@ -3211,7 +3254,14 @@ class SupervisorService:
                     provider_specific_gate_enabled = bool(ollama_state["provider_gate_enabled"])
                     model_id_configured = bool(ollama_state["model_id_configured"])
                     adapter_ready = bool(ollama_state["adapter_ready"])
-                    disabled_reason = "ollama_provider_adapter_not_implemented" if adapter_ready else proof.disabled_reason
+                    disabled_reason = (
+                        "ollama_provider_enabled_for_approved_host_endpoint"
+                        if bool(ollama_state["enabled"])
+                        else str(ollama_state["disabled_reason"] or proof.disabled_reason)
+                    )
+                    http_calls_attempted = bool(ollama_state["enabled"])
+                    model_calls_attempted = bool(ollama_state["enabled"])
+                    network_access_attempted = bool(ollama_state["enabled"])
                     connect_timeout_seconds = self.settings.ollama_connect_timeout_seconds
                     total_timeout_seconds = self.settings.ollama_total_timeout_seconds
                 proofs.append(
@@ -3226,9 +3276,9 @@ class SupervisorService:
                         adapterReady=adapter_ready,
                         endpointFamily=proof.endpoint_family,
                         endpointPolicy=proof.endpoint_policy,
-                        httpCallsAttempted=proof.http_calls_attempted,
-                        modelCallsAttempted=proof.model_calls_attempted,
-                        networkAccessAttempted=proof.network_access_attempted,
+                        httpCallsAttempted=http_calls_attempted,
+                        modelCallsAttempted=model_calls_attempted,
+                        networkAccessAttempted=network_access_attempted,
                         credentialAccessAttempted=proof.credential_access_attempted,
                         redactionChecks=list(proof.redaction_checks),
                         promptConstructionSources=list(proof.prompt_construction_sources),
@@ -4146,6 +4196,7 @@ class SupervisorService:
             for event in events[:8]
         ]
         threat_boundary = self.get_threat_boundary()
+        ollama_state = self._ollama_provider_gate_state()
         return LocalEvidencePacketView(
             packetId=f"local-evidence-packet-{decision.decision_id}",
             workItemId=item.id,
@@ -4160,6 +4211,12 @@ class SupervisorService:
             boundaries=self._local_evidence_boundaries(item)
             + [
                 f"Provider endpoints policy: {threat_boundary.providerEndpointPolicy}.",
+                (
+                    f"Ollama approved endpoint: {self.settings.ollama_approved_endpoint_url} with model "
+                    f"{self.settings.ollama_approved_model_id} only."
+                    if bool(ollama_state["enabled"])
+                    else "Ollama provider calls remain disabled until the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
+                ),
                 f"Credential policy: {threat_boundary.credentialPolicy}.",
             ],
             allowedPaths=list(recipe.allowed_paths) if recipe else [],
@@ -4220,6 +4277,15 @@ class SupervisorService:
 
         events = await self.list_work_item_events(session, work_item_id)
         threat_boundary = self.get_threat_boundary()
+        provider_attempt = None
+        ollama_state = self._ollama_provider_gate_state()
+        evidence_summary = self._local_evidence_summary(item, preview, events)
+        if bool(ollama_state["enabled"]):
+            provider_result = await self.ollama_provider_adapter.explain(
+                evidence_summary=evidence_summary,
+                evidence_count=len(events),
+            )
+            provider_attempt = LocalProviderAttemptMetadataView(**provider_result.to_metadata())
         explanation = LocalEvidenceExplanationView(
             explanationId=f"local-evidence-{preview.decision.decisionId}",
             workItemId=item.id,
@@ -4229,7 +4295,7 @@ class SupervisorService:
             stepId=preview.profile.stepId,
             createdAt=datetime.now(timezone.utc),
             route=preview.decision,
-            summary=self._local_evidence_summary(item, preview, events),
+            summary=evidence_summary,
             evidence=[
                 LocalEvidenceItemView(
                     eventType=event.event_type,
@@ -4241,9 +4307,16 @@ class SupervisorService:
             boundaries=self._local_evidence_boundaries(item)
             + [
                 f"Provider endpoints policy: {threat_boundary.providerEndpointPolicy}.",
+                (
+                    f"Ollama approved endpoint: {self.settings.ollama_approved_endpoint_url} with model "
+                    f"{self.settings.ollama_approved_model_id} only."
+                    if bool(ollama_state["enabled"])
+                    else "Ollama provider calls remain disabled until the broad gate, provider gate, exact approved endpoint, and exact approved model are configured."
+                ),
                 f"Credential policy: {threat_boundary.credentialPolicy}.",
             ],
             nextStepSuggestions=self._local_evidence_next_steps(preview),
+            providerAttempt=provider_attempt,
             writesAllowed=False,
             commandsAllowed=False,
         )
@@ -4402,6 +4475,7 @@ class SupervisorService:
                 "confidenceBand": explanation.route.confidenceBand,
                 "reasonCodes": list(explanation.route.reasonCodes),
                 "evidenceCount": len(explanation.evidence),
+                "providerAttempt": explanation.providerAttempt.model_dump() if explanation.providerAttempt else None,
                 "writesAllowed": explanation.writesAllowed,
                 "commandsAllowed": explanation.commandsAllowed,
             },

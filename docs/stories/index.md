@@ -9,7 +9,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 ### Ollama Local Provider
 
-- `4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
+No currently blocked Ollama local-provider story remains for the approved VM-to-host endpoint/model. Any endpoint, model, provider, or retention expansion still requires explicit successor approval.
 
 ### Subscription-Agent Launch
 
@@ -19,6 +19,7 @@ These stories must not be implemented until the operator explicitly approves the
 
 | Story | Slice |
 | --- | --- |
+| `4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md` | VM-to-host Ollama limited provider adapter for endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`, with metadata-only retention and disabled-default rollback. |
 | `5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md` | Disabled subscription launch lifecycle adapter evidence for timeout, cancellation, cleanup, and terminal states without process launch. |
 | `5-3-subscription-launch-workspace-output-and-session-contract.md` | Artifact-only workspace, session, environment, output, redaction, and retention contracts for subscription launch prep. |
 | `5-2-subscription-launch-approval-binding-and-stale-rejection.md` | Launch approval binding fields and non-executing stale/missing approval rejection evidence. |

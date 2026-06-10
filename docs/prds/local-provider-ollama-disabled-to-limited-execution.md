@@ -8,9 +8,9 @@ Scope: Future Ollama local provider enablement path
 
 This PRD drafts the requirements for moving the disabled Ollama provider from metadata-only/no-call proof to a limited local provider execution lane.
 
-Stories 4.1-4.3 are complete as non-executing no-call preparation only. They add disabled-default settings, registry evidence, prompt redaction and retention contracts, timeout and cancellation evidence, dashboard/report/export updates, and no-call fixture tests. Story 4.4 remains blocked pending explicit provider-execution approval.
+Stories 4.1-4.3 are complete as non-executing no-call preparation only. They add disabled-default settings, registry evidence, prompt redaction and retention contracts, timeout and cancellation evidence, dashboard/report/export updates, and no-call fixture tests. Story 4.4 is approved for VM-to-host Ollama limited execution only for endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`.
 
-This PRD does not approve provider execution. Ollama provider calls remain disabled until Story 4.4 or a successor decision record is explicitly approved with the required endpoint, model, timeout, review, and rollback scope.
+This PRD does not approve any broader provider execution. Ollama provider calls remain disabled unless the broad local-provider gate, Ollama-specific gate, exact approved endpoint, and exact approved model id are configured. Any endpoint discovery, model discovery, raw provider payload retention, alternate model, alternate endpoint, LM Studio, vLLM, llama.cpp, remote provider, premium, command, source mutation, credential, or subscription-agent authority requires a successor approval.
 
 Review record:
 
@@ -72,7 +72,7 @@ Initial authority mode:
 
 Allowed endpoint family, after approval only:
 
-- localhost Ollama OpenAI-compatible endpoint.
+- approved VM-to-host Ollama OpenAI-compatible endpoint.
 
 Required controls:
 

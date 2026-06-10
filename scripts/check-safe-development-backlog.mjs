@@ -75,8 +75,8 @@ for (const itemId of [
 for (const safetyText of [
   "blocked_pending_explicit_approval",
   "do_not_start",
-  "Ollama Story 4.4 remains blocked",
-  "Ollama Stories 4.1-4.3 are non-executing no-call preparation only",
+  "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
+  "LM Studio, vLLM, llama.cpp, remote providers, premium execution, commands, source mutation, credentials, and unapproved network access remain blocked.",
   "Subscription-agent Story 5.5 remains blocked pending explicit process-launch approval",
   "provider/model calls",
   "worker shell commands",
