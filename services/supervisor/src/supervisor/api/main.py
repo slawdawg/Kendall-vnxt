@@ -114,6 +114,18 @@ async def update_candidate_work(
     return ApiEnvelope(data=service.to_candidate_work_view(candidate))
 
 
+@app.post("/candidate-work/{candidate_work_id}/promote", response_model=ApiEnvelope)
+async def promote_candidate_work(candidate_work_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        promoted = await service.promote_candidate_work(session, candidate_work_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "candidate_work_promotion_rejected").model_dump()) from exc
+    if not promoted:
+        raise HTTPException(status_code=404, detail=error_response("Candidate work not found.", "candidate_work_not_found").model_dump())
+    candidate, item = promoted
+    return ApiEnvelope(data={"candidateWork": service.to_candidate_work_view(candidate), "workItem": service.to_work_item_view(item)})
+
+
 @app.get("/work-items", response_model=ApiEnvelope)
 async def list_work_items(session: AsyncSession = Depends(get_session)):
     items = await service.list_work_items(session)

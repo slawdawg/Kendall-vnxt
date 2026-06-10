@@ -127,7 +127,7 @@ function gitOutput(args: string[]) {
 }
 
 test.describe("dashboard workflow coverage", () => {
-  test("shows proposed work empty state and read-only candidate cards", async ({ page, request }) => {
+  test("shows proposed work empty state and promotes approved work", async ({ page, request }) => {
     await page.goto("/proposed-work");
 
     await expect(page.getByRole("heading", { name: "Ideas waiting at the front door" })).toBeVisible();
@@ -155,7 +155,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(candidateCard.getByText("docs/stories/6-4-bmad-import-package-parser.md")).toBeVisible();
     await expect(candidateCard.getByText("Review before active work")).toBeVisible();
     await expect(page.getByRole("link", { name: /Proposed Work/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Start|Run|Approve|Promote|Route/i })).toHaveCount(0);
+    await expect(candidateCard.getByRole("button", { name: "Move earlier" })).toBeVisible();
+    await expect(candidateCard.getByRole("button", { name: "Approve" })).toBeVisible();
+    await expect(candidateCard.getByRole("button", { name: "Move to active work" })).toBeDisabled();
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(candidateCard).toBeVisible();
@@ -165,6 +167,14 @@ test.describe("dashboard workflow coverage", () => {
         page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
       )
       .toBeTruthy();
+
+    await candidateCard.getByRole("button", { name: "Approve" }).click();
+    const approvedCard = page.locator("article").filter({ hasText: "Review Story 6.4 parser" }).first();
+    await expect(approvedCard.getByText("Approved")).toBeVisible();
+    await expect(approvedCard.getByRole("button", { name: "Move to active work" })).toBeEnabled();
+    await approvedCard.getByRole("button", { name: "Move to active work" }).click();
+    await expect(page).toHaveURL(/\/work-items\/.+/);
+    await expect(page.getByText("Promote proposed work", { exact: false })).toHaveCount(0);
   });
 
   test("shows supervisor-owned recipe details during intake", async ({ page }) => {

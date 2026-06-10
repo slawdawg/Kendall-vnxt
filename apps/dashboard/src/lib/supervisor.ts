@@ -1,6 +1,8 @@
 import type {
   ApiEnvelope,
   AuthorityReadinessMatrixReportView,
+  CandidateWorkPromotionView,
+  CandidateWorkUpdatePayload,
   CandidateWorkView,
   DashboardE2EReportView,
   DeliveryReadinessPolicyReportView,
@@ -68,6 +70,33 @@ export async function getWorkItems(): Promise<WorkItemView[]> {
 
 export async function getCandidateWork(): Promise<CandidateWorkView[]> {
   return requestJson<CandidateWorkView[]>("/candidate-work");
+}
+
+export async function updateCandidateWork(candidateWorkId: string, payload: CandidateWorkUpdatePayload): Promise<CandidateWorkView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/${candidateWorkId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error("Unable to update proposed work.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
+  return envelope.data;
+}
+
+export async function promoteCandidateWork(candidateWorkId: string): Promise<CandidateWorkPromotionView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/${candidateWorkId}/promote`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as
+      | { detail?: { error?: { message?: string } } }
+      | null;
+    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to move proposed work into active work.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkPromotionView>;
+  return envelope.data;
 }
 
 export async function getWorkItem(id: string): Promise<WorkItemView> {

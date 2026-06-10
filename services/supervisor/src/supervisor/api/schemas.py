@@ -37,12 +37,14 @@ class CandidateWorkCreate(BaseModel):
     sourceArtifactType: CandidateWorkArtifactType
     riskLevel: RiskLevel = RiskLevel.LOW
     priority: CandidateWorkPriority = CandidateWorkPriority.NORMAL
+    sortOrder: int = 0
 
 
 class CandidateWorkUpdate(BaseModel):
     status: CandidateWorkStatus | None = None
     priority: CandidateWorkPriority | None = None
     riskLevel: RiskLevel | None = None
+    sortOrder: int | None = None
 
 
 class CandidateWorkView(BaseModel):
@@ -54,6 +56,7 @@ class CandidateWorkView(BaseModel):
     sourceArtifactType: CandidateWorkArtifactType
     riskLevel: RiskLevel
     priority: CandidateWorkPriority
+    sortOrder: int
     status: CandidateWorkStatus
     createdAt: datetime
     updatedAt: datetime

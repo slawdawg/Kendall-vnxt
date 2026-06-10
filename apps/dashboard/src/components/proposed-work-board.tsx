@@ -1,4 +1,8 @@
+"use client";
+
 import type { CandidateWorkView } from "@kendall/contracts";
+import { useState, useTransition } from "react";
+import { promoteCandidateWork, updateCandidateWork } from "../lib/supervisor";
 
 const sourceLabels: Record<CandidateWorkView["source"], string> = {
   bmad: "BMAD",
@@ -50,6 +54,28 @@ function formatDate(value: string): string {
 }
 
 export function ProposedWorkBoard({ candidates }: { candidates: CandidateWorkView[] }) {
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function runAction(candidateId: string, action: () => Promise<unknown>, reload = true) {
+    setPendingId(candidateId);
+    setMessage(null);
+    startTransition(() => {
+      void (async () => {
+        try {
+          await action();
+          if (reload) {
+            window.location.reload();
+          }
+        } catch (error) {
+          setMessage(error instanceof Error ? error.message : "Unable to update proposed work.");
+          setPendingId(null);
+        }
+      })();
+    });
+  }
+
   if (!candidates.length) {
     return (
       <section className="rounded-lg border bg-[var(--panel)] p-8">
@@ -106,9 +132,90 @@ export function ProposedWorkBoard({ candidates }: { candidates: CandidateWorkVie
             </div>
             <div>
               <dt className="text-xs uppercase text-[var(--muted)]">Next step</dt>
-              <dd className="mt-1 text-[var(--foreground)]">Review before active work</dd>
+              <dd className="mt-1 text-[var(--foreground)]">
+                {candidate.promotedWorkItemId ? "Already active" : "Review before active work"}
+              </dd>
             </div>
           </dl>
+
+          <div className="mt-5 border-t pt-4">
+            <div className="flex flex-wrap gap-2">
+              {(["low", "normal", "high", "urgent"] as const).map((priority) => (
+                <button
+                  key={priority}
+                  type="button"
+                  disabled={isPending && pendingId === candidate.id}
+                  onClick={() => runAction(candidate.id, () => updateCandidateWork(candidate.id, { priority }))}
+                  className={`rounded-md border px-3 py-1.5 text-xs font-medium transition hover:border-[var(--accent)] disabled:opacity-50 ${
+                    candidate.priority === priority ? "bg-[var(--panel-strong)] text-[var(--accent)]" : "bg-[var(--surface)] text-[var(--muted)]"
+                  }`}
+                >
+                  {priorityLabels[priority]}
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={isPending && pendingId === candidate.id}
+                onClick={() => runAction(candidate.id, () => updateCandidateWork(candidate.id, { sortOrder: candidate.sortOrder - 1 }))}
+                className="rounded-md border bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-[var(--muted)] transition hover:border-[var(--accent)] disabled:opacity-50"
+              >
+                Move earlier
+              </button>
+              <button
+                type="button"
+                disabled={isPending && pendingId === candidate.id}
+                onClick={() => runAction(candidate.id, () => updateCandidateWork(candidate.id, { sortOrder: candidate.sortOrder + 1 }))}
+                className="rounded-md border bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-[var(--muted)] transition hover:border-[var(--accent)] disabled:opacity-50"
+              >
+                Move later
+              </button>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={isPending && pendingId === candidate.id}
+                onClick={() => runAction(candidate.id, () => updateCandidateWork(candidate.id, { status: "approved" }))}
+                className="rounded-md border border-[color-mix(in_srgb,var(--accent)_55%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] px-4 py-2 text-sm font-semibold text-[#bff5df] transition hover:bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] disabled:opacity-50"
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                disabled={isPending && pendingId === candidate.id}
+                onClick={() => runAction(candidate.id, () => updateCandidateWork(candidate.id, { status: "deferred" }))}
+                className="rounded-md border bg-[var(--surface)] px-4 py-2 text-sm font-semibold text-[var(--muted)] transition hover:border-[var(--accent)] disabled:opacity-50"
+              >
+                Save for later
+              </button>
+              <button
+                type="button"
+                disabled={isPending && pendingId === candidate.id}
+                onClick={() => runAction(candidate.id, () => updateCandidateWork(candidate.id, { status: "rejected" }))}
+                className="rounded-md border border-[color-mix(in_srgb,var(--warn)_45%,var(--line))] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] px-4 py-2 text-sm font-semibold text-[#ffd7c8] transition hover:bg-[color-mix(in_srgb,var(--warn)_18%,transparent)] disabled:opacity-50"
+              >
+                Pass
+              </button>
+              <button
+                type="button"
+                disabled={candidate.status !== "approved" || Boolean(candidate.promotedWorkItemId) || (isPending && pendingId === candidate.id)}
+                onClick={() =>
+                  runAction(
+                    candidate.id,
+                    async () => {
+                      const result = await promoteCandidateWork(candidate.id);
+                      window.location.href = `/work-items/${result.workItem.id}`;
+                    },
+                    false,
+                  )
+                }
+                className="rounded-md border border-[color-mix(in_srgb,var(--accent-2)_65%,var(--line))] bg-[color-mix(in_srgb,var(--accent-2)_14%,transparent)] px-4 py-2 text-sm font-semibold text-[#ffd8ba] transition enabled:hover:bg-[color-mix(in_srgb,var(--accent-2)_22%,transparent)] disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {candidate.promotedWorkItemId ? "Already active" : "Move to active work"}
+              </button>
+            </div>
+            {message && pendingId === candidate.id ? <p className="mt-3 text-sm text-[var(--warn)]">{message}</p> : null}
+          </div>
         </article>
       ))}
     </section>

@@ -313,6 +313,7 @@ class SupervisorService:
             source_artifact_type=payload.sourceArtifactType.value,
             risk_level=payload.riskLevel.value,
             priority=payload.priority.value,
+            sort_order=payload.sortOrder,
             status=CandidateWorkStatus.PROPOSED.value,
         )
         session.add(candidate)
@@ -321,7 +322,7 @@ class SupervisorService:
         return candidate
 
     async def list_candidate_work(self, session: AsyncSession) -> list[CandidateWork]:
-        result = await session.execute(select(CandidateWork).order_by(CandidateWork.created_at.desc()))
+        result = await session.execute(select(CandidateWork).order_by(CandidateWork.sort_order.asc(), CandidateWork.created_at.desc()))
         return list(result.scalars())
 
     async def update_candidate_work(self, session: AsyncSession, candidate_work_id: str, payload: CandidateWorkUpdate) -> CandidateWork | None:
@@ -339,11 +340,67 @@ class SupervisorService:
             candidate.priority = payload.priority.value
         if payload.riskLevel is not None:
             candidate.risk_level = payload.riskLevel.value
+        if payload.sortOrder is not None:
+            candidate.sort_order = payload.sortOrder
 
         candidate.updated_at = datetime.now(timezone.utc)
         await session.commit()
         await session.refresh(candidate)
         return candidate
+
+    async def promote_candidate_work(self, session: AsyncSession, candidate_work_id: str) -> tuple[CandidateWork, WorkItem] | None:
+        candidate = await session.get(CandidateWork, candidate_work_id)
+        if not candidate:
+            return None
+        if candidate.status != CandidateWorkStatus.APPROVED.value:
+            raise ValueError("Candidate work must be approved before promotion.")
+        if candidate.promoted_work_item_id:
+            raise ValueError("Candidate work has already been promoted.")
+
+        item = WorkItem(
+            title=candidate.title,
+            requested_outcome=candidate.requested_outcome,
+            source=f"candidate_work:{candidate.id}",
+            details=None,
+            risk_level=candidate.risk_level,
+            metadata_json={
+                "candidateWorkId": candidate.id,
+                "candidatePriority": candidate.priority,
+                "candidateSortOrder": candidate.sort_order,
+                "sourceArtifactPath": candidate.source_artifact_path,
+                "sourceArtifactType": candidate.source_artifact_type,
+                "source": candidate.source,
+            },
+            state=WorkflowState.QUEUED.value,
+            lane=None,
+            status_summary=default_status_summary(WorkflowState.QUEUED),
+            blocked_reason=None,
+            next_step=next_step_summary(WorkflowState.QUEUED),
+            requires_audit=candidate.risk_level in {"medium", "high"},
+            audit_mode=AuditMode.NONE.value,
+        )
+        session.add(item)
+        await session.flush()
+        candidate.promoted_work_item_id = item.id
+        candidate.updated_at = datetime.now(timezone.utc)
+        await self._record_event(
+            session,
+            item,
+            "candidate_work.promoted",
+            "Proposed work was moved into active work.",
+            {
+                "candidateWorkId": candidate.id,
+                "sourceArtifactPath": candidate.source_artifact_path,
+                "sourceArtifactType": candidate.source_artifact_type,
+                "candidatePriority": candidate.priority,
+                "candidateSortOrder": candidate.sort_order,
+            },
+        )
+        await session.commit()
+        await session.refresh(candidate)
+        await session.refresh(item)
+        await self._publish_item(item)
+        return candidate, item
 
     def list_execution_recipes(self) -> list[WorkItemExecutionRecipeView]:
         return [self._to_execution_recipe_view(recipe) for recipe in EXECUTION_RECIPES.values()]
@@ -7521,6 +7578,7 @@ class SupervisorService:
             sourceArtifactType=candidate.source_artifact_type,
             riskLevel=candidate.risk_level,
             priority=candidate.priority,
+            sortOrder=candidate.sort_order,
             status=candidate.status,
             createdAt=self._normalize_timestamp(candidate.created_at),
             updatedAt=self._normalize_timestamp(candidate.updated_at),

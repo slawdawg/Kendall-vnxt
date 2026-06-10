@@ -29,12 +29,14 @@ export interface CandidateWorkCreatePayload {
   sourceArtifactType: CandidateWorkArtifactType;
   riskLevel?: RiskLevel;
   priority?: CandidateWorkPriority;
+  sortOrder?: number;
 }
 
 export interface CandidateWorkUpdatePayload {
   status?: CandidateWorkStatus | null;
   priority?: CandidateWorkPriority | null;
   riskLevel?: RiskLevel | null;
+  sortOrder?: number | null;
 }
 
 export interface CandidateWorkView {
@@ -46,11 +48,17 @@ export interface CandidateWorkView {
   sourceArtifactType: CandidateWorkArtifactType;
   riskLevel: RiskLevel;
   priority: CandidateWorkPriority;
+  sortOrder: number;
   status: CandidateWorkStatus;
   createdAt: string;
   updatedAt: string;
   approvedAt?: string | null;
   promotedWorkItemId?: string | null;
+}
+
+export interface CandidateWorkPromotionView {
+  candidateWork: CandidateWorkView;
+  workItem: WorkItemView;
 }
 
 export interface BmadImportPackageView {

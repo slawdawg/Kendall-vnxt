@@ -32,6 +32,7 @@ def test_candidate_work_can_be_created_listed_and_updated_without_active_work(tm
                 "sourceArtifactType": "bmad_story",
                 "riskLevel": "medium",
                 "priority": "high",
+                "sortOrder": 5,
             },
         )
 
@@ -43,6 +44,7 @@ def test_candidate_work_can_be_created_listed_and_updated_without_active_work(tm
         assert candidate["sourceArtifactType"] == "bmad_story"
         assert candidate["riskLevel"] == "medium"
         assert candidate["priority"] == "high"
+        assert candidate["sortOrder"] == 5
         assert candidate["status"] == "proposed"
         assert candidate["approvedAt"] is None
         assert candidate["promotedWorkItemId"] is None
@@ -57,13 +59,14 @@ def test_candidate_work_can_be_created_listed_and_updated_without_active_work(tm
 
         updated_response = client.patch(
             f"/candidate-work/{candidate['id']}",
-            json={"status": "approved", "priority": "urgent"},
+            json={"status": "approved", "priority": "urgent", "sortOrder": 1},
         )
 
         assert updated_response.status_code == 200
         updated = updated_response.json()["data"]
         assert updated["status"] == "approved"
         assert updated["priority"] == "urgent"
+        assert updated["sortOrder"] == 1
         assert updated["approvedAt"] is not None
         assert updated["promotedWorkItemId"] is None
 
@@ -113,3 +116,79 @@ def test_candidate_work_rejects_invalid_enum_values_and_missing_candidate(tmp_pa
         missing_update = client.patch("/candidate-work/not-found", json={"status": "deferred"})
         assert missing_update.status_code == 404
         assert missing_update.json()["detail"]["error"]["code"] == "candidate_work_not_found"
+
+
+def test_candidate_work_promotes_once_into_active_work_with_metadata(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "candidate-work-promotion.db") as client:
+        created_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Promote proposed work",
+                "requestedOutcome": "Create exactly one active work item.",
+                "source": "operator",
+                "sourceArtifactPath": "docs/stories/6-6-candidate-priority-order-promote.md",
+                "sourceArtifactType": "bmad_story",
+                "riskLevel": "medium",
+                "priority": "high",
+                "sortOrder": 2,
+            },
+        )
+        assert created_response.status_code == 200
+        candidate_id = created_response.json()["data"]["id"]
+
+        rejected_promotion = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert rejected_promotion.status_code == 400
+        assert rejected_promotion.json()["detail"]["error"]["code"] == "candidate_work_promotion_rejected"
+
+        approved_response = client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"})
+        assert approved_response.status_code == 200
+
+        promoted_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promoted_response.status_code == 200
+        promoted = promoted_response.json()["data"]
+        promoted_candidate = promoted["candidateWork"]
+        work_item = promoted["workItem"]
+        assert promoted_candidate["promotedWorkItemId"] == work_item["id"]
+        assert work_item["title"] == "Promote proposed work"
+        assert work_item["requestedOutcome"] == "Create exactly one active work item."
+        assert work_item["source"] == f"candidate_work:{candidate_id}"
+        assert work_item["state"] == "queued"
+        assert work_item["metadata"]["candidateWorkId"] == candidate_id
+        assert work_item["metadata"]["sourceArtifactPath"] == "docs/stories/6-6-candidate-priority-order-promote.md"
+        assert work_item["metadata"]["candidatePriority"] == "high"
+        assert work_item["metadata"]["candidateSortOrder"] == 2
+
+        duplicate_promotion = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert duplicate_promotion.status_code == 400
+
+        work_items_response = client.get("/work-items")
+        assert work_items_response.status_code == 200
+        assert len(work_items_response.json()["data"]) == 1
+
+        events_response = client.get(f"/work-items/{work_item['id']}/events")
+        assert events_response.status_code == 200
+        events = events_response.json()["data"]
+        promotion_event = next(event for event in events if event["eventType"] == "candidate_work.promoted")
+        assert promotion_event["payload"]["candidateWorkId"] == candidate_id
+        assert promotion_event["payload"]["sourceArtifactType"] == "bmad_story"
+
+
+def test_candidate_work_list_uses_sort_order(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "candidate-work-order.db") as client:
+        for title, sort_order in (("Second", 20), ("First", 10)):
+            response = client.post(
+                "/candidate-work",
+                json={
+                    "title": title,
+                    "requestedOutcome": "Keep proposed work ordered.",
+                    "source": "bmad",
+                    "sourceArtifactPath": f"docs/stories/{title.lower()}.md",
+                    "sourceArtifactType": "bmad_story",
+                    "sortOrder": sort_order,
+                },
+            )
+            assert response.status_code == 200
+
+        listed_response = client.get("/candidate-work")
+        assert listed_response.status_code == 200
+        assert [item["title"] for item in listed_response.json()["data"]] == ["First", "Second"]
