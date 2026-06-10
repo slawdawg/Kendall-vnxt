@@ -106,6 +106,7 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `6-5-proposed-work-dev-console-view.md` | Add the Dev Console Proposed Work surface for reviewing Candidate Work before activation. |
 | `6-6-candidate-priority-order-promote.md` | Add priority/order controls and Candidate Work promotion into Active Dev Console work without execution. |
 | `6-7-task-packet-v0-orchestrated-preview.md` | Build minimal Task Packet v0 from Active work and record preview-only orchestrator lane decisions. |
+| `6-8-execution-attempt-integration.md` | Attach Task Packet preview evidence to fake or blocked execution attempts without worker launch authority. |
 
 ## Completed Foundation Stories
 

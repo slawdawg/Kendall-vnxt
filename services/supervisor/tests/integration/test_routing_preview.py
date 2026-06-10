@@ -258,6 +258,78 @@ def test_task_packet_preview_falls_back_for_missing_source_metadata(tmp_path, mo
         assert packet["taskKind"] == "task_classification"
 
 
+def test_execution_attempt_records_task_packet_artifact_without_execution(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-attempt.db") as client:
+        candidate_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Packet linked attempt",
+                "requestedOutcome": "Record packet evidence on a blocked attempt.",
+                "source": "bmad",
+                "sourceArtifactPath": "docs/stories/6-8-execution-attempt-integration.md",
+                "sourceArtifactType": "bmad_story",
+                "riskLevel": "medium",
+                "priority": "high",
+            },
+        )
+        assert candidate_response.status_code == 200
+        candidate_id = candidate_response.json()["data"]["id"]
+        assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
+        promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promote_response.status_code == 200
+        work_item_id = promote_response.json()["data"]["workItem"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={"taskKind": "evidence_summary"})
+        assert attempt_response.status_code == 200
+        attempt = attempt_response.json()["data"]
+        assert attempt["status"] == "rejected"
+        assert attempt["lane"] == "local_readonly"
+        assert attempt["authorityMode"] == "advisory"
+        assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["networkAllowed"] is False
+        assert len(attempt["artifactRefs"]) == 1
+        packet_ref = attempt["artifactRefs"][0]
+        assert packet_ref["artifactType"] == "task_packet_v0"
+        assert packet_ref["sourceArtifactPath"] == "docs/stories/6-8-execution-attempt-integration.md"
+        assert packet_ref["taskKind"] == "evidence_summary"
+        assert packet_ref["priority"] == "high"
+        assert packet_ref["previewOnly"] is True
+        assert packet_ref["executionAllowed"] is False
+
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        assert events_response.status_code == 200
+        event = next(event for event in events_response.json()["data"] if event["eventType"] == "execution_attempt.rejected")
+        assert event["payload"]["taskPacket"]["artifactType"] == "task_packet_v0"
+        assert event["payload"]["processLaunchAllowed"] is False
+        assert event["payload"]["providerCallsAllowed"] is False
+        assert event["payload"]["commandExecutionAllowed"] is False
+
+
+def test_packet_linked_attempt_blocks_duplicate_active_attempts(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-duplicate-attempt.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Utility planned attempt",
+                "requestedOutcome": "Keep duplicate active attempts blocked.",
+                "source": "operator-dashboard",
+                "riskLevel": "low",
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item_id = work_item_response.json()["data"]["id"]
+
+        first_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={"taskKind": "path_scope_check"})
+        assert first_response.status_code == 200
+        assert first_response.json()["data"]["status"] == "planned"
+        assert first_response.json()["data"]["artifactRefs"][0]["artifactType"] == "task_packet_v0"
+
+        duplicate_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={"taskKind": "path_scope_check"})
+        assert duplicate_response.status_code == 409
+        assert duplicate_response.json()["detail"]["error"]["code"] == "invalid_execution_attempt"
+
+
 def test_routing_preview_honors_forbidden_selected_lane() -> None:
     from supervisor.domain.routing import ExecutionLane, RoutingPreviewService, RoutingProfile, TaskKind
 

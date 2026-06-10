@@ -3552,6 +3552,7 @@ class SupervisorService:
         now = datetime.now(timezone.utc)
         attempt_id = str(uuid.uuid4())
         workspace_isolation_plan = self._workspace_isolation_plan(attempt_id, preview)
+        packet_ref = self._task_packet_artifact_ref(item, preview)
         attempt = ExecutionAttempt(
             id=attempt_id,
             work_item_id=item.id,
@@ -3564,7 +3565,7 @@ class SupervisorService:
             requested_by_label=payload.actorLabel,
             rejection_reason=rejection_reason,
             workspace_isolation_plan_json=workspace_isolation_plan,
-            artifact_refs_json=[],
+            artifact_refs_json=[packet_ref],
             event_refs_json=[],
             created_at=now,
             updated_at=now,
@@ -3576,6 +3577,7 @@ class SupervisorService:
             item,
             attempt,
             preview,
+            packet_ref,
             actor_id=payload.actorId,
             actor_label=payload.actorLabel,
         )
@@ -3824,12 +3826,31 @@ class SupervisorService:
             "outputPolicy": "summary_only_no_raw_stdout_or_stderr_retention",
         }
 
+    def _task_packet_artifact_ref(self, item: WorkItem, preview: RoutingPreviewView) -> dict:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        source_artifact_path = metadata.get("sourceArtifactPath")
+        candidate_priority = metadata.get("candidatePriority")
+        return {
+            "artifactType": "task_packet_v0",
+            "packetId": f"task-packet-{preview.decision.decisionId}",
+            "workItemId": item.id,
+            "routeDecisionId": preview.decision.decisionId,
+            "sourceArtifactPath": source_artifact_path if isinstance(source_artifact_path, str) else None,
+            "taskKind": preview.profile.taskKind,
+            "priority": candidate_priority if isinstance(candidate_priority, str) else "normal",
+            "approvalMode": preview.decision.authorityMode,
+            "retentionPolicy": "metadata_only_no_raw_artifact_content",
+            "previewOnly": True,
+            "executionAllowed": False,
+        }
+
     async def _record_execution_attempt_event(
         self,
         session: AsyncSession,
         item: WorkItem,
         attempt: ExecutionAttempt,
         preview: RoutingPreviewView,
+        packet_ref: dict,
         actor_id: str | None,
         actor_label: str | None,
     ) -> WorkflowEvent:
@@ -3855,6 +3876,7 @@ class SupervisorService:
                 "status": attempt.status,
                 "taskKind": preview.profile.taskKind,
                 "stepId": preview.profile.stepId,
+                "taskPacket": packet_ref,
                 "rejectionReason": attempt.rejection_reason,
                 "workspaceIsolationPlan": dict(attempt.workspace_isolation_plan_json or {}),
                 "executionAllowed": False,
