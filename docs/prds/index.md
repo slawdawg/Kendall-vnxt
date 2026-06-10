@@ -7,7 +7,7 @@ Status: current navigation index
 
 | PRD | Status | Implementation Authority |
 | --- | --- | --- |
-| `local-provider-ollama-disabled-to-limited-execution.md` | Draft, reviewed | Not approved; stories 4.1-4.4 remain blocked. |
+| `local-provider-ollama-disabled-to-limited-execution.md` | Draft, reviewed | Stories 4.1-4.3 are done as non-executing no-call preparation; story 4.4 remains blocked pending explicit provider-execution approval. |
 | `subscription-agent-launch-disabled-to-supervised-execution.md` | Draft, reviewed | Stories 5.1-5.4 completed as non-executing prep; Story 5.5 remains blocked pending explicit process-launch approval. |
 
 ## PRD Review Records

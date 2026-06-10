@@ -8,7 +8,9 @@ Scope: Future Ollama local provider enablement path
 
 This PRD drafts the requirements for moving the disabled Ollama provider from metadata-only/no-call proof to a limited local provider execution lane.
 
-It does not approve implementation. Ollama remains disabled until this PRD is explicitly approved and converted into implementation stories.
+Stories 4.1-4.3 are complete as non-executing no-call preparation only. They add disabled-default settings, registry evidence, prompt redaction and retention contracts, timeout and cancellation evidence, dashboard/report/export updates, and no-call fixture tests. Story 4.4 remains blocked pending explicit provider-execution approval.
+
+This PRD does not approve provider execution. Ollama provider calls remain disabled until Story 4.4 or a successor decision record is explicitly approved with the required endpoint, model, timeout, review, and rollback scope.
 
 Review record:
 

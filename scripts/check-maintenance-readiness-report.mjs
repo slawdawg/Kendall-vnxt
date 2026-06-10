@@ -58,11 +58,18 @@ for (const serviceText of [
   "verification-hygiene",
   "report-surface-alignment",
   "authority-blocker-watch",
+  "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
+  "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
   "Maintenance work must not approve local provider/model calls.",
   "docs/stories/3-46-maintenance-readiness-drift-check.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Maintenance readiness service must include ${serviceText}`, failures);
 }
+assertCondition(
+  !serviceSource.includes("4.1-4.4 remain blocked"),
+  "Maintenance readiness service must not use stale Ollama 4.1-4.4 blocked wording",
+  failures,
+);
 
 assertCondition(
   dashboardClient.includes("getMaintenanceReadinessReport"),

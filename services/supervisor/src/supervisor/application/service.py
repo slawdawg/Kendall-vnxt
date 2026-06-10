@@ -1966,7 +1966,8 @@ class SupervisorService:
                 status="blocked_pending_explicit_approval",
                 summary="Provider calls and subscription-agent launch stay blocked while maintenance work continues above the execution line.",
                 evidence=[
-                    "Ollama local provider stories 4.1-4.4 remain blocked.",
+                    "Ollama Story 4.4 remains blocked pending explicit approval for real provider calls.",
+                    "Ollama Stories 4.1-4.3 are non-executing no-call preparation only.",
                     "Subscription-agent launch Story 5.5 remains blocked.",
                     "Generic continuation language is not execution-authority approval.",
                 ],
