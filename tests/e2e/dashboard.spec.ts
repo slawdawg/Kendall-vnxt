@@ -128,7 +128,9 @@ function gitOutput(args: string[]) {
 
 test.describe("dashboard workflow coverage", () => {
   test("shows proposed work empty state and promotes approved work", async ({ page, request }) => {
+    const eventStreamRequest = page.waitForRequest((streamRequest) => streamRequest.url().endsWith("/events"));
     await page.goto("/proposed-work");
+    await eventStreamRequest;
 
     await expect(page.getByRole("heading", { name: "Ideas waiting at the front door" })).toBeVisible();
     await expect(page.getByText("No proposed work yet")).toBeVisible();
@@ -143,8 +145,6 @@ test.describe("dashboard workflow coverage", () => {
       riskLevel: "medium",
       priority: "high",
     });
-
-    await page.reload();
 
     const candidateCard = page.locator("article").filter({ hasText: "Review Story 6.4 parser" }).first();
     await expect(candidateCard).toBeVisible();

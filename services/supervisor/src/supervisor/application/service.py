@@ -321,6 +321,7 @@ class SupervisorService:
         session.add(candidate)
         await session.commit()
         await session.refresh(candidate)
+        await self._publish_candidate_work(candidate)
         return candidate
 
     async def list_candidate_work(self, session: AsyncSession) -> list[CandidateWork]:
@@ -348,6 +349,7 @@ class SupervisorService:
         candidate.updated_at = datetime.now(timezone.utc)
         await session.commit()
         await session.refresh(candidate)
+        await self._publish_candidate_work(candidate)
         return candidate
 
     async def promote_candidate_work(self, session: AsyncSession, candidate_work_id: str) -> tuple[CandidateWork, WorkItem] | None:
@@ -401,6 +403,7 @@ class SupervisorService:
         await session.commit()
         await session.refresh(candidate)
         await session.refresh(item)
+        await self._publish_candidate_work(candidate)
         await self._publish_item(item)
         return candidate, item
 
@@ -6510,6 +6513,27 @@ class SupervisorService:
                     "summary": item.status_summary,
                     "blockedReason": item.blocked_reason,
                     "nextStep": item.next_step,
+                },
+            )
+        )
+
+    async def _publish_candidate_work(self, candidate: CandidateWork) -> None:
+        await self.bus.publish(
+            self._event_payload(
+                "candidate_work.snapshot",
+                None,
+                str(uuid.uuid4()),
+                {
+                    "candidateWorkId": candidate.id,
+                    "title": candidate.title,
+                    "source": candidate.source,
+                    "sourceArtifactPath": candidate.source_artifact_path,
+                    "riskLevel": candidate.risk_level,
+                    "priority": candidate.priority,
+                    "sortOrder": candidate.sort_order,
+                    "status": candidate.status,
+                    "promotedWorkItemId": candidate.promoted_work_item_id,
+                    "summary": f"Proposed work updated: {candidate.title}",
                 },
             )
         )

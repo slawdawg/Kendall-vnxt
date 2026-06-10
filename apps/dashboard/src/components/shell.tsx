@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { NavStats } from "../lib/nav-stats";
+import { RealtimeRefresh } from "./realtime-refresh";
 
 const links = [
   { href: "/", label: "Overview" },
@@ -15,6 +16,7 @@ const links = [
 export function Shell({ children, navStats }: { children: ReactNode; navStats?: NavStats }) {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(92,200,166,0.18),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(240,154,97,0.12),_transparent_24%),linear-gradient(180deg,_var(--background-elevated),_var(--background))]">
+      <RealtimeRefresh />
       <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-6">
         <header className="rounded-[2rem] border bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] p-6 shadow-[0_22px_60px_rgba(3,8,8,0.32)] backdrop-blur">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">

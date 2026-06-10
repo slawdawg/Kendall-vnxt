@@ -1,6 +1,7 @@
 "use client";
 
 import type { CandidateWorkView } from "@kendall/contracts";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { promoteCandidateWork, updateCandidateWork } from "../lib/supervisor";
 
@@ -54,19 +55,20 @@ function formatDate(value: string): string {
 }
 
 export function ProposedWorkBoard({ candidates }: { candidates: CandidateWorkView[] }) {
+  const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  function runAction(candidateId: string, action: () => Promise<unknown>, reload = true) {
+  function runAction(candidateId: string, action: () => Promise<unknown>, refresh = true) {
     setPendingId(candidateId);
     setMessage(null);
     startTransition(() => {
       void (async () => {
         try {
           await action();
-          if (reload) {
-            window.location.reload();
+          if (refresh) {
+            router.refresh();
           }
         } catch (error) {
           setMessage(error instanceof Error ? error.message : "Unable to update proposed work.");
@@ -204,7 +206,7 @@ export function ProposedWorkBoard({ candidates }: { candidates: CandidateWorkVie
                     candidate.id,
                     async () => {
                       const result = await promoteCandidateWork(candidate.id);
-                      window.location.href = `/work-items/${result.workItem.id}`;
+                      router.push(`/work-items/${result.workItem.id}`);
                     },
                     false,
                   )
