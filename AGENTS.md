@@ -78,6 +78,56 @@
   `knx-safety-validation-review` only as follow-up lenses when the bundled
   code-review workflow leaves a specific gap.
 
+## Long-Running Dev Goals
+
+When Bob starts or approves a long-running development goal, treat it as a
+durable, milestone-driven workflow rather than a single unbounded task.
+
+- Maintain durable goal state in repo artifacts when the goal is larger than a
+  single story. Track current milestone, completed stories, next safe work,
+  blockers, verification state, and open approval requests.
+- Keep an authority ledger for any goal that may touch execution, provider
+  calls, source mutation, Git/GitHub operations, worker launch, cleanup, merge,
+  secrets, or retention policy. Approvals must name the authority family,
+  operation, scope, and evidence. Generic "continue" language does not approve
+  new authority.
+- Use progressive authority for all automation: document intent and stop lines,
+  add contracts first, preview/report, use fake adapters, dry-run real tools,
+  move to read-only real integration, then bounded write integration, then
+  human-approved execution, and only later policy-approved low-risk automation.
+- If one lane or task is blocked waiting for Bob approval, pause that specific
+  lane/task and continue other safe unblocked work. Stop only when no meaningful
+  safe work remains, unsafe behavior appears, scope expands beyond the approved
+  goal, or the gated operation is the next unavoidable step.
+- Treat refactoring and maintenance as valid goal work when it reduces
+  fragmentation, removes obsolete prototype concepts, clarifies naming,
+  improves Dev Console usability, stabilizes tests, fixes brittle scripts, or
+  makes the pipeline safer. Keep these changes scoped and verified; avoid
+  opportunistic repo-wide churn.
+- If churn or repeated failures come from bugs, brittle tooling, misformatted
+  commands, fragile scripts, unclear runbooks, flaky tests, Windows quoting, or
+  other preventable workflow errors, fix the root cause when safe and in scope
+  rather than repeatedly working around it.
+- Prefer one source of truth for state. Avoid parallel models for the same
+  lifecycle. Make ownership clear for Candidate Work, WorkItem,
+  ExecutionAttempt, events, evidence, and cleanup state.
+- Do not make automation invisible. Automated actions must leave evidence:
+  what ran, why it was allowed, authority level, input/output summary, result,
+  next step, and recovery path.
+- Keep Bob's attention focused. Interrupt only for decisions, approvals,
+  blockers, failed checks, scope expansion, scarce paid/review resources, or
+  unsafe behavior.
+- For mutating automation, define recovery before or during implementation:
+  resume, retry, rollback, inspect failure, preserve evidence, and cleanup.
+- Preserve metadata and links, not raw prompts, completions, reasoning traces,
+  provider payloads, secrets, or unnecessary source copies unless Bob
+  explicitly approves that retention.
+- Split large output into reviewable PR-sized milestones even if the same
+  long-running goal continues afterward.
+- Verify startup and environment assumptions as part of relevant milestones on
+  the Windows VM, especially when the work affects the supervisor, dashboard,
+  scheduled tasks, tools, or PATH-sensitive commands.
+
 ## Codex Workspace Protocol
 
 Use the repo-owned Codex workspace workflow when Bob asks to start, list,

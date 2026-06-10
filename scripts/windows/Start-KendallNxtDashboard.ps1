@@ -38,7 +38,14 @@ function Invoke-LoggedExternal {
         [string]$LogPath
     )
 
-    & $Command.Path @($Command.PrefixArgs + $Arguments) *>> $LogPath
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command.Path @($Command.PrefixArgs + $Arguments) *>> $LogPath
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

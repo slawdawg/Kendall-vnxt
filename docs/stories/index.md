@@ -7,6 +7,12 @@ Status: current navigation index
 
 These stories must not be implemented until the operator explicitly approves the named authority and scope.
 
+### Orchestrator CLI Worker Launch
+
+The orchestrator planning spike is safe to refine, but real Codex CLI process launch and real Claude Code CLI process launch remain blocked pending explicit approval.
+
+- `6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md`
+
 ### Ollama Local Provider
 
 No currently blocked Ollama local-provider story remains for the approved VM-to-host endpoint/model. Any endpoint, model, provider, or retention expansion still requires explicit successor approval.
@@ -19,6 +25,7 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 
 | Story | Slice |
 | --- | --- |
+| `6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md` | Orchestrator fake-worker spike with deterministic lane selection, metadata-only evidence, blocked real CLI launch, and 10 scenario fixtures for Ollama, Codex, Claude review, and GitHub workflow rails. |
 | `4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md` | VM-to-host Ollama limited provider adapter for endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`, with metadata-only retention and disabled-default rollback. |
 | `5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md` | Disabled subscription launch lifecycle adapter evidence for timeout, cancellation, cleanup, and terminal states without process launch. |
 | `5-3-subscription-launch-workspace-output-and-session-contract.md` | Artifact-only workspace, session, environment, output, redaction, and retention contracts for subscription launch prep. |
@@ -88,6 +95,17 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `3-7-execution-readiness-and-evidence-report.md` | Execution readiness reporting. |
 | `3-6-dashboard-command-boundary-contract.md` | Dashboard command/read boundary. |
 | `3-5-architecture-authority-dependency-graph.md` | Deferred authority dependency graph. |
+
+## Draft Epic 6 Stories
+
+| Story | Slice |
+| --- | --- |
+| `6-2-epic-6-product-architecture-consolidation.md` | Consolidate the integrated Epic 6 product direction across product brief, PRD, architecture, story map, Dev Console, BMAD intake, progressive authority, Git/GitHub hygiene, and startup requirements. |
+| `6-3-candidate-work-model-api.md` | Add the lightweight persisted Candidate Work model and supervisor API for proposed work before Active Dev Console promotion. |
+| `6-4-bmad-import-package-parser.md` | Convert local BMAD/story markdown artifacts into safe Candidate Work import packages without execution. |
+| `6-5-proposed-work-dev-console-view.md` | Add the Dev Console Proposed Work surface for reviewing Candidate Work before activation. |
+| `6-6-candidate-priority-order-promote.md` | Add priority/order controls and Candidate Work promotion into Active Dev Console work without execution. |
+| `6-7-task-packet-v0-orchestrated-preview.md` | Build minimal Task Packet v0 from Active work and record preview-only orchestrator lane decisions. |
 
 ## Completed Foundation Stories
 

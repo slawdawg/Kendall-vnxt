@@ -9,6 +9,7 @@ Status: current navigation index
 | --- | --- | --- |
 | `local-provider-ollama-disabled-to-limited-execution.md` | Draft, reviewed | Stories 4.1-4.3 are done as non-executing no-call preparation; Story 4.4 is approved only for VM-to-host endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`. |
 | `subscription-agent-launch-disabled-to-supervised-execution.md` | Draft, reviewed | Stories 5.1-5.4 completed as non-executing prep; Story 5.5 remains blocked pending explicit process-launch approval. |
+| `kendall-vnxt-orchestrator-epic-6.md` | Draft | Story 6.1 approved for fake-worker orchestration only; real Codex/Claude process launch and live GitHub operations remain blocked pending explicit approval. |
 
 ## PRD Review Records
 

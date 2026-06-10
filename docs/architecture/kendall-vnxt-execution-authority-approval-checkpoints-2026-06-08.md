@@ -16,6 +16,8 @@ On 2026-06-10, the operator explicitly approved Story 4.4 for Ollama limited exe
 
 On 2026-06-09, the operator explicitly approved subscription-agent launch Stories 5.1-5.4 for non-executing preparation only. That approval allows disabled-default launch settings, target registry evidence, launch approval binding and stale rejection, workspace/output/session contracts, disabled lifecycle adapter evidence, dashboard/report/export updates, and no-process fixture tests. It does not approve Story 5.5, real process launch, command execution, credential/session access, source mutation by workers, external sends, provider/model calls, premium execution, or supervised subscription-agent process execution.
 
+On 2026-06-10, the operator explicitly approved Story 6.1 for a fake-worker orchestrator spike only. That approval allows deterministic lane selection, fake worker adapters, metadata-only evidence, fixture scenarios, and supervisor tests. It does not approve real Codex CLI process launch, real Claude Code CLI process launch, command execution by workers, source mutation by workers, hosted routing gateways, new API billing, credential/session access, autonomous merge, external sends, or raw prompt/completion/provider payload retention.
+
 ## Current Blocked Execution Stories
 
 ### Ollama Local Provider
@@ -26,13 +28,17 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 
 - `docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md`
 
+### Orchestrator CLI Worker Launch
+
+- `docs/stories/6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md`
+
 ## Approval Language Required
 
 To unblock one of these authority families, the operator must explicitly say which authority is approved and what scope is approved.
 
 Acceptable approval must name:
 
-- authority family: Ollama local provider or subscription-agent launch,
+- authority family: Ollama local provider, subscription-agent launch, or orchestrator CLI worker launch,
 - approved story ids or exact slice,
 - allowed target or provider,
 - allowed settings/feature flags,
@@ -45,6 +51,7 @@ Examples of language that is specific enough:
 - "Approve Story 4.1 only: implement Ollama-specific disabled-default settings and registry evidence. Do not call Ollama."
 - "Approve Stories 5.1-5.2 only: implement launch settings and approval binding. Do not launch a process."
 - "Approve Story 4.4 for local Ollama execution using endpoint X and model Y with the rollback plan in the PRD."
+- "Approve Story 6.1 only: implement fake orchestrator workers and fixture evidence. Do not launch Codex or Claude."
 
 ## Language That Is Not Approval
 
@@ -89,6 +96,8 @@ Current status remains:
 - vLLM provider calls disabled,
 - llama.cpp provider calls disabled,
 - subscription-agent process launch disabled,
+- orchestrator Codex CLI worker launch disabled,
+- orchestrator Claude Code CLI worker launch disabled,
 - premium execution disabled,
 - arbitrary shell execution disabled,
 - worker source mutation disabled,
