@@ -17,7 +17,7 @@ This plan is evidence only. It does not approve push, PR creation/update, PR clo
 - Base observed from the current stack: `a460271`
 - Open GitHub PR observed by `gh pr list --state open --limit 20`: PR #85, `Implement Story 6.3 Candidate Work model API`
 - PR #85 state at snapshot: branch `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success
-- Local diff from `a460271..HEAD`: 68 files changed, 6829 insertions, 64 deletions
+- Verify the latest local diff from `a460271..HEAD` immediately before any push.
 
 ## Local Stack Contents
 
@@ -25,7 +25,7 @@ The current stack contains:
 
 - Stories 6.3-6.11: Candidate Work, BMAD import, Proposed Work, priority/promotion, task packet preview, execution-attempt evidence, realtime Dev Console, synthetic and real BMAD proof.
 - Stories 6.12-6.15: startup availability, safe local evidence checks, Git hygiene, and local worktree planning.
-- Stories 6.16-6.23: Codex/Claude readiness and approval packets, GitHub delivery authority ladder, local cleanup readiness, remote cleanup/sync readiness, and trusted autonomy readiness.
+- Stories 6.16-6.24: Codex/Claude readiness and approval packets, GitHub delivery authority ladder, local cleanup readiness, remote cleanup/sync readiness, trusted autonomy readiness, and Epic 6 completion audit visibility.
 - Progress and authority audit update: `docs/goals/epic-6-progress-and-kickoff-2026-06-10.md` and `docs/architecture/kendall-vnxt-epic-6-authority-ledger-2026-06-10.md`.
 
 ## Recommended Packaging
@@ -50,7 +50,7 @@ Alternative path: split into three PRs after pushing stack branches.
 
 1. Foundation PR: Stories 6.3-6.11.
 2. Local/runtime readiness PR: Stories 6.12-6.15.
-3. Authority/readiness PR: Stories 6.16-6.23 plus progress and ledger audit.
+3. Authority/readiness PR: Stories 6.16-6.24 plus progress, ledger audit, delivery plan, and completion audit visibility.
 
 Tradeoff:
 
@@ -66,7 +66,7 @@ Approve GitHub remote delivery for one integrated Epic 6 milestone PR only.
 Allowed operations:
 - push local branch codex/implement-story-6-23-trusted-autonomy-readiness to origin,
 - create or update one PR from that branch to main,
-- include a PR body summarizing Stories 6.3-6.23, verification, authority boundaries, and remaining blocked operations.
+- include a PR body summarizing Stories 6.3-6.24, verification, authority boundaries, and remaining blocked operations.
 Do not merge.
 Do not close PR #85 unless I explicitly approve closing it after the new PR exists.
 Do not delete local or remote branches.
@@ -83,7 +83,7 @@ Exact approval text Bob can use:
 ```text
 Approve GitHub remote delivery planning for stacked Epic 6 PRs only.
 Allowed operations:
-- push the named local Epic 6 stack branches needed for Stories 6.3-6.23,
+- push the named local Epic 6 stack branches needed for Stories 6.3-6.24,
 - create PRs in a chain or against main as appropriate after inspecting branch ancestry,
 - record PR URLs and dependencies.
 Do not merge.
@@ -98,7 +98,7 @@ Stop if branch ancestry is ambiguous, push is rejected, auth changes are request
 
 Already passed on the latest local stack head:
 
-- focused supervisor tests for Story 6.23
+- focused supervisor tests for Story 6.24 completion audit
 - dashboard build
 - focused Controls Playwright test
 - `pnpm.cmd run check:reports`

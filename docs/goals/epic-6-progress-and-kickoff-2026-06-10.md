@@ -44,7 +44,8 @@ Candidate Work
 | 12. GitHub delivery | Readiness prepared; remote writes blocked | Story 6.20 adds delivery authority ladder. Push, PR mutation, CI wait, review resolution, merge, and cleanup remain approval-gated. |
 | 13. Cleanup | Readiness prepared; deletion blocked | Stories 6.21 and 6.22 add local cleanup and remote cleanup/sync readiness without deletion or remote mutation. |
 | 14. Trusted autonomy | Readiness prepared; autonomy blocked | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. |
-| 15. MVP proof | Blocked pending approval | One real BMAD story still must complete through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. |
+| 15. Completion audit visibility | Readiness prepared; completion blocked | Story 6.24 adds a Dev Console completion audit showing prepared local work, remaining blockers, and the next delivery approval. |
+| 16. MVP proof | Blocked pending approval | One real BMAD story still must complete through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. |
 
 ## Approval Queue
 
@@ -62,7 +63,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 
 ## Current Safe Work
 
-- Package local Story 6.3-6.23 branch stack into reviewable remote PRs after Bob approves push/PR authority.
+- Package local Story 6.3-6.24 branch stack into reviewable remote PRs after Bob approves push/PR authority.
 - Keep report catalog, runtime evidence export, and Controls page anchors aligned when adding or changing evidence reports.
 - Continue root-cause maintenance only when scoped and verified.
 - Prepare exact approval text for the first unavoidable high-blast-radius operation when Bob is ready.
@@ -108,6 +109,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - 2026-06-11: Story 6.21 added a read-only local cleanup readiness report for completed, stale, abandoned, and evidence-retention cleanup policy without deletion. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
 - 2026-06-11: Story 6.22 added a read-only remote cleanup and issue/story sync readiness report without remote mutation. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
 - 2026-06-11: Story 6.23 added a read-only trusted autonomy readiness report for low-risk graduation gates with all autonomy booleans false. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
+- 2026-06-11: Story 6.24 added a read-only Epic 6 completion audit report and Dev Console panel that shows local prepared evidence, remaining GitHub/provider/cleanup blockers, the recommended delivery approval, and stop conditions. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime/docs drift checks, and `pnpm.cmd run check`.
 
 ## Current GitHub State Snapshot
 
@@ -115,7 +117,7 @@ Snapshot date: 2026-06-11.
 
 - Current local stack branch: `codex/implement-story-6-23-trusted-autonomy-readiness`; verify the latest commit with `git rev-parse --short HEAD` immediately before push.
 - Current open GitHub PR found by `gh pr list --state open --limit 20`: PR #85, `Implement Story 6.3 Candidate Work model API`, branch `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success.
-- Stories 6.4-6.23 are committed locally in stacked branches but have not been pushed or packaged into remote PRs from this run.
+- Stories 6.4-6.24 are committed locally in stacked branches but have not been pushed or packaged into remote PRs from this run.
 - Delivery packaging plan: `docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md`.
 
 ## Completion Audit
@@ -124,9 +126,9 @@ Epic 6 is not complete as of this snapshot.
 
 Evidence that is complete locally:
 
-- Story map through 6.23 has local commits on the current stack.
-- Controls page includes read-only surfaces for execution readiness, authority readiness, Git/GitHub posture, local cleanup, remote cleanup/sync, Codex, Claude, and trusted autonomy.
-- Full local verification passed on the latest stack head with 140 supervisor tests.
+- Story map through 6.24 has local commits on the current stack.
+- Controls page includes read-only surfaces for execution readiness, authority readiness, Git/GitHub posture, local cleanup, remote cleanup/sync, Codex, Claude, trusted autonomy, and Epic 6 completion audit visibility.
+- Full local verification passed on the latest stack head with 141 supervisor tests.
 
 Evidence still missing for completion:
 
