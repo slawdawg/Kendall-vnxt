@@ -124,6 +124,7 @@ for (const shortcutText of [
   "#github-delivery-authority-report",
   "#git-hygiene-report",
   "#local-cleanup-readiness-report",
+  "#remote-cleanup-sync-readiness-report",
   "#codex-readiness-report",
   "#codex-implementation-approval-report",
   "#claude-review-readiness-report",
@@ -230,6 +231,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-21-local-cleanup-readiness.md"),
   "Story index must reference Story 6.21 local cleanup readiness",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-22-remote-cleanup-sync-readiness.md"),
+  "Story index must reference Story 6.22 remote cleanup sync readiness",
   failures,
 );
 assertCondition(

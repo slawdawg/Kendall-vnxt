@@ -20,6 +20,7 @@ import { OperatorProfilePanel } from "../../components/operator-profile-panel";
 import { PageIntro } from "../../components/page-intro";
 import { RoutingFleetPanel } from "../../components/routing-fleet-panel";
 import { RuntimeEvidenceReviewReportPanel } from "../../components/runtime-evidence-review-report-panel";
+import { RemoteCleanupSyncReadinessReportPanel } from "../../components/remote-cleanup-sync-readiness-report-panel";
 import { SafeDevelopmentBacklogPanel } from "../../components/safe-development-backlog-panel";
 import { Shell } from "../../components/shell";
 import { SupervisorReportCatalogPanel } from "../../components/supervisor-report-catalog-panel";
@@ -46,6 +47,7 @@ import {
   getRoutingLaneProfiles,
   getRunStatus,
   getRuntimeEvidenceReviewReport,
+  getRemoteCleanupSyncReadinessReport,
   getSafeDevelopmentBacklogReport,
   getSupervisorReportCatalog,
   getVerificationReadinessReport,
@@ -75,6 +77,7 @@ export default async function ControlsPage() {
     githubDeliveryAuthorityReport,
     gitHygieneReport,
     localCleanupReadinessReport,
+    remoteCleanupSyncReadinessReport,
     codexReadinessReport,
     codexImplementationApprovalReport,
     claudeReviewReadinessReport,
@@ -101,6 +104,7 @@ export default async function ControlsPage() {
     getGitHubDeliveryAuthorityReport(),
     getGitHygieneReport(),
     getLocalCleanupReadinessReport(),
+    getRemoteCleanupSyncReadinessReport(),
     getCodexReadinessReport(),
     getCodexImplementationApprovalReport(),
     getClaudeReviewReadinessReport(),
@@ -171,6 +175,9 @@ export default async function ControlsPage() {
       </div>
       <div id="local-cleanup-readiness-report" className="scroll-mt-28">
         <LocalCleanupReadinessReportPanel report={localCleanupReadinessReport} />
+      </div>
+      <div id="remote-cleanup-sync-readiness-report" className="scroll-mt-28">
+        <RemoteCleanupSyncReadinessReportPanel report={remoteCleanupSyncReadinessReport} />
       </div>
       <div id="codex-readiness-report" className="scroll-mt-28">
         <CodexReadinessReportPanel report={codexReadinessReport} />

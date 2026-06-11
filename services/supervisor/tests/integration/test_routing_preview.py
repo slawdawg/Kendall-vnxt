@@ -1394,6 +1394,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/claude-review-approval-report",
         "GET /supervisor/github-delivery-authority-report",
         "GET /supervisor/local-cleanup-readiness-report",
+        "GET /supervisor/remote-cleanup-sync-readiness-report",
         "GET /supervisor/delivery-readiness-policy-report",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
@@ -2673,6 +2674,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/6-19-claude-review-approval-packet.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/6-20-github-delivery-authority-ladder.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/6-21-local-cleanup-readiness.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-22-remote-cleanup-sync-readiness.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-43-safe-delivery-hygiene.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-44-delivery-readiness-policy-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-45-delivery-readiness-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
@@ -2712,6 +2714,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/claude-review-approval-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/github-delivery-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/local-cleanup-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/remote-cleanup-sync-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
@@ -3085,6 +3088,42 @@ def test_local_cleanup_readiness_report_is_read_only_and_blocks_deletion(tmp_pat
     assert "main repository checkout" in report["blockedTargets"]
     assert any("Required evidence would be deleted" in stop_condition for stop_condition in report["stopConditions"])
     assert any("one local cleanup target at a time" in action for action in report["nextSafeActions"])
+
+
+def test_remote_cleanup_sync_readiness_report_blocks_remote_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "remote-cleanup-sync-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/remote-cleanup-sync-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "remote-cleanup-sync-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["remoteBranchDeletionApproved"] is False
+    assert report["issueSyncApproved"] is False
+    assert report["storyStatusSyncApproved"] is False
+    assert report["remoteMutationApproved"] is False
+    assert {item["itemId"] for item in report["syncPolicy"]} == {
+        "remote-branch-cleanup",
+        "issue-sync",
+        "story-status-sync",
+        "audit-retention",
+    }
+    assert any("GitHub tokens" in operation for operation in report["blockedOperations"])
+    assert any("target is ambiguous" in stop_condition for stop_condition in report["stopConditions"])
+    assert any("one remote cleanup or sync target at a time" in action for action in report["nextSafeActions"])
 
 
 def test_delivery_readiness_policy_report_documents_review_gate_without_mutation(tmp_path, monkeypatch) -> None:

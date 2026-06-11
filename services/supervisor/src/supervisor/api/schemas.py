@@ -1288,6 +1288,30 @@ class LocalCleanupReadinessReportView(BaseModel):
     evidenceDeletionApproved: bool = False
 
 
+class RemoteCleanupSyncPolicyItemView(BaseModel):
+    itemId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class RemoteCleanupSyncReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    syncPolicy: list[RemoteCleanupSyncPolicyItemView]
+    requiredEvidence: list[str]
+    blockedOperations: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    remoteBranchDeletionApproved: bool = False
+    issueSyncApproved: bool = False
+    storyStatusSyncApproved: bool = False
+    remoteMutationApproved: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

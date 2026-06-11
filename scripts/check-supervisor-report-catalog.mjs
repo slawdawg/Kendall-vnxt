@@ -139,6 +139,13 @@ const reports = [
     dashboardFetch: "getLocalCleanupReadinessReport",
   },
   {
+    reportId: "remote-cleanup-sync-readiness-report-v1",
+    endpoint: "GET /supervisor/remote-cleanup-sync-readiness-report",
+    apiPath: "/supervisor/remote-cleanup-sync-readiness-report",
+    story: "docs/stories/6-22-remote-cleanup-sync-readiness.md",
+    dashboardFetch: "getRemoteCleanupSyncReadinessReport",
+  },
+  {
     reportId: "codex-readiness-report-v1",
     endpoint: "GET /supervisor/codex-readiness-report",
     apiPath: "/supervisor/codex-readiness-report",
@@ -257,6 +264,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/github-delivery-authority-report",
   "GET /supervisor/git-hygiene-report",
   "GET /supervisor/local-cleanup-readiness-report",
+  "GET /supervisor/remote-cleanup-sync-readiness-report",
   "GET /supervisor/codex-readiness-report",
   "GET /supervisor/codex-implementation-approval-report",
   "GET /supervisor/claude-review-readiness-report",
@@ -328,6 +336,7 @@ for (const controlsAnchor of [
   'id="github-delivery-authority-report"',
   'id="git-hygiene-report"',
   'id="local-cleanup-readiness-report"',
+  'id="remote-cleanup-sync-readiness-report"',
   'id="codex-readiness-report"',
   'id="codex-implementation-approval-report"',
   'id="claude-review-readiness-report"',
@@ -409,6 +418,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-21-local-cleanup-readiness.md"),
   "Story index must reference Story 6.21 local cleanup readiness",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-22-remote-cleanup-sync-readiness.md"),
+  "Story index must reference Story 6.22 remote cleanup sync readiness",
   failures,
 );
 assertCondition(

@@ -1179,6 +1179,30 @@ export interface LocalCleanupReadinessReportView {
   evidenceDeletionApproved: boolean;
 }
 
+export interface RemoteCleanupSyncPolicyItemView {
+  itemId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface RemoteCleanupSyncReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  syncPolicy: RemoteCleanupSyncPolicyItemView[];
+  requiredEvidence: string[];
+  blockedOperations: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  remoteBranchDeletionApproved: boolean;
+  issueSyncApproved: boolean;
+  storyStatusSyncApproved: boolean;
+  remoteMutationApproved: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

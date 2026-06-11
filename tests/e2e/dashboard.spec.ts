@@ -308,6 +308,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-delivery-authority-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/git-hygiene-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/local-cleanup-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/remote-cleanup-sync-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-readiness-report")).toBeVisible();
@@ -468,6 +469,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(cleanupPanel.getByText("main repository checkout")).toBeVisible();
     await expect(cleanupPanel.getByText("Use this report to request one local cleanup target at a time.")).toBeVisible();
     await expect(page.locator("#local-cleanup-readiness-report")).toBeVisible();
+
+    const remoteCleanupPanel = page.locator("#remote-cleanup-sync-readiness-report");
+    await expect(remoteCleanupPanel.getByText("Remote cleanup", { exact: true })).toBeVisible();
+    await expect(remoteCleanupPanel.getByRole("heading", { name: "Remote sync readiness" })).toBeVisible();
+    await expect(remoteCleanupPanel.getByRole("heading", { name: "Remote branch cleanup" })).toBeVisible();
+    await expect(remoteCleanupPanel.getByRole("heading", { name: "Issue sync" })).toBeVisible();
+    await expect(remoteCleanupPanel.getByRole("heading", { name: "Story status sync" })).toBeVisible();
+    await expect(remoteCleanupPanel.getByText("GitHub tokens")).toBeVisible();
+    await expect(remoteCleanupPanel.getByText("Use this report to request one remote cleanup or sync target at a time.")).toBeVisible();
+    await expect(page.locator("#remote-cleanup-sync-readiness-report")).toBeVisible();
 
     const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();
     await expect(codexReadinessPanel.getByText("Codex readiness", { exact: true })).toBeVisible();

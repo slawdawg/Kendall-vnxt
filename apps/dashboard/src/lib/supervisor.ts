@@ -27,6 +27,7 @@ import type {
   MaintenanceReadinessReportView,
   RuntimeEvidenceReviewReportView,
   RuntimeEvidenceExportView,
+  RemoteCleanupSyncReadinessReportView,
   RoutingLaneEvidenceProfileView,
   RoutingPreviewView,
   RunStatusView,
@@ -243,6 +244,10 @@ export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
 
 export async function getLocalCleanupReadinessReport(): Promise<LocalCleanupReadinessReportView> {
   return requestJson<LocalCleanupReadinessReportView>("/supervisor/local-cleanup-readiness-report");
+}
+
+export async function getRemoteCleanupSyncReadinessReport(): Promise<RemoteCleanupSyncReadinessReportView> {
+  return requestJson<RemoteCleanupSyncReadinessReportView>("/supervisor/remote-cleanup-sync-readiness-report");
 }
 
 export async function getCodexReadinessReport(): Promise<CodexReadinessReportView> {

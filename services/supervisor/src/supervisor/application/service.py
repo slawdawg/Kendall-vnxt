@@ -71,6 +71,8 @@ from supervisor.api.schemas import (
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
     ProviderEnablementPolicyStepView,
+    RemoteCleanupSyncPolicyItemView,
+    RemoteCleanupSyncReadinessReportView,
     RuntimeEvidenceExportBoundaryView,
     RuntimeEvidenceReviewManifestView,
     RuntimeEvidenceReviewNavigatorItemView,
@@ -1661,6 +1663,15 @@ class SupervisorService:
                 relatedDocs=["docs/stories/6-21-local-cleanup-readiness.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="remote-cleanup-sync-readiness-report-v1",
+                label="Remote cleanup and sync readiness report",
+                endpoint="GET /supervisor/remote-cleanup-sync-readiness-report",
+                status="active",
+                summary="Defines readiness for future remote branch cleanup and GitHub issue/story sync without remote mutation.",
+                evidenceScope=["remote branch cleanup", "GitHub issue sync", "story status sync", "remote mutation boundaries"],
+                relatedDocs=["docs/stories/6-22-remote-cleanup-sync-readiness.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
                 label="Delivery readiness policy report",
                 endpoint="GET /supervisor/delivery-readiness-policy-report",
@@ -3177,6 +3188,77 @@ class SupervisorService:
             evidenceDeletionApproved=False,
         )
 
+    def get_remote_cleanup_sync_readiness_report(self) -> RemoteCleanupSyncReadinessReportView:
+        return RemoteCleanupSyncReadinessReportView(
+            reportId="remote-cleanup-sync-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only remote cleanup and sync readiness report. It defines the evidence needed before remote branch deletion, "
+                "GitHub issue updates, or story status sync, but performs no GitHub mutation."
+            ),
+            syncPolicy=[
+                RemoteCleanupSyncPolicyItemView(
+                    itemId="remote-branch-cleanup",
+                    label="Remote branch cleanup",
+                    status="blocked",
+                    summary="Remote branches can be deleted only after merged/abandoned evidence and explicit branch-scoped approval.",
+                    evidence=["PR merged or closed", "remote branch name", "local retained evidence", "rollback note"],
+                ),
+                RemoteCleanupSyncPolicyItemView(
+                    itemId="issue-sync",
+                    label="Issue sync",
+                    status="blocked",
+                    summary="GitHub issues can be updated only after the target issue, status, and comment body are approved.",
+                    evidence=["issue number", "intended label/status/comment", "linked story or PR", "operator approval"],
+                ),
+                RemoteCleanupSyncPolicyItemView(
+                    itemId="story-status-sync",
+                    label="Story status sync",
+                    status="blocked",
+                    summary="Story status sync must preserve local story evidence and avoid claiming delivery that did not happen.",
+                    evidence=["story file", "delivery status", "verification summary", "PR or waiver evidence"],
+                ),
+                RemoteCleanupSyncPolicyItemView(
+                    itemId="audit-retention",
+                    label="Audit retention",
+                    status="required",
+                    summary="Every remote sync must retain before/after metadata without storing credentials or raw tokens.",
+                    evidence=["before state", "after state", "actor", "timestamp", "target URL"],
+                ),
+            ],
+            requiredEvidence=[
+                "exact remote branch, issue, PR, or story target",
+                "operator approval naming the remote operation and scope",
+                "before/after remote metadata without credential retention",
+                "local evidence retained before remote cleanup",
+                "rollback or correction plan if sync is wrong",
+            ],
+            blockedOperations=[
+                "deleting remote branches without merged or abandoned evidence",
+                "closing issues or PRs without explicit target approval",
+                "changing labels, milestones, assignees, or project fields automatically",
+                "rewriting story status without preserving local evidence",
+                "storing GitHub tokens, credentials, or session material",
+            ],
+            stopConditions=[
+                "The remote branch, issue, PR, or story target is ambiguous.",
+                "The local evidence does not prove the remote cleanup or sync is safe.",
+                "The requested operation would alter auth state or persist credentials.",
+                "The sync would claim completion without PR, merge, waiver, or local closure evidence.",
+                "The operation expands from cleanup/sync into merge, delivery, or new implementation work.",
+            ],
+            nextSafeActions=[
+                "Use this report to request one remote cleanup or sync target at a time.",
+                "Keep remote cleanup and issue sync blocked until GitHub delivery authority has landed for the work item.",
+                "Record remote sync evidence in runtime evidence exports after approval.",
+            ],
+            readOnly=True,
+            remoteBranchDeletionApproved=False,
+            issueSyncApproved=False,
+            storyStatusSyncApproved=False,
+            remoteMutationApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3795,6 +3877,7 @@ class SupervisorService:
             "GET /supervisor/claude-review-approval-report",
             "GET /supervisor/github-delivery-authority-report",
             "GET /supervisor/local-cleanup-readiness-report",
+            "GET /supervisor/remote-cleanup-sync-readiness-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -3850,6 +3933,7 @@ class SupervisorService:
             "docs/stories/6-19-claude-review-approval-packet.md",
             "docs/stories/6-20-github-delivery-authority-ladder.md",
             "docs/stories/6-21-local-cleanup-readiness.md",
+            "docs/stories/6-22-remote-cleanup-sync-readiness.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
