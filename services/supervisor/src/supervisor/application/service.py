@@ -3367,11 +3367,12 @@ class SupervisorService:
             reportId="epic-6-completion-audit-report-v1",
             generatedAt=datetime.now(timezone.utc),
             summary=(
-                "Read-only Epic 6 completion audit. PR #86 is open with CI passing, but Epic 6 is not complete until "
-                "approved merge, one real BMAD story proof through done, and approved cleanup evidence are recorded."
+                "Read-only Epic 6 completion audit. The integrated Epic 6 milestone PR was merged and local cleanup was "
+                "handled, but Epic 6 remains in progressive hardening until provider execution, subscription-agent launch, "
+                "trusted autonomy, and follow-up delivery gates are approved by scope."
             ),
             epicId="6",
-            overallStatus="blocked_pending_merge_authority",
+            overallStatus="merged_progressive_hardening",
             completedItems=[
                 EpicCompletionAuditItemView(
                     itemId="local-readiness-stack",
@@ -3387,13 +3388,24 @@ class SupervisorService:
                 EpicCompletionAuditItemView(
                     itemId="delivery-packaging-plan",
                     label="Delivery packaging plan",
-                    status="pr_open_ci_passed",
-                    summary="Gate 1 opened integrated PR #86 for the Epic 6 milestone stack and CI passed.",
+                    status="merged",
+                    summary="Integrated PR #86 delivered the Epic 6 milestone stack into main after approved merge authority.",
                     evidence=[
                         "https://github.com/slawdawg/Kendall-vnxt/pull/86",
-                        "PR #86 merge state was CLEAN and CI `check` passed after the approved push/PR gate.",
+                        "PR #86 was merged into main.",
                         "docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md",
-                        "The delivery plan does not approve merge, close, delete, cleanup, Codex, or Claude.",
+                        "The delivery plan did not approve Codex launch, Claude launch, remote cleanup, story sync, or trusted autonomy expansion.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="local-cleanup-closeout",
+                    label="Local cleanup closeout",
+                    status="completed_with_follow_up",
+                    summary="Merged Epic 6 worktrees and branches were cleaned up, and Windows cleanup RCA produced a hardening follow-up.",
+                    evidence=[
+                        "Local Git worktree list was reduced to the main checkout plus intentional ongoing work.",
+                        "Remote merged branches for PR #85 and PR #86 were cleaned up.",
+                        "Windows cache and ACL cleanup prevention was prepared as a follow-up implementation slice.",
                     ],
                 ),
                 EpicCompletionAuditItemView(
@@ -3409,20 +3421,20 @@ class SupervisorService:
             ],
             remainingItems=[
                 EpicCompletionAuditItemView(
-                    itemId="remote-stack-delivery",
-                    label="Remote stack delivery closeout",
+                    itemId="cleanup-hardening-delivery",
+                    label="Cleanup hardening delivery",
                     status="needs_approval",
-                    summary="PR #86 exists and CI passed; merge remains gated and PR #85 closeout remains separately gated.",
+                    summary="The Windows cleanup RCA follow-up must still be delivered through the normal push, PR, CI, review, merge, and cleanup gates.",
                     evidence=[
-                        "Open remote PR #86 covers the integrated Epic 6 branch.",
-                        "Open remote PR #85 covers the earlier 6.3 branch and must not be closed without separate approval.",
+                        "A local cleanup hardening branch exists separately from the merged Epic 6 milestone.",
+                        "Follow-up delivery should use the same progressive PR, merge, and cleanup policy.",
                     ],
                 ),
                 EpicCompletionAuditItemView(
                     itemId="real-bmad-done-proof",
                     label="Real BMAD story done proof",
-                    status="needs_approval",
-                    summary="Epic 6 completion requires one real BMAD story to reach final done evidence through the approved delivery and cleanup path.",
+                    status="ready_for_next_trial",
+                    summary="The system still needs a full real BMAD story trial through the strengthened delivery and cleanup path before autonomy expands.",
                     evidence=[
                         "Synthetic and real-story preview proofs are local evidence only.",
                         "A final done state requires approved GitHub delivery and retained runtime evidence.",
@@ -3441,8 +3453,8 @@ class SupervisorService:
                 EpicCompletionAuditItemView(
                     itemId="cleanup-closeout",
                     label="Cleanup closeout",
-                    status="needs_approval",
-                    summary="Local worktree cleanup, branch deletion, remote cleanup, and story sync remain blocked until explicitly approved after delivery evidence is retained.",
+                    status="partially_complete",
+                    summary="Local cleanup was handled for the merged milestone, but automatic cleanup, remote cleanup, and story sync remain blocked by default.",
                     evidence=[
                         "Local cleanup readiness report defaults deletion approvals to false.",
                         "Remote cleanup and sync readiness report defaults remote mutation approvals to false.",
@@ -3450,41 +3462,40 @@ class SupervisorService:
                 ),
             ],
             blockedOperations=[
-                "Pushing additional PR #86 updates without explicit update approval.",
+                "Pushing follow-up hardening branches without explicit update approval.",
                 "Merging, closing, or deleting GitHub PRs without matching approval.",
                 "Launching Codex or Claude workers without bounded approval.",
-                "Deleting local worktrees, branches, artifacts, or remote branches before retained evidence and cleanup approval.",
-                "Marking Epic 6 complete before real delivery and cleanup evidence exists.",
+                "Deleting local worktrees, branches, artifacts, or remote branches before retained evidence and cleanup approval for the specific target.",
+                "Marking trusted autonomy complete before repeated real-story delivery and cleanup evidence exists.",
             ],
             recommendedApproval=(
-                "Approve merging PR #86, `Implement Epic 6 Dev Console orchestration pipeline and readiness controls`, into `main` after "
-                "confirming it remains clean and CI `check` is successful. Do not close PR #85, delete branches, run cleanup, launch Codex, "
-                "launch Claude, or perform GitHub issue/story sync until separately approved."
+                "Approve the next follow-up branch only after its scope, CI, review state, merge target, and cleanup target are visible. "
+                "Keep Codex launch, Claude launch, provider expansion, autonomous cleanup, remote cleanup, and GitHub issue/story sync separately gated."
             ),
             requiredEvidence=[
-                "PR #86 URL and CI/check status recorded after approved push and PR creation.",
-                "Merge state remains CLEAN immediately before merge approval is exercised.",
+                "Merged PR #86 URL and merge commit retained as milestone delivery evidence.",
+                "Follow-up branch URL, CI/check status, and diffstat recorded after approved push and PR creation.",
                 "Review comments resolved or explicitly deferred with evidence.",
-                "Merge approval recorded separately before merge.",
-                "Cleanup approval and retained evidence recorded after delivery.",
+                "Merge approval recorded separately before each future merge.",
+                "Cleanup approval and retained evidence recorded after each future delivery.",
             ],
             stopConditions=[
                 "The local worktree is dirty or contains unrelated changes.",
                 "The remote branch or PR target is ambiguous.",
                 "CI fails, review comments remain unresolved, or GitHub reports merge conflicts.",
-                "The requested action expands into Codex launch, Claude launch, cleanup, or merge without separate approval.",
+                "The requested action expands into Codex launch, Claude launch, cleanup, or merge without separate approval for that action.",
                 "Evidence needed for audit or rollback would be lost.",
             ],
             nextSafeActions=[
-                "Use this audit and PR #86 status to request one narrow merge approval packet.",
-                "Continue read-only PR/CI/review inspection and merge packet preparation while merge authority is pending.",
-                "After merge approval is granted, re-check PR #86 merge state and CI before merging.",
+                "Use this audit to request one narrow follow-up delivery approval packet at a time.",
+                "Continue implementation on non-gated hardening while provider, launch, merge, and cleanup gates wait for approval.",
+                "Run the next real BMAD story trial through the visible Dev Console pipeline before softening autonomy gates.",
             ],
             readOnly=True,
             epicComplete=False,
             remoteDeliveryApproved=True,
             providerExecutionApproved=False,
-            cleanupApproved=False,
+            cleanupApproved=True,
         )
 
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:

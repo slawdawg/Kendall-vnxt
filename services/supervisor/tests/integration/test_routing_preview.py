@@ -3192,22 +3192,23 @@ def test_epic_6_completion_audit_report_shows_remaining_blockers_without_mutatio
     assert report["epicComplete"] is False
     assert report["remoteDeliveryApproved"] is True
     assert report["providerExecutionApproved"] is False
-    assert report["cleanupApproved"] is False
-    assert report["overallStatus"] == "blocked_pending_merge_authority"
+    assert report["cleanupApproved"] is True
+    assert report["overallStatus"] == "merged_progressive_hardening"
     assert {item["itemId"] for item in report["completedItems"]} == {
         "local-readiness-stack",
         "delivery-packaging-plan",
+        "local-cleanup-closeout",
         "dev-console-integration",
     }
     assert {item["itemId"] for item in report["remainingItems"]} == {
-        "remote-stack-delivery",
+        "cleanup-hardening-delivery",
         "real-bmad-done-proof",
         "provider-and-review-execution",
         "cleanup-closeout",
     }
-    assert "Approve merging PR #86" in report["recommendedApproval"]
+    assert "Approve the next follow-up branch" in report["recommendedApproval"]
     assert any("Merging, closing, or deleting" in operation for operation in report["blockedOperations"])
-    assert any("PR #86 URL" in evidence for evidence in report["requiredEvidence"])
+    assert any("Merged PR #86 URL" in evidence for evidence in report["requiredEvidence"])
     assert any("worktree is dirty" in condition for condition in report["stopConditions"])
 
 
