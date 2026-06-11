@@ -5,6 +5,7 @@ import type {
   CandidateWorkPromotionView,
   CandidateWorkUpdatePayload,
   CandidateWorkView,
+  ClaudeReviewReadinessReportView,
   CodexImplementationApprovalReportView,
   CodexReadinessReportView,
   DashboardE2EReportView,
@@ -239,6 +240,10 @@ export async function getCodexReadinessReport(): Promise<CodexReadinessReportVie
 
 export async function getCodexImplementationApprovalReport(): Promise<CodexImplementationApprovalReportView> {
   return requestJson<CodexImplementationApprovalReportView>("/supervisor/codex-implementation-approval-report");
+}
+
+export async function getClaudeReviewReadinessReport(): Promise<ClaudeReviewReadinessReportView> {
+  return requestJson<ClaudeReviewReadinessReportView>("/supervisor/claude-review-readiness-report");
 }
 
 export async function getDeliveryReadinessPolicyReport(): Promise<DeliveryReadinessPolicyReportView> {

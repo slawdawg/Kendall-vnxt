@@ -1179,6 +1179,30 @@ class CodexImplementationApprovalReportView(BaseModel):
     approvalBindingImplemented: bool = False
 
 
+class ClaudeReadinessCheckView(BaseModel):
+    checkId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class ClaudeReviewReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    cliPath: str | None = None
+    reviewPolicy: list[ClaudeReadinessCheckView]
+    scarcityPolicy: list[ClaudeReadinessCheckView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    reviewTaskExecutionApproved: bool = False
+    sourceMutationApproved: bool = False
+    scarceUseApproved: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

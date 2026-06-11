@@ -124,6 +124,7 @@ for (const shortcutText of [
   "#git-hygiene-report",
   "#codex-readiness-report",
   "#codex-implementation-approval-report",
+  "#claude-review-readiness-report",
   "#delivery-readiness-policy-report",
   "#supervisor-report-catalog",
 ]) {
@@ -206,6 +207,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-17-codex-implementation-approval-packet.md"),
   "Story index must reference Story 6.17 Codex implementation approval packet",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-18-claude-readiness-no-launch.md"),
+  "Story index must reference Story 6.18 Claude readiness no-launch",
   failures,
 );
 assertCondition(

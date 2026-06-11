@@ -19,6 +19,8 @@ from supervisor.api.schemas import (
     CandidateWorkCreate,
     CandidateWorkUpdate,
     CandidateWorkView,
+    ClaudeReadinessCheckView,
+    ClaudeReviewReadinessReportView,
     CodexImplementationApprovalReportView,
     CodexImplementationApprovalRequirementView,
     CodexReadinessCheckView,
@@ -1617,6 +1619,15 @@ class SupervisorService:
                 relatedDocs=["docs/stories/6-17-codex-implementation-approval-packet.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="claude-review-readiness-report-v1",
+                label="Claude review readiness report",
+                endpoint="GET /supervisor/claude-review-readiness-report",
+                status="active",
+                summary="Shows no-launch Claude CLI discovery, review-only policy, scarcity controls, and stop lines.",
+                evidenceScope=["PATH discovery", "review-only posture", "scarce-use policy", "source mutation boundary"],
+                relatedDocs=["docs/stories/6-18-claude-readiness-no-launch.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
                 label="Delivery readiness policy report",
                 endpoint="GET /supervisor/delivery-readiness-policy-report",
@@ -2775,6 +2786,92 @@ class SupervisorService:
             approvalBindingImplemented=False,
         )
 
+    def get_claude_review_readiness_report(self) -> ClaudeReviewReadinessReportView:
+        cli_path = shutil.which("claude") or shutil.which("claude.cmd")
+        cli_detected = bool(cli_path)
+        return ClaudeReviewReadinessReportView(
+            reportId="claude-review-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "No-launch Claude review readiness report. It discovers whether a Claude CLI executable is on PATH, "
+                "but does not run Claude, check auth, start a session, send code or diffs, write files, or consume review budget."
+            ),
+            cliPath=cli_path,
+            reviewPolicy=[
+                ClaudeReadinessCheckView(
+                    checkId="cli-discovery",
+                    label="CLI discovery",
+                    status="available" if cli_detected else "not_found",
+                    summary=(
+                        "A Claude CLI executable was found on PATH."
+                        if cli_detected
+                        else "No Claude CLI executable was found on PATH."
+                    ),
+                    evidence=["shutil.which('claude')", "shutil.which('claude.cmd')"],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="auth-posture",
+                    label="Auth posture",
+                    status="not_checked",
+                    summary="No Claude auth, account, model, or subscription command was executed by this report.",
+                    evidence=["Auth checks require explicit successor approval before any CLI invocation."],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="review-only",
+                    label="Review-only posture",
+                    status="blocked",
+                    summary="Claude review execution remains blocked until a successor story proves review-only invocation behavior.",
+                    evidence=["Story 6.18 is no-launch readiness only.", "Source mutation is not approved for Claude review."],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="source-mutation",
+                    label="Source mutation",
+                    status="blocked",
+                    summary="Claude must not edit files unless Bob later grants a separate explicit edit-mode authority.",
+                    evidence=["Current Claude lane is scarce adversarial review, not routine implementation."],
+                ),
+            ],
+            scarcityPolicy=[
+                ClaudeReadinessCheckView(
+                    checkId="scarce-use",
+                    label="Scarce use",
+                    status="required",
+                    summary="Claude is reserved for adversarial review, high-risk changes, security-sensitive diffs, and checks on Codex output.",
+                    evidence=["User preference: Claude is a limited $20/month subscription for review, not routine generation."],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="budget-record",
+                    label="Budget record",
+                    status="not_implemented",
+                    summary="The supervisor does not yet record Claude review budget usage or monthly scarcity limits.",
+                    evidence=["Story 6.19 is the first bounded Claude review authority candidate."],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="review-trigger",
+                    label="Review trigger",
+                    status="policy_pending",
+                    summary="High-risk or explicitly approved work should trigger Claude review only after review-only behavior is proven.",
+                    evidence=["Security-sensitive diffs", "Broad architectural changes", "Codex output flaw-finding"],
+                ),
+            ],
+            stopLines=[
+                "This report does not approve Claude CLI process launch.",
+                "This report does not approve sending code, diffs, prompts, repository context, or credentials to Claude.",
+                "This report does not approve source mutation, command execution, Git operations, GitHub delivery, merge, or cleanup.",
+                "This report does not approve consuming scarce Claude subscription usage.",
+            ],
+            nextSafeActions=[
+                "Use this report to decide whether a future manual Claude availability check is needed.",
+                "Define a review-only command shape before bounded Claude review execution.",
+                "Keep Claude scarce-use policy separate from Codex implementation and GitHub delivery authority.",
+            ],
+            readOnly=True,
+            processLaunchApproved=False,
+            reviewTaskExecutionApproved=False,
+            sourceMutationApproved=False,
+            scarceUseApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3389,6 +3486,7 @@ class SupervisorService:
             "GET /supervisor/git-hygiene-report",
             "GET /supervisor/codex-readiness-report",
             "GET /supervisor/codex-implementation-approval-report",
+            "GET /supervisor/claude-review-readiness-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -3440,6 +3538,7 @@ class SupervisorService:
             "docs/stories/6-14-git-hygiene-read-only.md",
             "docs/stories/6-16-codex-readiness-no-launch.md",
             "docs/stories/6-17-codex-implementation-approval-packet.md",
+            "docs/stories/6-18-claude-readiness-no-launch.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",

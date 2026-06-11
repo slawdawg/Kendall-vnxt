@@ -139,6 +139,13 @@ const reports = [
     dashboardFetch: "getCodexImplementationApprovalReport",
   },
   {
+    reportId: "claude-review-readiness-report-v1",
+    endpoint: "GET /supervisor/claude-review-readiness-report",
+    apiPath: "/supervisor/claude-review-readiness-report",
+    story: "docs/stories/6-18-claude-readiness-no-launch.md",
+    dashboardFetch: "getClaudeReviewReadinessReport",
+  },
+  {
     reportId: "delivery-readiness-policy-report-v1",
     endpoint: "GET /supervisor/delivery-readiness-policy-report",
     apiPath: "/supervisor/delivery-readiness-policy-report",
@@ -229,6 +236,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/git-hygiene-report",
   "GET /supervisor/codex-readiness-report",
   "GET /supervisor/codex-implementation-approval-report",
+  "GET /supervisor/claude-review-readiness-report",
   "GET /supervisor/delivery-readiness-policy-report",
 ]) {
   assertCondition(
@@ -296,6 +304,7 @@ for (const controlsAnchor of [
   'id="git-hygiene-report"',
   'id="codex-readiness-report"',
   'id="codex-implementation-approval-report"',
+  'id="claude-review-readiness-report"',
   'id="delivery-readiness-policy-report"',
 ]) {
   assertCondition(
@@ -353,6 +362,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-17-codex-implementation-approval-packet.md"),
   "Story index must reference Story 6.17 Codex implementation approval packet",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-18-claude-readiness-no-launch.md"),
+  "Story index must reference Story 6.18 Claude readiness no-launch",
   failures,
 );
 assertCondition(

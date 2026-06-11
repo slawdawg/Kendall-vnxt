@@ -1390,6 +1390,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/git-hygiene-report",
         "GET /supervisor/codex-readiness-report",
         "GET /supervisor/codex-implementation-approval-report",
+        "GET /supervisor/claude-review-readiness-report",
         "GET /supervisor/delivery-readiness-policy-report",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
@@ -2665,6 +2666,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/6-14-git-hygiene-read-only.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/6-16-codex-readiness-no-launch.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/6-17-codex-implementation-approval-packet.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-18-claude-readiness-no-launch.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-43-safe-delivery-hygiene.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-44-delivery-readiness-policy-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-45-delivery-readiness-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
@@ -2700,6 +2702,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/git-hygiene-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/codex-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/codex-implementation-approval-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/claude-review-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
@@ -2910,6 +2913,49 @@ def test_codex_implementation_approval_report_stays_non_executing(tmp_path, monk
     }
     approval_binding = next(requirement for requirement in report["requirements"] if requirement["requirementId"] == "approval-binding")
     assert approval_binding["status"] == "not_implemented"
+
+
+def test_claude_review_readiness_report_does_not_launch_claude(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "claude-review-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/claude-review-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "claude-review-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["processLaunchApproved"] is False
+    assert report["reviewTaskExecutionApproved"] is False
+    assert report["sourceMutationApproved"] is False
+    assert report["scarceUseApproved"] is False
+    assert {check["checkId"] for check in report["reviewPolicy"]} == {
+        "cli-discovery",
+        "auth-posture",
+        "review-only",
+        "source-mutation",
+    }
+    assert {check["checkId"] for check in report["scarcityPolicy"]} == {
+        "scarce-use",
+        "budget-record",
+        "review-trigger",
+    }
+    assert next(check for check in report["reviewPolicy"] if check["checkId"] == "auth-posture")["status"] == "not_checked"
+    assert next(check for check in report["reviewPolicy"] if check["checkId"] == "review-only")["status"] == "blocked"
+    assert next(check for check in report["scarcityPolicy"] if check["checkId"] == "budget-record")["status"] == "not_implemented"
+    assert any("does not approve Claude CLI process launch" in stop_line for stop_line in report["stopLines"])
+    assert any("scarce Claude subscription usage" in stop_line for stop_line in report["stopLines"])
 
 
 def test_delivery_readiness_policy_report_documents_review_gate_without_mutation(tmp_path, monkeypatch) -> None:

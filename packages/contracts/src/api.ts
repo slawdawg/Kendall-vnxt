@@ -1070,6 +1070,30 @@ export interface CodexImplementationApprovalReportView {
   approvalBindingImplemented: boolean;
 }
 
+export interface ClaudeReadinessCheckView {
+  checkId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface ClaudeReviewReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  cliPath?: string | null;
+  reviewPolicy: ClaudeReadinessCheckView[];
+  scarcityPolicy: ClaudeReadinessCheckView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  reviewTaskExecutionApproved: boolean;
+  sourceMutationApproved: boolean;
+  scarceUseApproved: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

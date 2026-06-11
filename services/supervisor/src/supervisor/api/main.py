@@ -608,6 +608,11 @@ async def get_codex_implementation_approval_report():
     return ApiEnvelope(data=service.get_codex_implementation_approval_report())
 
 
+@app.get("/supervisor/claude-review-readiness-report", response_model=ApiEnvelope)
+async def get_claude_review_readiness_report():
+    return ApiEnvelope(data=service.get_claude_review_readiness_report())
+
+
 @app.get("/supervisor/delivery-readiness-policy-report", response_model=ApiEnvelope)
 async def get_delivery_readiness_policy_report():
     return ApiEnvelope(data=service.get_delivery_readiness_policy_report())
