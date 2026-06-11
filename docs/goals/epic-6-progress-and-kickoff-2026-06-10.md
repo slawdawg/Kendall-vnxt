@@ -67,6 +67,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - Keep report catalog, runtime evidence export, and Controls page anchors aligned when adding or changing evidence reports.
 - Continue root-cause maintenance only when scoped and verified.
 - Prepare exact approval text for the next unavoidable high-blast-radius operation when Bob is ready.
+- Current follow-up delivery plan: `docs/goals/epic-6-follow-up-hardening-delivery-plan-2026-06-11.md`.
 
 ## Stop/Continue Rules
 
@@ -131,6 +132,8 @@ Snapshot date: 2026-06-11.
 - Stories 6.4-6.24 were included in PR #86. Follow-up cleanup hardening and audit refresh now continue on a separate branch.
 - Delivery packaging plan: `docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md`.
 - Integrated PR body draft: `docs/goals/epic-6-integrated-pr-body-draft-2026-06-11.md`.
+- Follow-up hardening delivery plan: `docs/goals/epic-6-follow-up-hardening-delivery-plan-2026-06-11.md`.
+- Follow-up hardening PR body draft: `docs/goals/epic-6-follow-up-hardening-pr-body-draft-2026-06-11.md`.
 
 ## Completion Audit
 
