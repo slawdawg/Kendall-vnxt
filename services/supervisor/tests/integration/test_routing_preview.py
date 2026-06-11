@@ -1395,6 +1395,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/github-delivery-authority-report",
         "GET /supervisor/local-cleanup-readiness-report",
         "GET /supervisor/remote-cleanup-sync-readiness-report",
+        "GET /supervisor/trusted-autonomy-readiness-report",
         "GET /supervisor/delivery-readiness-policy-report",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
@@ -2675,6 +2676,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/6-20-github-delivery-authority-ladder.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/6-21-local-cleanup-readiness.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/6-22-remote-cleanup-sync-readiness.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-23-trusted-autonomy-readiness.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-43-safe-delivery-hygiene.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-44-delivery-readiness-policy-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-45-delivery-readiness-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
@@ -2715,6 +2717,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/github-delivery-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/local-cleanup-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/remote-cleanup-sync-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/trusted-autonomy-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
@@ -3124,6 +3127,42 @@ def test_remote_cleanup_sync_readiness_report_blocks_remote_mutation(tmp_path, m
     assert any("GitHub tokens" in operation for operation in report["blockedOperations"])
     assert any("target is ambiguous" in stop_condition for stop_condition in report["stopConditions"])
     assert any("one remote cleanup or sync target at a time" in action for action in report["nextSafeActions"])
+
+
+def test_trusted_autonomy_readiness_report_blocks_autonomous_execution(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "trusted-autonomy-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/trusted-autonomy-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "trusted-autonomy-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["lowRiskAutonomyApproved"] is False
+    assert report["autonomousProviderUseApproved"] is False
+    assert report["autonomousGitHubDeliveryApproved"] is False
+    assert report["autonomousCleanupApproved"] is False
+    assert {gate["gateId"] for gate in report["autonomyGates"]} == {
+        "repeatable-low-risk-work",
+        "bounded-tools",
+        "automatic-stop",
+        "operator-visibility",
+    }
+    assert any("Codex or Claude launch" in item for item in report["blockedWork"])
+    assert any("authority report says the action is blocked" in condition for condition in report["stopConditions"])
+    assert any("one narrow workflow class" in action for action in report["nextSafeActions"])
 
 
 def test_delivery_readiness_policy_report_documents_review_gate_without_mutation(tmp_path, monkeypatch) -> None:

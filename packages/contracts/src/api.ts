@@ -1203,6 +1203,31 @@ export interface RemoteCleanupSyncReadinessReportView {
   remoteMutationApproved: boolean;
 }
 
+export interface TrustedAutonomyReadinessGateView {
+  gateId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface TrustedAutonomyReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  autonomyGates: TrustedAutonomyReadinessGateView[];
+  eligibleWork: string[];
+  blockedWork: string[];
+  requiredEvidence: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  lowRiskAutonomyApproved: boolean;
+  autonomousProviderUseApproved: boolean;
+  autonomousGitHubDeliveryApproved: boolean;
+  autonomousCleanupApproved: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

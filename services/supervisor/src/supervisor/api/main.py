@@ -633,6 +633,11 @@ async def get_remote_cleanup_sync_readiness_report():
     return ApiEnvelope(data=service.get_remote_cleanup_sync_readiness_report())
 
 
+@app.get("/supervisor/trusted-autonomy-readiness-report", response_model=ApiEnvelope)
+async def get_trusted_autonomy_readiness_report():
+    return ApiEnvelope(data=service.get_trusted_autonomy_readiness_report())
+
+
 @app.get("/supervisor/delivery-readiness-policy-report", response_model=ApiEnvelope)
 async def get_delivery_readiness_policy_report():
     return ApiEnvelope(data=service.get_delivery_readiness_policy_report())

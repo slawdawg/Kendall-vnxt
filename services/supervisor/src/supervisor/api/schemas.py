@@ -1312,6 +1312,31 @@ class RemoteCleanupSyncReadinessReportView(BaseModel):
     remoteMutationApproved: bool = False
 
 
+class TrustedAutonomyReadinessGateView(BaseModel):
+    gateId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class TrustedAutonomyReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    autonomyGates: list[TrustedAutonomyReadinessGateView]
+    eligibleWork: list[str]
+    blockedWork: list[str]
+    requiredEvidence: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    lowRiskAutonomyApproved: bool = False
+    autonomousProviderUseApproved: bool = False
+    autonomousGitHubDeliveryApproved: bool = False
+    autonomousCleanupApproved: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

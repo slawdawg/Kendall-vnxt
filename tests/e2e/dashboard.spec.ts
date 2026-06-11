@@ -309,6 +309,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/git-hygiene-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/local-cleanup-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/remote-cleanup-sync-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/trusted-autonomy-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-readiness-report")).toBeVisible();
@@ -479,6 +480,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(remoteCleanupPanel.getByText("GitHub tokens")).toBeVisible();
     await expect(remoteCleanupPanel.getByText("Use this report to request one remote cleanup or sync target at a time.")).toBeVisible();
     await expect(page.locator("#remote-cleanup-sync-readiness-report")).toBeVisible();
+
+    const autonomyPanel = page.locator("#trusted-autonomy-readiness-report");
+    await expect(autonomyPanel.getByText("Trusted autonomy", { exact: true })).toBeVisible();
+    await expect(autonomyPanel.getByRole("heading", { name: "Autonomy readiness" })).toBeVisible();
+    await expect(autonomyPanel.getByRole("heading", { name: "Repeatable low-risk work" })).toBeVisible();
+    await expect(autonomyPanel.getByRole("heading", { name: "Automatic stop" })).toBeVisible();
+    await expect(autonomyPanel.getByRole("heading", { name: "Blocked work" })).toBeVisible();
+    await expect(autonomyPanel.getByText("Codex or Claude launch without explicit authority")).toBeVisible();
+    await expect(autonomyPanel.getByText("Use this report to select one narrow workflow class for a future autonomy trial.")).toBeVisible();
+    await expect(page.locator("#trusted-autonomy-readiness-report")).toBeVisible();
 
     const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();
     await expect(codexReadinessPanel.getByText("Codex readiness", { exact: true })).toBeVisible();

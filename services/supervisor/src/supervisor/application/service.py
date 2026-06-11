@@ -96,6 +96,8 @@ from supervisor.api.schemas import (
     TaskPacketV0View,
     ThreatBoundaryRuleView,
     ThreatBoundaryView,
+    TrustedAutonomyReadinessGateView,
+    TrustedAutonomyReadinessReportView,
     VerificationCommandView,
     VerificationCommandGroupView,
     VerificationHandoffCheckpointView,
@@ -1670,6 +1672,15 @@ class SupervisorService:
                 summary="Defines readiness for future remote branch cleanup and GitHub issue/story sync without remote mutation.",
                 evidenceScope=["remote branch cleanup", "GitHub issue sync", "story status sync", "remote mutation boundaries"],
                 relatedDocs=["docs/stories/6-22-remote-cleanup-sync-readiness.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="trusted-autonomy-readiness-report-v1",
+                label="Trusted autonomy readiness report",
+                endpoint="GET /supervisor/trusted-autonomy-readiness-report",
+                status="active",
+                summary="Defines graduation gates for future low-risk autonomy without enabling autonomous execution.",
+                evidenceScope=["low-risk eligibility", "graduation gates", "blocked work", "autonomy stop lines"],
+                relatedDocs=["docs/stories/6-23-trusted-autonomy-readiness.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
@@ -3259,6 +3270,83 @@ class SupervisorService:
             remoteMutationApproved=False,
         )
 
+    def get_trusted_autonomy_readiness_report(self) -> TrustedAutonomyReadinessReportView:
+        return TrustedAutonomyReadinessReportView(
+            reportId="trusted-autonomy-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only trusted autonomy readiness report. It defines the evidence needed before low-risk repeatable workflows "
+                "can run end to end with Bob handling exceptions, but it does not approve autonomous execution."
+            ),
+            autonomyGates=[
+                TrustedAutonomyReadinessGateView(
+                    gateId="repeatable-low-risk-work",
+                    label="Repeatable low-risk work",
+                    status="not_approved",
+                    summary="Only narrow, repeatable, already-proven work can be considered for autonomy.",
+                    evidence=["synthetic proof", "real-story proof", "passing verification history"],
+                ),
+                TrustedAutonomyReadinessGateView(
+                    gateId="bounded-tools",
+                    label="Bounded tools",
+                    status="not_approved",
+                    summary="Every tool lane must have explicit path, provider, command, GitHub, and cleanup boundaries.",
+                    evidence=["authority reports", "blocked default booleans", "runtime evidence export"],
+                ),
+                TrustedAutonomyReadinessGateView(
+                    gateId="automatic-stop",
+                    label="Automatic stop",
+                    status="required",
+                    summary="The system must stop for failures, ambiguous targets, scope expansion, scarce usage, or high-risk actions.",
+                    evidence=["stopConditions", "attention queue", "work-item evidence"],
+                ),
+                TrustedAutonomyReadinessGateView(
+                    gateId="operator-visibility",
+                    label="Operator visibility",
+                    status="required",
+                    summary="The Dev Console must show live status, waiting items, attention needs, and retained evidence.",
+                    evidence=["Controls reports", "work item detail", "runtime evidence review"],
+                ),
+            ],
+            eligibleWork=[
+                "documentation-only cleanup with stable checks",
+                "deterministic report or index drift repairs",
+                "safe local evidence summarization",
+                "repeatable low-risk dashboard copy changes with focused tests",
+            ],
+            blockedWork=[
+                "Codex or Claude launch without explicit authority",
+                "provider/model expansion beyond approved Ollama boundary",
+                "GitHub push, PR, merge, issue sync, or cleanup without matching approval",
+                "source mutation outside approved paths",
+                "credential, token, auth, session, or secret handling",
+            ],
+            requiredEvidence=[
+                "history of repeated successful runs for the same workflow class",
+                "clear rollback or stop behavior",
+                "bounded path, command, provider, GitHub, and cleanup scope",
+                "runtime evidence export retained before and after automation",
+                "Bob-approved policy defining what exceptions still interrupt him",
+            ],
+            stopConditions=[
+                "The work is not low-risk, repeatable, and already proven.",
+                "Any required authority report says the action is blocked.",
+                "Verification fails or becomes flaky.",
+                "The task requests scarce Claude usage or remote GitHub mutation.",
+                "The workflow would hide evidence, delete state, or continue after ambiguity.",
+            ],
+            nextSafeActions=[
+                "Use this report to select one narrow workflow class for a future autonomy trial.",
+                "Keep all autonomy booleans false until a specific policy is approved.",
+                "Prefer Bob exceptions over silent retries when failures or scope changes occur.",
+            ],
+            readOnly=True,
+            lowRiskAutonomyApproved=False,
+            autonomousProviderUseApproved=False,
+            autonomousGitHubDeliveryApproved=False,
+            autonomousCleanupApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3878,6 +3966,7 @@ class SupervisorService:
             "GET /supervisor/github-delivery-authority-report",
             "GET /supervisor/local-cleanup-readiness-report",
             "GET /supervisor/remote-cleanup-sync-readiness-report",
+            "GET /supervisor/trusted-autonomy-readiness-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -3934,6 +4023,7 @@ class SupervisorService:
             "docs/stories/6-20-github-delivery-authority-ladder.md",
             "docs/stories/6-21-local-cleanup-readiness.md",
             "docs/stories/6-22-remote-cleanup-sync-readiness.md",
+            "docs/stories/6-23-trusted-autonomy-readiness.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",

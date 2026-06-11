@@ -35,6 +35,7 @@ import type {
   SavedWorkItemView,
   SavedWorkItemViewPayload,
   SupervisorReportCatalogView,
+  TrustedAutonomyReadinessReportView,
   WorkItemBranchPreparationPayload,
   WorkItemAssignmentPayload,
   WorkItemFilterScope,
@@ -248,6 +249,10 @@ export async function getLocalCleanupReadinessReport(): Promise<LocalCleanupRead
 
 export async function getRemoteCleanupSyncReadinessReport(): Promise<RemoteCleanupSyncReadinessReportView> {
   return requestJson<RemoteCleanupSyncReadinessReportView>("/supervisor/remote-cleanup-sync-readiness-report");
+}
+
+export async function getTrustedAutonomyReadinessReport(): Promise<TrustedAutonomyReadinessReportView> {
+  return requestJson<TrustedAutonomyReadinessReportView>("/supervisor/trusted-autonomy-readiness-report");
 }
 
 export async function getCodexReadinessReport(): Promise<CodexReadinessReportView> {

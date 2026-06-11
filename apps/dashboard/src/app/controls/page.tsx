@@ -24,6 +24,7 @@ import { RemoteCleanupSyncReadinessReportPanel } from "../../components/remote-c
 import { SafeDevelopmentBacklogPanel } from "../../components/safe-development-backlog-panel";
 import { Shell } from "../../components/shell";
 import { SupervisorReportCatalogPanel } from "../../components/supervisor-report-catalog-panel";
+import { TrustedAutonomyReadinessReportPanel } from "../../components/trusted-autonomy-readiness-report-panel";
 import { VerificationReadinessReportPanel } from "../../components/verification-readiness-report-panel";
 import { buildNavStats } from "../../lib/nav-stats";
 import {
@@ -50,6 +51,7 @@ import {
   getRemoteCleanupSyncReadinessReport,
   getSafeDevelopmentBacklogReport,
   getSupervisorReportCatalog,
+  getTrustedAutonomyReadinessReport,
   getVerificationReadinessReport,
   getWorkerRegistry,
   getWorkItems,
@@ -78,6 +80,7 @@ export default async function ControlsPage() {
     gitHygieneReport,
     localCleanupReadinessReport,
     remoteCleanupSyncReadinessReport,
+    trustedAutonomyReadinessReport,
     codexReadinessReport,
     codexImplementationApprovalReport,
     claudeReviewReadinessReport,
@@ -105,6 +108,7 @@ export default async function ControlsPage() {
     getGitHygieneReport(),
     getLocalCleanupReadinessReport(),
     getRemoteCleanupSyncReadinessReport(),
+    getTrustedAutonomyReadinessReport(),
     getCodexReadinessReport(),
     getCodexImplementationApprovalReport(),
     getClaudeReviewReadinessReport(),
@@ -178,6 +182,9 @@ export default async function ControlsPage() {
       </div>
       <div id="remote-cleanup-sync-readiness-report" className="scroll-mt-28">
         <RemoteCleanupSyncReadinessReportPanel report={remoteCleanupSyncReadinessReport} />
+      </div>
+      <div id="trusted-autonomy-readiness-report" className="scroll-mt-28">
+        <TrustedAutonomyReadinessReportPanel report={trustedAutonomyReadinessReport} />
       </div>
       <div id="codex-readiness-report" className="scroll-mt-28">
         <CodexReadinessReportPanel report={codexReadinessReport} />

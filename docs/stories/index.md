@@ -121,6 +121,7 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `6-20-github-delivery-authority-ladder.md` | Add a read-only GitHub delivery authority ladder for push, PR, CI, review resolution, merge, and remote cleanup approvals. |
 | `6-21-local-cleanup-readiness.md` | Add a read-only local cleanup readiness report for completed, stale, and abandoned worktree cleanup policy before deletion is enabled. |
 | `6-22-remote-cleanup-sync-readiness.md` | Add a read-only remote cleanup and issue/story sync readiness report before remote deletion or GitHub status updates are enabled. |
+| `6-23-trusted-autonomy-readiness.md` | Add a read-only trusted autonomy readiness report for low-risk workflow graduation gates before autonomous execution is enabled. |
 
 ## Completed Foundation Stories
 
