@@ -29,7 +29,7 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 | Merge | Not approved | Bob-approved or stretch | Blocked |
 | Local cleanup | Readiness only | Automatic after done with evidence | Deletion blocked |
 | Remote cleanup | Readiness only | Stretch | Blocked |
-| Trusted low-risk autonomy | Readiness only | Stretch | Blocked |
+| Trusted low-risk autonomy | Proposal drafted | Stretch | Blocked until Bob approves a named autonomy policy |
 | Raw prompt/completion retention | Not approved | Not part of MVP | Blocked |
 
 ## Current Evidence Surfaces
@@ -42,6 +42,7 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 - Trusted autonomy: `GET /supervisor/trusted-autonomy-readiness-report`.
 - Epic completion audit: `GET /supervisor/epic-6-completion-audit-report`.
 - MVP proof trial packet: `GET /supervisor/epic-6-mvp-proof-trial-report`.
+- Low-risk doc/evidence autonomy proposal: `docs/goals/epic-6-low-risk-doc-evidence-autonomy-policy-proposal-2026-06-11.md`.
 
 These reports are evidence and approval-prep surfaces only. They do not grant the authority they describe.
 
@@ -53,6 +54,7 @@ Snapshot date: 2026-06-11.
 - PR #90 delivered the read-only Epic 6 MVP proof trial packet from `codex/epic-6-mvp-proof-run`.
 - Current `main` verification passed after PR #90 with `pnpm.cmd run check`, including dashboard build and 143 supervisor tests.
 - Future branch deletion, local cleanup, remote cleanup, Codex launch, Claude launch, push/PR delivery, merge, and issue/story sync still require explicit Bob approval naming action and scope.
+- PR #91 and PR #92 provide initial evidence for a future low-risk doc/evidence-only PR autonomy policy, but no autonomy policy is active yet.
 
 ## Approval Request Format
 

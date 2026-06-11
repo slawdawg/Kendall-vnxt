@@ -43,7 +43,7 @@ Candidate Work
 | 11. Claude authority | Readiness prepared; real launch blocked | Stories 6.18 and 6.19 add no-launch readiness and review-only approval packet. Real Claude process/task execution is not approved. |
 | 12. GitHub delivery | Milestone delivered; future writes gated | Story 6.20 adds delivery authority ladder. PR #86 was merged after approval; future push, PR mutation, CI wait, review resolution, merge, and cleanup remain approval-gated per target. |
 | 13. Cleanup | Milestone cleanup performed; automation blocked | Stories 6.21 and 6.22 add local cleanup and remote cleanup/sync readiness. Local cleanup was performed for the merged milestone; automatic cleanup and remote mutation remain blocked. |
-| 14. Trusted autonomy | Readiness prepared; autonomy blocked | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. |
+| 14. Trusted autonomy | Proposal drafted; autonomy blocked | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. PR #91 and PR #92 provide initial evidence for a future low-risk doc/evidence-only PR autonomy policy, but no policy is active yet. |
 | 15. Completion audit visibility | Readiness prepared; completion blocked | Story 6.24 adds a Dev Console completion audit showing prepared local work, remaining blockers, and the next delivery approval. |
 | 16. Trusted delivery eligibility | Delivered in PR #88 | Stories 6.25 and 6.26 define read-only eligibility stages and current-branch evaluation for softening push, PR, merge, and cleanup gates after strict evidence is satisfied. Actual future GitHub mutation remains gated per target. |
 | 17. MVP proof | Trial packet delivered; real trial blocked | Story 6.27 delivered the read-only approval packet for one real BMAD story trial through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. Bob story selection and bounded launch approval are still required before a real trial. |
@@ -66,6 +66,8 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 
 - Prepare the next real BMAD story trial approval packet with exact implementation scope, provider lane, verification command, review plan, delivery target, and cleanup target.
 - Current real-story trial approval packet: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
+- Current low-risk autonomy proposal: `docs/goals/epic-6-low-risk-doc-evidence-autonomy-policy-proposal-2026-06-11.md`.
+- Claude Code setup reference for future review-only gates: `docs/claude-code-setup-for-epic-6.md`.
 - Keep report catalog, runtime evidence export, and Controls page anchors aligned when adding or changing evidence reports.
 - Continue root-cause maintenance only when scoped and verified.
 - Prepare exact approval text for the next unavoidable high-blast-radius operation when Bob is ready.
@@ -129,6 +131,9 @@ After a PR is opened under explicit approval and CI is green, the line softens o
 - 2026-06-11: PR #88 delivered Story 6.26 into `main` after CI `check` passed and one review comment was resolved by switching delivery diffstat to merge-base branch scope.
 - 2026-06-11: Story 6.27 added a read-only Epic 6 MVP proof trial packet that names the selected story, bounded Codex implementation, local/Ollama evidence, bounded Claude review, GitHub delivery, cleanup, and done-evidence approvals required for the next real BMAD story proof.
 - 2026-06-11: PR #90 delivered Story 6.27 into `main`. Local verification after merge passed with `pnpm.cmd run check` including preflight, all drift checks, dashboard build, and 143 supervisor tests.
+- 2026-06-11: PR #91 completed the first real Epic 6 MVP proof trial for Story 3.61 through bounded Codex implementation, local verification, PR delivery, CI success, approved merge, and approved cleanup.
+- 2026-06-11: PR #92 delivered the post-proof progress and authority docs after CI success, approved merge, and approved branch cleanup.
+- 2026-06-11: Drafted the low-risk doc/evidence-only autonomy policy proposal. It is not active until Bob explicitly approves the named policy.
 
 ## Current GitHub State Snapshot
 
@@ -143,6 +148,8 @@ Snapshot date: 2026-06-11.
 - Follow-up hardening PR body draft: `docs/goals/epic-6-follow-up-hardening-pr-body-draft-2026-06-11.md`.
 - Trusted delivery eligibility PR: `https://github.com/slawdawg/Kendall-vnxt/pull/88`.
 - MVP proof trial packet PR: `https://github.com/slawdawg/Kendall-vnxt/pull/90`.
+- MVP proof trial evidence PR: `https://github.com/slawdawg/Kendall-vnxt/pull/91`.
+- Post-proof authority docs PR: `https://github.com/slawdawg/Kendall-vnxt/pull/92`.
 
 ## Completion Audit
 
@@ -164,8 +171,8 @@ Evidence still missing for completion:
 - No approved real Claude review attempt has been executed.
 - GitHub delivery Gate 1 and merge are complete for PR #86, PR #87, and PR #88.
 - Automatic cleanup, remote cleanup, issue/story sync, and trusted autonomy remain blocked by default.
-- No real BMAD story has reached the final Dev Console done/evidence state through approved implementation, delivery, and cleanup.
-- The next real-story trial packet is delivered, but no story has been selected and no Codex or Claude worker launch has been approved from it.
+- One real BMAD story, Story 3.61, has completed a bounded doc/evidence proof trial through approved implementation, delivery, merge, and cleanup evidence.
+- Trusted low-risk autonomy is proposed but not active.
 
 Next unavoidable gate:
 

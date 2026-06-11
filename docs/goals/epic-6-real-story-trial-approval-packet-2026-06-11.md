@@ -1,13 +1,15 @@
 # Epic 6 Real Story Trial Approval Packet
 
 Date: 2026-06-11
-Status: pending Bob story selection and explicit approval
+Status: initial doc/evidence trial completed; broader MVP proof still incomplete
 
 ## Purpose
 
 Define the next approval gate for the Epic 6 MVP proof run without granting authority by implication.
 
 Epic 6 MVP still requires one real BMAD story to move through Dev Console evidence from Candidate Work to done state with approved bounded execution, verification, delivery, cleanup, and retained evidence.
+
+Story 3.61 has now completed an initial doc/evidence-only proof lane through bounded Codex implementation, local verification, PR delivery, CI success, merge, and cleanup. That is useful initial evidence, but it does not prove the full Dev Console Candidate Work to done-state lifecycle and does not activate broader autonomy.
 
 ## Current Evidence
 
@@ -16,10 +18,15 @@ Epic 6 MVP still requires one real BMAD story to move through Dev Console eviden
 - `pnpm.cmd run check` passed on `main` after PR #90 with preflight, all drift checks, dashboard build, and 143 supervisor tests.
 - Focused Controls e2e passed with the existing Playwright cache:
   `$env:PLAYWRIGHT_BROWSERS_PATH='C:\Users\slaw_dawg\Kendall_Nxt\.data\ms-playwright'; pnpm.cmd run test:e2e:dashboard:controls`
+- PR #91 delivered Story 3.61 proof-trial evidence after bounded Codex implementation and local `pnpm.cmd run check`.
+- PR #91 CI `check` passed, PR #91 was merged after explicit approval, and its branch/worktree cleanup was performed after explicit approval.
+- PR #92 refreshed post-trial progress and authority docs after CI success, approved merge, and approved branch cleanup.
 
 ## Selected Story
 
-No story is selected yet.
+Selected initial trial story: `docs/stories/3-61-maintenance-action-evidence-links.md`.
+
+No successor full-lifecycle MVP proof story is selected yet.
 
 Selection requirements:
 
@@ -77,7 +84,7 @@ This approval would not allow:
 
 ## Next Separate Gates
 
-After the local implementation and verification evidence exists, these remain separate:
+After any local implementation and verification evidence exists, these remain separate:
 
 - Claude review approval, if adversarial review is justified.
 - GitHub push/PR/check approval for the exact branch and target PR.
