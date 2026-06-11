@@ -1,8 +1,8 @@
 # Kendall_vNxt Execution Authority Approval Checkpoints
 
 Date: 2026-06-08
-Status: accepted governance baseline
-Scope: Approval language and evidence required before blocked execution-authority stories can move to ready
+Status: accepted governance baseline; post-Epic-6 status reconciled
+Scope: Approval language and evidence required before deferred post-MVP execution-authority work can move to ready
 
 ## Purpose
 
@@ -30,6 +30,8 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 
 ### Orchestrator CLI Worker Launch
 
+Story 6.1 is done for the fake-worker orchestrator spike. It remains listed here only as the durable blocker for any future real Codex or Claude CLI worker launch.
+
 - `docs/stories/6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md`
 
 ## Approval Language Required
@@ -51,7 +53,7 @@ Examples of language that is specific enough:
 - "Approve Story 4.1 only: implement Ollama-specific disabled-default settings and registry evidence. Do not call Ollama."
 - "Approve Stories 5.1-5.2 only: implement launch settings and approval binding. Do not launch a process."
 - "Approve Story 4.4 for local Ollama execution using endpoint X and model Y with the rollback plan in the PRD."
-- "Approve Story 6.1 only: implement fake orchestrator workers and fixture evidence. Do not launch Codex or Claude."
+- "Approve a post-MVP orchestrator CLI launch slice only: define the exact Codex or Claude command boundary, worktree, timeout, evidence, and rollback plan. Do not broaden provider, credential, merge, or cleanup authority."
 
 ## Language That Is Not Approval
 
@@ -87,7 +89,7 @@ Before a blocked execution story can move to ready, the implementer must inspect
 
 ## Current Decision
 
-Stories 4.1-4.3 are approved only for non-executing Ollama preparation and no-call fixture evidence. Stories 5.1-5.4 are approved only for non-executing subscription-agent launch preparation and no-process fixture evidence.
+Stories 4.1-4.3 are complete as non-executing Ollama preparation and no-call fixture evidence. Story 4.4 is complete only within the approved VM-to-host Ollama endpoint/model boundary. Stories 5.1-5.4 are complete as non-executing subscription-agent launch preparation and no-process fixture evidence. Story 5.5 remains deferred post-MVP.
 
 Current status remains:
 

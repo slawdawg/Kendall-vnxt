@@ -1,7 +1,7 @@
 # Story 3.57: Work-Item Review Queue Shortcuts
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

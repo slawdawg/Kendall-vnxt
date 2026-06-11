@@ -1,5 +1,6 @@
 # Story 3.5: Architecture Authority Dependency Graph
 
+Status: done
 ## Status
 
 Ready for Review

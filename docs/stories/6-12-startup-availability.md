@@ -1,7 +1,7 @@
 # Story 6.12: Startup Availability
 
 Date: 2026-06-10
-Status: Review
+Status: done
 
 ## Story
 

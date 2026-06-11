@@ -1,5 +1,6 @@
 # Story 3.14: Dashboard Evidence Overview Polish
 
+Status: done
 ## Status
 
 Ready for Review

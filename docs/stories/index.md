@@ -3,13 +3,22 @@
 Date: 2026-06-08
 Status: current navigation index
 
+## Post-Epic-6 Status Reconciliation
+
+Epics 3, 4, 5, and 6 have been reconciled after Epic 6 MVP completion.
+
+- Epic 3 readiness, maintenance, verification, report, and evidence-link stories are closed as delivered story evidence.
+- Epic 4 Ollama/provider stories are closed within their approved scope: Stories 4.1-4.3 are non-executing preparation, and Story 4.4 is limited to the approved VM-to-host Ollama endpoint/model boundary.
+- Epic 5 subscription-launch stories are closed for non-executing preparation through Story 5.4. Story 5.5 remains deferred post-MVP until explicit supervised process-launch approval exists.
+- Epic 6 MVP is complete through Story 3.66 and PR #98. Story 6.1 is done for the fake-worker spike; real Codex/Claude process launch remains a post-MVP authority gate.
+
 ## Blocked Pending Explicit Approval
 
 These stories must not be implemented until the operator explicitly approves the named authority and scope.
 
 ### Orchestrator CLI Worker Launch
 
-The orchestrator planning spike is safe to refine, but real Codex CLI process launch and real Claude Code CLI process launch remain blocked pending explicit approval.
+Story 6.1 is complete for the fake-worker spike. It remains listed here only because real Codex CLI process launch and real Claude Code CLI process launch are still blocked pending explicit post-MVP approval.
 
 - `6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md`
 
@@ -19,9 +28,11 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 
 ### Subscription-Agent Launch
 
+Stories 5.1-5.4 are complete as non-executing subscription-launch preparation. Story 5.5 remains deferred because it would cross into supervised process launch.
+
 - `5-5-subscription-launch-supervised-process-behind-approval.md`
 
-## Recent Ready For Review Stories
+## Closed Epic 3-6 Story Evidence
 
 ## Selected Epic 6 MVP Proof Trial Story
 
@@ -102,7 +113,7 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `3-6-dashboard-command-boundary-contract.md` | Dashboard command/read boundary. |
 | `3-5-architecture-authority-dependency-graph.md` | Deferred authority dependency graph. |
 
-## Draft Epic 6 Stories
+## Closed Epic 6 Story Map
 
 | Story | Slice |
 | --- | --- |
@@ -148,4 +159,4 @@ Stories under `1-*` and `2-*` establish the current safe foundation:
 
 ## Current Rule
 
-Generic continuation language does not approve blocked authority stories. Use `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md` before moving any blocked story to ready.
+Generic continuation language does not approve blocked post-MVP authority stories. Use `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md` before moving any blocked story to ready.

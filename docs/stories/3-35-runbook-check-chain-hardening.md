@@ -1,7 +1,7 @@
 # Story 3.35: Runbook Check Chain Hardening
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

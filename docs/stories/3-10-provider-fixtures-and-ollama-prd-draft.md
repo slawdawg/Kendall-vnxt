@@ -1,5 +1,6 @@
 # Story 3.10: Provider Fixtures And Ollama PRD Draft
 
+Status: done
 ## Status
 
 Ready for Review

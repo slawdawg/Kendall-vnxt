@@ -1,5 +1,6 @@
 # Story 3.3: Fresh VM Acceptance Checklist And Current Handoff
 
+Status: done
 ## Status
 
 Ready for Review

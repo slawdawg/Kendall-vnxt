@@ -1,5 +1,6 @@
 # Story 3.12: Subscription Agent Launch PRD
 
+Status: done
 ## Status
 
 Ready for Review

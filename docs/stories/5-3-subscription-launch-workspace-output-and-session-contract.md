@@ -1,5 +1,6 @@
 # Story 5.3: Subscription Launch Workspace Output And Session Contract
 
+Status: done as non-executing subscription-launch preparation; supervised process launch deferred post-MVP
 ## Status
 
 done

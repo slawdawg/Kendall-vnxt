@@ -319,7 +319,7 @@ def test_real_bmad_story_flows_through_import_preview_attempt_and_runtime_eviden
         assert candidate["source"] == "bmad"
         assert candidate["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
         assert candidate["sourceArtifactType"] == "bmad_story"
-        assert candidate["priority"] == "high"
+        assert candidate["priority"] == "normal"
         assert candidate["sortOrder"] == 11
         assert candidate["importMetadata"]["storyId"] == "6-5"
         assert candidate["importMetadata"]["epicId"] == "6"

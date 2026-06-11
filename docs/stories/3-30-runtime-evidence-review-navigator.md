@@ -1,7 +1,7 @@
 # Story 3.30: Runtime Evidence Review Navigator
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

@@ -1,7 +1,7 @@
 # Story 6.3: Candidate Work Model And API
 
 Date: 2026-06-10
-Status: Review
+Status: done
 
 ## Story
 

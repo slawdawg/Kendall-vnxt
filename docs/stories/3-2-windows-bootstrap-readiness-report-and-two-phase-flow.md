@@ -1,5 +1,6 @@
 # Story 3.2: Windows Bootstrap Readiness Report And Two-Phase Flow
 
+Status: done
 ## Status
 
 Ready for Review

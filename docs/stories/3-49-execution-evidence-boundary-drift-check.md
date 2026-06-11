@@ -1,7 +1,7 @@
 # Story 3.49: Execution Evidence Boundary Drift Check
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

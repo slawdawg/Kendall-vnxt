@@ -1,5 +1,6 @@
 # Story 3.1: GitHub Auth And Remote Sync Doctor
 
+Status: done
 ## Status
 
 Ready for Review

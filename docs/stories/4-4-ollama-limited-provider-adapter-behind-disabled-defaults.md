@@ -1,4 +1,5 @@
 ---
+Status: done within approved VM-to-host Ollama endpoint/model boundary; broader provider expansion deferred post-MVP
 baseline_commit: c0688534e4eaeed2c15e19efd41d1d080213fbcb
 ---
 

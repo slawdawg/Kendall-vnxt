@@ -1,7 +1,7 @@
 # Story 3.33: Evidence Overview Review Shortcuts
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

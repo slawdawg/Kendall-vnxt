@@ -1,7 +1,7 @@
 # Story 3.51: Process Lifecycle Policy Drift Check
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

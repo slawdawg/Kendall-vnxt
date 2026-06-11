@@ -1,7 +1,7 @@
 # Story 3.20: Runtime Evidence Review Manifest
 
 Date: 2026-06-08
-Status: ready for review
+Status: done
 
 ## Goal
 

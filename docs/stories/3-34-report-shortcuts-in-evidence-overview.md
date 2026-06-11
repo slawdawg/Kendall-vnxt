@@ -1,7 +1,7 @@
 # Story 3.34: Report Shortcuts In Evidence Overview
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

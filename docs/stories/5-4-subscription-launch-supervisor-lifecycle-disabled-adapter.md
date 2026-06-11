@@ -1,5 +1,6 @@
 # Story 5.4: Subscription Launch Supervisor Lifecycle Disabled Adapter
 
+Status: done as non-executing subscription-launch preparation; supervised process launch deferred post-MVP
 ## Status
 
 done

@@ -1,6 +1,6 @@
 # Story 3.15: Documentation Authority Report
 
-Status: ready for review
+Status: done
 Date: 2026-06-08
 
 ## Goal
