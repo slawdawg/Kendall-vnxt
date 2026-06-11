@@ -307,6 +307,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-delivery-authority-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/git-hygiene-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/local-cleanup-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-readiness-report")).toBeVisible();
@@ -456,6 +457,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gitHygienePanel.getByText("No GitHub PR lookup was performed by this read-only local report.")).toBeVisible();
     await expect(gitHygienePanel.getByText("This report is not approval to push")).toBeVisible();
     await expect(page.locator("#git-hygiene-report")).toBeVisible();
+
+    const cleanupPanel = page.locator("#local-cleanup-readiness-report");
+    await expect(cleanupPanel.getByText("Local cleanup", { exact: true })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Cleanup readiness" })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Completed worktree" })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Stale worktree" })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Evidence retention" })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Blocked targets" })).toBeVisible();
+    await expect(cleanupPanel.getByText("main repository checkout")).toBeVisible();
+    await expect(cleanupPanel.getByText("Use this report to request one local cleanup target at a time.")).toBeVisible();
+    await expect(page.locator("#local-cleanup-readiness-report")).toBeVisible();
 
     const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();
     await expect(codexReadinessPanel.getByText("Codex readiness", { exact: true })).toBeVisible();

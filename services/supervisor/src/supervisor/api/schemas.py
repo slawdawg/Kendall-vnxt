@@ -1264,6 +1264,30 @@ class GitHubDeliveryAuthorityReportView(BaseModel):
     remoteCleanupApproved: bool = False
 
 
+class LocalCleanupPolicyItemView(BaseModel):
+    itemId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class LocalCleanupReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    cleanupPolicy: list[LocalCleanupPolicyItemView]
+    requiredEvidence: list[str]
+    blockedTargets: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    automaticCleanupApproved: bool = False
+    worktreeRemovalApproved: bool = False
+    branchDeletionApproved: bool = False
+    evidenceDeletionApproved: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

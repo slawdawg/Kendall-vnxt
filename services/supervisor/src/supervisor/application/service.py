@@ -56,6 +56,8 @@ from supervisor.api.schemas import (
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
     LocalEvidencePacketView,
+    LocalCleanupPolicyItemView,
+    LocalCleanupReadinessReportView,
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
     LocalWorktreePlanView,
@@ -1650,6 +1652,15 @@ class SupervisorService:
                 relatedDocs=["docs/stories/6-20-github-delivery-authority-ladder.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="local-cleanup-readiness-report-v1",
+                label="Local cleanup readiness report",
+                endpoint="GET /supervisor/local-cleanup-readiness-report",
+                status="active",
+                summary="Defines evidence and stop lines for future local worktree, branch, and artifact cleanup without deleting anything.",
+                evidenceScope=["cleanup policy", "retained evidence", "blocked targets", "worktree and branch removal boundaries"],
+                relatedDocs=["docs/stories/6-21-local-cleanup-readiness.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
                 label="Delivery readiness policy report",
                 endpoint="GET /supervisor/delivery-readiness-policy-report",
@@ -3093,6 +3104,79 @@ class SupervisorService:
             remoteCleanupApproved=False,
         )
 
+    def get_local_cleanup_readiness_report(self) -> LocalCleanupReadinessReportView:
+        return LocalCleanupReadinessReportView(
+            reportId="local-cleanup-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only local cleanup readiness report. It defines when completed, stale, or abandoned local work can be cleaned up "
+                "while retaining evidence, but it does not remove worktrees, delete branches, delete artifacts, or mutate files."
+            ),
+            cleanupPolicy=[
+                LocalCleanupPolicyItemView(
+                    itemId="completed-worktree",
+                    label="Completed worktree",
+                    status="approval_required",
+                    summary="A completed worktree can be removed only after merge/local-closure evidence and retained verification are present.",
+                    evidence=["clean git status", "commit hash", "verification summary", "delivery or local-closure decision"],
+                ),
+                LocalCleanupPolicyItemView(
+                    itemId="stale-worktree",
+                    label="Stale worktree",
+                    status="manual_review",
+                    summary="A stale worktree requires Bob review until the system can prove it has no unmerged useful changes.",
+                    evidence=["last commit", "branch relation", "changed-file list", "staleness reason"],
+                ),
+                LocalCleanupPolicyItemView(
+                    itemId="abandoned-attempt",
+                    label="Abandoned attempt",
+                    status="approval_required",
+                    summary="Failed or abandoned attempts can be cleaned only after failure evidence and recovery notes are retained.",
+                    evidence=["failure summary", "remaining diffstat", "reason for abandonment", "next replacement branch if any"],
+                ),
+                LocalCleanupPolicyItemView(
+                    itemId="evidence-retention",
+                    label="Evidence retention",
+                    status="required",
+                    summary="Runtime evidence, story verification, and final status must survive local cleanup.",
+                    evidence=["story file", "runtime evidence export", "verification command list", "commit id"],
+                ),
+            ],
+            requiredEvidence=[
+                "target worktree path and branch name",
+                "current git status and diffstat before cleanup",
+                "commit hash or explicit no-commit reason",
+                "verification or failure summary",
+                "delivery, abandonment, or local-only closure decision",
+                "retained evidence location after cleanup",
+            ],
+            blockedTargets=[
+                "main repository checkout",
+                "current active worktree",
+                "dirty worktree with unreviewed changes",
+                "branch without retained commit/evidence reference",
+                "runtime evidence database or exported evidence artifacts",
+                "remote branches, PRs, issues, or GitHub state",
+            ],
+            stopConditions=[
+                "The cleanup target path is ambiguous or outside the managed worktree root.",
+                "Git reports uncommitted changes that have not been reviewed.",
+                "The branch has not been merged, intentionally abandoned, or explicitly waived.",
+                "Required evidence would be deleted or become unreachable.",
+                "Cleanup would require remote branch deletion, PR closure, issue sync, or merge authority.",
+            ],
+            nextSafeActions=[
+                "Use this report to request one local cleanup target at a time.",
+                "Add a future cleanup candidate inventory before enabling removal commands.",
+                "Keep destructive removal commands behind explicit approval until repeated evidence proves the policy.",
+            ],
+            readOnly=True,
+            automaticCleanupApproved=False,
+            worktreeRemovalApproved=False,
+            branchDeletionApproved=False,
+            evidenceDeletionApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3710,6 +3794,7 @@ class SupervisorService:
             "GET /supervisor/claude-review-readiness-report",
             "GET /supervisor/claude-review-approval-report",
             "GET /supervisor/github-delivery-authority-report",
+            "GET /supervisor/local-cleanup-readiness-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -3764,6 +3849,7 @@ class SupervisorService:
             "docs/stories/6-18-claude-readiness-no-launch.md",
             "docs/stories/6-19-claude-review-approval-packet.md",
             "docs/stories/6-20-github-delivery-authority-ladder.md",
+            "docs/stories/6-21-local-cleanup-readiness.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",

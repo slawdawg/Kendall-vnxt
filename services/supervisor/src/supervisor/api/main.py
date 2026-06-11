@@ -623,6 +623,11 @@ async def get_github_delivery_authority_report():
     return ApiEnvelope(data=service.get_github_delivery_authority_report())
 
 
+@app.get("/supervisor/local-cleanup-readiness-report", response_model=ApiEnvelope)
+async def get_local_cleanup_readiness_report():
+    return ApiEnvelope(data=service.get_local_cleanup_readiness_report())
+
+
 @app.get("/supervisor/delivery-readiness-policy-report", response_model=ApiEnvelope)
 async def get_delivery_readiness_policy_report():
     return ApiEnvelope(data=service.get_delivery_readiness_policy_report())

@@ -1155,6 +1155,30 @@ export interface GitHubDeliveryAuthorityReportView {
   remoteCleanupApproved: boolean;
 }
 
+export interface LocalCleanupPolicyItemView {
+  itemId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface LocalCleanupReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  cleanupPolicy: LocalCleanupPolicyItemView[];
+  requiredEvidence: string[];
+  blockedTargets: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  automaticCleanupApproved: boolean;
+  worktreeRemovalApproved: boolean;
+  branchDeletionApproved: boolean;
+  evidenceDeletionApproved: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

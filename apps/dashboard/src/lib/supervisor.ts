@@ -18,6 +18,7 @@ import type {
   GitHubDeliveryAuthorityReportView,
   GitHubWorkflowPolicyReportView,
   GitHygieneReportView,
+  LocalCleanupReadinessReportView,
   LocalEvidenceExplanationPayload,
   LocalEvidenceExplanationView,
   LocalWorktreePlanView,
@@ -238,6 +239,10 @@ export async function getGitHubDeliveryAuthorityReport(): Promise<GitHubDelivery
 
 export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
   return requestJson<GitHygieneReportView>("/supervisor/git-hygiene-report");
+}
+
+export async function getLocalCleanupReadinessReport(): Promise<LocalCleanupReadinessReportView> {
+  return requestJson<LocalCleanupReadinessReportView>("/supervisor/local-cleanup-readiness-report");
 }
 
 export async function getCodexReadinessReport(): Promise<CodexReadinessReportView> {

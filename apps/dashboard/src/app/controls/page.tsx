@@ -12,6 +12,7 @@ import { ExecutionReadinessReportPanel } from "../../components/execution-readin
 import { GitHubDeliveryAuthorityReportPanel } from "../../components/github-delivery-authority-report-panel";
 import { GitHubWorkflowPolicyReportPanel } from "../../components/github-workflow-policy-report-panel";
 import { GitHygieneReportPanel } from "../../components/git-hygiene-report-panel";
+import { LocalCleanupReadinessReportPanel } from "../../components/local-cleanup-readiness-report-panel";
 import { MaintenanceActionPlanReportPanel } from "../../components/maintenance-action-plan-report-panel";
 import { MaintenanceReadinessReportPanel } from "../../components/maintenance-readiness-report-panel";
 import { ManagedRecipePolicyReportPanel } from "../../components/managed-recipe-policy-report-panel";
@@ -38,6 +39,7 @@ import {
   getGitHubDeliveryAuthorityReport,
   getGitHubWorkflowPolicyReport,
   getGitHygieneReport,
+  getLocalCleanupReadinessReport,
   getMaintenanceActionPlanReport,
   getMaintenanceReadinessReport,
   getManagedRecipePolicyReport,
@@ -72,6 +74,7 @@ export default async function ControlsPage() {
     githubWorkflowPolicyReport,
     githubDeliveryAuthorityReport,
     gitHygieneReport,
+    localCleanupReadinessReport,
     codexReadinessReport,
     codexImplementationApprovalReport,
     claudeReviewReadinessReport,
@@ -97,6 +100,7 @@ export default async function ControlsPage() {
     getGitHubWorkflowPolicyReport(),
     getGitHubDeliveryAuthorityReport(),
     getGitHygieneReport(),
+    getLocalCleanupReadinessReport(),
     getCodexReadinessReport(),
     getCodexImplementationApprovalReport(),
     getClaudeReviewReadinessReport(),
@@ -164,6 +168,9 @@ export default async function ControlsPage() {
       </div>
       <div id="git-hygiene-report" className="scroll-mt-28">
         <GitHygieneReportPanel report={gitHygieneReport} />
+      </div>
+      <div id="local-cleanup-readiness-report" className="scroll-mt-28">
+        <LocalCleanupReadinessReportPanel report={localCleanupReadinessReport} />
       </div>
       <div id="codex-readiness-report" className="scroll-mt-28">
         <CodexReadinessReportPanel report={codexReadinessReport} />
