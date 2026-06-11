@@ -44,9 +44,9 @@ Candidate Work
 | 12. GitHub delivery | Milestone delivered; future writes gated | Story 6.20 adds delivery authority ladder. PR #86 was merged after approval; future push, PR mutation, CI wait, review resolution, merge, and cleanup remain approval-gated per target. |
 | 13. Cleanup | Milestone cleanup performed; automation blocked | Stories 6.21 and 6.22 add local cleanup and remote cleanup/sync readiness. Local cleanup was performed for the merged milestone; automatic cleanup and remote mutation remain blocked. |
 | 14. Trusted autonomy | Low-risk doc/evidence PR policy active | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. PR #91 and PR #92 provide initial evidence for `epic-6-low-risk-doc-evidence-pr-v1`, now active only for bounded doc/evidence PR preparation. Merge, cleanup, issue sync, Claude, providers, secrets, destructive operations, failed-check bypass, and unrelated source changes remain blocked. |
-| 15. Completion audit visibility | Readiness prepared; completion blocked | Story 6.24 adds a Dev Console completion audit showing prepared local work, remaining blockers, and the next delivery approval. |
+| 15. Completion audit visibility | Complete | Story 6.24 adds a Dev Console completion audit; the audit now reports Epic 6 MVP complete after Story 3.66 proof evidence. |
 | 16. Trusted delivery eligibility | Delivered in PR #88 | Stories 6.25 and 6.26 define read-only eligibility stages and current-branch evaluation for softening push, PR, merge, and cleanup gates after strict evidence is satisfied. Actual future GitHub mutation remains gated per target. |
-| 17. MVP proof | Story 3.66 bounded implementation in progress | Story 6.27 delivered the read-only approval packet. Story 3.61 completed an initial bounded doc/evidence proof through implementation, verification, PR delivery, merge, and cleanup. Story 3.66 has completed selection, Candidate Work promotion, local-readonly evidence, PR #96 proof-selection merge/cleanup, and one approved local Codex implementation gate. Verification, delivery, cleanup, and done/evidence state remain gated. |
+| 17. MVP proof | Complete | Story 6.27 delivered the read-only approval packet. Story 3.61 completed an initial bounded doc/evidence proof. Story 3.66 completed the real MVP lifecycle through selection, Candidate Work, Active Work, local-readonly evidence, bounded Codex implementation, verification, PR #97 delivery/merge, cleanup, and retained done evidence. |
 
 ## Approval Queue
 
@@ -54,24 +54,24 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 
 | Request | Status | Scope | Requested Evidence | Decision |
 | --- | --- | --- | --- | --- |
-| Codex process launch/task execution | approved for `epic-6-low-risk-doc-evidence-pr-v1` and one Story 3.66 bounded local implementation | Matching doc/evidence-only changes may use an isolated branch/worktree; Story 3.66 may use one isolated local worktree for the approved proof scope | Clean main, bounded docs/report scope, `pnpm.cmd run check`, diffstat, rollback/cleanup plan | Story 3.66 implementation branch `codex/epic-6-mvp-proof-story-3-66-bounded-implementati` active; additional Codex launches remain gated |
+| Codex process launch/task execution | completed for Story 3.66 proof; post-MVP launches gated | Matching doc/evidence-only changes may use an isolated branch/worktree under active policy; additional non-doc/evidence Codex implementation requires scoped approval | Clean main, bounded docs/report scope, `pnpm.cmd run check`, diffstat, rollback/cleanup plan | Story 3.66 implementation branch was delivered and cleaned up; additional Codex launches remain gated |
 | Claude review task execution | pending explicit approval | One high-risk or explicitly approved work item review | Review trigger, bounded context, review-only command shape, scarcity reason, output contract | TBD |
-| GitHub push/PR/update/check delivery | approved and completed for PR #86, PR #87, and PR #88 | Push approved branches, open PRs to `main`, run read-only PR/CI checks | Branch/PR plan, target remote, CI/check evidence, rollback plan | PR #86, PR #87, and PR #88 opened and CI `check` passed |
-| Merge | approved and completed for PR #86, PR #87, and PR #88 | Merge approved clean PRs into `main` | Green checks, review gates, exact merge method, explicit merge approval | PR #86, PR #87, and PR #88 merged; future merges remain gated per PR |
-| Local cleanup deletion | approved and completed for merged Epic 6 targets | Remove delivered local worktrees/branches after retained evidence | Retained evidence, clean status/diffstat, target path/branch, rollback note | Merged Epic 6 worktrees/branches and orphan directories cleaned up |
+| GitHub push/PR/update/check delivery | approved and completed for Epic 6 MVP proof PRs | Push approved branches, open PRs to `main`, run read-only PR/CI checks | Branch/PR plan, target remote, CI/check evidence, rollback plan | PR #86-#97 proof/milestone delivery evidence retained |
+| Merge | approved and completed for Epic 6 MVP proof PRs | Merge approved clean PRs into `main` | Green checks, review gates, exact merge method, explicit merge approval | PR #86-#97 proof/milestone merge evidence retained; post-MVP merges remain gated |
+| Local cleanup deletion | approved and completed for merged Epic 6 proof targets | Remove delivered local worktrees/branches after retained evidence | Retained evidence, clean status/diffstat, target path/branch, rollback note | Merged Epic 6 worktrees/branches and proof branches cleaned up |
 | Remote cleanup / issue-story sync | stretch / pending explicit approval | Delete remote branch or sync issue/story status | Completed delivery evidence, remote target, before/after metadata, cleanup plan | TBD |
 | Trusted low-risk autonomy | approved for doc/evidence PR preparation | `epic-6-low-risk-doc-evidence-pr-v1` only | PR #91/#92 evidence, stop conditions, approved exception policy | Active for matching doc/evidence PR work; merge/cleanup and higher-risk operations remain gated |
 
 ## Current Safe Work
 
-- Prepare the next full-lifecycle real BMAD story trial approval packet with exact Candidate Work, Active Work, provider lane, verification command, review plan, delivery target, cleanup target, and Dev Console done/evidence target.
+- Epic 6 MVP proof is complete; use this document as retained completion evidence.
 - Current real-story trial approval packet: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
 - Selected successor full-lifecycle MVP proof story: `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md`.
 - Current low-risk autonomy proposal: `docs/goals/epic-6-low-risk-doc-evidence-autonomy-policy-proposal-2026-06-11.md`.
 - Claude Code setup reference for future review-only gates: `docs/claude-code-setup-for-epic-6.md`.
 - Keep report catalog, runtime evidence export, and Controls page anchors aligned when adding or changing evidence reports.
 - Continue root-cause maintenance only when scoped and verified.
-- Prepare exact approval text for the next unavoidable high-blast-radius operation when Bob is ready.
+- Prepare exact approval text only for post-MVP authority expansion such as Claude, provider expansion, issue sync, or broader autonomy.
 - Current follow-up delivery plan: `docs/goals/epic-6-follow-up-hardening-delivery-plan-2026-06-11.md`.
 
 ## Stop/Continue Rules
@@ -140,6 +140,10 @@ After a PR is opened under explicit approval and CI is green, the line softens o
 - 2026-06-11: Bob approved PR #96 readiness/merge and then approved PR #96 cleanup. PR #96 was marked ready, merged into `main` at merge commit `c35ff16339fd53c502b328e3f3b120a303f905e1`, and branch `codex/epic-6-proof-selection-evidence` was deleted locally and remotely after retained evidence. This did not approve Claude, provider expansion, issue sync, or bounded implementation.
 - 2026-06-11: Bob approved one bounded Story 3.66 local Codex implementation. Created isolated worktree `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260611-epic-6-mvp-proof-story-3-66-bounded-implementati` on branch `codex/epic-6-mvp-proof-story-3-66-bounded-implementati` from `main`. Scope is limited to the approved proof report/evidence surface and local `pnpm.cmd run check`; Claude, provider expansion, GitHub delivery, merge, cleanup, issue sync, and done-state completion remain separately gated.
 - 2026-06-11: Story 3.66 bounded local implementation updated the existing Epic 6 MVP proof trial report and completion audit report to show selected story, Candidate Work/WorkItem IDs, local-readonly evidence, PR #96 merge/cleanup evidence, and current implementation gate. Focused supervisor verification passed with 2 report tests. Full `pnpm.cmd run check` passed with preflight, drift checks, dashboard build, and 143 supervisor tests before delivery approval.
+- 2026-06-11: PR #97 delivered the Story 3.66 implementation evidence. CI `check` passed, PR #97 was marked ready and merged into `main` at `a750601af1d0144507f6cc05b3ca1ada676d2d07`, and branch/worktree `codex/epic-6-mvp-proof-story-3-66-bounded-implementati` was cleaned up locally and remotely after evidence retention.
+- 2026-06-11: Bob approved standing Epic 6 completion authority for PR creation/update, CI inspection, merge, and cleanup when scoped to Epic 6 completion work with clean status, green verification, green CI, clean merge state, and retained evidence. Claude launch, provider expansion, secrets, issue sync, unrelated deletion, and post-MVP broad autonomy remain separately gated.
+- 2026-06-11: Final Epic 6 completion update marks Story 3.66 done and updates the Dev Console proof report and completion audit to show `trialStatus=epic_6_mvp_proof_complete` and `epicComplete=true`.
+- 2026-06-11: Final local verification for the Epic 6 completion update passed with focused report tests and full `pnpm.cmd run check`, including preflight, drift checks, dashboard build, and 143 supervisor tests.
 
 ## Current GitHub State Snapshot
 
@@ -159,10 +163,11 @@ Snapshot date: 2026-06-11.
 - Low-risk doc/evidence autonomy proposal PR: `https://github.com/slawdawg/Kendall-vnxt/pull/93`.
 - Low-risk doc/evidence autonomy activation PR: `https://github.com/slawdawg/Kendall-vnxt/pull/94`.
 - Epic 6 proof-selection evidence PR: `https://github.com/slawdawg/Kendall-vnxt/pull/96` merged at `c35ff16339fd53c502b328e3f3b120a303f905e1`; proof-selection branch cleaned up after separate approval.
+- Epic 6 Story 3.66 implementation evidence PR: `https://github.com/slawdawg/Kendall-vnxt/pull/97` merged at `a750601af1d0144507f6cc05b3ca1ada676d2d07`; implementation branch/worktree cleaned up after approval.
 
 ## Completion Audit
 
-Epic 6 is not complete as of this snapshot.
+Epic 6 MVP is complete as of this snapshot.
 
 Evidence that is complete locally:
 
@@ -171,20 +176,19 @@ Evidence that is complete locally:
 - Story 6.26 trusted delivery eligibility was delivered through PR #88.
 - Story 6.27 MVP proof trial packet was delivered through PR #90 to make the next approval exact before any worker launch.
 - Story 3.61 completed an initial bounded doc/evidence proof trial through PR #91, including local verification, PR delivery, CI success, approved merge, and approved cleanup.
-- Story 3.66 has been selected and moved through Candidate Work import, Candidate approval, Active Work promotion, task-packet preview, local-readonly lane decision, local evidence explanation, and runtime evidence export on a current supervisor proof instance.
+- Story 3.66 moved through Candidate Work import, Candidate approval, Active Work promotion, task-packet preview, local-readonly lane decision, local evidence explanation, runtime evidence export, bounded Codex implementation, local verification, PR #97 delivery/merge, cleanup, and retained done evidence.
 - The low-risk doc/evidence PR autonomy policy `epic-6-low-risk-doc-evidence-pr-v1` is active on `main` after PR #94.
 - Controls page includes read-only surfaces for execution readiness, authority readiness, Git/GitHub posture, local cleanup, remote cleanup/sync, Codex, Claude, trusted autonomy, trusted delivery eligibility, and Epic 6 completion audit visibility.
 - Full local verification passed on the merged milestone and follow-up branches with 143 supervisor tests after PR #90.
 - Local cleanup for the merged milestone was performed, Windows cleanup hardening was delivered, and orphan Codex workspace directories were removed after stale Git probes were stopped.
 
-Evidence still missing for full Epic 6 completion:
+Evidence still outside Epic 6 MVP:
 
-- The selected successor full-lifecycle proof story has moved through Candidate Work, Active Work, orchestrated lane decision, safe local evidence, runtime export, PR #96 proof-selection delivery/cleanup, and one approved bounded Codex implementation gate, but has not yet completed local verification, implementation delivery, cleanup, and Dev Console done/evidence state: `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md`.
-- No approved real Claude review attempt has been executed.
+- No real Claude review attempt was needed for the low-risk Story 3.66 proof; Claude remains separately gated for post-MVP work.
 - Provider expansion beyond the approved Ollama endpoint/model boundary is not approved.
-- Auto-merge, cleanup, remote cleanup, issue/story sync, Claude, providers, secrets, destructive operations, failed-check bypass, and unrelated source changes remain blocked by default.
-- Trusted low-risk autonomy is active only for the narrow doc/evidence PR preparation policy `epic-6-low-risk-doc-evidence-pr-v1`; it does not complete Epic 6 by itself.
+- Remote issue/story sync, secrets access, destructive unrelated cleanup, failed-check bypass, and broad trusted autonomy remain blocked by default.
+- Trusted low-risk autonomy remains limited to the narrow doc/evidence PR preparation policy `epic-6-low-risk-doc-evidence-pr-v1` unless a post-MVP policy expands it.
 
-Next unavoidable gate:
+Next work:
 
-- Bob approval is required before GitHub push/PR delivery for the bounded Story 3.66 implementation. Claude review, provider expansion, merge, issue sync, cleanup, and done-state completion also remain separately gated.
+- Run an Epic 6 retrospective or plan the next post-MVP authority-hardening epic. Any post-MVP Claude, provider expansion, issue sync, or broad autonomy work needs a new explicit approval.

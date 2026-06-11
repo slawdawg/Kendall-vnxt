@@ -3219,7 +3219,7 @@ def test_trusted_autonomy_readiness_report_blocks_autonomous_execution(tmp_path,
     assert any("one narrow workflow class" in action for action in report["nextSafeActions"])
 
 
-def test_epic_6_completion_audit_report_shows_remaining_blockers_without_mutation(tmp_path, monkeypatch) -> None:
+def test_epic_6_completion_audit_report_shows_mvp_complete_without_mutation(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "epic-6-completion-audit-report.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -3240,11 +3240,11 @@ def test_epic_6_completion_audit_report_shows_remaining_blockers_without_mutatio
     report = response.json()["data"]
     assert report["reportId"] == "epic-6-completion-audit-report-v1"
     assert report["readOnly"] is True
-    assert report["epicComplete"] is False
+    assert report["epicComplete"] is True
     assert report["remoteDeliveryApproved"] is True
     assert report["providerExecutionApproved"] is False
     assert report["cleanupApproved"] is True
-    assert report["overallStatus"] == "story_3_66_bounded_implementation_in_progress"
+    assert report["overallStatus"] == "epic_6_mvp_complete"
     assert {item["itemId"] for item in report["completedItems"]} == {
         "local-readiness-stack",
         "delivery-packaging-plan",
@@ -3252,24 +3252,29 @@ def test_epic_6_completion_audit_report_shows_remaining_blockers_without_mutatio
         "dev-console-integration",
         "trusted-delivery-eligibility",
         "story-3-66-selection",
+        "story-3-66-done-proof",
     }
     assert {item["itemId"] for item in report["remainingItems"]} == {
-        "real-bmad-done-proof",
         "provider-and-review-execution",
-        "cleanup-closeout",
+        "post-mvp-autonomy",
     }
-    assert "Approve one real BMAD story trial" in report["recommendedApproval"]
+    assert "Treat Epic 6 MVP as complete" in report["recommendedApproval"]
     assert any("Merging, closing, or deleting" in operation for operation in report["blockedOperations"])
-    assert any("PR #96" in evidence for evidence in report["requiredEvidence"])
+    assert any("PR #97" in evidence for evidence in report["requiredEvidence"])
     assert any("worktree is dirty" in condition for condition in report["stopConditions"])
     assert any(
         "docs/stories/3-66-epic-6-mvp-proof-done-evidence.md" in evidence
         for item in report["completedItems"]
         for evidence in item["evidence"]
     )
+    assert any(
+        "a750601af1d0144507f6cc05b3ca1ada676d2d07" in evidence
+        for item in report["completedItems"]
+        for evidence in item["evidence"]
+    )
 
 
-def test_epic_6_mvp_proof_trial_report_defines_next_approval_without_mutation(tmp_path, monkeypatch) -> None:
+def test_epic_6_mvp_proof_trial_report_shows_done_evidence_without_mutation(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "epic-6-mvp-proof-trial-report.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
@@ -3295,7 +3300,7 @@ def test_epic_6_mvp_proof_trial_report_defines_next_approval_without_mutation(tm
     assert report["providerExpansionApproved"] is False
     assert report["autonomousDeliveryApproved"] is False
     assert report["selectedStory"] == "Story 3.66: docs/stories/3-66-epic-6-mvp-proof-done-evidence.md"
-    assert report["trialStatus"] == "bounded_codex_implementation_in_progress"
+    assert report["trialStatus"] == "epic_6_mvp_proof_complete"
     assert {step["stepId"] for step in report["steps"]} == {
         "select-real-story",
         "bounded-codex-implementation",
@@ -3304,9 +3309,20 @@ def test_epic_6_mvp_proof_trial_report_defines_next_approval_without_mutation(tm
         "github-delivery",
         "done-evidence",
     }
-    assert any("Story 3.66 Codex implementation launch approval" in packet for packet in report["approvalPackets"])
-    assert any("additional Codex workers" in operation for operation in report["blockedOperations"])
+    assert any("GitHub delivery, merge, and cleanup approvals completed" in packet for packet in report["approvalPackets"])
+    assert any("raw prompts" in operation for operation in report["blockedOperations"])
     assert any("Story 3.66 scope expands" in condition for condition in report["stopConditions"])
+    assert all(
+        step["status"] == "completed"
+        for step in report["steps"]
+        if step["stepId"] in {
+            "select-real-story",
+            "bounded-codex-implementation",
+            "local-and-ollama-checks",
+            "github-delivery",
+            "done-evidence",
+        }
+    )
     assert any(
         "Candidate Work 8afea99f-bb79-4f51-a66c-f1b02dff9005" in evidence
         for step in report["steps"]
@@ -3314,6 +3330,11 @@ def test_epic_6_mvp_proof_trial_report_defines_next_approval_without_mutation(tm
     )
     assert any(
         "runtime-evidence-export-a8e43bba-a2dd-4b2e-b995-22fecea85611" in evidence
+        for step in report["steps"]
+        for evidence in step["evidence"]
+    )
+    assert any(
+        "https://github.com/slawdawg/Kendall-vnxt/pull/97" in evidence
         for step in report["steps"]
         for evidence in step["evidence"]
     )
