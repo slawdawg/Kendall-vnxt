@@ -32,6 +32,8 @@ Story `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md` is the retained proo
 
 Post-MVP work is ready to plan, but not ready for broad autonomy. Execution, provider, issue-sync, cleanup, and review authorities should continue using explicit scoped approvals.
 
+Bob's retrospective correction: Epic 6 is complete as infrastructure evidence, but it did not produce much visible user value. The proof may be valid from an engineering and governance perspective, yet the work was mostly background preparation from the product-owner perspective. Epic 7 should therefore convert the foundation into useful supervised work quickly, with fewer human-managed PR, merge, and cleanup interruptions.
+
 ## Delivered Scope
 
 Epic 6 delivered the supervised-work MVP foundation:
@@ -88,14 +90,22 @@ Supporting retained evidence:
 - A runtime proof database was not a durable enough final evidence store by itself. Epic 6 now treats report surfaces, docs, PRs, commits, and CI as the retained evidence source.
 - Story status drift remained after Epic 6 MVP completion. PR #99 exists to normalize Epics 3-6 status headers and clarify deferred post-MVP authority work.
 - Full lifecycle proof required repeated approval packets. The cost was real, but it kept dangerous operations gated while proving the pipeline.
+- Bob had to manually manage PR readiness, merges, and cleanup approvals. That repeatedly stopped work and made the process feel slower than the value being produced.
+- The final lifecycle happened mostly through backend evidence, docs, PRs, and reports. From Bob's seat, it was not very visible, so the proof did not feel as concrete as it looked in the retained evidence.
 
 ## What Worked
 
-- Progressive authority kept the proof honest: contracts, previews, fake/blocked attempts, read-only evidence, then one bounded implementation and delivery.
+- Progressive authority kept the proof honest from an engineering-control perspective: contracts, previews, fake/blocked attempts, read-only evidence, then one bounded implementation and delivery.
 - A single real BMAD story was enough to prove the pipeline without expanding blast radius.
 - Isolated Codex worktrees made implementation and cleanup auditable.
 - Report drift checks, doc checks, dashboard build, supervisor tests, GitHub CI, and merge-state checks provided layered confidence.
 - Narrow approval phrases worked well for GitHub delivery, merge, and cleanup because each approval named scope, evidence, and stop lines.
+
+What did not work well enough:
+
+- The work did not create enough visible product value for Bob while it was happening.
+- The approval workflow protected dangerous operations, but it also put Bob in the critical path for routine PR/merge/cleanup mechanics.
+- The team spent too much effort anticipating possible failures and not enough effort making the system do useful supervised work.
 
 ## Remaining Post-MVP Blockers
 
@@ -118,28 +128,35 @@ These remain intentionally blocked after Epic 6:
 - Runtime evidence should be exportable and referenced from docs; runtime state alone is too fragile for closeout.
 - Story status normalization should be part of every epic closeout, not a later reconciliation task.
 - The next risk is not routing decisions; it is supervised process launch, cancellation, evidence capture, and recovery.
+- Safety controls must reduce Bob's workload, not transfer operational busywork to him.
+- A cautious workflow still needs visible progress. If the system only prepares and never acts, it is not meeting the product need.
+- The next epic should bias toward doing one useful bounded thing end-to-end, then hardening the exact friction discovered from that real use.
 
 ## Recommended Epic 7 Theme
 
-Recommended theme: supervised execution hardening.
+Recommended theme: useful supervised execution.
 
-Start Epic 7 with a real Codex worker launch before subscription-agent launch. Codex is the better first worker because Epic 6 already proved bounded Codex implementation manually, while subscription-agent launch introduces broader runtime and product-risk coupling.
+Start Epic 7 with a real Codex worker launch that does useful bounded work before subscription-agent launch. Codex is the better first worker because Epic 6 already proved bounded Codex implementation manually, while subscription-agent launch introduces broader runtime and product-risk coupling.
+
+The goal is not another preparation-only epic. The goal is to make the system act under supervision, show Bob visible progress, and remove Bob from routine PR/merge/cleanup handling where the evidence is already green and the scope is approved.
 
 Recommended Epic 7 initial scope:
 
 - Define a supervised execution contract for one bounded Codex worker attempt.
 - Add explicit launch authority, stop conditions, timeout, cancellation, and cleanup rules.
 - Preserve metadata-only evidence for command shape, branch/worktree, input scope, output summary, verification, and recovery path.
-- Add no-op and dry-run adapters before a real launch.
+- Use no-op or dry-run adapters only as the shortest path to one real useful Codex launch, not as a long preparatory phase.
 - Detect and block out-of-scope diffs before commit or PR.
 - Support inspect, retry, resume, and cleanup paths after failed or interrupted attempts.
-- Prove one low-risk real Codex worker launch against a scoped story or docs/evidence task.
-- Keep GitHub delivery, merge, cleanup, Claude, provider expansion, issue sync, and subscription-agent launch separately gated until the Codex worker path is proven.
+- Prove one low-risk real Codex worker launch against a scoped story that creates visible value or removes a real blocker.
+- Add a narrow auto-delivery lane for approved low-risk work where PR creation, CI inspection, merge, and cleanup can proceed without stopping for Bob when all evidence gates are green.
+- Keep Claude, provider expansion, issue sync, secrets, failed-check bypass, and subscription-agent launch separately gated until the Codex worker path is proven.
 
 Recommended Epic 7 non-goals:
 
 - Broad autonomy.
 - Subscription-agent process launch as the first worker.
+- Another preparation-only authority epic with no visible work product.
 - Provider expansion beyond the approved Ollama boundary.
 - Claude launch by default.
 - Remote issue sync.
@@ -149,7 +166,7 @@ Recommended Epic 7 non-goals:
 ## Action Items
 
 - Land the Epics 3-6 status normalization PR or otherwise accept its reconciliation before treating old story status as authoritative.
-- Plan Epic 7 around supervised Codex execution hardening.
+- Plan Epic 7 around useful supervised Codex execution with a narrow green-gate delivery lane.
 - Keep post-MVP authority expansion in explicit approval packets.
 - Add story status reconciliation and retrospective capture to future epic closeout checklists.
 - Treat subscription-agent launch as a later Epic 7 milestone after Codex worker launch evidence exists.
