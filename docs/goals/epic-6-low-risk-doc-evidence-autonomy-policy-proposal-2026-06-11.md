@@ -1,7 +1,7 @@
 # Epic 6 Low-Risk Doc/Evidence Autonomy Policy Proposal
 
 Date: 2026-06-11
-Status: proposal only; not active policy
+Status: active policy for matching low-risk doc/evidence PR work
 
 ## Purpose
 
@@ -83,11 +83,23 @@ Codex must stop and ask for explicit approval if:
 - the work would require cleanup, branch deletion, issue sync, Claude, provider expansion, or secrets access,
 - the target doc/story is ambiguous.
 
+## Activation
+
+Bob approved this policy on 2026-06-11.
+
+Active policy scope:
+
+- Codex may create an isolated branch or worktree from `main`.
+- Codex may implement bounded documentation/evidence changes matching this policy.
+- Codex may run `pnpm.cmd run check`.
+- Codex may commit, push, open one PR to `main`, and run read-only PR/CI checks.
+- Auto-merge, cleanup, issue sync, Claude launch, provider expansion, secrets access, destructive operations, failed-check bypass, and unrelated source changes remain separately gated.
+
 ## Promotion Criteria
 
-This proposal should become active policy only after Bob explicitly approves it as policy. Approval should treat PR #91 and PR #92 as initial low-risk evidence, not as complete proof that broader autonomy is safe.
+This policy is active only for the low-risk doc/evidence PR class described above. PR #91 and PR #92 remain initial low-risk evidence, not complete proof that broader autonomy is safe.
 
-Suggested activation approval phrase:
+Activation approval phrase:
 
 ```text
 Approve Epic 6 low-risk doc/evidence PR autonomy policy v1: for doc/evidence-only changes matching docs/goals/epic-6-low-risk-doc-evidence-autonomy-policy-proposal-2026-06-11.md, Codex may create an isolated branch or worktree from main, implement bounded documentation/evidence changes, run pnpm.cmd run check, commit, push, open one PR to main, and run read-only PR/CI checks without per-step approval. Auto-merge, cleanup, issue sync, Claude launch, provider expansion, secrets access, destructive operations, failed-check bypass, and unrelated source changes remain separately gated.
