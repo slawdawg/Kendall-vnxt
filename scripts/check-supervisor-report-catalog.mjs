@@ -118,6 +118,69 @@ const reports = [
     dashboardFetch: "getGitHubWorkflowPolicyReport",
   },
   {
+    reportId: "github-delivery-authority-report-v1",
+    endpoint: "GET /supervisor/github-delivery-authority-report",
+    apiPath: "/supervisor/github-delivery-authority-report",
+    story: "docs/stories/6-20-github-delivery-authority-ladder.md",
+    dashboardFetch: "getGitHubDeliveryAuthorityReport",
+  },
+  {
+    reportId: "git-hygiene-report-v1",
+    endpoint: "GET /supervisor/git-hygiene-report",
+    apiPath: "/supervisor/git-hygiene-report",
+    story: "docs/stories/6-14-git-hygiene-read-only.md",
+    dashboardFetch: "getGitHygieneReport",
+  },
+  {
+    reportId: "local-cleanup-readiness-report-v1",
+    endpoint: "GET /supervisor/local-cleanup-readiness-report",
+    apiPath: "/supervisor/local-cleanup-readiness-report",
+    story: "docs/stories/6-21-local-cleanup-readiness.md",
+    dashboardFetch: "getLocalCleanupReadinessReport",
+  },
+  {
+    reportId: "remote-cleanup-sync-readiness-report-v1",
+    endpoint: "GET /supervisor/remote-cleanup-sync-readiness-report",
+    apiPath: "/supervisor/remote-cleanup-sync-readiness-report",
+    story: "docs/stories/6-22-remote-cleanup-sync-readiness.md",
+    dashboardFetch: "getRemoteCleanupSyncReadinessReport",
+  },
+  {
+    reportId: "trusted-autonomy-readiness-report-v1",
+    endpoint: "GET /supervisor/trusted-autonomy-readiness-report",
+    apiPath: "/supervisor/trusted-autonomy-readiness-report",
+    story: "docs/stories/6-23-trusted-autonomy-readiness.md",
+    dashboardFetch: "getTrustedAutonomyReadinessReport",
+  },
+  {
+    reportId: "codex-readiness-report-v1",
+    endpoint: "GET /supervisor/codex-readiness-report",
+    apiPath: "/supervisor/codex-readiness-report",
+    story: "docs/stories/6-16-codex-readiness-no-launch.md",
+    dashboardFetch: "getCodexReadinessReport",
+  },
+  {
+    reportId: "codex-implementation-approval-report-v1",
+    endpoint: "GET /supervisor/codex-implementation-approval-report",
+    apiPath: "/supervisor/codex-implementation-approval-report",
+    story: "docs/stories/6-17-codex-implementation-approval-packet.md",
+    dashboardFetch: "getCodexImplementationApprovalReport",
+  },
+  {
+    reportId: "claude-review-readiness-report-v1",
+    endpoint: "GET /supervisor/claude-review-readiness-report",
+    apiPath: "/supervisor/claude-review-readiness-report",
+    story: "docs/stories/6-18-claude-readiness-no-launch.md",
+    dashboardFetch: "getClaudeReviewReadinessReport",
+  },
+  {
+    reportId: "claude-review-approval-report-v1",
+    endpoint: "GET /supervisor/claude-review-approval-report",
+    apiPath: "/supervisor/claude-review-approval-report",
+    story: "docs/stories/6-19-claude-review-approval-packet.md",
+    dashboardFetch: "getClaudeReviewApprovalReport",
+  },
+  {
     reportId: "delivery-readiness-policy-report-v1",
     endpoint: "GET /supervisor/delivery-readiness-policy-report",
     apiPath: "/supervisor/delivery-readiness-policy-report",
@@ -205,6 +268,15 @@ for (const visibleEndpoint of [
   "GET /supervisor/safe-development-backlog",
   "GET /supervisor/managed-recipe-policy-report",
   "GET /supervisor/github-workflow-policy-report",
+  "GET /supervisor/github-delivery-authority-report",
+  "GET /supervisor/git-hygiene-report",
+  "GET /supervisor/local-cleanup-readiness-report",
+  "GET /supervisor/remote-cleanup-sync-readiness-report",
+  "GET /supervisor/trusted-autonomy-readiness-report",
+  "GET /supervisor/codex-readiness-report",
+  "GET /supervisor/codex-implementation-approval-report",
+  "GET /supervisor/claude-review-readiness-report",
+  "GET /supervisor/claude-review-approval-report",
   "GET /supervisor/delivery-readiness-policy-report",
 ]) {
   assertCondition(
@@ -269,6 +341,15 @@ for (const controlsAnchor of [
   'id="runtime-evidence-review-report"',
   'id="managed-recipe-policy-report"',
   'id="github-workflow-policy-report"',
+  'id="github-delivery-authority-report"',
+  'id="git-hygiene-report"',
+  'id="local-cleanup-readiness-report"',
+  'id="remote-cleanup-sync-readiness-report"',
+  'id="trusted-autonomy-readiness-report"',
+  'id="codex-readiness-report"',
+  'id="codex-implementation-approval-report"',
+  'id="claude-review-readiness-report"',
+  'id="claude-review-approval-report"',
   'id="delivery-readiness-policy-report"',
 ]) {
   assertCondition(
@@ -311,6 +392,51 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-42-github-workflow-policy-report.md"),
   "Story index must reference Story 3.42 GitHub workflow policy report",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-14-git-hygiene-read-only.md"),
+  "Story index must reference Story 6.14 Git hygiene read-only",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-16-codex-readiness-no-launch.md"),
+  "Story index must reference Story 6.16 Codex readiness no-launch",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-17-codex-implementation-approval-packet.md"),
+  "Story index must reference Story 6.17 Codex implementation approval packet",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-18-claude-readiness-no-launch.md"),
+  "Story index must reference Story 6.18 Claude readiness no-launch",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-19-claude-review-approval-packet.md"),
+  "Story index must reference Story 6.19 Claude review approval packet",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-20-github-delivery-authority-ladder.md"),
+  "Story index must reference Story 6.20 GitHub delivery authority ladder",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-21-local-cleanup-readiness.md"),
+  "Story index must reference Story 6.21 local cleanup readiness",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-22-remote-cleanup-sync-readiness.md"),
+  "Story index must reference Story 6.22 remote cleanup sync readiness",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-23-trusted-autonomy-readiness.md"),
+  "Story index must reference Story 6.23 trusted autonomy readiness",
   failures,
 );
 assertCondition(

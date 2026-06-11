@@ -1,7 +1,7 @@
 # Story 6.6: Candidate Priority, Order, And Promotion
 
 Date: 2026-06-10
-Status: Draft
+Status: Review
 
 ## Story
 
@@ -73,4 +73,3 @@ Required focused checks:
 - documentation index checks if docs are changed.
 
 Run full `pnpm.cmd run check` if shared contracts, dashboard behavior, or cross-package APIs are touched.
-

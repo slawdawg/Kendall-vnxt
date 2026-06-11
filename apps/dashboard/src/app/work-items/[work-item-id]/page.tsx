@@ -6,6 +6,8 @@ import { EscalationPanel } from "../../../components/escalation-panel";
 import { EvidenceOverviewPanel } from "../../../components/evidence-overview-panel";
 import { ExecutionAttemptEvidencePanel } from "../../../components/execution-attempt-evidence-panel";
 import { ExecutionRecipePanel } from "../../../components/execution-recipe-panel";
+import { LocalEvidencePanel } from "../../../components/local-evidence-panel";
+import { LocalWorktreePlanPanel } from "../../../components/local-worktree-plan-panel";
 import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
 import { RoutingPreviewPanel } from "../../../components/routing-preview-panel";
 import { RuntimeEvidenceExportPanel } from "../../../components/runtime-evidence-export-panel";
@@ -16,6 +18,7 @@ import { WorkItemRetryHistory } from "../../../components/work-item-retry-histor
 import { buildNavStats } from "../../../lib/nav-stats";
 import {
   getExecutionAttempts,
+  getLocalWorktreePlan,
   getRecipeGateAudit,
   getRoutingPreview,
   getRuntimeEvidenceExport,
@@ -43,6 +46,7 @@ export default async function WorkItemDetailPage({
       getRuntimeEvidenceReviewReport(),
     ]);
   const recipeGateAudit = item.executionRecipe ? await getRecipeGateAudit(workItemId) : null;
+  const localWorktreePlan = item.executionRecipe ? await getLocalWorktreePlan(workItemId) : null;
   const metadata = item.metadata ?? {};
   const navStats = buildNavStats(items);
   const retryCount = Math.max(0, events.filter((event) => event.eventType === "work_item.implementing").length - 1);
@@ -137,6 +141,12 @@ export default async function WorkItemDetailPage({
               Routing
             </a>
             <a
+              href="#local-check"
+              className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Local check
+            </a>
+            <a
               href="#execution-attempts"
               className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
@@ -181,9 +191,11 @@ export default async function WorkItemDetailPage({
             events={events}
           />
           <RoutingPreviewPanel preview={routingPreview} />
+          <LocalEvidencePanel workItemId={item.id} />
           <ExecutionAttemptEvidencePanel attempts={executionAttempts} />
           <RuntimeEvidenceExportPanel exportView={runtimeEvidenceExport} />
           {item.executionRecipe ? <ExecutionRecipePanel recipe={item.executionRecipe} /> : null}
+          {localWorktreePlan ? <LocalWorktreePlanPanel plan={localWorktreePlan} /> : null}
           {item.executionRecipe ? (
             <BranchPreparationPanel
               workItemId={item.id}

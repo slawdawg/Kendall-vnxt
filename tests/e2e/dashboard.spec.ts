@@ -14,6 +14,23 @@ type WorkItemCreatePayload = {
   metadata?: Record<string, string | boolean>;
 };
 
+type CandidateWorkCreatePayload = {
+  title: string;
+  requestedOutcome: string;
+  source: "bmad" | "chief_of_staff" | "operator" | "supervisor";
+  sourceArtifactPath: string;
+  sourceArtifactType: "bmad_story" | "bmad_research" | "bmad_workflow_output" | "chief_of_staff_request" | "manual_note";
+  riskLevel?: "low" | "medium" | "high";
+  priority?: "low" | "normal" | "high" | "urgent";
+};
+
+async function createCandidateWork(request: APIRequestContext, payload: CandidateWorkCreatePayload) {
+  const response = await request.post(`${supervisorUrl}/candidate-work`, { data: payload });
+  expect(response.ok()).toBeTruthy();
+  const body = (await response.json()) as { data: { id: string } };
+  return body.data.id;
+}
+
 async function createWorkItem(request: APIRequestContext, payload: WorkItemCreatePayload) {
   const response = await request.post(`${supervisorUrl}/work-items`, {
     data: {
@@ -110,6 +127,56 @@ function gitOutput(args: string[]) {
 }
 
 test.describe("dashboard workflow coverage", () => {
+  test("shows proposed work empty state and promotes approved work", async ({ page, request }) => {
+    const eventStreamRequest = page.waitForRequest((streamRequest) => streamRequest.url().endsWith("/events"));
+    await page.goto("/proposed-work");
+    await eventStreamRequest;
+
+    await expect(page.getByRole("heading", { name: "Ideas waiting at the front door" })).toBeVisible();
+    await expect(page.getByText("No proposed work yet")).toBeVisible();
+    await expect(page.getByText("BMAD plans, Chief of Staff requests, Dev Console ideas, and system suggestions")).toBeVisible();
+
+    await createCandidateWork(request, {
+      title: "Review Story 6.4 parser",
+      requestedOutcome: "Decide whether the BMAD import parser should enter the active work pipeline.",
+      source: "bmad",
+      sourceArtifactPath: "docs/stories/6-4-bmad-import-package-parser.md",
+      sourceArtifactType: "bmad_story",
+      riskLevel: "medium",
+      priority: "high",
+    });
+
+    const candidateCard = page.locator("article").filter({ hasText: "Review Story 6.4 parser" }).first();
+    await expect(candidateCard).toBeVisible();
+    await expect(candidateCard.getByText("Needs review")).toBeVisible();
+    await expect(candidateCard.getByText("BMAD", { exact: true })).toBeVisible();
+    await expect(candidateCard.getByText("Medium risk")).toBeVisible();
+    await expect(candidateCard.getByText("High priority")).toBeVisible();
+    await expect(candidateCard.getByText("docs/stories/6-4-bmad-import-package-parser.md")).toBeVisible();
+    await expect(candidateCard.getByText("Review before active work")).toBeVisible();
+    await expect(page.getByRole("link", { name: /Proposed Work/ })).toBeVisible();
+    await expect(candidateCard.getByRole("button", { name: "Move earlier" })).toBeVisible();
+    await expect(candidateCard.getByRole("button", { name: "Approve" })).toBeVisible();
+    await expect(candidateCard.getByRole("button", { name: "Move to active work" })).toBeDisabled();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(candidateCard).toBeVisible();
+    await expect(candidateCard.getByText("docs/stories/6-4-bmad-import-package-parser.md")).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+      )
+      .toBeTruthy();
+
+    await candidateCard.getByRole("button", { name: "Approve" }).click();
+    const approvedCard = page.locator("article").filter({ hasText: "Review Story 6.4 parser" }).first();
+    await expect(approvedCard.getByText("Approved")).toBeVisible();
+    await expect(approvedCard.getByRole("button", { name: "Move to active work" })).toBeEnabled();
+    await approvedCard.getByRole("button", { name: "Move to active work" }).click();
+    await expect(page).toHaveURL(/\/work-items\/.+/);
+    await expect(page.getByText("Promote proposed work", { exact: false })).toHaveCount(0);
+  });
+
   test("shows supervisor-owned recipe details during intake", async ({ page }) => {
     await page.goto("/");
 
@@ -145,17 +212,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(readinessPanel.getByText("Provider proofs")).toBeVisible();
     await expect(readinessPanel.getByText("Provider no-call proofs")).toBeVisible();
     await expect(readinessPanel.getByText("Ollama OpenAI-compatible local worker")).toBeVisible();
-    await expect(readinessPanel.getByText("Registry: disabled")).toBeVisible();
-    await expect(readinessPanel.getByText("Provider gate: disabled")).toBeVisible();
+    await expect(readinessPanel.getByText("Registry: disabled").first()).toBeVisible();
+    await expect(readinessPanel.getByText("Provider gate: disabled").first()).toBeVisible();
     await expect(readinessPanel.getByText("Prompt sources: work_item_title")).toBeVisible();
-    await expect(readinessPanel.getByText("Timeout policy: connect 5s, total 30s.")).toBeVisible();
+    await expect(readinessPanel.getByText("Timeout policy: connect 2s, total 120s.")).toBeVisible();
     await expect(readinessPanel.getByText("cancel_requested -> request_abort_recorded")).toBeVisible();
 
     const documentationPanel = page.locator("section").filter({ hasText: "Indexes and approval stop lines" }).first();
     await expect(documentationPanel.getByText("Documentation authority", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("Indexes and approval stop lines")).toBeVisible();
     await expect(documentationPanel.getByText("Blocked authority stories")).toBeVisible();
-    await expect(documentationPanel.getByText("6 pending approval")).toBeVisible();
+    await expect(documentationPanel.getByText("2 pending approval")).toBeVisible();
     await expect(documentationPanel.getByText("docs/architecture/index.md", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("blocked pending explicit approval").first()).toBeVisible();
     await expect(documentationPanel.getByText("Documentation drift command")).toBeVisible();
@@ -238,6 +305,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/github-delivery-authority-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/git-hygiene-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/local-cleanup-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/remote-cleanup-sync-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/trusted-autonomy-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/epic-6-completion-audit-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/delivery-readiness-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/disabled-provider-proofs")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-state-boundary")).toBeVisible();
@@ -362,6 +439,111 @@ test.describe("dashboard workflow coverage", () => {
     await expect(githubPolicyPanel.getByText("Do not create persistent plaintext GitHub CLI tokens")).toBeVisible();
     await expect(page.locator("#github-workflow-policy-report")).toBeVisible();
 
+    const githubDeliveryPanel = page.locator("#github-delivery-authority-report");
+    await expect(githubDeliveryPanel.getByText("GitHub delivery", { exact: true })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Delivery authority ladder" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Push branch" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Open or update PR" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Wait for CI" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Merge PR" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByText("branch-scoped push approval")).toBeVisible();
+    await expect(githubDeliveryPanel.getByText("Use this ladder to request one delivery step at a time.")).toBeVisible();
+    await expect(page.locator("#github-delivery-authority-report")).toBeVisible();
+
+    const gitHygienePanel = page.locator("section").filter({ hasText: "Repository readiness" }).first();
+    await expect(gitHygienePanel.getByText("Git hygiene", { exact: true })).toBeVisible();
+    await expect(gitHygienePanel.getByText("Repository readiness")).toBeVisible();
+    await expect(gitHygienePanel.getByRole("heading", { name: "Working tree" })).toBeVisible();
+    await expect(gitHygienePanel.getByRole("heading", { name: "Current branch" })).toBeVisible();
+    await expect(gitHygienePanel.getByRole("heading", { name: "Worktree inventory" })).toBeVisible();
+    await expect(gitHygienePanel.getByRole("heading", { name: "PR and CI" })).toBeVisible();
+    await expect(gitHygienePanel.getByText("No GitHub PR lookup was performed by this read-only local report.")).toBeVisible();
+    await expect(gitHygienePanel.getByText("This report is not approval to push")).toBeVisible();
+    await expect(page.locator("#git-hygiene-report")).toBeVisible();
+
+    const cleanupPanel = page.locator("#local-cleanup-readiness-report");
+    await expect(cleanupPanel.getByText("Local cleanup", { exact: true })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Cleanup readiness" })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Completed worktree" })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Stale worktree" })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Evidence retention" })).toBeVisible();
+    await expect(cleanupPanel.getByRole("heading", { name: "Blocked targets" })).toBeVisible();
+    await expect(cleanupPanel.getByText("main repository checkout")).toBeVisible();
+    await expect(cleanupPanel.getByText("Use this report to request one local cleanup target at a time.")).toBeVisible();
+    await expect(page.locator("#local-cleanup-readiness-report")).toBeVisible();
+
+    const remoteCleanupPanel = page.locator("#remote-cleanup-sync-readiness-report");
+    await expect(remoteCleanupPanel.getByText("Remote cleanup", { exact: true })).toBeVisible();
+    await expect(remoteCleanupPanel.getByRole("heading", { name: "Remote sync readiness" })).toBeVisible();
+    await expect(remoteCleanupPanel.getByRole("heading", { name: "Remote branch cleanup" })).toBeVisible();
+    await expect(remoteCleanupPanel.getByRole("heading", { name: "Issue sync" })).toBeVisible();
+    await expect(remoteCleanupPanel.getByRole("heading", { name: "Story status sync" })).toBeVisible();
+    await expect(remoteCleanupPanel.getByText("GitHub tokens")).toBeVisible();
+    await expect(remoteCleanupPanel.getByText("Use this report to request one remote cleanup or sync target at a time.")).toBeVisible();
+    await expect(page.locator("#remote-cleanup-sync-readiness-report")).toBeVisible();
+
+    const autonomyPanel = page.locator("#trusted-autonomy-readiness-report");
+    await expect(autonomyPanel.getByText("Trusted autonomy", { exact: true })).toBeVisible();
+    await expect(autonomyPanel.getByRole("heading", { name: "Autonomy readiness" })).toBeVisible();
+    await expect(autonomyPanel.getByRole("heading", { name: "Repeatable low-risk work" })).toBeVisible();
+    await expect(autonomyPanel.getByRole("heading", { name: "Automatic stop" })).toBeVisible();
+    await expect(autonomyPanel.getByRole("heading", { name: "Blocked work" })).toBeVisible();
+    await expect(autonomyPanel.getByText("Codex or Claude launch without explicit authority")).toBeVisible();
+    await expect(autonomyPanel.getByText("Use this report to select one narrow workflow class for a future autonomy trial.")).toBeVisible();
+    await expect(page.locator("#trusted-autonomy-readiness-report")).toBeVisible();
+
+    const epicCompletionPanel = page.locator("#epic-6-completion-audit-report");
+    await expect(epicCompletionPanel.getByText("Epic 6 audit", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Completion status" })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("blocked_pending_merge_authority")).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Local readiness stack" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Remote stack delivery closeout" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Real BMAD story done proof" })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Approve merging PR #86")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Marking Epic 6 complete before real delivery and cleanup evidence exists.")).toBeVisible();
+    await expect(page.locator("#epic-6-completion-audit-report")).toBeVisible();
+
+    const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();
+    await expect(codexReadinessPanel.getByText("Codex readiness", { exact: true })).toBeVisible();
+    await expect(codexReadinessPanel.getByRole("heading", { name: "No-launch readiness" })).toBeVisible();
+    await expect(codexReadinessPanel.getByRole("heading", { name: "CLI discovery" })).toBeVisible();
+    await expect(codexReadinessPanel.getByRole("heading", { name: "Auth posture" })).toBeVisible();
+    await expect(codexReadinessPanel.getByRole("heading", { name: "Worker launch" })).toBeVisible();
+    await expect(codexReadinessPanel.getByText("This report does not approve Codex CLI process launch.")).toBeVisible();
+    await expect(page.locator("#codex-readiness-report")).toBeVisible();
+
+    const codexImplementationPanel = page.locator("#codex-implementation-approval-report");
+    await expect(codexImplementationPanel.getByText("Codex implementation", { exact: true })).toBeVisible();
+    await expect(codexImplementationPanel.getByRole("heading", { name: "Approval packet" })).toBeVisible();
+    await expect(codexImplementationPanel.getByText("Approve one bounded Codex implementation attempt")).toBeVisible();
+    await expect(codexImplementationPanel.getByRole("heading", { name: "Isolated worktree" })).toBeVisible();
+    await expect(codexImplementationPanel.getByRole("heading", { name: "Path scope" })).toBeVisible();
+    await expect(codexImplementationPanel.getByRole("heading", { name: "Approval binding" })).toBeVisible();
+    await expect(codexImplementationPanel.getByText("codex <non-interactive task mode> --cwd <approved-worktree>")).toBeVisible();
+    await expect(codexImplementationPanel.getByText("Codex asks for credentials")).toBeVisible();
+    await expect(page.locator("#codex-implementation-approval-report")).toBeVisible();
+
+    const claudeReviewPanel = page.locator("#claude-review-readiness-report");
+    await expect(claudeReviewPanel.getByText("Claude review", { exact: true })).toBeVisible();
+    await expect(claudeReviewPanel.getByRole("heading", { name: "No-launch review readiness" })).toBeVisible();
+    await expect(claudeReviewPanel.getByRole("heading", { name: "CLI discovery" })).toBeVisible();
+    await expect(claudeReviewPanel.getByRole("heading", { name: "Review-only posture" })).toBeVisible();
+    await expect(claudeReviewPanel.getByRole("heading", { name: "Scarce use" })).toBeVisible();
+    await expect(claudeReviewPanel.getByText("This report does not approve Claude CLI process launch.")).toBeVisible();
+    await expect(claudeReviewPanel.getByText("scarce Claude subscription usage")).toBeVisible();
+    await expect(page.locator("#claude-review-readiness-report")).toBeVisible();
+
+    const claudeApprovalPanel = page.locator("#claude-review-approval-report");
+    await expect(claudeApprovalPanel.getByText("Claude review approval", { exact: true })).toBeVisible();
+    await expect(claudeApprovalPanel.getByRole("heading", { name: "Review-only approval packet" })).toBeVisible();
+    await expect(claudeApprovalPanel.getByText("Approve one bounded Claude review-only attempt")).toBeVisible();
+    await expect(claudeApprovalPanel.getByRole("heading", { name: "Explicit request" })).toBeVisible();
+    await expect(claudeApprovalPanel.getByRole("heading", { name: "Routine generation" })).toBeVisible();
+    await expect(claudeApprovalPanel.getByRole("heading", { name: "Blocked inputs" })).toBeVisible();
+    await expect(claudeApprovalPanel.getByText("Risk-ranked findings")).toBeVisible();
+    await expect(claudeApprovalPanel.getByText("One Claude review attempt per approval")).toBeVisible();
+    await expect(page.locator("#claude-review-approval-report")).toBeVisible();
+
     const deliveryReadinessPolicyPanel = page.locator("section").filter({ hasText: "Review gate policy" }).first();
     await expect(deliveryReadinessPolicyPanel.getByText("Delivery readiness", { exact: true })).toBeVisible();
     await expect(deliveryReadinessPolicyPanel.getByText("Pull request evidence")).toBeVisible();
@@ -379,6 +561,27 @@ test.describe("dashboard workflow coverage", () => {
     await expect(fleetPanel.getByText("Decisions 1")).toBeVisible();
     await expect(fleetPanel.getByText("Task Deterministic Check")).toBeVisible();
   });
+
+  test("runs a safe local check from the work item detail page", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Local evidence check",
+      requestedOutcome: "Summarize the available workflow evidence without changing files or running commands.",
+    });
+
+    await page.goto(`/work-items/${workItemId}`);
+
+    const localCheck = page.locator("#local-check");
+    await expect(localCheck.getByRole("heading", { name: "Ask the local lane to explain this work" })).toBeVisible();
+    await expect(localCheck.getByText("Changes off")).toBeVisible();
+    await expect(localCheck.getByText("Commands off")).toBeVisible();
+
+    await localCheck.getByRole("button", { name: "Run local check" }).click();
+
+    await expect(localCheck.getByText("Local read-only", { exact: true })).toBeVisible();
+    await expect(localCheck.getByText("No model call was made. This check used existing work evidence only.")).toBeVisible();
+    await expect(localCheck.getByText("Read-only explanation only; file writes are not allowed.")).toBeVisible();
+  });
+
   test("guides a non-coder through intake templates and advanced fields", async ({ page }) => {
     await page.goto("/");
 
@@ -744,6 +947,11 @@ test.describe("dashboard workflow coverage", () => {
 
     await expect(page.getByRole("button", { name: "Prepare branch" })).toBeVisible();
     await expect(page.getByText("Prepare execution branch")).toBeVisible();
+    await expect(page.getByText("Isolated workspace plan")).toBeVisible();
+    await expect(page.getByText("Create off")).toBeVisible();
+    await expect(page.getByText("Cleanup off")).toBeVisible();
+    await expect(page.getByText("local_worktree_creation_not_enabled")).toBeVisible();
+    await expect(page.getByText("Plan only: no local filesystem mutation was performed.")).toBeVisible();
   });
 
   test("surfaces recovery guidance when managed recipe blocks on branch policy", async ({ page, request }) => {

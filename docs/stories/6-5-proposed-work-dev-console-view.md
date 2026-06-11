@@ -1,7 +1,7 @@
 # Story 6.5: Proposed Work Dev Console View
 
 Date: 2026-06-10
-Status: Draft
+Status: Review
 
 ## Story
 
@@ -68,4 +68,3 @@ Required focused checks:
 - mobile/responsive browser test if layout changes are material.
 
 Run full `pnpm.cmd run check` if shared contracts or cross-package behavior are touched.
-

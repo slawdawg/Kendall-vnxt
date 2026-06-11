@@ -1,6 +1,10 @@
 ﻿import type {
   AuditFilterMode,
   BmadLane,
+  CandidateWorkArtifactType,
+  CandidateWorkPriority,
+  CandidateWorkSource,
+  CandidateWorkStatus,
   RiskLevel,
   RunMode,
   WorkItemFilterScope,
@@ -15,6 +19,92 @@ export interface WorkItemPayload {
   details?: string | null;
   riskLevel?: RiskLevel;
   metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface CandidateWorkCreatePayload {
+  title: string;
+  requestedOutcome: string;
+  source: CandidateWorkSource;
+  sourceArtifactPath: string;
+  sourceArtifactType: CandidateWorkArtifactType;
+  riskLevel?: RiskLevel;
+  priority?: CandidateWorkPriority;
+  sortOrder?: number;
+  importMetadata?: Record<string, unknown>;
+}
+
+export interface CandidateWorkUpdatePayload {
+  status?: CandidateWorkStatus | null;
+  priority?: CandidateWorkPriority | null;
+  riskLevel?: RiskLevel | null;
+  sortOrder?: number | null;
+}
+
+export interface CandidateWorkBmadImportPayload {
+  artifactPath: string;
+  sortOrder?: number;
+}
+
+export interface CandidateWorkView {
+  id: string;
+  title: string;
+  requestedOutcome: string;
+  source: CandidateWorkSource;
+  sourceArtifactPath: string;
+  sourceArtifactType: CandidateWorkArtifactType;
+  riskLevel: RiskLevel;
+  priority: CandidateWorkPriority;
+  sortOrder: number;
+  status: CandidateWorkStatus;
+  createdAt: string;
+  updatedAt: string;
+  approvedAt?: string | null;
+  promotedWorkItemId?: string | null;
+  importMetadata: Record<string, unknown>;
+}
+
+export interface CandidateWorkPromotionView {
+  candidateWork: CandidateWorkView;
+  workItem: WorkItemView;
+}
+
+export interface BmadImportPackageView {
+  title: string;
+  requestedOutcome: string;
+  sourceArtifactPath: string;
+  sourceArtifactType: CandidateWorkArtifactType;
+  artifactTitle: string;
+  storyId?: string | null;
+  epicId?: string | null;
+  acceptanceCriteria: string;
+  riskLevel: RiskLevel;
+  recommendedPriority: CandidateWorkPriority;
+  verificationSummary: string;
+  allowedScope?: string | null;
+  notes: string[];
+}
+
+export interface TaskPacketV0View {
+  workItemId: string;
+  title: string;
+  requestedOutcome: string;
+  source: string;
+  sourceArtifactPath: string;
+  taskKind: string;
+  riskLevel: string;
+  priority: string;
+  approvalMode: string;
+  verificationSummary: string;
+}
+
+export interface TaskPacketPreviewView {
+  packet: TaskPacketV0View;
+  route: RoutingDecisionView;
+  whyThisPath: string;
+  previewOnly: boolean;
+  executionAttemptCreated: boolean;
+  providerCallsAllowed: boolean;
+  commandExecutionAllowed: boolean;
 }
 
 export interface WorkItemPolicyGateView {
@@ -342,6 +432,13 @@ export interface LocalReadonlyWorkerPreviewView {
   writesAllowed: boolean;
   commandsAllowed: boolean;
 }
+
+export interface LocalEvidenceExplanationPayload {
+  stepId?: string | null;
+  taskKind?: string | null;
+  recordEvent?: boolean;
+}
+
 export interface LocalEvidenceItemView {
   eventType: string;
   summary: string;
@@ -862,6 +959,301 @@ export interface GitHubWorkflowPolicyReportView {
   executionAuthorityApproved: boolean;
   plaintextTokenStorageApproved: boolean;
   remoteAutomationApproved: boolean;
+}
+
+export interface GitHygieneSignalView {
+  signalId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface GitHygieneWorktreeView {
+  path: string;
+  branch?: string | null;
+  head?: string | null;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+}
+
+export interface GitHygieneReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  repoRoot: string;
+  currentBranch: string;
+  headRevision: string;
+  upstreamBranch?: string | null;
+  workingTreeStatus: string;
+  statusCounts: Record<string, number>;
+  worktrees: GitHygieneWorktreeView[];
+  localSignals: GitHygieneSignalView[];
+  remoteSignals: GitHygieneSignalView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  remoteMutationApproved: boolean;
+  cleanupApproved: boolean;
+}
+
+export interface LocalWorktreePlanView {
+  planId: string;
+  workItemId: string;
+  title: string;
+  executionBranch: string;
+  baseBranch: string;
+  baseRevision: string;
+  worktreePath: string;
+  status: string;
+  createCommand: string[];
+  cleanupCommand: string[];
+  safetyChecks: string[];
+  blockedBy: string[];
+  evidence: string[];
+  createAllowed: boolean;
+  cleanupAllowed: boolean;
+  remoteOperationsAllowed: boolean;
+}
+
+export interface CodexReadinessCheckView {
+  checkId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface CodexReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  cliPath?: string | null;
+  checks: CodexReadinessCheckView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  workerTaskExecutionApproved: boolean;
+  sourceMutationApproved: boolean;
+}
+
+export interface CodexImplementationApprovalRequirementView {
+  requirementId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface CodexImplementationApprovalReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  approvalPrompt: string;
+  authorityFamily: string;
+  operation: string;
+  targetScope: string[];
+  allowedPaths: string[];
+  blockedPaths: string[];
+  expectedCommandShape: string[];
+  requiredEvidence: string[];
+  rollbackPlan: string[];
+  stopConditions: string[];
+  requirements: CodexImplementationApprovalRequirementView[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  workerTaskExecutionApproved: boolean;
+  sourceMutationApproved: boolean;
+  approvalBindingImplemented: boolean;
+}
+
+export interface ClaudeReadinessCheckView {
+  checkId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface ClaudeReviewReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  cliPath?: string | null;
+  reviewPolicy: ClaudeReadinessCheckView[];
+  scarcityPolicy: ClaudeReadinessCheckView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  reviewTaskExecutionApproved: boolean;
+  sourceMutationApproved: boolean;
+  scarceUseApproved: boolean;
+}
+
+export interface ClaudeReviewApprovalRequirementView {
+  requirementId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface ClaudeReviewApprovalReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  approvalPrompt: string;
+  authorityFamily: string;
+  operation: string;
+  triggerPolicy: ClaudeReviewApprovalRequirementView[];
+  contextScope: string[];
+  blockedInputs: string[];
+  expectedCommandShape: string[];
+  outputContract: string[];
+  requiredEvidence: string[];
+  scarcityControls: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  reviewTaskExecutionApproved: boolean;
+  sourceMutationApproved: boolean;
+  scarceUseApproved: boolean;
+  approvalBindingImplemented: boolean;
+}
+
+export interface GitHubDeliveryAuthorityStepView {
+  stepId: string;
+  label: string;
+  status: string;
+  summary: string;
+  requiredApproval: string;
+  evidence: string[];
+}
+
+export interface GitHubDeliveryAuthorityReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  authorityFamily: string;
+  approvalPrompt: string;
+  ladder: GitHubDeliveryAuthorityStepView[];
+  requiredEvidence: string[];
+  rollbackPlan: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  pushApproved: boolean;
+  pullRequestApproved: boolean;
+  ciWaitApproved: boolean;
+  reviewResolutionApproved: boolean;
+  mergeApproved: boolean;
+  remoteCleanupApproved: boolean;
+}
+
+export interface LocalCleanupPolicyItemView {
+  itemId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface LocalCleanupReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  cleanupPolicy: LocalCleanupPolicyItemView[];
+  requiredEvidence: string[];
+  blockedTargets: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  automaticCleanupApproved: boolean;
+  worktreeRemovalApproved: boolean;
+  branchDeletionApproved: boolean;
+  evidenceDeletionApproved: boolean;
+}
+
+export interface RemoteCleanupSyncPolicyItemView {
+  itemId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface RemoteCleanupSyncReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  syncPolicy: RemoteCleanupSyncPolicyItemView[];
+  requiredEvidence: string[];
+  blockedOperations: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  remoteBranchDeletionApproved: boolean;
+  issueSyncApproved: boolean;
+  storyStatusSyncApproved: boolean;
+  remoteMutationApproved: boolean;
+}
+
+export interface TrustedAutonomyReadinessGateView {
+  gateId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface TrustedAutonomyReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  autonomyGates: TrustedAutonomyReadinessGateView[];
+  eligibleWork: string[];
+  blockedWork: string[];
+  requiredEvidence: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  lowRiskAutonomyApproved: boolean;
+  autonomousProviderUseApproved: boolean;
+  autonomousGitHubDeliveryApproved: boolean;
+  autonomousCleanupApproved: boolean;
+}
+
+export interface EpicCompletionAuditItemView {
+  itemId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface EpicCompletionAuditReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  epicId: string;
+  overallStatus: string;
+  completedItems: EpicCompletionAuditItemView[];
+  remainingItems: EpicCompletionAuditItemView[];
+  blockedOperations: string[];
+  recommendedApproval: string;
+  requiredEvidence: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  epicComplete: boolean;
+  remoteDeliveryApproved: boolean;
+  providerExecutionApproved: boolean;
+  cleanupApproved: boolean;
 }
 
 export interface DeliveryReadinessPolicyItemView {

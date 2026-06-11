@@ -38,6 +38,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\Install-KendallNxtSta
 
 This creates per-user logon tasks for the dashboard, supervisor, and a visible Codex terminal. Codex is interactive, so the supported automatic launch point is Windows logon rather than pre-login boot.
 
+After signing out and back in, verify the startup tasks and live endpoints:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\Test-KendallNxtStartup.ps1 -WriteReport
+```
+
+For a task-registration-only check before the next logon, skip endpoint checks:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\Test-KendallNxtStartup.ps1 -SkipEndpointChecks -WriteReport
+```
+
 If required tools are already installed and you only want to verify the machine:
 
 ```powershell
@@ -80,6 +92,7 @@ pnpm run bootstrap:windows -- -VerifyRemote
 - runs `pnpm run doctor:github`, with live remote checks when `-VerifyRemote` or `-Full` is used,
 - optionally runs `pnpm run check` when `-RunCheck` or `-Full` is used,
 - writes a redacted readiness report under `.data/bootstrap/` when `-WriteReport` or `-Full` is used.
+- startup verification can write a redacted report under `.data/startup/` after logon tasks are installed.
 
 ## Readiness Reports
 
@@ -175,6 +188,7 @@ pnpm run check:development-runway
 pnpm run check:delivery-readiness
 pnpm run check:maintenance-readiness
 pnpm run check
+pnpm run startup:windows:verify -- -SkipEndpointChecks -WriteReport
 git status --short --branch
 ```
 

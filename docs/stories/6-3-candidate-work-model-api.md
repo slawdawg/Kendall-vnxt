@@ -1,7 +1,7 @@
 # Story 6.3: Candidate Work Model And API
 
 Date: 2026-06-10
-Status: Draft
+Status: Review
 
 ## Story
 
@@ -97,4 +97,3 @@ Required focused checks:
 - documentation index checks if docs are changed.
 
 Run full `pnpm.cmd run check` if shared contracts, dashboard build paths, or documentation drift checks are touched.
-

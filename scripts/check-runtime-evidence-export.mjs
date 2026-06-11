@@ -121,6 +121,15 @@ for (const shortcutText of [
   "#runtime-evidence-review-report",
   "#safe-development-backlog",
   "#github-workflow-policy-report",
+  "#github-delivery-authority-report",
+  "#git-hygiene-report",
+  "#local-cleanup-readiness-report",
+  "#remote-cleanup-sync-readiness-report",
+  "#trusted-autonomy-readiness-report",
+  "#codex-readiness-report",
+  "#codex-implementation-approval-report",
+  "#claude-review-readiness-report",
+  "#claude-review-approval-report",
   "#delivery-readiness-policy-report",
   "#supervisor-report-catalog",
 ]) {
@@ -188,6 +197,51 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-42-github-workflow-policy-report.md"),
   "Story index must reference Story 3.42 GitHub workflow policy report",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-14-git-hygiene-read-only.md"),
+  "Story index must reference Story 6.14 Git hygiene read-only",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-16-codex-readiness-no-launch.md"),
+  "Story index must reference Story 6.16 Codex readiness no-launch",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-17-codex-implementation-approval-packet.md"),
+  "Story index must reference Story 6.17 Codex implementation approval packet",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-18-claude-readiness-no-launch.md"),
+  "Story index must reference Story 6.18 Claude readiness no-launch",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-19-claude-review-approval-packet.md"),
+  "Story index must reference Story 6.19 Claude review approval packet",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-20-github-delivery-authority-ladder.md"),
+  "Story index must reference Story 6.20 GitHub delivery authority ladder",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-21-local-cleanup-readiness.md"),
+  "Story index must reference Story 6.21 local cleanup readiness",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-22-remote-cleanup-sync-readiness.md"),
+  "Story index must reference Story 6.22 remote cleanup sync readiness",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-23-trusted-autonomy-readiness.md"),
+  "Story index must reference Story 6.23 trusted autonomy readiness",
   failures,
 );
 assertCondition(

@@ -106,6 +106,23 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `6-5-proposed-work-dev-console-view.md` | Add the Dev Console Proposed Work surface for reviewing Candidate Work before activation. |
 | `6-6-candidate-priority-order-promote.md` | Add priority/order controls and Candidate Work promotion into Active Dev Console work without execution. |
 | `6-7-task-packet-v0-orchestrated-preview.md` | Build minimal Task Packet v0 from Active work and record preview-only orchestrator lane decisions. |
+| `6-8-execution-attempt-integration.md` | Attach Task Packet preview evidence to fake or blocked execution attempts without worker launch authority. |
+| `6-9-dev-console-realtime-live-state.md` | Refresh Dev Console cards, counts, attempts, and evidence from supervisor SSE events without polling or full reloads. |
+| `6-10-synthetic-bmad-proof.md` | Prove a synthetic BMAD artifact can flow through Candidate Work, Active Work, routing preview, and fake/blocked attempt evidence. |
+| `6-11-real-bmad-story-proof.md` | Prove a real existing BMAD story can preserve metadata through Candidate Work, Active Work, Task Packet, attempt, and runtime evidence. |
+| `6-12-startup-availability.md` | Verify Windows logon startup tasks and live Dashboard/Supervisor endpoints for Dev Console availability. |
+| `6-13-safe-local-execution.md` | Add a work-item Local check panel that records local read-only evidence explanations while preserving disabled write, command, worker, Git, and provider expansion boundaries. |
+| `6-14-git-hygiene-read-only.md` | Add a read-only Git hygiene report and Dev Console panel for repository, worktree, branch, PR, and CI posture without remote writes or cleanup. |
+| `6-15-local-worktree-management.md` | Add a guarded local worktree plan for managed work items without creating, removing, or cleaning up local worktrees. |
+| `6-16-codex-readiness-no-launch.md` | Add a no-launch Codex readiness report for CLI discovery, auth-check posture, worker-launch stop lines, and source-mutation boundaries. |
+| `6-17-codex-implementation-approval-packet.md` | Add a read-only approval packet for future bounded Codex implementation with target scope, path boundaries, command shape, evidence, rollback, and stop conditions. |
+| `6-18-claude-readiness-no-launch.md` | Add a no-launch Claude review readiness report for CLI discovery, review-only posture, scarce-use policy, and source-mutation boundaries. |
+| `6-19-claude-review-approval-packet.md` | Add a read-only approval packet for future bounded Claude review with trigger policy, context scope, blocked inputs, output contract, and scarcity controls. |
+| `6-20-github-delivery-authority-ladder.md` | Add a read-only GitHub delivery authority ladder for push, PR, CI, review resolution, merge, and remote cleanup approvals. |
+| `6-21-local-cleanup-readiness.md` | Add a read-only local cleanup readiness report for completed, stale, and abandoned worktree cleanup policy before deletion is enabled. |
+| `6-22-remote-cleanup-sync-readiness.md` | Add a read-only remote cleanup and issue/story sync readiness report before remote deletion or GitHub status updates are enabled. |
+| `6-23-trusted-autonomy-readiness.md` | Add a read-only trusted autonomy readiness report for low-risk workflow graduation gates before autonomous execution is enabled. |
+| `6-24-epic-6-completion-audit.md` | Add a read-only Dev Console audit showing Epic 6 completion evidence, remaining authority blockers, and the next delivery approval needed. |
 
 ## Completed Foundation Stories
 

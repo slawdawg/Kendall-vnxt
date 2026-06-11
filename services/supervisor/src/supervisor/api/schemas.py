@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field
 from supervisor.domain.types import (
     AuditMode,
     BmadLane,
+    CandidateWorkArtifactType,
+    CandidateWorkPriority,
+    CandidateWorkSource,
+    CandidateWorkStatus,
     ExecutionAttemptStatus,
     ErrorCategory,
     RiskLevel,
@@ -23,6 +27,64 @@ class WorkItemCreate(BaseModel):
     details: str | None = None
     riskLevel: RiskLevel = RiskLevel.LOW
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CandidateWorkCreate(BaseModel):
+    title: str
+    requestedOutcome: str
+    source: CandidateWorkSource
+    sourceArtifactPath: str
+    sourceArtifactType: CandidateWorkArtifactType
+    riskLevel: RiskLevel = RiskLevel.LOW
+    priority: CandidateWorkPriority = CandidateWorkPriority.NORMAL
+    sortOrder: int = 0
+    importMetadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CandidateWorkUpdate(BaseModel):
+    status: CandidateWorkStatus | None = None
+    priority: CandidateWorkPriority | None = None
+    riskLevel: RiskLevel | None = None
+    sortOrder: int | None = None
+
+
+class CandidateWorkView(BaseModel):
+    id: str
+    title: str
+    requestedOutcome: str
+    source: CandidateWorkSource
+    sourceArtifactPath: str
+    sourceArtifactType: CandidateWorkArtifactType
+    riskLevel: RiskLevel
+    priority: CandidateWorkPriority
+    sortOrder: int
+    status: CandidateWorkStatus
+    createdAt: datetime
+    updatedAt: datetime
+    approvedAt: datetime | None = None
+    promotedWorkItemId: str | None = None
+    importMetadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BmadImportPackageView(BaseModel):
+    title: str
+    requestedOutcome: str
+    sourceArtifactPath: str
+    sourceArtifactType: CandidateWorkArtifactType
+    artifactTitle: str
+    storyId: str | None = None
+    epicId: str | None = None
+    acceptanceCriteria: str
+    riskLevel: RiskLevel
+    recommendedPriority: CandidateWorkPriority
+    verificationSummary: str
+    allowedScope: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class CandidateWorkBmadImportRequest(BaseModel):
+    artifactPath: str
+    sortOrder: int = 0
 
 
 class WorkItemActionRequest(BaseModel):
@@ -291,6 +353,29 @@ class RoutingDecisionView(BaseModel):
 class RoutingPreviewView(BaseModel):
     profile: RoutingProfileView
     decision: RoutingDecisionView
+
+
+class TaskPacketV0View(BaseModel):
+    workItemId: str
+    title: str
+    requestedOutcome: str
+    source: str
+    sourceArtifactPath: str
+    taskKind: str
+    riskLevel: str
+    priority: str
+    approvalMode: str
+    verificationSummary: str
+
+
+class TaskPacketPreviewView(BaseModel):
+    packet: TaskPacketV0View
+    route: RoutingDecisionView
+    whyThisPath: str
+    previewOnly: bool = True
+    executionAttemptCreated: bool = False
+    providerCallsAllowed: bool = False
+    commandExecutionAllowed: bool = False
 
 
 class SubscriptionHandoffEvidenceView(BaseModel):
@@ -983,6 +1068,301 @@ class GitHubWorkflowPolicyReportView(BaseModel):
     executionAuthorityApproved: bool = False
     plaintextTokenStorageApproved: bool = False
     remoteAutomationApproved: bool = False
+
+
+class GitHygieneSignalView(BaseModel):
+    signalId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class GitHygieneWorktreeView(BaseModel):
+    path: str
+    branch: str | None = None
+    head: str | None = None
+    detached: bool = False
+    locked: bool = False
+    prunable: bool = False
+
+
+class GitHygieneReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    repoRoot: str
+    currentBranch: str
+    headRevision: str
+    upstreamBranch: str | None = None
+    workingTreeStatus: str
+    statusCounts: dict[str, int]
+    worktrees: list[GitHygieneWorktreeView]
+    localSignals: list[GitHygieneSignalView]
+    remoteSignals: list[GitHygieneSignalView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    remoteMutationApproved: bool = False
+    cleanupApproved: bool = False
+
+
+class LocalWorktreePlanView(BaseModel):
+    planId: str
+    workItemId: str
+    title: str
+    executionBranch: str
+    baseBranch: str
+    baseRevision: str
+    worktreePath: str
+    status: str
+    createCommand: list[str]
+    cleanupCommand: list[str]
+    safetyChecks: list[str]
+    blockedBy: list[str]
+    evidence: list[str]
+    createAllowed: bool = False
+    cleanupAllowed: bool = False
+    remoteOperationsAllowed: bool = False
+
+
+class CodexReadinessCheckView(BaseModel):
+    checkId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class CodexReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    cliPath: str | None = None
+    checks: list[CodexReadinessCheckView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    workerTaskExecutionApproved: bool = False
+    sourceMutationApproved: bool = False
+
+
+class CodexImplementationApprovalRequirementView(BaseModel):
+    requirementId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class CodexImplementationApprovalReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    approvalPrompt: str
+    authorityFamily: str
+    operation: str
+    targetScope: list[str]
+    allowedPaths: list[str]
+    blockedPaths: list[str]
+    expectedCommandShape: list[str]
+    requiredEvidence: list[str]
+    rollbackPlan: list[str]
+    stopConditions: list[str]
+    requirements: list[CodexImplementationApprovalRequirementView]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    workerTaskExecutionApproved: bool = False
+    sourceMutationApproved: bool = False
+    approvalBindingImplemented: bool = False
+
+
+class ClaudeReadinessCheckView(BaseModel):
+    checkId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class ClaudeReviewReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    cliPath: str | None = None
+    reviewPolicy: list[ClaudeReadinessCheckView]
+    scarcityPolicy: list[ClaudeReadinessCheckView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    reviewTaskExecutionApproved: bool = False
+    sourceMutationApproved: bool = False
+    scarceUseApproved: bool = False
+
+
+class ClaudeReviewApprovalRequirementView(BaseModel):
+    requirementId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class ClaudeReviewApprovalReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    approvalPrompt: str
+    authorityFamily: str
+    operation: str
+    triggerPolicy: list[ClaudeReviewApprovalRequirementView]
+    contextScope: list[str]
+    blockedInputs: list[str]
+    expectedCommandShape: list[str]
+    outputContract: list[str]
+    requiredEvidence: list[str]
+    scarcityControls: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    reviewTaskExecutionApproved: bool = False
+    sourceMutationApproved: bool = False
+    scarceUseApproved: bool = False
+    approvalBindingImplemented: bool = False
+
+
+class GitHubDeliveryAuthorityStepView(BaseModel):
+    stepId: str
+    label: str
+    status: str
+    summary: str
+    requiredApproval: str
+    evidence: list[str]
+
+
+class GitHubDeliveryAuthorityReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    authorityFamily: str
+    approvalPrompt: str
+    ladder: list[GitHubDeliveryAuthorityStepView]
+    requiredEvidence: list[str]
+    rollbackPlan: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    pushApproved: bool = False
+    pullRequestApproved: bool = False
+    ciWaitApproved: bool = False
+    reviewResolutionApproved: bool = False
+    mergeApproved: bool = False
+    remoteCleanupApproved: bool = False
+
+
+class LocalCleanupPolicyItemView(BaseModel):
+    itemId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class LocalCleanupReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    cleanupPolicy: list[LocalCleanupPolicyItemView]
+    requiredEvidence: list[str]
+    blockedTargets: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    automaticCleanupApproved: bool = False
+    worktreeRemovalApproved: bool = False
+    branchDeletionApproved: bool = False
+    evidenceDeletionApproved: bool = False
+
+
+class RemoteCleanupSyncPolicyItemView(BaseModel):
+    itemId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class RemoteCleanupSyncReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    syncPolicy: list[RemoteCleanupSyncPolicyItemView]
+    requiredEvidence: list[str]
+    blockedOperations: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    remoteBranchDeletionApproved: bool = False
+    issueSyncApproved: bool = False
+    storyStatusSyncApproved: bool = False
+    remoteMutationApproved: bool = False
+
+
+class TrustedAutonomyReadinessGateView(BaseModel):
+    gateId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class TrustedAutonomyReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    autonomyGates: list[TrustedAutonomyReadinessGateView]
+    eligibleWork: list[str]
+    blockedWork: list[str]
+    requiredEvidence: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    lowRiskAutonomyApproved: bool = False
+    autonomousProviderUseApproved: bool = False
+    autonomousGitHubDeliveryApproved: bool = False
+    autonomousCleanupApproved: bool = False
+
+
+class EpicCompletionAuditItemView(BaseModel):
+    itemId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class EpicCompletionAuditReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    epicId: str
+    overallStatus: str
+    completedItems: list[EpicCompletionAuditItemView]
+    remainingItems: list[EpicCompletionAuditItemView]
+    blockedOperations: list[str]
+    recommendedApproval: str
+    requiredEvidence: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    epicComplete: bool = False
+    remoteDeliveryApproved: bool = False
+    providerExecutionApproved: bool = False
+    cleanupApproved: bool = False
 
 
 class DeliveryReadinessPolicyItemView(BaseModel):

@@ -1,18 +1,34 @@
 import type {
   ApiEnvelope,
   AuthorityReadinessMatrixReportView,
+  CandidateWorkBmadImportPayload,
+  CandidateWorkPromotionView,
+  CandidateWorkUpdatePayload,
+  CandidateWorkView,
+  ClaudeReviewApprovalReportView,
+  ClaudeReviewReadinessReportView,
+  CodexImplementationApprovalReportView,
+  CodexReadinessReportView,
   DashboardE2EReportView,
   DeliveryReadinessPolicyReportView,
   DevelopmentRunwayReportView,
   DocumentationAuthorityReportView,
+  EpicCompletionAuditReportView,
   ExecutionAttemptView,
   ExecutionReadinessReportView,
+  GitHubDeliveryAuthorityReportView,
   GitHubWorkflowPolicyReportView,
+  GitHygieneReportView,
+  LocalCleanupReadinessReportView,
+  LocalEvidenceExplanationPayload,
+  LocalEvidenceExplanationView,
+  LocalWorktreePlanView,
   ManagedRecipePolicyReportView,
   MaintenanceActionPlanReportView,
   MaintenanceReadinessReportView,
   RuntimeEvidenceReviewReportView,
   RuntimeEvidenceExportView,
+  RemoteCleanupSyncReadinessReportView,
   RoutingLaneEvidenceProfileView,
   RoutingPreviewView,
   RunStatusView,
@@ -20,6 +36,7 @@ import type {
   SavedWorkItemView,
   SavedWorkItemViewPayload,
   SupervisorReportCatalogView,
+  TrustedAutonomyReadinessReportView,
   WorkItemBranchPreparationPayload,
   WorkItemAssignmentPayload,
   WorkItemFilterScope,
@@ -65,6 +82,53 @@ export async function getWorkItems(): Promise<WorkItemView[]> {
   return requestJson<WorkItemView[]>("/work-items");
 }
 
+export async function getCandidateWork(): Promise<CandidateWorkView[]> {
+  return requestJson<CandidateWorkView[]>("/candidate-work");
+}
+
+export async function importBmadCandidateWork(payload: CandidateWorkBmadImportPayload): Promise<CandidateWorkView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/import-bmad`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as
+      | { detail?: { error?: { message?: string } } }
+      | null;
+    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to import BMAD work.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
+  return envelope.data;
+}
+
+export async function updateCandidateWork(candidateWorkId: string, payload: CandidateWorkUpdatePayload): Promise<CandidateWorkView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/${candidateWorkId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error("Unable to update proposed work.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
+  return envelope.data;
+}
+
+export async function promoteCandidateWork(candidateWorkId: string): Promise<CandidateWorkPromotionView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/${candidateWorkId}/promote`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as
+      | { detail?: { error?: { message?: string } } }
+      | null;
+    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to move proposed work into active work.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkPromotionView>;
+  return envelope.data;
+}
+
 export async function getWorkItem(id: string): Promise<WorkItemView> {
   return requestJson<WorkItemView>(`/work-items/${id}`);
 }
@@ -81,6 +145,10 @@ export async function getRuntimeEvidenceExport(workItemId: string): Promise<Runt
   return requestJson<RuntimeEvidenceExportView>(`/work-items/${workItemId}/runtime-evidence-export`);
 }
 
+export async function getLocalWorktreePlan(workItemId: string): Promise<LocalWorktreePlanView> {
+  return requestJson<LocalWorktreePlanView>(`/work-items/${workItemId}/local-worktree-plan`);
+}
+
 export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView[]> {
   return requestJson<WorkItemExecutionRecipeView[]>("/execution-recipes");
 }
@@ -95,6 +163,25 @@ export async function getRoutingPreview(workItemId: string): Promise<RoutingPrev
 
 export async function getRoutingLaneProfiles(): Promise<RoutingLaneEvidenceProfileView[]> {
   return requestJson<RoutingLaneEvidenceProfileView[]>("/routing/lane-profiles");
+}
+
+export async function createLocalEvidenceExplanation(
+  workItemId: string,
+  payload: LocalEvidenceExplanationPayload,
+): Promise<LocalEvidenceExplanationView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/local-evidence-explanation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as
+      | { detail?: { error?: { message?: string } } }
+      | null;
+    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to run the local check.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<LocalEvidenceExplanationView>;
+  return envelope.data;
 }
 
 export async function getExecutionReadinessReport(): Promise<ExecutionReadinessReportView> {
@@ -147,6 +234,46 @@ export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolic
 
 export async function getGitHubWorkflowPolicyReport(): Promise<GitHubWorkflowPolicyReportView> {
   return requestJson<GitHubWorkflowPolicyReportView>("/supervisor/github-workflow-policy-report");
+}
+
+export async function getGitHubDeliveryAuthorityReport(): Promise<GitHubDeliveryAuthorityReportView> {
+  return requestJson<GitHubDeliveryAuthorityReportView>("/supervisor/github-delivery-authority-report");
+}
+
+export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
+  return requestJson<GitHygieneReportView>("/supervisor/git-hygiene-report");
+}
+
+export async function getLocalCleanupReadinessReport(): Promise<LocalCleanupReadinessReportView> {
+  return requestJson<LocalCleanupReadinessReportView>("/supervisor/local-cleanup-readiness-report");
+}
+
+export async function getRemoteCleanupSyncReadinessReport(): Promise<RemoteCleanupSyncReadinessReportView> {
+  return requestJson<RemoteCleanupSyncReadinessReportView>("/supervisor/remote-cleanup-sync-readiness-report");
+}
+
+export async function getTrustedAutonomyReadinessReport(): Promise<TrustedAutonomyReadinessReportView> {
+  return requestJson<TrustedAutonomyReadinessReportView>("/supervisor/trusted-autonomy-readiness-report");
+}
+
+export async function getEpic6CompletionAuditReport(): Promise<EpicCompletionAuditReportView> {
+  return requestJson<EpicCompletionAuditReportView>("/supervisor/epic-6-completion-audit-report");
+}
+
+export async function getCodexReadinessReport(): Promise<CodexReadinessReportView> {
+  return requestJson<CodexReadinessReportView>("/supervisor/codex-readiness-report");
+}
+
+export async function getCodexImplementationApprovalReport(): Promise<CodexImplementationApprovalReportView> {
+  return requestJson<CodexImplementationApprovalReportView>("/supervisor/codex-implementation-approval-report");
+}
+
+export async function getClaudeReviewReadinessReport(): Promise<ClaudeReviewReadinessReportView> {
+  return requestJson<ClaudeReviewReadinessReportView>("/supervisor/claude-review-readiness-report");
+}
+
+export async function getClaudeReviewApprovalReport(): Promise<ClaudeReviewApprovalReportView> {
+  return requestJson<ClaudeReviewApprovalReportView>("/supervisor/claude-review-approval-report");
 }
 
 export async function getDeliveryReadinessPolicyReport(): Promise<DeliveryReadinessPolicyReportView> {

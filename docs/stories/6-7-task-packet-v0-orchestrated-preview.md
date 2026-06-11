@@ -1,7 +1,7 @@
 # Story 6.7: Task Packet v0 And Orchestrated Preview
 
 Date: 2026-06-10
-Status: Draft
+Status: Review
 
 ## Story
 
@@ -75,4 +75,3 @@ Required focused checks:
 - docs index checks if story/architecture docs are updated.
 
 Run full `pnpm.cmd run check` when shared contracts or dashboard behavior are touched.
-

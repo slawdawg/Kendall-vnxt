@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ const tempDir = join(tmpdir(), "kendall-supervisor-tests");
 
 mkdirSync(uvCacheDir, { recursive: true });
 mkdirSync(tempDir, { recursive: true });
+const runTempDir = mkdtempSync(join(tempDir, "run-"));
 
 const windowsUvPath = process.env.USERPROFILE ? join(process.env.USERPROFILE, ".local", "bin", "uv.exe") : "";
 const uvCommand = process.env.UV_EXE || (process.platform === "win32" && existsSync(windowsUvPath) ? windowsUvPath : "uv");
@@ -22,11 +23,18 @@ const result = spawnSync(uvCommand, args, {
   env: {
     ...process.env,
     UV_CACHE_DIR: uvCacheDir,
-    TMP: tempDir,
-    TEMP: tempDir,
+    TMP: runTempDir,
+    TEMP: runTempDir,
   },
   stdio: "inherit",
 });
+
+try {
+  rmSync(runTempDir, { recursive: true, force: true });
+} catch {
+  // Windows can briefly hold pytest temp handles after process exit; a stale
+  // per-run temp dir should not mask the actual test result.
+}
 
 if (result.error) {
   console.error(result.error.message);

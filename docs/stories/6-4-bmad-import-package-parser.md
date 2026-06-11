@@ -1,7 +1,7 @@
 # Story 6.4: BMAD Import Package Parser
 
 Date: 2026-06-10
-Status: Draft
+Status: Review
 
 ## Story
 
@@ -84,4 +84,3 @@ Required focused checks:
 - documentation index checks if docs are changed.
 
 Run full `pnpm.cmd run check` if shared contracts, dashboard build paths, or documentation drift checks are touched.
-

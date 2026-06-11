@@ -1,6 +1,33 @@
 import { expect, test, devices } from "@playwright/test";
 
+const supervisorUrl = process.env.PLAYWRIGHT_SUPERVISOR_URL ?? "http://127.0.0.1:8100";
+
 test.use(devices["Pixel 5"]);
+
+test("shows proposed work on a phone viewport", async ({ page, request }) => {
+  const response = await request.post(`${supervisorUrl}/candidate-work`, {
+    data: {
+      title: "Chief of Staff follow-up",
+      requestedOutcome: "Review a proposed calendar handoff before it becomes active work.",
+      source: "chief_of_staff",
+      sourceArtifactPath: "_bmad-output/planning-artifacts/chief-of-staff/follow-up.md",
+      sourceArtifactType: "chief_of_staff_request",
+      riskLevel: "low",
+      priority: "normal",
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+
+  await page.goto("/proposed-work");
+
+  await expect(page.getByRole("heading", { name: "Ideas waiting at the front door" })).toBeVisible();
+  const card = page.locator("article").filter({ hasText: "Chief of Staff follow-up" }).first();
+  await expect(card).toBeVisible();
+  await expect(card.getByText("Chief of Staff", { exact: true })).toBeVisible();
+  await expect(card.getByText("Low risk")).toBeVisible();
+  await expect(card.getByText("Normal priority")).toBeVisible();
+  await expect(card.getByText("_bmad-output/planning-artifacts/chief-of-staff/follow-up.md")).toBeVisible();
+});
 
 test("restores a saved intake draft after refresh and clears it after submit", async ({ page }) => {
   await page.goto("/");

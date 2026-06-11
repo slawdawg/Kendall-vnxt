@@ -11,6 +11,9 @@ from supervisor.api.schemas import (
     ApiEnvelope,
     ApiErrorEnvelope,
     ApiErrorShape,
+    CandidateWorkBmadImportRequest,
+    CandidateWorkCreate,
+    CandidateWorkUpdate,
     OperatorViewCreate,
     OperatorViewDefaultRequest,
     WorkItemActionRequest,
@@ -31,6 +34,7 @@ from supervisor.api.schemas import (
 )
 from supervisor.application.service import SupervisorService
 from supervisor.config.settings import get_settings
+from supervisor.domain.bmad_import import BmadImportError
 from supervisor.domain.types import ErrorCategory, RunMode, WorkItemFilterScope
 from supervisor.infrastructure.db.database import get_session, init_db
 from supervisor.infrastructure.db.models import WorkItem
@@ -86,6 +90,51 @@ async def health() -> dict[str, str]:
 async def create_work_item(payload: WorkItemCreate, session: AsyncSession = Depends(get_session)):
     item = await service.create_work_item(session, payload)
     return ApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.post("/candidate-work", response_model=ApiEnvelope)
+async def create_candidate_work(payload: CandidateWorkCreate, session: AsyncSession = Depends(get_session)):
+    candidate = await service.create_candidate_work(session, payload)
+    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+
+
+@app.post("/candidate-work/import-bmad", response_model=ApiEnvelope)
+async def import_bmad_candidate_work(payload: CandidateWorkBmadImportRequest, session: AsyncSession = Depends(get_session)):
+    try:
+        candidate = await service.import_bmad_candidate_work(session, payload)
+    except BmadImportError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "invalid_bmad_import").model_dump()) from exc
+    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+
+
+@app.get("/candidate-work", response_model=ApiEnvelope)
+async def list_candidate_work(session: AsyncSession = Depends(get_session)):
+    candidates = await service.list_candidate_work(session)
+    return ApiEnvelope(data=[service.to_candidate_work_view(candidate) for candidate in candidates])
+
+
+@app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)
+async def update_candidate_work(
+    candidate_work_id: str,
+    payload: CandidateWorkUpdate,
+    session: AsyncSession = Depends(get_session),
+):
+    candidate = await service.update_candidate_work(session, candidate_work_id, payload)
+    if not candidate:
+        raise HTTPException(status_code=404, detail=error_response("Candidate work not found.", "candidate_work_not_found").model_dump())
+    return ApiEnvelope(data=service.to_candidate_work_view(candidate))
+
+
+@app.post("/candidate-work/{candidate_work_id}/promote", response_model=ApiEnvelope)
+async def promote_candidate_work(candidate_work_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        promoted = await service.promote_candidate_work(session, candidate_work_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "candidate_work_promotion_rejected").model_dump()) from exc
+    if not promoted:
+        raise HTTPException(status_code=404, detail=error_response("Candidate work not found.", "candidate_work_not_found").model_dump())
+    candidate, item = promoted
+    return ApiEnvelope(data={"candidateWork": service.to_candidate_work_view(candidate), "workItem": service.to_work_item_view(item)})
 
 
 @app.get("/work-items", response_model=ApiEnvelope)
@@ -197,6 +246,17 @@ async def get_work_item_routing_preview(work_item_id: str, session: AsyncSession
     preview = await service.get_routing_preview(session, work_item_id)
     if not preview:
         raise HTTPException(status_code=404, detail=error_response("Routing preview not found.", "routing_preview_not_found").model_dump())
+    return ApiEnvelope(data=preview)
+
+
+@app.get("/work-items/{work_item_id}/task-packet-preview", response_model=ApiEnvelope)
+async def get_work_item_task_packet_preview(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    preview = await service.get_task_packet_preview(session, work_item_id)
+    if not preview:
+        raise HTTPException(status_code=404, detail=error_response("Task packet preview not found.", "task_packet_preview_not_found").model_dump())
     return ApiEnvelope(data=preview)
 
 
@@ -335,6 +395,20 @@ async def prepare_work_item_branch(
     if not item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     return ApiEnvelope(data=service.to_work_item_view(item))
+
+
+@app.get("/work-items/{work_item_id}/local-worktree-plan", response_model=ApiEnvelope)
+async def get_work_item_local_worktree_plan(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        plan = await service.get_local_worktree_plan(session, work_item_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "invalid_local_worktree_plan").model_dump(),
+        ) from exc
+    if not plan:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=plan)
 
 
 @app.post("/work-items/{work_item_id}/retry", response_model=ApiEnvelope)
@@ -517,6 +591,56 @@ async def get_managed_recipe_policy_report():
 @app.get("/supervisor/github-workflow-policy-report", response_model=ApiEnvelope)
 async def get_github_workflow_policy_report():
     return ApiEnvelope(data=service.get_github_workflow_policy_report())
+
+
+@app.get("/supervisor/git-hygiene-report", response_model=ApiEnvelope)
+async def get_git_hygiene_report():
+    return ApiEnvelope(data=service.get_git_hygiene_report())
+
+
+@app.get("/supervisor/codex-readiness-report", response_model=ApiEnvelope)
+async def get_codex_readiness_report():
+    return ApiEnvelope(data=service.get_codex_readiness_report())
+
+
+@app.get("/supervisor/codex-implementation-approval-report", response_model=ApiEnvelope)
+async def get_codex_implementation_approval_report():
+    return ApiEnvelope(data=service.get_codex_implementation_approval_report())
+
+
+@app.get("/supervisor/claude-review-readiness-report", response_model=ApiEnvelope)
+async def get_claude_review_readiness_report():
+    return ApiEnvelope(data=service.get_claude_review_readiness_report())
+
+
+@app.get("/supervisor/claude-review-approval-report", response_model=ApiEnvelope)
+async def get_claude_review_approval_report():
+    return ApiEnvelope(data=service.get_claude_review_approval_report())
+
+
+@app.get("/supervisor/github-delivery-authority-report", response_model=ApiEnvelope)
+async def get_github_delivery_authority_report():
+    return ApiEnvelope(data=service.get_github_delivery_authority_report())
+
+
+@app.get("/supervisor/local-cleanup-readiness-report", response_model=ApiEnvelope)
+async def get_local_cleanup_readiness_report():
+    return ApiEnvelope(data=service.get_local_cleanup_readiness_report())
+
+
+@app.get("/supervisor/remote-cleanup-sync-readiness-report", response_model=ApiEnvelope)
+async def get_remote_cleanup_sync_readiness_report():
+    return ApiEnvelope(data=service.get_remote_cleanup_sync_readiness_report())
+
+
+@app.get("/supervisor/trusted-autonomy-readiness-report", response_model=ApiEnvelope)
+async def get_trusted_autonomy_readiness_report():
+    return ApiEnvelope(data=service.get_trusted_autonomy_readiness_report())
+
+
+@app.get("/supervisor/epic-6-completion-audit-report", response_model=ApiEnvelope)
+async def get_epic_6_completion_audit_report():
+    return ApiEnvelope(data=service.get_epic_6_completion_audit_report())
 
 
 @app.get("/supervisor/delivery-readiness-policy-report", response_model=ApiEnvelope)

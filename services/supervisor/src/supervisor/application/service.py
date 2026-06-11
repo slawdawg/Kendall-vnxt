@@ -15,6 +15,18 @@ from supervisor.api.schemas import (
     AuditEventView,
     AuthorityReadinessFamilyView,
     AuthorityReadinessMatrixReportView,
+    CandidateWorkBmadImportRequest,
+    CandidateWorkCreate,
+    CandidateWorkUpdate,
+    CandidateWorkView,
+    ClaudeReadinessCheckView,
+    ClaudeReviewApprovalReportView,
+    ClaudeReviewApprovalRequirementView,
+    ClaudeReviewReadinessReportView,
+    CodexImplementationApprovalReportView,
+    CodexImplementationApprovalRequirementView,
+    CodexReadinessCheckView,
+    CodexReadinessReportView,
     DashboardE2EReportView,
     DashboardE2ERunnerView,
     DeliveryReadinessPolicyItemView,
@@ -28,19 +40,29 @@ from supervisor.api.schemas import (
     ExecutionConfigurationCheckView,
     ExecutionConfigurationChecksView,
     ExecutionAttemptView,
+    EpicCompletionAuditItemView,
+    EpicCompletionAuditReportView,
     ExecutionReadinessAttemptSummaryView,
     ExecutionReadinessOutcomeEvidenceView,
     ExecutionReadinessReportView,
     ExecutionStateBoundaryView,
     DisabledProviderProofView,
     GitHubWorkflowPolicyItemView,
+    GitHubDeliveryAuthorityReportView,
+    GitHubDeliveryAuthorityStepView,
     GitHubWorkflowPolicyReportView,
+    GitHygieneReportView,
+    GitHygieneSignalView,
+    GitHygieneWorktreeView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
     LocalEvidencePacketView,
+    LocalCleanupPolicyItemView,
+    LocalCleanupReadinessReportView,
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
+    LocalWorktreePlanView,
     ManagedRecipePolicyReportView,
     MaintenanceActionPlanReportView,
     MaintenanceActionPlanStepView,
@@ -51,6 +73,8 @@ from supervisor.api.schemas import (
     PremiumApprovalEvidenceView,
     PremiumApprovalRequestView,
     ProviderEnablementPolicyStepView,
+    RemoteCleanupSyncPolicyItemView,
+    RemoteCleanupSyncReadinessReportView,
     RuntimeEvidenceExportBoundaryView,
     RuntimeEvidenceReviewManifestView,
     RuntimeEvidenceReviewNavigatorItemView,
@@ -70,8 +94,12 @@ from supervisor.api.schemas import (
     SubscriptionHandoffPackageView,
     SupervisorReportCatalogEntryView,
     SupervisorReportCatalogView,
+    TaskPacketPreviewView,
+    TaskPacketV0View,
     ThreatBoundaryRuleView,
     ThreatBoundaryView,
+    TrustedAutonomyReadinessGateView,
+    TrustedAutonomyReadinessReportView,
     VerificationCommandView,
     VerificationCommandGroupView,
     VerificationHandoffCheckpointView,
@@ -103,6 +131,7 @@ from supervisor.api.schemas import (
     WorkItemView,
 )
 from supervisor.config.settings import Settings
+from supervisor.domain.bmad_import import parse_bmad_import_package
 from supervisor.domain.disabled_provider_adapter import DisabledLocalProviderAdapter
 from supervisor.domain.local_readonly_worker import MockLocalReadonlyWorkerAdapter
 from supervisor.domain.ollama_provider_adapter import OllamaProviderAdapter
@@ -117,10 +146,10 @@ from supervisor.domain.routing import (
 )
 from supervisor.domain.summaries import default_status_summary, mode_summary, next_step_summary
 from supervisor.domain.subscription_launch import DisabledSubscriptionLaunchAdapter, SubscriptionLaunchRegistry
-from supervisor.domain.types import AuditMode, BmadLane, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
+from supervisor.domain.types import AuditMode, BmadLane, CandidateWorkStatus, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
-from supervisor.infrastructure.db.models import AuditEvent, ExecutionAttempt, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
+from supervisor.infrastructure.db.models import AuditEvent, CandidateWork, ExecutionAttempt, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
 from supervisor.infrastructure.streaming.bus import EventBus
 
 
@@ -300,6 +329,146 @@ class SupervisorService:
     async def list_work_items(self, session: AsyncSession) -> list[WorkItem]:
         result = await session.execute(select(WorkItem).order_by(WorkItem.created_at.desc()))
         return list(result.scalars())
+
+    async def create_candidate_work(self, session: AsyncSession, payload: CandidateWorkCreate) -> CandidateWork:
+        candidate = CandidateWork(
+            title=payload.title,
+            requested_outcome=payload.requestedOutcome,
+            source=payload.source.value,
+            source_artifact_path=payload.sourceArtifactPath,
+            source_artifact_type=payload.sourceArtifactType.value,
+            risk_level=payload.riskLevel.value,
+            priority=payload.priority.value,
+            sort_order=payload.sortOrder,
+            import_metadata_json=dict(payload.importMetadata),
+            status=CandidateWorkStatus.PROPOSED.value,
+        )
+        session.add(candidate)
+        await session.commit()
+        await session.refresh(candidate)
+        await self._publish_candidate_work(candidate)
+        return candidate
+
+    async def import_bmad_candidate_work(self, session: AsyncSession, payload: CandidateWorkBmadImportRequest) -> CandidateWork:
+        repo_root = Path(__file__).resolve().parents[5]
+        package = parse_bmad_import_package(repo_root, payload.artifactPath)
+        return await self.create_candidate_work(
+            session,
+            CandidateWorkCreate(
+                title=package.title,
+                requestedOutcome=package.requested_outcome,
+                source="bmad",
+                sourceArtifactPath=package.source_artifact_path,
+                sourceArtifactType=package.source_artifact_type,
+                riskLevel=package.risk_level,
+                priority=package.recommended_priority,
+                sortOrder=payload.sortOrder,
+                importMetadata={
+                    "artifactTitle": package.artifact_title,
+                    "storyId": package.story_id,
+                    "epicId": package.epic_id,
+                    "acceptanceCriteria": package.acceptance_criteria,
+                    "verificationSummary": package.verification_summary,
+                    "allowedScope": package.allowed_scope,
+                    "notes": list(package.notes),
+                    "retentionPolicy": "metadata_only_no_raw_artifact_content",
+                },
+            ),
+        )
+
+    async def list_candidate_work(self, session: AsyncSession) -> list[CandidateWork]:
+        result = await session.execute(select(CandidateWork).order_by(CandidateWork.sort_order.asc(), CandidateWork.created_at.desc()))
+        return list(result.scalars())
+
+    async def update_candidate_work(self, session: AsyncSession, candidate_work_id: str, payload: CandidateWorkUpdate) -> CandidateWork | None:
+        candidate = await session.get(CandidateWork, candidate_work_id)
+        if not candidate:
+            return None
+
+        if payload.status is not None:
+            candidate.status = payload.status.value
+            if payload.status == CandidateWorkStatus.APPROVED and candidate.approved_at is None:
+                candidate.approved_at = datetime.now(timezone.utc)
+            elif payload.status != CandidateWorkStatus.APPROVED:
+                candidate.approved_at = None
+        if payload.priority is not None:
+            candidate.priority = payload.priority.value
+        if payload.riskLevel is not None:
+            candidate.risk_level = payload.riskLevel.value
+        if payload.sortOrder is not None:
+            candidate.sort_order = payload.sortOrder
+
+        candidate.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+        await session.refresh(candidate)
+        await self._publish_candidate_work(candidate)
+        return candidate
+
+    async def promote_candidate_work(self, session: AsyncSession, candidate_work_id: str) -> tuple[CandidateWork, WorkItem] | None:
+        candidate = await session.get(CandidateWork, candidate_work_id)
+        if not candidate:
+            return None
+        if candidate.status != CandidateWorkStatus.APPROVED.value:
+            raise ValueError("Candidate work must be approved before promotion.")
+        if candidate.promoted_work_item_id:
+            raise ValueError("Candidate work has already been promoted.")
+
+        import_metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+        item_metadata = {
+            "candidateWorkId": candidate.id,
+            "candidatePriority": candidate.priority,
+            "candidateSortOrder": candidate.sort_order,
+            "sourceArtifactPath": candidate.source_artifact_path,
+            "sourceArtifactType": candidate.source_artifact_type,
+            "source": candidate.source,
+            "importMetadata": import_metadata,
+        }
+        verification_summary = import_metadata.get("verificationSummary")
+        acceptance_criteria = import_metadata.get("acceptanceCriteria")
+        if isinstance(verification_summary, str) and verification_summary:
+            item_metadata["verificationSummary"] = verification_summary
+        if isinstance(acceptance_criteria, str) and acceptance_criteria:
+            item_metadata["acceptanceCriteriaSummary"] = acceptance_criteria
+
+        item = WorkItem(
+            title=candidate.title,
+            requested_outcome=candidate.requested_outcome,
+            source=f"candidate_work:{candidate.id}",
+            details=None,
+            risk_level=candidate.risk_level,
+            metadata_json=item_metadata,
+            state=WorkflowState.QUEUED.value,
+            lane=None,
+            status_summary=default_status_summary(WorkflowState.QUEUED),
+            blocked_reason=None,
+            next_step=next_step_summary(WorkflowState.QUEUED),
+            requires_audit=candidate.risk_level in {"medium", "high"},
+            audit_mode=AuditMode.NONE.value,
+        )
+        session.add(item)
+        await session.flush()
+        candidate.promoted_work_item_id = item.id
+        candidate.updated_at = datetime.now(timezone.utc)
+        await self._record_event(
+            session,
+            item,
+            "candidate_work.promoted",
+            "Proposed work was moved into active work.",
+            {
+                "candidateWorkId": candidate.id,
+                "sourceArtifactPath": candidate.source_artifact_path,
+                "sourceArtifactType": candidate.source_artifact_type,
+                "candidatePriority": candidate.priority,
+                "candidateSortOrder": candidate.sort_order,
+                "importMetadata": import_metadata,
+            },
+        )
+        await session.commit()
+        await session.refresh(candidate)
+        await session.refresh(item)
+        await self._publish_candidate_work(candidate)
+        await self._publish_item(item)
+        return candidate, item
 
     def list_execution_recipes(self) -> list[WorkItemExecutionRecipeView]:
         return [self._to_execution_recipe_view(recipe) for recipe in EXECUTION_RECIPES.values()]
@@ -1435,6 +1604,100 @@ class SupervisorService:
                 ],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="git-hygiene-report-v1",
+                label="Git hygiene report",
+                endpoint="GET /supervisor/git-hygiene-report",
+                status="active",
+                summary="Shows read-only repository, worktree, branch, PR, and CI hygiene signals before delivery automation is approved.",
+                evidenceScope=["local Git status", "branch and upstream status", "worktree inventory", "PR/CI query posture"],
+                relatedDocs=["docs/stories/6-14-git-hygiene-read-only.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="codex-readiness-report-v1",
+                label="Codex readiness report",
+                endpoint="GET /supervisor/codex-readiness-report",
+                status="active",
+                summary="Shows no-launch Codex CLI discovery, auth-check posture, worker-launch stop lines, and source-mutation boundaries.",
+                evidenceScope=["PATH discovery", "auth check posture", "worker launch boundary", "source mutation boundary"],
+                relatedDocs=["docs/stories/6-16-codex-readiness-no-launch.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="codex-implementation-approval-report-v1",
+                label="Codex implementation approval report",
+                endpoint="GET /supervisor/codex-implementation-approval-report",
+                status="active",
+                summary="Defines the exact approval packet for a future bounded Codex implementation run without launching Codex.",
+                evidenceScope=["approval request", "isolated worktree scope", "path boundaries", "verification and rollback evidence"],
+                relatedDocs=["docs/stories/6-17-codex-implementation-approval-packet.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="claude-review-readiness-report-v1",
+                label="Claude review readiness report",
+                endpoint="GET /supervisor/claude-review-readiness-report",
+                status="active",
+                summary="Shows no-launch Claude CLI discovery, review-only policy, scarcity controls, and stop lines.",
+                evidenceScope=["PATH discovery", "review-only posture", "scarce-use policy", "source mutation boundary"],
+                relatedDocs=["docs/stories/6-18-claude-readiness-no-launch.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="claude-review-approval-report-v1",
+                label="Claude review approval report",
+                endpoint="GET /supervisor/claude-review-approval-report",
+                status="active",
+                summary="Defines the exact approval packet for a future bounded Claude adversarial review without launching Claude.",
+                evidenceScope=["review trigger", "context scope", "no-edit boundary", "scarcity controls", "output contract"],
+                relatedDocs=["docs/stories/6-19-claude-review-approval-packet.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="github-delivery-authority-report-v1",
+                label="GitHub delivery authority report",
+                endpoint="GET /supervisor/github-delivery-authority-report",
+                status="active",
+                summary="Defines the progressive approval ladder for push, PR, CI, review resolution, merge, and remote cleanup without remote writes.",
+                evidenceScope=["push approval", "PR approval", "CI wait approval", "merge approval", "remote cleanup boundary"],
+                relatedDocs=["docs/stories/6-20-github-delivery-authority-ladder.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="local-cleanup-readiness-report-v1",
+                label="Local cleanup readiness report",
+                endpoint="GET /supervisor/local-cleanup-readiness-report",
+                status="active",
+                summary="Defines evidence and stop lines for future local worktree, branch, and artifact cleanup without deleting anything.",
+                evidenceScope=["cleanup policy", "retained evidence", "blocked targets", "worktree and branch removal boundaries"],
+                relatedDocs=["docs/stories/6-21-local-cleanup-readiness.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="remote-cleanup-sync-readiness-report-v1",
+                label="Remote cleanup and sync readiness report",
+                endpoint="GET /supervisor/remote-cleanup-sync-readiness-report",
+                status="active",
+                summary="Defines readiness for future remote branch cleanup and GitHub issue/story sync without remote mutation.",
+                evidenceScope=["remote branch cleanup", "GitHub issue sync", "story status sync", "remote mutation boundaries"],
+                relatedDocs=["docs/stories/6-22-remote-cleanup-sync-readiness.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="trusted-autonomy-readiness-report-v1",
+                label="Trusted autonomy readiness report",
+                endpoint="GET /supervisor/trusted-autonomy-readiness-report",
+                status="active",
+                summary="Defines graduation gates for future low-risk autonomy without enabling autonomous execution.",
+                evidenceScope=["low-risk eligibility", "graduation gates", "blocked work", "autonomy stop lines"],
+                relatedDocs=["docs/stories/6-23-trusted-autonomy-readiness.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="epic-6-completion-audit-report-v1",
+                label="Epic 6 completion audit",
+                endpoint="GET /supervisor/epic-6-completion-audit-report",
+                status="active",
+                summary="Shows Epic 6 completion evidence, remaining blockers, and the next approval needed before delivery work continues.",
+                evidenceScope=["Epic 6 local stack", "delivery packaging plan", "authority gates", "completion blockers"],
+                relatedDocs=[
+                    "docs/goals/epic-6-progress-and-kickoff-2026-06-10.md",
+                    "docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md",
+                    "docs/stories/6-24-epic-6-completion-audit.md",
+                ],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
                 label="Delivery readiness policy report",
                 endpoint="GET /supervisor/delivery-readiness-policy-report",
@@ -2321,6 +2584,909 @@ class SupervisorService:
             remoteAutomationApproved=False,
         )
 
+    def get_git_hygiene_report(self) -> GitHygieneReportView:
+        repo_root = self._repo_root() or str(Path.cwd())
+        branch_ok, branch_output = self._git_hygiene_output(["git", "branch", "--show-current"], repo_root)
+        head_ok, head_output = self._git_hygiene_output(["git", "rev-parse", "--short", "HEAD"], repo_root)
+        upstream_ok, upstream_output = self._git_hygiene_output(
+            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            repo_root,
+        )
+        status_ok, status_output = self._git_hygiene_output(["git", "status", "--porcelain=v1"], repo_root)
+        worktree_ok, worktree_output = self._git_hygiene_output(["git", "worktree", "list", "--porcelain"], repo_root)
+
+        status_counts = self._git_hygiene_status_counts(status_output if status_ok else "")
+        working_tree_status = "clean" if status_ok and not status_output.strip() else "attention"
+        current_branch = branch_output if branch_ok and branch_output else ("detached" if head_ok else "unknown")
+        head_revision = head_output if head_ok else "unknown"
+        upstream_branch = upstream_output if upstream_ok and upstream_output else None
+        worktrees = self._parse_git_worktrees(worktree_output if worktree_ok else "")
+
+        return GitHygieneReportView(
+            reportId="git-hygiene-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only Git hygiene snapshot for the current repository, isolated worktrees, branch posture, "
+                "and PR/CI query readiness. It does not push, pull, merge, create PRs, wait for CI, or clean up files."
+            ),
+            repoRoot=repo_root,
+            currentBranch=current_branch,
+            headRevision=head_revision,
+            upstreamBranch=upstream_branch,
+            workingTreeStatus=working_tree_status,
+            statusCounts=status_counts,
+            worktrees=worktrees,
+            localSignals=[
+                GitHygieneSignalView(
+                    signalId="working-tree",
+                    label="Working tree",
+                    status=working_tree_status,
+                    summary=(
+                        "No local file changes are visible to Git."
+                        if working_tree_status == "clean"
+                        else "Local file changes are visible and should be reviewed before delivery."
+                    ),
+                    evidence=["git status --porcelain=v1", f"changed={sum(status_counts.values())}"],
+                ),
+                GitHygieneSignalView(
+                    signalId="branch",
+                    label="Current branch",
+                    status="detached" if current_branch == "detached" else "detected",
+                    summary=f"Current branch is {current_branch}.",
+                    evidence=["git branch --show-current", f"HEAD {head_revision}"],
+                ),
+                GitHygieneSignalView(
+                    signalId="upstream",
+                    label="Upstream tracking",
+                    status="configured" if upstream_branch else "not_configured",
+                    summary=(
+                        f"Branch tracks {upstream_branch}."
+                        if upstream_branch
+                        else "No upstream branch is configured for the current branch."
+                    ),
+                    evidence=["git rev-parse --abbrev-ref --symbolic-full-name @{u}"],
+                ),
+                GitHygieneSignalView(
+                    signalId="worktrees",
+                    label="Worktree inventory",
+                    status="detected" if worktrees else "unavailable",
+                    summary=f"{len(worktrees)} local worktree(s) are visible to Git.",
+                    evidence=["git worktree list --porcelain"],
+                ),
+            ],
+            remoteSignals=[
+                GitHygieneSignalView(
+                    signalId="pull-request",
+                    label="Pull request",
+                    status="not_queried",
+                    summary="No GitHub PR lookup was performed by this read-only local report.",
+                    evidence=["Use the GitHub connector or `pnpm run doctor:github -- --remote` only when remote checks are approved."],
+                ),
+                GitHygieneSignalView(
+                    signalId="ci",
+                    label="CI checks",
+                    status="not_queried",
+                    summary="No remote CI lookup or wait was performed by this read-only local report.",
+                    evidence=["CI evidence remains a delivery-readiness record, not an automatic action."],
+                ),
+            ],
+            stopLines=[
+                "This report is not approval to push, pull, create PRs, wait for CI, merge, delete branches, or remove worktrees.",
+                "Remote GitHub writes remain blocked until explicit operator approval names the action and scope.",
+                "Cleanup remains blocked until local cleanup policy and evidence retention are implemented.",
+            ],
+            nextSafeActions=[
+                "Review changed-file counts before preparing delivery.",
+                "Use isolated worktrees for implementation stories before source mutation authority expands.",
+                "Record PR and CI evidence through delivery readiness surfaces after remote delivery is approved.",
+            ],
+            readOnly=True,
+            remoteMutationApproved=False,
+            cleanupApproved=False,
+        )
+
+    def get_codex_readiness_report(self) -> CodexReadinessReportView:
+        cli_path = shutil.which("codex") or shutil.which("codex.cmd")
+        cli_detected = bool(cli_path)
+        return CodexReadinessReportView(
+            reportId="codex-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "No-launch Codex readiness report. It discovers whether a Codex CLI executable is on PATH, "
+                "but does not run Codex, check auth, start a session, send a task, write files, or mutate source."
+            ),
+            cliPath=cli_path,
+            checks=[
+                CodexReadinessCheckView(
+                    checkId="cli-discovery",
+                    label="CLI discovery",
+                    status="available" if cli_detected else "not_found",
+                    summary=(
+                        "A Codex CLI executable was found on PATH."
+                        if cli_detected
+                        else "No Codex CLI executable was found on PATH."
+                    ),
+                    evidence=["shutil.which('codex')", "shutil.which('codex.cmd')"],
+                ),
+                CodexReadinessCheckView(
+                    checkId="auth-posture",
+                    label="Auth posture",
+                    status="not_checked",
+                    summary="No Codex auth or account command was executed by this report.",
+                    evidence=["Auth checks require an explicit successor story or operator-approved manual command."],
+                ),
+                CodexReadinessCheckView(
+                    checkId="worker-launch",
+                    label="Worker launch",
+                    status="blocked",
+                    summary="Codex worker process launch remains blocked pending explicit authority.",
+                    evidence=["Story 6.16 is no-launch readiness only."],
+                ),
+                CodexReadinessCheckView(
+                    checkId="source-mutation",
+                    label="Source mutation",
+                    status="blocked",
+                    summary="Codex source mutation remains blocked until isolated worktree, path scope, tests, and approval binding are implemented.",
+                    evidence=["Story 6.17 is the first bounded implementation authority candidate."],
+                ),
+            ],
+            stopLines=[
+                "This report does not approve Codex CLI process launch.",
+                "This report does not approve sending tasks, prompts, repository context, or credentials to Codex.",
+                "This report does not approve source mutation, command execution, Git operations, GitHub delivery, or merge.",
+            ],
+            nextSafeActions=[
+                "Use this report to decide whether a future manual Codex availability check is needed.",
+                "Keep bounded Codex implementation behind isolated worktree, path scope, verification, and explicit approval.",
+                "Use Claude review only through its separate scarce-review authority path.",
+            ],
+            readOnly=True,
+            processLaunchApproved=False,
+            workerTaskExecutionApproved=False,
+            sourceMutationApproved=False,
+        )
+
+    def get_codex_implementation_approval_report(self) -> CodexImplementationApprovalReportView:
+        return CodexImplementationApprovalReportView(
+            reportId="codex-implementation-approval-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only approval packet for the first future bounded Codex implementation run. "
+                "It does not launch Codex, send a task, inspect auth, create a worktree, write source, run Git, or execute shell commands."
+            ),
+            approvalPrompt=(
+                "Approve one bounded Codex implementation attempt for the selected work item only, in an isolated worktree, "
+                "limited to the listed paths and verification commands, with metadata evidence retained and stop conditions enforced."
+            ),
+            authorityFamily="codex_implementation",
+            operation="one_time_bounded_implementation_attempt",
+            targetScope=[
+                "One named Active work item or story.",
+                "One isolated local worktree created by the approved worktree-management path.",
+                "One Codex worker task packet generated from existing supervisor evidence.",
+            ],
+            allowedPaths=[
+                "docs/stories/<approved-story>.md",
+                "services/supervisor/** only when the approved story requires backend behavior",
+                "apps/dashboard/** only when the approved story requires Dev Console behavior",
+                "packages/contracts/** only when API/dashboard contracts change",
+                "tests/** only for verification tied to the approved story",
+                "scripts/** only for drift checks tied to the approved story",
+            ],
+            blockedPaths=[
+                ".env and credential files",
+                ".git/**",
+                "node_modules/**",
+                "services/supervisor/.venv/**",
+                "Any path outside the approved worktree",
+                "Any unrelated source, docs, or generated output not named by the approval",
+            ],
+            expectedCommandShape=[
+                "codex <non-interactive task mode> --cwd <approved-worktree> -- <bounded task packet>",
+                "pnpm.cmd run check or narrower approved verification command",
+                "git diff --stat and git status --short for evidence only",
+            ],
+            requiredEvidence=[
+                "approval text with authority family, operation, target story, allowed paths, expected command shape, and stop conditions",
+                "worktree path, branch, base revision, and task packet id",
+                "Codex process start/finish metadata without raw prompt or completion retention",
+                "changed-file list and diffstat",
+                "verification commands and exit codes",
+                "rollback or cleanup recommendation",
+            ],
+            rollbackPlan=[
+                "Leave all changes in the isolated worktree until Bob reviews them.",
+                "If verification fails, keep the branch blocked and retain failure evidence.",
+                "Do not push, merge, delete branches, or remove the worktree without separate authority.",
+                "Use Git diff/status evidence to decide whether to repair, abandon, or manually inspect the attempt.",
+            ],
+            stopConditions=[
+                "Codex attempts to read or write outside the approved worktree or allowed paths.",
+                "Codex asks for credentials, secrets, browser session access, or external account changes.",
+                "The task packet expands beyond the approved story or requested operation.",
+                "Verification fails in a way that cannot be repaired within the approved scope.",
+                "The run would require GitHub remote writes, merge, cleanup, Claude review, or a new provider/model authority.",
+            ],
+            requirements=[
+                CodexImplementationApprovalRequirementView(
+                    requirementId="isolated-worktree",
+                    label="Isolated worktree",
+                    status="required",
+                    summary="The run must happen in a named local worktree with branch and base revision evidence.",
+                    evidence=["Story 6.15 local worktree plan", "git status --short", "git diff --stat"],
+                ),
+                CodexImplementationApprovalRequirementView(
+                    requirementId="path-scope",
+                    label="Path scope",
+                    status="required",
+                    summary="Allowed and blocked paths must be named before any Codex task execution.",
+                    evidence=["allowedPaths", "blockedPaths", "approval text"],
+                ),
+                CodexImplementationApprovalRequirementView(
+                    requirementId="verification",
+                    label="Verification",
+                    status="required",
+                    summary="The approval must name the focused and broad checks that prove the attempt.",
+                    evidence=["pnpm.cmd run check", "focused supervisor/dashboard checks when applicable"],
+                ),
+                CodexImplementationApprovalRequirementView(
+                    requirementId="retention",
+                    label="Evidence retention",
+                    status="metadata_only",
+                    summary="Store process/task metadata and verification evidence, not raw prompt or completion bodies.",
+                    evidence=["task packet id", "exit code", "changed-file list", "verification command output summary"],
+                ),
+                CodexImplementationApprovalRequirementView(
+                    requirementId="approval-binding",
+                    label="Approval binding",
+                    status="not_implemented",
+                    summary="The backend does not yet bind a recorded approval to a real Codex launch.",
+                    evidence=["processLaunchApproved=false", "workerTaskExecutionApproved=false", "sourceMutationApproved=false"],
+                ),
+            ],
+            nextSafeActions=[
+                "Use this packet to ask Bob for one story-scoped Codex implementation authority when ready.",
+                "Add approval binding before any backend endpoint can launch Codex.",
+                "Keep Claude review, GitHub delivery, merge, and cleanup on separate authority paths.",
+            ],
+            readOnly=True,
+            processLaunchApproved=False,
+            workerTaskExecutionApproved=False,
+            sourceMutationApproved=False,
+            approvalBindingImplemented=False,
+        )
+
+    def get_claude_review_readiness_report(self) -> ClaudeReviewReadinessReportView:
+        cli_path = shutil.which("claude") or shutil.which("claude.cmd")
+        cli_detected = bool(cli_path)
+        return ClaudeReviewReadinessReportView(
+            reportId="claude-review-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "No-launch Claude review readiness report. It discovers whether a Claude CLI executable is on PATH, "
+                "but does not run Claude, check auth, start a session, send code or diffs, write files, or consume review budget."
+            ),
+            cliPath=cli_path,
+            reviewPolicy=[
+                ClaudeReadinessCheckView(
+                    checkId="cli-discovery",
+                    label="CLI discovery",
+                    status="available" if cli_detected else "not_found",
+                    summary=(
+                        "A Claude CLI executable was found on PATH."
+                        if cli_detected
+                        else "No Claude CLI executable was found on PATH."
+                    ),
+                    evidence=["shutil.which('claude')", "shutil.which('claude.cmd')"],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="auth-posture",
+                    label="Auth posture",
+                    status="not_checked",
+                    summary="No Claude auth, account, model, or subscription command was executed by this report.",
+                    evidence=["Auth checks require explicit successor approval before any CLI invocation."],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="review-only",
+                    label="Review-only posture",
+                    status="blocked",
+                    summary="Claude review execution remains blocked until a successor story proves review-only invocation behavior.",
+                    evidence=["Story 6.18 is no-launch readiness only.", "Source mutation is not approved for Claude review."],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="source-mutation",
+                    label="Source mutation",
+                    status="blocked",
+                    summary="Claude must not edit files unless Bob later grants a separate explicit edit-mode authority.",
+                    evidence=["Current Claude lane is scarce adversarial review, not routine implementation."],
+                ),
+            ],
+            scarcityPolicy=[
+                ClaudeReadinessCheckView(
+                    checkId="scarce-use",
+                    label="Scarce use",
+                    status="required",
+                    summary="Claude is reserved for adversarial review, high-risk changes, security-sensitive diffs, and checks on Codex output.",
+                    evidence=["User preference: Claude is a limited $20/month subscription for review, not routine generation."],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="budget-record",
+                    label="Budget record",
+                    status="not_implemented",
+                    summary="The supervisor does not yet record Claude review budget usage or monthly scarcity limits.",
+                    evidence=["Story 6.19 is the first bounded Claude review authority candidate."],
+                ),
+                ClaudeReadinessCheckView(
+                    checkId="review-trigger",
+                    label="Review trigger",
+                    status="policy_pending",
+                    summary="High-risk or explicitly approved work should trigger Claude review only after review-only behavior is proven.",
+                    evidence=["Security-sensitive diffs", "Broad architectural changes", "Codex output flaw-finding"],
+                ),
+            ],
+            stopLines=[
+                "This report does not approve Claude CLI process launch.",
+                "This report does not approve sending code, diffs, prompts, repository context, or credentials to Claude.",
+                "This report does not approve source mutation, command execution, Git operations, GitHub delivery, merge, or cleanup.",
+                "This report does not approve consuming scarce Claude subscription usage.",
+            ],
+            nextSafeActions=[
+                "Use this report to decide whether a future manual Claude availability check is needed.",
+                "Define a review-only command shape before bounded Claude review execution.",
+                "Keep Claude scarce-use policy separate from Codex implementation and GitHub delivery authority.",
+            ],
+            readOnly=True,
+            processLaunchApproved=False,
+            reviewTaskExecutionApproved=False,
+            sourceMutationApproved=False,
+            scarceUseApproved=False,
+        )
+
+    def get_claude_review_approval_report(self) -> ClaudeReviewApprovalReportView:
+        return ClaudeReviewApprovalReportView(
+            reportId="claude-review-approval-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only approval packet for a future bounded Claude adversarial review. "
+                "It does not launch Claude, send code or diffs, consume subscription usage, write files, or mutate workflow state."
+            ),
+            approvalPrompt=(
+                "Approve one bounded Claude review-only attempt for the selected work item only, using the listed context scope, "
+                "scarcity controls, output contract, and stop conditions. Claude may produce findings only; file edits remain blocked."
+            ),
+            authorityFamily="claude_review",
+            operation="one_time_bounded_review_only_attempt",
+            triggerPolicy=[
+                ClaudeReviewApprovalRequirementView(
+                    requirementId="explicit-request",
+                    label="Explicit request",
+                    status="allowed",
+                    summary="Bob can explicitly request Claude review for a named work item or diff.",
+                    evidence=["approvalPrompt", "target work item id", "review reason"],
+                ),
+                ClaudeReviewApprovalRequirementView(
+                    requirementId="high-risk-diff",
+                    label="High-risk diff",
+                    status="allowed",
+                    summary="Security-sensitive, broad, or architecture-changing diffs can qualify for scarce review.",
+                    evidence=["riskLevel=high", "security-sensitive paths", "architecture decision impact"],
+                ),
+                ClaudeReviewApprovalRequirementView(
+                    requirementId="codex-output-check",
+                    label="Codex output check",
+                    status="allowed",
+                    summary="Claude can review Codex output for flaws after Codex implementation authority is separately approved.",
+                    evidence=["Codex changed-file list", "verification summary", "review question"],
+                ),
+                ClaudeReviewApprovalRequirementView(
+                    requirementId="routine-generation",
+                    label="Routine generation",
+                    status="blocked",
+                    summary="Claude is not a routine generation or implementation lane.",
+                    evidence=["scarceUseApproved=false", "sourceMutationApproved=false"],
+                ),
+            ],
+            contextScope=[
+                "Named work item, story, or PR/diff summary.",
+                "Changed-file list and bounded diff excerpts only when approved.",
+                "Relevant architecture/product docs needed to judge risk.",
+                "Verification results and known failure summaries.",
+                "A precise review question and expected finding format.",
+            ],
+            blockedInputs=[
+                "Credentials, tokens, secrets, cookies, browser sessions, or account data.",
+                "Raw unrelated repository context.",
+                "Private data not required for the review question.",
+                "Instructions to edit files, run commands, push branches, merge, or clean up.",
+                "Any context outside the approved work item or review scope.",
+            ],
+            expectedCommandShape=[
+                "claude <review-only non-interactive mode> --cwd <approved-worktree> -- <bounded review packet>",
+                "No write flags, no shell execution request, and no edit-mode approval.",
+                "Supervisor records metadata, review reason, context scope, exit status, and findings artifact location.",
+            ],
+            outputContract=[
+                "Risk-ranked findings with file/path references where applicable.",
+                "False-positive tolerant critique; no implementation patch is expected.",
+                "Explicit statement if no material issues are found.",
+                "Questions or blockers that require Bob rather than autonomous expansion.",
+            ],
+            requiredEvidence=[
+                "approval text with authority family, operation, target work item, review reason, and context scope",
+                "scarce-use reason and review trigger",
+                "bounded context manifest without raw secrets",
+                "Claude process metadata without raw prompt retention",
+                "findings artifact summary and verification follow-up recommendation",
+            ],
+            scarcityControls=[
+                "One Claude review attempt per approval unless Bob grants a wider policy.",
+                "Do not use Claude for routine generation, low-risk changes, formatting, or ordinary docs cleanup.",
+                "Record why Codex, Ollama, deterministic checks, or human review were insufficient.",
+                "Stop before retrying or expanding context if the review fails or asks for more authority.",
+            ],
+            stopConditions=[
+                "Claude invocation would require credentials, secrets, account state, or browser/session access.",
+                "Claude would edit files, run commands, or mutate Git/GitHub state.",
+                "The review packet expands beyond the approved work item, diff, or question.",
+                "The review would consume scarce subscription usage without a recorded reason.",
+                "The review output requires implementation, merge, delivery, or cleanup authority.",
+            ],
+            nextSafeActions=[
+                "Use this packet to ask Bob for one review-only Claude authority when a high-risk work item is ready.",
+                "Implement approval binding before any endpoint can launch Claude.",
+                "Keep implementation fixes, GitHub delivery, and cleanup on separate authority paths.",
+            ],
+            readOnly=True,
+            processLaunchApproved=False,
+            reviewTaskExecutionApproved=False,
+            sourceMutationApproved=False,
+            scarceUseApproved=False,
+            approvalBindingImplemented=False,
+        )
+
+    def get_github_delivery_authority_report(self) -> GitHubDeliveryAuthorityReportView:
+        return GitHubDeliveryAuthorityReportView(
+            reportId="github-delivery-authority-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only GitHub delivery authority ladder. It documents the progressive approvals needed for remote delivery "
+                "without pushing, creating PRs, waiting for CI, resolving review comments, merging, or deleting remote branches."
+            ),
+            authorityFamily="github_delivery",
+            approvalPrompt=(
+                "Approve only the named GitHub delivery step for the selected branch/PR, with required evidence retained and stop conditions enforced."
+            ),
+            ladder=[
+                GitHubDeliveryAuthorityStepView(
+                    stepId="push-branch",
+                    label="Push branch",
+                    status="blocked",
+                    summary="Push a named local branch to origin only after branch, diffstat, and target remote are approved.",
+                    requiredApproval="branch-scoped push approval",
+                    evidence=["git status --short", "git diff --stat", "target remote and branch name"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="open-or-update-pr",
+                    label="Open or update PR",
+                    status="blocked",
+                    summary="Create or update one pull request only after title, body, base branch, and source branch are approved.",
+                    requiredApproval="PR-scoped create/update approval",
+                    evidence=["PR title/body", "base branch", "source branch", "linked story evidence"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="wait-for-ci",
+                    label="Wait for CI",
+                    status="blocked",
+                    summary="Read CI status only after remote checks are approved for the named PR or commit.",
+                    requiredApproval="read-only CI wait approval",
+                    evidence=["PR number or commit sha", "check suite summary", "timeout"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="resolve-review-comments",
+                    label="Resolve review comments",
+                    status="blocked",
+                    summary="Resolve or reply to review comments only after Bob confirms comments were addressed.",
+                    requiredApproval="comment-resolution approval",
+                    evidence=["review thread ids", "resolution summary", "verification after changes"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="merge-pr",
+                    label="Merge PR",
+                    status="blocked",
+                    summary="Merge only after PR, CI, review, and final branch evidence are ready and Bob approves the merge.",
+                    requiredApproval="PR-scoped merge approval",
+                    evidence=["green CI", "review resolved", "merge method", "post-merge target branch"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="remote-cleanup",
+                    label="Remote cleanup",
+                    status="blocked",
+                    summary="Delete remote branches or close stale remote state only after delivery completion and cleanup approval.",
+                    requiredApproval="remote cleanup approval",
+                    evidence=["merged PR", "branch name", "cleanup target", "rollback note"],
+                ),
+            ],
+            requiredEvidence=[
+                "named branch, PR, commit, or remote target for each approved step",
+                "operator approval text naming action and scope",
+                "pre-action local git status and diffstat where relevant",
+                "remote result metadata without credential retention",
+                "post-action status, URL, check result, or merge summary",
+            ],
+            rollbackPlan=[
+                "If push or PR creation fails, leave local branch untouched and record the error.",
+                "If CI fails, stop delivery and return the work item to blocked or repair status.",
+                "If review comments require changes, create a new local implementation/repair slice before merge.",
+                "If merge fails, do not retry with a different method without new approval.",
+                "Do not delete local or remote branches until cleanup authority is separately approved.",
+            ],
+            stopConditions=[
+                "The remote target, branch, PR, or merge base is ambiguous.",
+                "Local git status is dirty outside the approved delivery changes.",
+                "CI fails, review comments remain unresolved, or required evidence is missing.",
+                "The operation would expose credentials, persist plaintext tokens, or alter GitHub auth state.",
+                "The requested step expands into merge, cleanup, issue sync, or branch deletion without matching approval.",
+            ],
+            nextSafeActions=[
+                "Use this ladder to request one delivery step at a time.",
+                "Keep GitHub remote writes, merge, and cleanup separate until the system earns broader policy authority.",
+                "Record remote evidence through delivery readiness and runtime evidence surfaces after approval.",
+            ],
+            readOnly=True,
+            pushApproved=False,
+            pullRequestApproved=False,
+            ciWaitApproved=False,
+            reviewResolutionApproved=False,
+            mergeApproved=False,
+            remoteCleanupApproved=False,
+        )
+
+    def get_local_cleanup_readiness_report(self) -> LocalCleanupReadinessReportView:
+        return LocalCleanupReadinessReportView(
+            reportId="local-cleanup-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only local cleanup readiness report. It defines when completed, stale, or abandoned local work can be cleaned up "
+                "while retaining evidence, but it does not remove worktrees, delete branches, delete artifacts, or mutate files."
+            ),
+            cleanupPolicy=[
+                LocalCleanupPolicyItemView(
+                    itemId="completed-worktree",
+                    label="Completed worktree",
+                    status="approval_required",
+                    summary="A completed worktree can be removed only after merge/local-closure evidence and retained verification are present.",
+                    evidence=["clean git status", "commit hash", "verification summary", "delivery or local-closure decision"],
+                ),
+                LocalCleanupPolicyItemView(
+                    itemId="stale-worktree",
+                    label="Stale worktree",
+                    status="manual_review",
+                    summary="A stale worktree requires Bob review until the system can prove it has no unmerged useful changes.",
+                    evidence=["last commit", "branch relation", "changed-file list", "staleness reason"],
+                ),
+                LocalCleanupPolicyItemView(
+                    itemId="abandoned-attempt",
+                    label="Abandoned attempt",
+                    status="approval_required",
+                    summary="Failed or abandoned attempts can be cleaned only after failure evidence and recovery notes are retained.",
+                    evidence=["failure summary", "remaining diffstat", "reason for abandonment", "next replacement branch if any"],
+                ),
+                LocalCleanupPolicyItemView(
+                    itemId="evidence-retention",
+                    label="Evidence retention",
+                    status="required",
+                    summary="Runtime evidence, story verification, and final status must survive local cleanup.",
+                    evidence=["story file", "runtime evidence export", "verification command list", "commit id"],
+                ),
+            ],
+            requiredEvidence=[
+                "target worktree path and branch name",
+                "current git status and diffstat before cleanup",
+                "commit hash or explicit no-commit reason",
+                "verification or failure summary",
+                "delivery, abandonment, or local-only closure decision",
+                "retained evidence location after cleanup",
+            ],
+            blockedTargets=[
+                "main repository checkout",
+                "current active worktree",
+                "dirty worktree with unreviewed changes",
+                "branch without retained commit/evidence reference",
+                "runtime evidence database or exported evidence artifacts",
+                "remote branches, PRs, issues, or GitHub state",
+            ],
+            stopConditions=[
+                "The cleanup target path is ambiguous or outside the managed worktree root.",
+                "Git reports uncommitted changes that have not been reviewed.",
+                "The branch has not been merged, intentionally abandoned, or explicitly waived.",
+                "Required evidence would be deleted or become unreachable.",
+                "Cleanup would require remote branch deletion, PR closure, issue sync, or merge authority.",
+            ],
+            nextSafeActions=[
+                "Use this report to request one local cleanup target at a time.",
+                "Add a future cleanup candidate inventory before enabling removal commands.",
+                "Keep destructive removal commands behind explicit approval until repeated evidence proves the policy.",
+            ],
+            readOnly=True,
+            automaticCleanupApproved=False,
+            worktreeRemovalApproved=False,
+            branchDeletionApproved=False,
+            evidenceDeletionApproved=False,
+        )
+
+    def get_remote_cleanup_sync_readiness_report(self) -> RemoteCleanupSyncReadinessReportView:
+        return RemoteCleanupSyncReadinessReportView(
+            reportId="remote-cleanup-sync-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only remote cleanup and sync readiness report. It defines the evidence needed before remote branch deletion, "
+                "GitHub issue updates, or story status sync, but performs no GitHub mutation."
+            ),
+            syncPolicy=[
+                RemoteCleanupSyncPolicyItemView(
+                    itemId="remote-branch-cleanup",
+                    label="Remote branch cleanup",
+                    status="blocked",
+                    summary="Remote branches can be deleted only after merged/abandoned evidence and explicit branch-scoped approval.",
+                    evidence=["PR merged or closed", "remote branch name", "local retained evidence", "rollback note"],
+                ),
+                RemoteCleanupSyncPolicyItemView(
+                    itemId="issue-sync",
+                    label="Issue sync",
+                    status="blocked",
+                    summary="GitHub issues can be updated only after the target issue, status, and comment body are approved.",
+                    evidence=["issue number", "intended label/status/comment", "linked story or PR", "operator approval"],
+                ),
+                RemoteCleanupSyncPolicyItemView(
+                    itemId="story-status-sync",
+                    label="Story status sync",
+                    status="blocked",
+                    summary="Story status sync must preserve local story evidence and avoid claiming delivery that did not happen.",
+                    evidence=["story file", "delivery status", "verification summary", "PR or waiver evidence"],
+                ),
+                RemoteCleanupSyncPolicyItemView(
+                    itemId="audit-retention",
+                    label="Audit retention",
+                    status="required",
+                    summary="Every remote sync must retain before/after metadata without storing credentials or raw tokens.",
+                    evidence=["before state", "after state", "actor", "timestamp", "target URL"],
+                ),
+            ],
+            requiredEvidence=[
+                "exact remote branch, issue, PR, or story target",
+                "operator approval naming the remote operation and scope",
+                "before/after remote metadata without credential retention",
+                "local evidence retained before remote cleanup",
+                "rollback or correction plan if sync is wrong",
+            ],
+            blockedOperations=[
+                "deleting remote branches without merged or abandoned evidence",
+                "closing issues or PRs without explicit target approval",
+                "changing labels, milestones, assignees, or project fields automatically",
+                "rewriting story status without preserving local evidence",
+                "storing GitHub tokens, credentials, or session material",
+            ],
+            stopConditions=[
+                "The remote branch, issue, PR, or story target is ambiguous.",
+                "The local evidence does not prove the remote cleanup or sync is safe.",
+                "The requested operation would alter auth state or persist credentials.",
+                "The sync would claim completion without PR, merge, waiver, or local closure evidence.",
+                "The operation expands from cleanup/sync into merge, delivery, or new implementation work.",
+            ],
+            nextSafeActions=[
+                "Use this report to request one remote cleanup or sync target at a time.",
+                "Keep remote cleanup and issue sync blocked until GitHub delivery authority has landed for the work item.",
+                "Record remote sync evidence in runtime evidence exports after approval.",
+            ],
+            readOnly=True,
+            remoteBranchDeletionApproved=False,
+            issueSyncApproved=False,
+            storyStatusSyncApproved=False,
+            remoteMutationApproved=False,
+        )
+
+    def get_trusted_autonomy_readiness_report(self) -> TrustedAutonomyReadinessReportView:
+        return TrustedAutonomyReadinessReportView(
+            reportId="trusted-autonomy-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only trusted autonomy readiness report. It defines the evidence needed before low-risk repeatable workflows "
+                "can run end to end with Bob handling exceptions, but it does not approve autonomous execution."
+            ),
+            autonomyGates=[
+                TrustedAutonomyReadinessGateView(
+                    gateId="repeatable-low-risk-work",
+                    label="Repeatable low-risk work",
+                    status="not_approved",
+                    summary="Only narrow, repeatable, already-proven work can be considered for autonomy.",
+                    evidence=["synthetic proof", "real-story proof", "passing verification history"],
+                ),
+                TrustedAutonomyReadinessGateView(
+                    gateId="bounded-tools",
+                    label="Bounded tools",
+                    status="not_approved",
+                    summary="Every tool lane must have explicit path, provider, command, GitHub, and cleanup boundaries.",
+                    evidence=["authority reports", "blocked default booleans", "runtime evidence export"],
+                ),
+                TrustedAutonomyReadinessGateView(
+                    gateId="automatic-stop",
+                    label="Automatic stop",
+                    status="required",
+                    summary="The system must stop for failures, ambiguous targets, scope expansion, scarce usage, or high-risk actions.",
+                    evidence=["stopConditions", "attention queue", "work-item evidence"],
+                ),
+                TrustedAutonomyReadinessGateView(
+                    gateId="operator-visibility",
+                    label="Operator visibility",
+                    status="required",
+                    summary="The Dev Console must show live status, waiting items, attention needs, and retained evidence.",
+                    evidence=["Controls reports", "work item detail", "runtime evidence review"],
+                ),
+            ],
+            eligibleWork=[
+                "documentation-only cleanup with stable checks",
+                "deterministic report or index drift repairs",
+                "safe local evidence summarization",
+                "repeatable low-risk dashboard copy changes with focused tests",
+            ],
+            blockedWork=[
+                "Codex or Claude launch without explicit authority",
+                "provider/model expansion beyond approved Ollama boundary",
+                "GitHub push, PR, merge, issue sync, or cleanup without matching approval",
+                "source mutation outside approved paths",
+                "credential, token, auth, session, or secret handling",
+            ],
+            requiredEvidence=[
+                "history of repeated successful runs for the same workflow class",
+                "clear rollback or stop behavior",
+                "bounded path, command, provider, GitHub, and cleanup scope",
+                "runtime evidence export retained before and after automation",
+                "Bob-approved policy defining what exceptions still interrupt him",
+            ],
+            stopConditions=[
+                "The work is not low-risk, repeatable, and already proven.",
+                "Any required authority report says the action is blocked.",
+                "Verification fails or becomes flaky.",
+                "The task requests scarce Claude usage or remote GitHub mutation.",
+                "The workflow would hide evidence, delete state, or continue after ambiguity.",
+            ],
+            nextSafeActions=[
+                "Use this report to select one narrow workflow class for a future autonomy trial.",
+                "Keep all autonomy booleans false until a specific policy is approved.",
+                "Prefer Bob exceptions over silent retries when failures or scope changes occur.",
+            ],
+            readOnly=True,
+            lowRiskAutonomyApproved=False,
+            autonomousProviderUseApproved=False,
+            autonomousGitHubDeliveryApproved=False,
+            autonomousCleanupApproved=False,
+        )
+
+    def get_epic_6_completion_audit_report(self) -> EpicCompletionAuditReportView:
+        return EpicCompletionAuditReportView(
+            reportId="epic-6-completion-audit-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only Epic 6 completion audit. PR #86 is open with CI passing, but Epic 6 is not complete until "
+                "approved merge, one real BMAD story proof through done, and approved cleanup evidence are recorded."
+            ),
+            epicId="6",
+            overallStatus="blocked_pending_merge_authority",
+            completedItems=[
+                EpicCompletionAuditItemView(
+                    itemId="local-readiness-stack",
+                    label="Local readiness stack",
+                    status="prepared_locally",
+                    summary="Stories 6.3 through 6.24 have implementation evidence for proposed work, routing preview, Dev Console visibility, authority readiness reports, and completion audit visibility.",
+                    evidence=[
+                        "Candidate Work and BMAD import surfaces exist.",
+                        "Task Packet preview, fake or blocked attempts, runtime evidence, and Dev Console live state are wired.",
+                        "Codex, Claude, GitHub, cleanup, and trusted autonomy reports are read-only and default to blocked.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="delivery-packaging-plan",
+                    label="Delivery packaging plan",
+                    status="pr_open_ci_passed",
+                    summary="Gate 1 opened integrated PR #86 for the Epic 6 milestone stack and CI passed.",
+                    evidence=[
+                        "https://github.com/slawdawg/Kendall-vnxt/pull/86",
+                        "PR #86 merge state was CLEAN and CI `check` passed after the approved push/PR gate.",
+                        "docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md",
+                        "The delivery plan does not approve merge, close, delete, cleanup, Codex, or Claude.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="dev-console-integration",
+                    label="Dev Console integration",
+                    status="visible",
+                    summary="Controls, proposed work, active work, runtime evidence, and report catalog surfaces make the pipeline visible.",
+                    evidence=[
+                        "Controls page includes authority, cleanup, delivery, and autonomy reports.",
+                        "Report shortcut anchors link evidence to the right dashboard sections.",
+                    ],
+                ),
+            ],
+            remainingItems=[
+                EpicCompletionAuditItemView(
+                    itemId="remote-stack-delivery",
+                    label="Remote stack delivery closeout",
+                    status="needs_approval",
+                    summary="PR #86 exists and CI passed; merge remains gated and PR #85 closeout remains separately gated.",
+                    evidence=[
+                        "Open remote PR #86 covers the integrated Epic 6 branch.",
+                        "Open remote PR #85 covers the earlier 6.3 branch and must not be closed without separate approval.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="real-bmad-done-proof",
+                    label="Real BMAD story done proof",
+                    status="needs_approval",
+                    summary="Epic 6 completion requires one real BMAD story to reach final done evidence through the approved delivery and cleanup path.",
+                    evidence=[
+                        "Synthetic and real-story preview proofs are local evidence only.",
+                        "A final done state requires approved GitHub delivery and retained runtime evidence.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="provider-and-review-execution",
+                    label="Provider and review execution",
+                    status="blocked_by_default",
+                    summary="Codex and Claude process launches remain blocked until the exact bounded authority is granted.",
+                    evidence=[
+                        "Codex readiness and approval packet reports do not launch Codex.",
+                        "Claude readiness and approval packet reports do not launch Claude.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="cleanup-closeout",
+                    label="Cleanup closeout",
+                    status="needs_approval",
+                    summary="Local worktree cleanup, branch deletion, remote cleanup, and story sync remain blocked until explicitly approved after delivery evidence is retained.",
+                    evidence=[
+                        "Local cleanup readiness report defaults deletion approvals to false.",
+                        "Remote cleanup and sync readiness report defaults remote mutation approvals to false.",
+                    ],
+                ),
+            ],
+            blockedOperations=[
+                "Pushing additional PR #86 updates without explicit update approval.",
+                "Merging, closing, or deleting GitHub PRs without matching approval.",
+                "Launching Codex or Claude workers without bounded approval.",
+                "Deleting local worktrees, branches, artifacts, or remote branches before retained evidence and cleanup approval.",
+                "Marking Epic 6 complete before real delivery and cleanup evidence exists.",
+            ],
+            recommendedApproval=(
+                "Approve merging PR #86, `Implement Epic 6 Dev Console orchestration pipeline and readiness controls`, into `main` after "
+                "confirming it remains clean and CI `check` is successful. Do not close PR #85, delete branches, run cleanup, launch Codex, "
+                "launch Claude, or perform GitHub issue/story sync until separately approved."
+            ),
+            requiredEvidence=[
+                "PR #86 URL and CI/check status recorded after approved push and PR creation.",
+                "Merge state remains CLEAN immediately before merge approval is exercised.",
+                "Review comments resolved or explicitly deferred with evidence.",
+                "Merge approval recorded separately before merge.",
+                "Cleanup approval and retained evidence recorded after delivery.",
+            ],
+            stopConditions=[
+                "The local worktree is dirty or contains unrelated changes.",
+                "The remote branch or PR target is ambiguous.",
+                "CI fails, review comments remain unresolved, or GitHub reports merge conflicts.",
+                "The requested action expands into Codex launch, Claude launch, cleanup, or merge without separate approval.",
+                "Evidence needed for audit or rollback would be lost.",
+            ],
+            nextSafeActions=[
+                "Use this audit and PR #86 status to request one narrow merge approval packet.",
+                "Continue read-only PR/CI/review inspection and merge packet preparation while merge authority is pending.",
+                "After merge approval is granted, re-check PR #86 merge state and CI before merging.",
+            ],
+            readOnly=True,
+            epicComplete=False,
+            remoteDeliveryApproved=True,
+            providerExecutionApproved=False,
+            cleanupApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -2932,6 +4098,16 @@ class SupervisorService:
             "GET /supervisor/safe-development-backlog",
             "GET /supervisor/managed-recipe-policy-report",
             "GET /supervisor/github-workflow-policy-report",
+            "GET /supervisor/git-hygiene-report",
+            "GET /supervisor/codex-readiness-report",
+            "GET /supervisor/codex-implementation-approval-report",
+            "GET /supervisor/claude-review-readiness-report",
+            "GET /supervisor/claude-review-approval-report",
+            "GET /supervisor/github-delivery-authority-report",
+            "GET /supervisor/local-cleanup-readiness-report",
+            "GET /supervisor/remote-cleanup-sync-readiness-report",
+            "GET /supervisor/trusted-autonomy-readiness-report",
+            "GET /supervisor/epic-6-completion-audit-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -2980,6 +4156,16 @@ class SupervisorService:
             "docs/stories/3-40-runtime-report-anchor-links.md",
             "docs/stories/3-41-current-gap-review-refresh.md",
             "docs/stories/3-42-github-workflow-policy-report.md",
+            "docs/stories/6-14-git-hygiene-read-only.md",
+            "docs/stories/6-16-codex-readiness-no-launch.md",
+            "docs/stories/6-17-codex-implementation-approval-packet.md",
+            "docs/stories/6-18-claude-readiness-no-launch.md",
+            "docs/stories/6-19-claude-review-approval-packet.md",
+            "docs/stories/6-20-github-delivery-authority-ladder.md",
+            "docs/stories/6-21-local-cleanup-readiness.md",
+            "docs/stories/6-22-remote-cleanup-sync-readiness.md",
+            "docs/stories/6-23-trusted-autonomy-readiness.md",
+            "docs/stories/6-24-epic-6-completion-audit.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
@@ -3449,6 +4635,7 @@ class SupervisorService:
         now = datetime.now(timezone.utc)
         attempt_id = str(uuid.uuid4())
         workspace_isolation_plan = self._workspace_isolation_plan(attempt_id, preview)
+        packet_ref = self._task_packet_artifact_ref(item, preview)
         attempt = ExecutionAttempt(
             id=attempt_id,
             work_item_id=item.id,
@@ -3461,7 +4648,7 @@ class SupervisorService:
             requested_by_label=payload.actorLabel,
             rejection_reason=rejection_reason,
             workspace_isolation_plan_json=workspace_isolation_plan,
-            artifact_refs_json=[],
+            artifact_refs_json=[packet_ref],
             event_refs_json=[],
             created_at=now,
             updated_at=now,
@@ -3473,6 +4660,7 @@ class SupervisorService:
             item,
             attempt,
             preview,
+            packet_ref,
             actor_id=payload.actorId,
             actor_label=payload.actorLabel,
         )
@@ -3721,12 +4909,31 @@ class SupervisorService:
             "outputPolicy": "summary_only_no_raw_stdout_or_stderr_retention",
         }
 
+    def _task_packet_artifact_ref(self, item: WorkItem, preview: RoutingPreviewView) -> dict:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        source_artifact_path = metadata.get("sourceArtifactPath")
+        candidate_priority = metadata.get("candidatePriority")
+        return {
+            "artifactType": "task_packet_v0",
+            "packetId": f"task-packet-{preview.decision.decisionId}",
+            "workItemId": item.id,
+            "routeDecisionId": preview.decision.decisionId,
+            "sourceArtifactPath": source_artifact_path if isinstance(source_artifact_path, str) else None,
+            "taskKind": preview.profile.taskKind,
+            "priority": candidate_priority if isinstance(candidate_priority, str) else "normal",
+            "approvalMode": preview.decision.authorityMode,
+            "retentionPolicy": "metadata_only_no_raw_artifact_content",
+            "previewOnly": True,
+            "executionAllowed": False,
+        }
+
     async def _record_execution_attempt_event(
         self,
         session: AsyncSession,
         item: WorkItem,
         attempt: ExecutionAttempt,
         preview: RoutingPreviewView,
+        packet_ref: dict,
         actor_id: str | None,
         actor_label: str | None,
     ) -> WorkflowEvent:
@@ -3752,6 +4959,7 @@ class SupervisorService:
                 "status": attempt.status,
                 "taskKind": preview.profile.taskKind,
                 "stepId": preview.profile.stepId,
+                "taskPacket": packet_ref,
                 "rejectionReason": attempt.rejection_reason,
                 "workspaceIsolationPlan": dict(attempt.workspace_isolation_plan_json or {}),
                 "executionAllowed": False,
@@ -3982,6 +5190,42 @@ class SupervisorService:
             await session.commit()
             await session.refresh(item)
         return preview
+
+    async def get_task_packet_preview(self, session: AsyncSession, work_item_id: str) -> TaskPacketPreviewView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        preview = await self.get_routing_preview(session, work_item_id)
+        if not preview:
+            return None
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        source_artifact_path = metadata.get("sourceArtifactPath")
+        priority = metadata.get("candidatePriority")
+        verification_summary = metadata.get("verificationSummary")
+        packet = TaskPacketV0View(
+            workItemId=item.id,
+            title=item.title,
+            requestedOutcome=item.requested_outcome,
+            source=item.source,
+            sourceArtifactPath=source_artifact_path if isinstance(source_artifact_path, str) and source_artifact_path else "not_recorded",
+            taskKind=preview.profile.taskKind,
+            riskLevel=item.risk_level,
+            priority=priority if isinstance(priority, str) and priority else "normal",
+            approvalMode=preview.decision.authorityMode,
+            verificationSummary=verification_summary
+            if isinstance(verification_summary, str) and verification_summary
+            else "No verification summary recorded yet.",
+        )
+        return TaskPacketPreviewView(
+            packet=packet,
+            route=preview.decision,
+            whyThisPath=preview.decision.humanExplanation,
+            previewOnly=True,
+            executionAttemptCreated=False,
+            providerCallsAllowed=False,
+            commandExecutionAllowed=False,
+        )
 
     async def get_subscription_handoff_package(
         self,
@@ -5522,6 +6766,73 @@ class SupervisorService:
         await self._publish_item(item)
         return item
 
+    async def get_local_worktree_plan(self, session: AsyncSession, work_item_id: str) -> LocalWorktreePlanView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+
+        recipe = self._execution_recipe_for_item(item)
+        if not recipe:
+            raise ValueError("Local worktree planning is available only for managed recipe work.")
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        repo_root = self._repo_root() or str(Path.cwd())
+        branch_ok, current_branch = self._git_output(["git", "branch", "--show-current"])
+        revision_ok, current_revision = self._git_output(["git", "rev-parse", "HEAD"])
+        base_branch = metadata.get("baseBranch") if isinstance(metadata.get("baseBranch"), str) and metadata.get("baseBranch").strip() else current_branch
+        base_revision = (
+            metadata.get("baseRevision")
+            if isinstance(metadata.get("baseRevision"), str) and metadata.get("baseRevision").strip()
+            else current_revision
+        )
+        execution_branch = (
+            metadata.get("executionBranch")
+            if isinstance(metadata.get("executionBranch"), str) and metadata.get("executionBranch").strip()
+            else self._recipe_execution_branch(item, recipe)
+        )
+        if not base_branch:
+            base_branch = "unknown"
+        if not base_revision:
+            base_revision = "unknown"
+
+        worktree_path = str(self._planned_worktree_path(repo_root, execution_branch))
+        dirty = self._repo_is_dirty()
+        blocked_by = ["local_worktree_creation_not_enabled", "local_worktree_cleanup_not_enabled"]
+        if dirty:
+            blocked_by.append("current_repo_has_uncommitted_changes")
+        if not branch_ok:
+            blocked_by.append("base_branch_unavailable")
+        if not revision_ok:
+            blocked_by.append("base_revision_unavailable")
+
+        return LocalWorktreePlanView(
+            planId=f"local-worktree-plan-{item.id}",
+            workItemId=item.id,
+            title=item.title,
+            executionBranch=execution_branch,
+            baseBranch=base_branch,
+            baseRevision=base_revision,
+            worktreePath=worktree_path,
+            status="blocked_pending_authority",
+            createCommand=["git", "worktree", "add", "-b", execution_branch, worktree_path, base_revision],
+            cleanupCommand=["git", "worktree", "remove", worktree_path],
+            safetyChecks=[
+                "Confirm current repository status is clean before creating an isolated worktree.",
+                "Confirm execution branch starts with the managed recipe branch prefix.",
+                "Keep all implementation changes inside recipe allowed paths.",
+                "Record verification evidence before any delivery or cleanup action.",
+            ],
+            blockedBy=blocked_by,
+            evidence=[
+                "Plan only: no local filesystem mutation was performed.",
+                f"Recipe branch prefix: {recipe.branch_prefix}.",
+                f"Allowed paths: {', '.join(recipe.allowed_paths)}.",
+            ],
+            createAllowed=False,
+            cleanupAllowed=False,
+            remoteOperationsAllowed=False,
+        )
+
     async def process_once(self, session: AsyncSession) -> None:
         async with self._loop_lock:
             control = await self.ensure_control(session)
@@ -6353,6 +7664,28 @@ class SupervisorService:
             )
         )
 
+    async def _publish_candidate_work(self, candidate: CandidateWork) -> None:
+        await self.bus.publish(
+            self._event_payload(
+                "candidate_work.snapshot",
+                None,
+                str(uuid.uuid4()),
+                {
+                    "candidateWorkId": candidate.id,
+                    "title": candidate.title,
+                    "source": candidate.source,
+                    "sourceArtifactPath": candidate.source_artifact_path,
+                    "riskLevel": candidate.risk_level,
+                    "priority": candidate.priority,
+                    "sortOrder": candidate.sort_order,
+                    "status": candidate.status,
+                    "promotedWorkItemId": candidate.promoted_work_item_id,
+                    "importMetadata": candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {},
+                    "summary": f"Proposed work updated: {candidate.title}",
+                },
+            )
+        )
+
     def _event_payload(
         self,
         event_type: str,
@@ -6406,6 +7739,94 @@ class SupervisorService:
             return False, str(exc)
         output = result.stdout.strip() or result.stderr.strip()
         return result.returncode == 0, output
+
+    def _git_hygiene_output(self, args: list[str], repo_root: str) -> tuple[bool, str]:
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+                cwd=repo_root,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, str(exc)
+        output = result.stdout.strip() or result.stderr.strip()
+        return result.returncode == 0, output
+
+    def _git_hygiene_status_counts(self, porcelain: str) -> dict[str, int]:
+        counts = {
+            "added": 0,
+            "modified": 0,
+            "deleted": 0,
+            "renamed": 0,
+            "untracked": 0,
+            "conflicted": 0,
+        }
+        for line in porcelain.splitlines():
+            if not line:
+                continue
+            status = line[:2]
+            if status == "??":
+                counts["untracked"] += 1
+                continue
+            if "U" in status or status in {"AA", "DD"}:
+                counts["conflicted"] += 1
+            if "A" in status:
+                counts["added"] += 1
+            if "M" in status:
+                counts["modified"] += 1
+            if "D" in status:
+                counts["deleted"] += 1
+            if "R" in status:
+                counts["renamed"] += 1
+        return counts
+
+    def _parse_git_worktrees(self, porcelain: str) -> list[GitHygieneWorktreeView]:
+        worktrees: list[GitHygieneWorktreeView] = []
+        current: dict[str, str | bool | None] | None = None
+        for raw_line in porcelain.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("worktree "):
+                if current:
+                    worktrees.append(self._git_hygiene_worktree_view(current))
+                current = {
+                    "path": line.removeprefix("worktree "),
+                    "branch": None,
+                    "head": None,
+                    "detached": False,
+                    "locked": False,
+                    "prunable": False,
+                }
+                continue
+            if current is None:
+                continue
+            if line.startswith("HEAD "):
+                current["head"] = line.removeprefix("HEAD ")[:12]
+            elif line.startswith("branch "):
+                current["branch"] = line.removeprefix("branch ").removeprefix("refs/heads/")
+            elif line == "detached":
+                current["detached"] = True
+            elif line.startswith("locked"):
+                current["locked"] = True
+            elif line.startswith("prunable"):
+                current["prunable"] = True
+        if current:
+            worktrees.append(self._git_hygiene_worktree_view(current))
+        return worktrees
+
+    def _git_hygiene_worktree_view(self, data: dict[str, str | bool | None]) -> GitHygieneWorktreeView:
+        return GitHygieneWorktreeView(
+            path=str(data.get("path") or ""),
+            branch=str(data["branch"]) if data.get("branch") else None,
+            head=str(data["head"]) if data.get("head") else None,
+            detached=bool(data.get("detached")),
+            locked=bool(data.get("locked")),
+            prunable=bool(data.get("prunable")),
+        )
 
     def _git_success(self, args: list[str]) -> bool:
         try:
@@ -6989,6 +8410,11 @@ class SupervisorService:
         slug = "".join(normalized).strip("-")[:32] or "work"
         return f"{recipe.branch_prefix}{slug}-{item.id[:8]}"
 
+    def _planned_worktree_path(self, repo_root: str, execution_branch: str) -> Path:
+        safe_branch = "".join(character if character.isalnum() or character in {"-", "_"} else "-" for character in execution_branch).strip("-")
+        root = Path(repo_root)
+        return root.parent / f"{root.name}-worktrees" / (safe_branch or "worktree")
+
     def _recipe_delivery_gate_payload(self, item: WorkItem, recipe: ExecutionRecipe | None) -> dict:
         metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
         changed_paths = self._recipe_changed_paths(item) if recipe else []
@@ -7466,6 +8892,25 @@ class SupervisorService:
             return "general"
 
         return None
+
+    def to_candidate_work_view(self, candidate: CandidateWork) -> CandidateWorkView:
+        return CandidateWorkView(
+            id=candidate.id,
+            title=candidate.title,
+            requestedOutcome=candidate.requested_outcome,
+            source=candidate.source,
+            sourceArtifactPath=candidate.source_artifact_path,
+            sourceArtifactType=candidate.source_artifact_type,
+            riskLevel=candidate.risk_level,
+            priority=candidate.priority,
+            sortOrder=candidate.sort_order,
+            status=candidate.status,
+            createdAt=self._normalize_timestamp(candidate.created_at),
+            updatedAt=self._normalize_timestamp(candidate.updated_at),
+            approvedAt=self._normalize_timestamp(candidate.approved_at) if candidate.approved_at else None,
+            promotedWorkItemId=candidate.promoted_work_item_id,
+            importMetadata=candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {},
+        )
 
     def to_work_item_view(self, item: WorkItem) -> WorkItemView:
         age_minutes = self._age_minutes(item)

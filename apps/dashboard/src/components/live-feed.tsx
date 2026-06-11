@@ -62,11 +62,10 @@ export function LiveFeed() {
       setLines((current) => [
         {
           id: crypto.randomUUID(),
-          text: "Event stream disconnected. Refresh to resync with authoritative state.",
+          text: "Event stream disconnected. Reconnecting...",
         },
         ...current,
       ].slice(0, 8));
-      source.close();
     };
     return () => source.close();
   }, []);

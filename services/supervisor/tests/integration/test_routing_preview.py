@@ -12,6 +12,17 @@ def _reset_supervisor_modules() -> None:
             sys.modules.pop(module_name, None)
 
 
+def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
+    db_path = (tmp_path / db_name).as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    return TestClient(app)
+
+
 def test_routing_preview_selects_utility_for_deterministic_checks() -> None:
     from supervisor.domain.routing import RoutingPreviewService, RoutingProfile, TaskKind
 
@@ -173,6 +184,150 @@ def test_supervisor_routing_preview_derives_from_next_managed_action_without_mut
     assert "task.deterministic_check" in preview["decision"]["reasonCodes"]
     assert before_item == after_item
     assert before_events == after_events
+
+
+def test_task_packet_preview_uses_promoted_candidate_metadata_without_execution(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-preview.db") as client:
+        candidate_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Task packet candidate",
+                "requestedOutcome": "Preview how promoted work would be routed.",
+                "source": "bmad",
+                "sourceArtifactPath": "docs/stories/6-7-task-packet-v0-orchestrated-preview.md",
+                "sourceArtifactType": "bmad_story",
+                "riskLevel": "medium",
+                "priority": "high",
+            },
+        )
+        assert candidate_response.status_code == 200
+        candidate_id = candidate_response.json()["data"]["id"]
+        approve_response = client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"})
+        assert approve_response.status_code == 200
+        promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promote_response.status_code == 200
+        work_item_id = promote_response.json()["data"]["workItem"]["id"]
+
+        preview_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
+        assert preview_response.status_code == 200
+        preview = preview_response.json()["data"]
+
+        packet = preview["packet"]
+        assert packet["workItemId"] == work_item_id
+        assert packet["title"] == "Task packet candidate"
+        assert packet["requestedOutcome"] == "Preview how promoted work would be routed."
+        assert packet["source"] == f"candidate_work:{candidate_id}"
+        assert packet["sourceArtifactPath"] == "docs/stories/6-7-task-packet-v0-orchestrated-preview.md"
+        assert packet["taskKind"] == "task_classification"
+        assert packet["riskLevel"] == "medium"
+        assert packet["priority"] == "high"
+        assert packet["approvalMode"] == preview["route"]["authorityMode"]
+        assert packet["verificationSummary"] == "No verification summary recorded yet."
+        assert preview["route"]["selectedLane"] == "local_readonly"
+        assert preview["route"]["rejectedLanes"]
+        assert preview["whyThisPath"] == preview["route"]["humanExplanation"]
+        assert preview["previewOnly"] is True
+        assert preview["executionAttemptCreated"] is False
+        assert preview["providerCallsAllowed"] is False
+        assert preview["commandExecutionAllowed"] is False
+
+        attempts_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+        assert attempts_response.status_code == 200
+        assert attempts_response.json()["data"] == []
+
+
+def test_task_packet_preview_falls_back_for_missing_source_metadata(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-preview-fallback.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Manual work item",
+                "requestedOutcome": "Preview route without candidate metadata.",
+                "source": "operator-dashboard",
+                "riskLevel": "low",
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item_id = work_item_response.json()["data"]["id"]
+
+        preview_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
+        assert preview_response.status_code == 200
+        packet = preview_response.json()["data"]["packet"]
+        assert packet["sourceArtifactPath"] == "not_recorded"
+        assert packet["priority"] == "normal"
+        assert packet["taskKind"] == "task_classification"
+
+
+def test_execution_attempt_records_task_packet_artifact_without_execution(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-attempt.db") as client:
+        candidate_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Packet linked attempt",
+                "requestedOutcome": "Record packet evidence on a blocked attempt.",
+                "source": "bmad",
+                "sourceArtifactPath": "docs/stories/6-8-execution-attempt-integration.md",
+                "sourceArtifactType": "bmad_story",
+                "riskLevel": "medium",
+                "priority": "high",
+            },
+        )
+        assert candidate_response.status_code == 200
+        candidate_id = candidate_response.json()["data"]["id"]
+        assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
+        promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promote_response.status_code == 200
+        work_item_id = promote_response.json()["data"]["workItem"]["id"]
+
+        attempt_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={"taskKind": "evidence_summary"})
+        assert attempt_response.status_code == 200
+        attempt = attempt_response.json()["data"]
+        assert attempt["status"] == "rejected"
+        assert attempt["lane"] == "local_readonly"
+        assert attempt["authorityMode"] == "advisory"
+        assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["networkAllowed"] is False
+        assert len(attempt["artifactRefs"]) == 1
+        packet_ref = attempt["artifactRefs"][0]
+        assert packet_ref["artifactType"] == "task_packet_v0"
+        assert packet_ref["sourceArtifactPath"] == "docs/stories/6-8-execution-attempt-integration.md"
+        assert packet_ref["taskKind"] == "evidence_summary"
+        assert packet_ref["priority"] == "high"
+        assert packet_ref["previewOnly"] is True
+        assert packet_ref["executionAllowed"] is False
+
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        assert events_response.status_code == 200
+        event = next(event for event in events_response.json()["data"] if event["eventType"] == "execution_attempt.rejected")
+        assert event["payload"]["taskPacket"]["artifactType"] == "task_packet_v0"
+        assert event["payload"]["processLaunchAllowed"] is False
+        assert event["payload"]["providerCallsAllowed"] is False
+        assert event["payload"]["commandExecutionAllowed"] is False
+
+
+def test_packet_linked_attempt_blocks_duplicate_active_attempts(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "task-packet-duplicate-attempt.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Utility planned attempt",
+                "requestedOutcome": "Keep duplicate active attempts blocked.",
+                "source": "operator-dashboard",
+                "riskLevel": "low",
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item_id = work_item_response.json()["data"]["id"]
+
+        first_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={"taskKind": "path_scope_check"})
+        assert first_response.status_code == 200
+        assert first_response.json()["data"]["status"] == "planned"
+        assert first_response.json()["data"]["artifactRefs"][0]["artifactType"] == "task_packet_v0"
+
+        duplicate_response = client.post(f"/work-items/{work_item_id}/execution-attempts", json={"taskKind": "path_scope_check"})
+        assert duplicate_response.status_code == 409
+        assert duplicate_response.json()["detail"]["error"]["code"] == "invalid_execution_attempt"
 
 
 def test_routing_preview_honors_forbidden_selected_lane() -> None:
@@ -1232,6 +1387,16 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/safe-development-backlog",
         "GET /supervisor/managed-recipe-policy-report",
         "GET /supervisor/github-workflow-policy-report",
+        "GET /supervisor/git-hygiene-report",
+        "GET /supervisor/codex-readiness-report",
+        "GET /supervisor/codex-implementation-approval-report",
+        "GET /supervisor/claude-review-readiness-report",
+        "GET /supervisor/claude-review-approval-report",
+        "GET /supervisor/github-delivery-authority-report",
+        "GET /supervisor/local-cleanup-readiness-report",
+        "GET /supervisor/remote-cleanup-sync-readiness-report",
+        "GET /supervisor/trusted-autonomy-readiness-report",
+        "GET /supervisor/epic-6-completion-audit-report",
         "GET /supervisor/delivery-readiness-policy-report",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
@@ -2504,6 +2669,16 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-40-runtime-report-anchor-links.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-41-current-gap-review-refresh.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-42-github-workflow-policy-report.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-14-git-hygiene-read-only.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-16-codex-readiness-no-launch.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-17-codex-implementation-approval-packet.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-18-claude-readiness-no-launch.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-19-claude-review-approval-packet.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-20-github-delivery-authority-ladder.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-21-local-cleanup-readiness.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-22-remote-cleanup-sync-readiness.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-23-trusted-autonomy-readiness.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-24-epic-6-completion-audit.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-43-safe-delivery-hygiene.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-44-delivery-readiness-policy-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-45-delivery-readiness-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
@@ -2536,6 +2711,16 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/safe-development-backlog" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/managed-recipe-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/github-workflow-policy-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/git-hygiene-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/codex-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/codex-implementation-approval-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/claude-review-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/claude-review-approval-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/github-delivery-authority-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/local-cleanup-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/remote-cleanup-sync-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/trusted-autonomy-readiness-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/epic-6-completion-audit-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
@@ -2642,6 +2827,388 @@ def test_github_workflow_policy_report_documents_auth_split_without_mutation(tmp
     assert {item["itemId"] for item in report["requiredChecks"]} == {"github-doctor-local", "github-doctor-remote", "connector-probe"}
     assert any("plaintext GitHub CLI tokens" in stop_line for stop_line in report["stopLines"])
     assert any("Git/GCM" in action for action in report["nextSafeActions"])
+
+
+def test_git_hygiene_report_reads_local_status_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "git-hygiene-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/git-hygiene-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "git-hygiene-report-v1"
+    assert report["readOnly"] is True
+    assert report["remoteMutationApproved"] is False
+    assert report["cleanupApproved"] is False
+    assert report["currentBranch"]
+    assert report["headRevision"]
+    assert report["workingTreeStatus"] in {"clean", "attention"}
+    assert set(report["statusCounts"]) == {"added", "modified", "deleted", "renamed", "untracked", "conflicted"}
+    assert {signal["signalId"] for signal in report["localSignals"]} == {"working-tree", "branch", "upstream", "worktrees"}
+    assert {signal["signalId"] for signal in report["remoteSignals"]} == {"pull-request", "ci"}
+    assert all(signal["status"] == "not_queried" for signal in report["remoteSignals"])
+    assert any("not approval to push" in stop_line for stop_line in report["stopLines"])
+
+
+def test_codex_readiness_report_does_not_launch_codex(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "codex-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/codex-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+    report = response.json()["data"]
+    assert report["reportId"] == "codex-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["processLaunchApproved"] is False
+    assert report["workerTaskExecutionApproved"] is False
+    assert report["sourceMutationApproved"] is False
+    assert {check["checkId"] for check in report["checks"]} == {"cli-discovery", "auth-posture", "worker-launch", "source-mutation"}
+    assert next(check for check in report["checks"] if check["checkId"] == "auth-posture")["status"] == "not_checked"
+    assert next(check for check in report["checks"] if check["checkId"] == "worker-launch")["status"] == "blocked"
+    assert any("does not approve Codex CLI process launch" in stop_line for stop_line in report["stopLines"])
+
+
+def test_codex_implementation_approval_report_stays_non_executing(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "codex-implementation-approval-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/codex-implementation-approval-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "codex-implementation-approval-report-v1"
+    assert report["readOnly"] is True
+    assert report["authorityFamily"] == "codex_implementation"
+    assert report["operation"] == "one_time_bounded_implementation_attempt"
+    assert report["processLaunchApproved"] is False
+    assert report["workerTaskExecutionApproved"] is False
+    assert report["sourceMutationApproved"] is False
+    assert report["approvalBindingImplemented"] is False
+    assert ".git/**" in report["blockedPaths"]
+    assert any("codex <non-interactive task mode>" in command for command in report["expectedCommandShape"])
+    assert any("raw prompt or completion" in evidence for evidence in report["requiredEvidence"])
+    assert any("outside the approved worktree" in stop_condition for stop_condition in report["stopConditions"])
+    assert {requirement["requirementId"] for requirement in report["requirements"]} == {
+        "isolated-worktree",
+        "path-scope",
+        "verification",
+        "retention",
+        "approval-binding",
+    }
+    approval_binding = next(requirement for requirement in report["requirements"] if requirement["requirementId"] == "approval-binding")
+    assert approval_binding["status"] == "not_implemented"
+
+
+def test_claude_review_readiness_report_does_not_launch_claude(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "claude-review-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/claude-review-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "claude-review-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["processLaunchApproved"] is False
+    assert report["reviewTaskExecutionApproved"] is False
+    assert report["sourceMutationApproved"] is False
+    assert report["scarceUseApproved"] is False
+    assert {check["checkId"] for check in report["reviewPolicy"]} == {
+        "cli-discovery",
+        "auth-posture",
+        "review-only",
+        "source-mutation",
+    }
+    assert {check["checkId"] for check in report["scarcityPolicy"]} == {
+        "scarce-use",
+        "budget-record",
+        "review-trigger",
+    }
+    assert next(check for check in report["reviewPolicy"] if check["checkId"] == "auth-posture")["status"] == "not_checked"
+    assert next(check for check in report["reviewPolicy"] if check["checkId"] == "review-only")["status"] == "blocked"
+    assert next(check for check in report["scarcityPolicy"] if check["checkId"] == "budget-record")["status"] == "not_implemented"
+    assert any("does not approve Claude CLI process launch" in stop_line for stop_line in report["stopLines"])
+    assert any("scarce Claude subscription usage" in stop_line for stop_line in report["stopLines"])
+
+
+def test_claude_review_approval_report_stays_review_only_and_non_executing(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "claude-review-approval-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/claude-review-approval-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "claude-review-approval-report-v1"
+    assert report["readOnly"] is True
+    assert report["authorityFamily"] == "claude_review"
+    assert report["operation"] == "one_time_bounded_review_only_attempt"
+    assert report["processLaunchApproved"] is False
+    assert report["reviewTaskExecutionApproved"] is False
+    assert report["sourceMutationApproved"] is False
+    assert report["scarceUseApproved"] is False
+    assert report["approvalBindingImplemented"] is False
+    assert {trigger["requirementId"] for trigger in report["triggerPolicy"]} == {
+        "explicit-request",
+        "high-risk-diff",
+        "codex-output-check",
+        "routine-generation",
+    }
+    assert next(trigger for trigger in report["triggerPolicy"] if trigger["requirementId"] == "routine-generation")["status"] == "blocked"
+    assert any("review-only non-interactive mode" in command for command in report["expectedCommandShape"])
+    assert any("Credentials" in blocked_input for blocked_input in report["blockedInputs"])
+    assert any("Risk-ranked findings" in output for output in report["outputContract"])
+    assert any("One Claude review attempt per approval" in control for control in report["scarcityControls"])
+    assert any("edit files" in stop_condition for stop_condition in report["stopConditions"])
+
+
+def test_github_delivery_authority_report_stays_read_only_and_blocks_remote_steps(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "github-delivery-authority-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/github-delivery-authority-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "github-delivery-authority-report-v1"
+    assert report["readOnly"] is True
+    assert report["authorityFamily"] == "github_delivery"
+    assert report["pushApproved"] is False
+    assert report["pullRequestApproved"] is False
+    assert report["ciWaitApproved"] is False
+    assert report["reviewResolutionApproved"] is False
+    assert report["mergeApproved"] is False
+    assert report["remoteCleanupApproved"] is False
+    assert {step["stepId"] for step in report["ladder"]} == {
+        "push-branch",
+        "open-or-update-pr",
+        "wait-for-ci",
+        "resolve-review-comments",
+        "merge-pr",
+        "remote-cleanup",
+    }
+    assert all(step["status"] == "blocked" for step in report["ladder"])
+    assert any("green CI" in evidence for step in report["ladder"] for evidence in step["evidence"])
+    assert any("plaintext tokens" in stop_condition for stop_condition in report["stopConditions"])
+    assert any("one delivery step at a time" in action for action in report["nextSafeActions"])
+
+
+def test_local_cleanup_readiness_report_is_read_only_and_blocks_deletion(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "local-cleanup-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/local-cleanup-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "local-cleanup-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["automaticCleanupApproved"] is False
+    assert report["worktreeRemovalApproved"] is False
+    assert report["branchDeletionApproved"] is False
+    assert report["evidenceDeletionApproved"] is False
+    assert {item["itemId"] for item in report["cleanupPolicy"]} == {
+        "completed-worktree",
+        "stale-worktree",
+        "abandoned-attempt",
+        "evidence-retention",
+    }
+    assert "main repository checkout" in report["blockedTargets"]
+    assert any("Required evidence would be deleted" in stop_condition for stop_condition in report["stopConditions"])
+    assert any("one local cleanup target at a time" in action for action in report["nextSafeActions"])
+
+
+def test_remote_cleanup_sync_readiness_report_blocks_remote_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "remote-cleanup-sync-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/remote-cleanup-sync-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "remote-cleanup-sync-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["remoteBranchDeletionApproved"] is False
+    assert report["issueSyncApproved"] is False
+    assert report["storyStatusSyncApproved"] is False
+    assert report["remoteMutationApproved"] is False
+    assert {item["itemId"] for item in report["syncPolicy"]} == {
+        "remote-branch-cleanup",
+        "issue-sync",
+        "story-status-sync",
+        "audit-retention",
+    }
+    assert any("GitHub tokens" in operation for operation in report["blockedOperations"])
+    assert any("target is ambiguous" in stop_condition for stop_condition in report["stopConditions"])
+    assert any("one remote cleanup or sync target at a time" in action for action in report["nextSafeActions"])
+
+
+def test_trusted_autonomy_readiness_report_blocks_autonomous_execution(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "trusted-autonomy-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/trusted-autonomy-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "trusted-autonomy-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["lowRiskAutonomyApproved"] is False
+    assert report["autonomousProviderUseApproved"] is False
+    assert report["autonomousGitHubDeliveryApproved"] is False
+    assert report["autonomousCleanupApproved"] is False
+    assert {gate["gateId"] for gate in report["autonomyGates"]} == {
+        "repeatable-low-risk-work",
+        "bounded-tools",
+        "automatic-stop",
+        "operator-visibility",
+    }
+    assert any("Codex or Claude launch" in item for item in report["blockedWork"])
+    assert any("authority report says the action is blocked" in condition for condition in report["stopConditions"])
+    assert any("one narrow workflow class" in action for action in report["nextSafeActions"])
+
+
+def test_epic_6_completion_audit_report_shows_remaining_blockers_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "epic-6-completion-audit-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/epic-6-completion-audit-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "epic-6-completion-audit-report-v1"
+    assert report["readOnly"] is True
+    assert report["epicComplete"] is False
+    assert report["remoteDeliveryApproved"] is True
+    assert report["providerExecutionApproved"] is False
+    assert report["cleanupApproved"] is False
+    assert report["overallStatus"] == "blocked_pending_merge_authority"
+    assert {item["itemId"] for item in report["completedItems"]} == {
+        "local-readiness-stack",
+        "delivery-packaging-plan",
+        "dev-console-integration",
+    }
+    assert {item["itemId"] for item in report["remainingItems"]} == {
+        "remote-stack-delivery",
+        "real-bmad-done-proof",
+        "provider-and-review-execution",
+        "cleanup-closeout",
+    }
+    assert "Approve merging PR #86" in report["recommendedApproval"]
+    assert any("Merging, closing, or deleting" in operation for operation in report["blockedOperations"])
+    assert any("PR #86 URL" in evidence for evidence in report["requiredEvidence"])
+    assert any("worktree is dirty" in condition for condition in report["stopConditions"])
 
 
 def test_delivery_readiness_policy_report_documents_review_gate_without_mutation(tmp_path, monkeypatch) -> None:
