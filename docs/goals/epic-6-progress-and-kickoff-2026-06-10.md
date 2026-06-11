@@ -46,7 +46,7 @@ Candidate Work
 | 14. Trusted autonomy | Low-risk doc/evidence PR policy active | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. PR #91 and PR #92 provide initial evidence for `epic-6-low-risk-doc-evidence-pr-v1`, now active only for bounded doc/evidence PR preparation. Merge, cleanup, issue sync, Claude, providers, secrets, destructive operations, failed-check bypass, and unrelated source changes remain blocked. |
 | 15. Completion audit visibility | Readiness prepared; completion blocked | Story 6.24 adds a Dev Console completion audit showing prepared local work, remaining blockers, and the next delivery approval. |
 | 16. Trusted delivery eligibility | Delivered in PR #88 | Stories 6.25 and 6.26 define read-only eligibility stages and current-branch evaluation for softening push, PR, merge, and cleanup gates after strict evidence is satisfied. Actual future GitHub mutation remains gated per target. |
-| 17. MVP proof | Trial packet delivered; real trial blocked | Story 6.27 delivered the read-only approval packet for one real BMAD story trial through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. Bob story selection and bounded launch approval are still required before a real trial. |
+| 17. MVP proof | Initial doc/evidence proof complete; full lifecycle proof blocked | Story 6.27 delivered the read-only approval packet. Story 3.61 completed an initial bounded doc/evidence proof through implementation, verification, PR delivery, merge, and cleanup. Full Dev Console Candidate Work to done/evidence lifecycle, Claude review, provider expansion, and broader execution remain blocked pending explicit approval. |
 
 ## Approval Queue
 
@@ -54,7 +54,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 
 | Request | Status | Scope | Requested Evidence | Decision |
 | --- | --- | --- | --- | --- |
-| Codex process launch/task execution | pending explicit approval | One approved Active work item in isolated worktree | Approval packet, path scope, expected command shape, verification command, rollback/cleanup plan | TBD |
+| Codex process launch/task execution | approved only for `epic-6-low-risk-doc-evidence-pr-v1`; otherwise pending explicit approval | Matching doc/evidence-only changes may use an isolated branch/worktree; all other Codex implementation remains story-scoped | Clean main, bounded docs scope, `pnpm.cmd run check`, PR/CI evidence, rollback/cleanup plan | Low-risk doc/evidence PR prep active; broader Codex launch TBD |
 | Claude review task execution | pending explicit approval | One high-risk or explicitly approved work item review | Review trigger, bounded context, review-only command shape, scarcity reason, output contract | TBD |
 | GitHub push/PR/update/check delivery | approved and completed for PR #86, PR #87, and PR #88 | Push approved branches, open PRs to `main`, run read-only PR/CI checks | Branch/PR plan, target remote, CI/check evidence, rollback plan | PR #86, PR #87, and PR #88 opened and CI `check` passed |
 | Merge | approved and completed for PR #86, PR #87, and PR #88 | Merge approved clean PRs into `main` | Green checks, review gates, exact merge method, explicit merge approval | PR #86, PR #87, and PR #88 merged; future merges remain gated per PR |
@@ -64,7 +64,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 
 ## Current Safe Work
 
-- Prepare the next real BMAD story trial approval packet with exact implementation scope, provider lane, verification command, review plan, delivery target, and cleanup target.
+- Prepare the next full-lifecycle real BMAD story trial approval packet with exact Candidate Work, Active Work, provider lane, verification command, review plan, delivery target, cleanup target, and Dev Console done/evidence target.
 - Current real-story trial approval packet: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
 - Current low-risk autonomy proposal: `docs/goals/epic-6-low-risk-doc-evidence-autonomy-policy-proposal-2026-06-11.md`.
 - Claude Code setup reference for future review-only gates: `docs/claude-code-setup-for-epic-6.md`.
@@ -134,6 +134,7 @@ After a PR is opened under explicit approval and CI is green, the line softens o
 - 2026-06-11: PR #91 completed the first real Epic 6 MVP proof trial for Story 3.61 through bounded Codex implementation, local verification, PR delivery, CI success, approved merge, and approved cleanup.
 - 2026-06-11: PR #92 delivered the post-proof progress and authority docs after CI success, approved merge, and approved branch cleanup.
 - 2026-06-11: Drafted and then Bob approved the low-risk doc/evidence-only autonomy policy `epic-6-low-risk-doc-evidence-pr-v1`. It is active only for bounded doc/evidence PR preparation and does not allow auto-merge, cleanup, issue sync, Claude, providers, secrets, destructive operations, failed-check bypass, or unrelated source changes.
+- 2026-06-11: PR #93 delivered the low-risk doc/evidence autonomy policy proposal after CI success and review-thread resolution. PR #94 activated the policy on `main`, then its branch was cleaned up after separate approval.
 
 ## Current GitHub State Snapshot
 
@@ -150,6 +151,8 @@ Snapshot date: 2026-06-11.
 - MVP proof trial packet PR: `https://github.com/slawdawg/Kendall-vnxt/pull/90`.
 - MVP proof trial evidence PR: `https://github.com/slawdawg/Kendall-vnxt/pull/91`.
 - Post-proof authority docs PR: `https://github.com/slawdawg/Kendall-vnxt/pull/92`.
+- Low-risk doc/evidence autonomy proposal PR: `https://github.com/slawdawg/Kendall-vnxt/pull/93`.
+- Low-risk doc/evidence autonomy activation PR: `https://github.com/slawdawg/Kendall-vnxt/pull/94`.
 
 ## Completion Audit
 
@@ -161,19 +164,20 @@ Evidence that is complete locally:
 - Cleanup hardening was delivered through PR #87.
 - Story 6.26 trusted delivery eligibility was delivered through PR #88.
 - Story 6.27 MVP proof trial packet was delivered through PR #90 to make the next approval exact before any worker launch.
+- Story 3.61 completed an initial bounded doc/evidence proof trial through PR #91, including local verification, PR delivery, CI success, approved merge, and approved cleanup.
+- The low-risk doc/evidence PR autonomy policy `epic-6-low-risk-doc-evidence-pr-v1` is active on `main` after PR #94.
 - Controls page includes read-only surfaces for execution readiness, authority readiness, Git/GitHub posture, local cleanup, remote cleanup/sync, Codex, Claude, trusted autonomy, trusted delivery eligibility, and Epic 6 completion audit visibility.
 - Full local verification passed on the merged milestone and follow-up branches with 143 supervisor tests after PR #90.
 - Local cleanup for the merged milestone was performed, Windows cleanup hardening was delivered, and one empty Codex workspace directory remains locked by another process outside Git worktree registration.
 
-Evidence still missing for completion:
+Evidence still missing for full Epic 6 completion:
 
-- No approved real Codex implementation attempt has been executed.
+- No full-lifecycle real BMAD story has moved through Dev Console Candidate Work, Active Work, orchestrated lane decision, safe local/Ollama checks, bounded implementation, verification, delivery, cleanup, and Dev Console done/evidence state.
 - No approved real Claude review attempt has been executed.
-- GitHub delivery Gate 1 and merge are complete for PR #86, PR #87, and PR #88.
-- Automatic cleanup, remote cleanup, issue/story sync, and trusted autonomy remain blocked by default.
-- One real BMAD story, Story 3.61, has completed a bounded doc/evidence proof trial through approved implementation, delivery, merge, and cleanup evidence.
-- Trusted low-risk autonomy is active only for the narrow doc/evidence PR preparation policy `epic-6-low-risk-doc-evidence-pr-v1`.
+- Provider expansion beyond the approved Ollama endpoint/model boundary is not approved.
+- Auto-merge, cleanup, remote cleanup, issue/story sync, Claude, providers, secrets, destructive operations, failed-check bypass, and unrelated source changes remain blocked by default.
+- Trusted low-risk autonomy is active only for the narrow doc/evidence PR preparation policy `epic-6-low-risk-doc-evidence-pr-v1`; it does not complete Epic 6 by itself.
 
 Next unavoidable gate:
 
-- Bob approval is required before a real BMAD story trial can launch Codex, launch Claude, expand provider/model use, merge future PRs, or perform destructive cleanup. The immediate approval request should be scoped to one selected real story and its exact implementation, verification, review, delivery, and cleanup plan.
+- Bob approval is required before the next full-lifecycle real BMAD story trial can use non-doc/evidence Codex implementation, launch Claude, expand provider/model use, merge future PRs, sync issues, or perform cleanup. The immediate approval request should be scoped to one selected real story and its exact Candidate Work, Active Work, implementation, verification, review, delivery, cleanup, and done-evidence plan.
