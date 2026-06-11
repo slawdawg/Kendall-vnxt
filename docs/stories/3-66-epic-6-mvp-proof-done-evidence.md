@@ -65,3 +65,25 @@ Approve one Epic 6 MVP proof trial for `docs/stories/3-66-epic-6-mvp-proof-done-
 - Current WorkItem state reached `implementing` after the repo was cleaned, but runtime evidence still shows zero execution attempts and all process/provider/command/source-mutation authority flags disabled.
 - The proof supervisor instance was stopped before any bounded Codex implementation, Claude review, GitHub delivery, merge, cleanup, or done-state completion.
 - The bounded implementation scope, allowed paths, blocked operations, verification, and rollback plan are defined in `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
+
+## Implementation Design Notes
+
+The smallest useful implementation is to update existing Epic 6 report content rather than introduce new workflow machinery.
+
+Target behavior:
+
+- `GET /supervisor/epic-6-mvp-proof-trial-report` names Story 3.66 as the selected story.
+- The MVP proof report shows the proof has completed selection, Candidate Work import, Active Work promotion, local-readonly routing evidence, runtime export, PR #96 delivery preparation, and is stopped before bounded implementation.
+- `GET /supervisor/epic-6-completion-audit-report` reflects the same progress while keeping `epicComplete=false`.
+- Controls page continues using the existing `MvpProofTrialReportPanel` and `EpicCompletionAuditReportPanel`; no new component should be needed unless the report contract changes.
+- Report catalog/runtime export drift checks include any new Story 3.66 evidence references.
+
+Likely code changes:
+
+- Update `get_epic_6_mvp_proof_trial_report` in `services/supervisor/src/supervisor/application/service.py`.
+- Update `get_epic_6_completion_audit_report` in `services/supervisor/src/supervisor/application/service.py`.
+- Update focused supervisor assertions in `services/supervisor/tests/integration/test_routing_preview.py`.
+- Update controls-page e2e assertions in `tests/e2e/dashboard.spec.ts` only if the rendered text changes.
+- Update drift checks only if new story references or report evidence references require static coverage.
+
+Implementation should not add process launch, provider calls, direct GitHub mutation, cleanup execution, issue sync, or new persistence tables.

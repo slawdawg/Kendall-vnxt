@@ -106,6 +106,13 @@ Expected diff shape:
 - focused supervisor/dashboard tests or drift checks that prove the new evidence is wired,
 - retained story/progress/authority evidence updates.
 
+Preferred implementation design:
+
+- update the existing Epic 6 MVP proof trial report content instead of adding a new report,
+- update the existing Epic 6 completion audit report content instead of adding a new completion mechanism,
+- keep the existing dashboard panels unless a contract change is strictly necessary,
+- keep the WorkItem non-done until merge, cleanup, and final done evidence exist.
+
 Required verification:
 
 - focused supervisor test for the changed report/evidence surface,
