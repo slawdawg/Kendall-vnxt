@@ -8,6 +8,7 @@ import { DashboardE2EReportPanel } from "../../components/dashboard-e2e-report-p
 import { DeliveryReadinessPolicyReportPanel } from "../../components/delivery-readiness-policy-report-panel";
 import { DevelopmentRunwayReportPanel } from "../../components/development-runway-report-panel";
 import { DocumentationAuthorityReportPanel } from "../../components/documentation-authority-report-panel";
+import { EpicCompletionAuditReportPanel } from "../../components/epic-completion-audit-report-panel";
 import { ExecutionReadinessReportPanel } from "../../components/execution-readiness-report-panel";
 import { GitHubDeliveryAuthorityReportPanel } from "../../components/github-delivery-authority-report-panel";
 import { GitHubWorkflowPolicyReportPanel } from "../../components/github-workflow-policy-report-panel";
@@ -38,6 +39,7 @@ import {
   getDeliveryReadinessPolicyReport,
   getDevelopmentRunwayReport,
   getExecutionReadinessReport,
+  getEpic6CompletionAuditReport,
   getGitHubDeliveryAuthorityReport,
   getGitHubWorkflowPolicyReport,
   getGitHygieneReport,
@@ -81,6 +83,7 @@ export default async function ControlsPage() {
     localCleanupReadinessReport,
     remoteCleanupSyncReadinessReport,
     trustedAutonomyReadinessReport,
+    epic6CompletionAuditReport,
     codexReadinessReport,
     codexImplementationApprovalReport,
     claudeReviewReadinessReport,
@@ -109,6 +112,7 @@ export default async function ControlsPage() {
     getLocalCleanupReadinessReport(),
     getRemoteCleanupSyncReadinessReport(),
     getTrustedAutonomyReadinessReport(),
+    getEpic6CompletionAuditReport(),
     getCodexReadinessReport(),
     getCodexImplementationApprovalReport(),
     getClaudeReviewReadinessReport(),
@@ -185,6 +189,9 @@ export default async function ControlsPage() {
       </div>
       <div id="trusted-autonomy-readiness-report" className="scroll-mt-28">
         <TrustedAutonomyReadinessReportPanel report={trustedAutonomyReadinessReport} />
+      </div>
+      <div id="epic-6-completion-audit-report" className="scroll-mt-28">
+        <EpicCompletionAuditReportPanel report={epic6CompletionAuditReport} />
       </div>
       <div id="codex-readiness-report" className="scroll-mt-28">
         <CodexReadinessReportPanel report={codexReadinessReport} />

@@ -40,6 +40,8 @@ from supervisor.api.schemas import (
     ExecutionConfigurationCheckView,
     ExecutionConfigurationChecksView,
     ExecutionAttemptView,
+    EpicCompletionAuditItemView,
+    EpicCompletionAuditReportView,
     ExecutionReadinessAttemptSummaryView,
     ExecutionReadinessOutcomeEvidenceView,
     ExecutionReadinessReportView,
@@ -1681,6 +1683,19 @@ class SupervisorService:
                 summary="Defines graduation gates for future low-risk autonomy without enabling autonomous execution.",
                 evidenceScope=["low-risk eligibility", "graduation gates", "blocked work", "autonomy stop lines"],
                 relatedDocs=["docs/stories/6-23-trusted-autonomy-readiness.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="epic-6-completion-audit-report-v1",
+                label="Epic 6 completion audit",
+                endpoint="GET /supervisor/epic-6-completion-audit-report",
+                status="active",
+                summary="Shows Epic 6 completion evidence, remaining blockers, and the next approval needed before delivery work continues.",
+                evidenceScope=["Epic 6 local stack", "delivery packaging plan", "authority gates", "completion blockers"],
+                relatedDocs=[
+                    "docs/goals/epic-6-progress-and-kickoff-2026-06-10.md",
+                    "docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md",
+                    "docs/stories/6-24-epic-6-completion-audit.md",
+                ],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
@@ -3347,6 +3362,129 @@ class SupervisorService:
             autonomousCleanupApproved=False,
         )
 
+    def get_epic_6_completion_audit_report(self) -> EpicCompletionAuditReportView:
+        return EpicCompletionAuditReportView(
+            reportId="epic-6-completion-audit-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only Epic 6 completion audit. The local readiness stack is prepared, but Epic 6 is not complete until "
+                "approved remote delivery, one real BMAD story proof through done, and approved cleanup evidence are recorded."
+            ),
+            epicId="6",
+            overallStatus="blocked_pending_explicit_delivery_authority",
+            completedItems=[
+                EpicCompletionAuditItemView(
+                    itemId="local-readiness-stack",
+                    label="Local readiness stack",
+                    status="prepared_locally",
+                    summary="Stories 6.3 through 6.23 have local implementation evidence for proposed work, routing preview, Dev Console visibility, and authority readiness reports.",
+                    evidence=[
+                        "Candidate Work and BMAD import surfaces exist.",
+                        "Task Packet preview, fake or blocked attempts, runtime evidence, and Dev Console live state are wired.",
+                        "Codex, Claude, GitHub, cleanup, and trusted autonomy reports are read-only and default to blocked.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="delivery-packaging-plan",
+                    label="Delivery packaging plan",
+                    status="prepared_locally",
+                    summary="A local packaging plan recommends one integrated Epic 6 milestone PR after explicit approval.",
+                    evidence=[
+                        "docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md",
+                        "Plan does not approve push, PR creation, merge, close, delete, Codex, or Claude.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="dev-console-integration",
+                    label="Dev Console integration",
+                    status="visible",
+                    summary="Controls, proposed work, active work, runtime evidence, and report catalog surfaces make the pipeline visible.",
+                    evidence=[
+                        "Controls page includes authority, cleanup, delivery, and autonomy reports.",
+                        "Report shortcut anchors link evidence to the right dashboard sections.",
+                    ],
+                ),
+            ],
+            remainingItems=[
+                EpicCompletionAuditItemView(
+                    itemId="remote-stack-delivery",
+                    label="Remote stack delivery",
+                    status="needs_approval",
+                    summary="The local Epic 6 stack still needs approved push and PR packaging before it can be reviewed or merged remotely.",
+                    evidence=[
+                        "Open remote PR #85 covers the earlier 6.3 branch only.",
+                        "Stories 6.4 through this audit are local-stack work until an approved delivery action occurs.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="real-bmad-done-proof",
+                    label="Real BMAD story done proof",
+                    status="needs_approval",
+                    summary="Epic 6 completion requires one real BMAD story to reach final done evidence through the approved delivery and cleanup path.",
+                    evidence=[
+                        "Synthetic and real-story preview proofs are local evidence only.",
+                        "A final done state requires approved GitHub delivery and retained runtime evidence.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="provider-and-review-execution",
+                    label="Provider and review execution",
+                    status="blocked_by_default",
+                    summary="Codex and Claude process launches remain blocked until the exact bounded authority is granted.",
+                    evidence=[
+                        "Codex readiness and approval packet reports do not launch Codex.",
+                        "Claude readiness and approval packet reports do not launch Claude.",
+                    ],
+                ),
+                EpicCompletionAuditItemView(
+                    itemId="cleanup-closeout",
+                    label="Cleanup closeout",
+                    status="needs_approval",
+                    summary="Local worktree cleanup, branch deletion, remote cleanup, and story sync remain blocked until explicitly approved after delivery evidence is retained.",
+                    evidence=[
+                        "Local cleanup readiness report defaults deletion approvals to false.",
+                        "Remote cleanup and sync readiness report defaults remote mutation approvals to false.",
+                    ],
+                ),
+            ],
+            blockedOperations=[
+                "Pushing the local Epic 6 stack without explicit branch and PR approval.",
+                "Creating, updating, merging, closing, or deleting GitHub PRs without matching approval.",
+                "Launching Codex or Claude workers without bounded approval.",
+                "Deleting local worktrees, branches, artifacts, or remote branches before retained evidence and cleanup approval.",
+                "Marking Epic 6 complete before real delivery and cleanup evidence exists.",
+            ],
+            recommendedApproval=(
+                "Approve pushing branch `codex/implement-story-6-23-trusted-autonomy-readiness`, opening one integrated Epic 6 milestone PR "
+                "against `main`, and running read-only PR/CI status checks. Do not merge, close PR #85, delete branches, launch Codex, launch Claude, "
+                "or run cleanup until separately approved."
+            ),
+            requiredEvidence=[
+                "Latest local head verified with `git rev-parse --short HEAD` immediately before push.",
+                "Remote PR URL and CI/check status recorded after approved push and PR creation.",
+                "Review comments resolved or explicitly deferred with evidence.",
+                "Merge approval recorded separately before merge.",
+                "Cleanup approval and retained evidence recorded after delivery.",
+            ],
+            stopConditions=[
+                "The local worktree is dirty or contains unrelated changes.",
+                "The remote branch or PR target is ambiguous.",
+                "CI fails, review comments remain unresolved, or GitHub reports merge conflicts.",
+                "The requested action expands into Codex launch, Claude launch, cleanup, or merge without separate approval.",
+                "Evidence needed for audit or rollback would be lost.",
+            ],
+            nextSafeActions=[
+                "Use this audit and the delivery packaging plan to request the integrated PR approval.",
+                "Continue only read-only local checks until that approval is granted.",
+                "After approved PR creation, record PR URL, CI status, review status, and merge readiness before requesting merge authority.",
+            ],
+            readOnly=True,
+            epicComplete=False,
+            remoteDeliveryApproved=False,
+            providerExecutionApproved=False,
+            cleanupApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3967,6 +4105,7 @@ class SupervisorService:
             "GET /supervisor/local-cleanup-readiness-report",
             "GET /supervisor/remote-cleanup-sync-readiness-report",
             "GET /supervisor/trusted-autonomy-readiness-report",
+            "GET /supervisor/epic-6-completion-audit-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -4024,6 +4163,7 @@ class SupervisorService:
             "docs/stories/6-21-local-cleanup-readiness.md",
             "docs/stories/6-22-remote-cleanup-sync-readiness.md",
             "docs/stories/6-23-trusted-autonomy-readiness.md",
+            "docs/stories/6-24-epic-6-completion-audit.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",

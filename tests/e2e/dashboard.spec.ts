@@ -310,6 +310,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/local-cleanup-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/remote-cleanup-sync-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/trusted-autonomy-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/epic-6-completion-audit-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-readiness-report")).toBeVisible();
@@ -490,6 +491,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(autonomyPanel.getByText("Codex or Claude launch without explicit authority")).toBeVisible();
     await expect(autonomyPanel.getByText("Use this report to select one narrow workflow class for a future autonomy trial.")).toBeVisible();
     await expect(page.locator("#trusted-autonomy-readiness-report")).toBeVisible();
+
+    const epicCompletionPanel = page.locator("#epic-6-completion-audit-report");
+    await expect(epicCompletionPanel.getByText("Epic 6 audit", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Completion status" })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("blocked_pending_explicit_delivery_authority")).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Local readiness stack" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Remote stack delivery" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Real BMAD story done proof" })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Approve pushing branch")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Marking Epic 6 complete before real delivery and cleanup evidence exists.")).toBeVisible();
+    await expect(page.locator("#epic-6-completion-audit-report")).toBeVisible();
 
     const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();
     await expect(codexReadinessPanel.getByText("Codex readiness", { exact: true })).toBeVisible();

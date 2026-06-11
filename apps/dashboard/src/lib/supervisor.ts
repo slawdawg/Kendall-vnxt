@@ -13,6 +13,7 @@ import type {
   DeliveryReadinessPolicyReportView,
   DevelopmentRunwayReportView,
   DocumentationAuthorityReportView,
+  EpicCompletionAuditReportView,
   ExecutionAttemptView,
   ExecutionReadinessReportView,
   GitHubDeliveryAuthorityReportView,
@@ -253,6 +254,10 @@ export async function getRemoteCleanupSyncReadinessReport(): Promise<RemoteClean
 
 export async function getTrustedAutonomyReadinessReport(): Promise<TrustedAutonomyReadinessReportView> {
   return requestJson<TrustedAutonomyReadinessReportView>("/supervisor/trusted-autonomy-readiness-report");
+}
+
+export async function getEpic6CompletionAuditReport(): Promise<EpicCompletionAuditReportView> {
+  return requestJson<EpicCompletionAuditReportView>("/supervisor/epic-6-completion-audit-report");
 }
 
 export async function getCodexReadinessReport(): Promise<CodexReadinessReportView> {

@@ -1337,6 +1337,34 @@ class TrustedAutonomyReadinessReportView(BaseModel):
     autonomousCleanupApproved: bool = False
 
 
+class EpicCompletionAuditItemView(BaseModel):
+    itemId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class EpicCompletionAuditReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    epicId: str
+    overallStatus: str
+    completedItems: list[EpicCompletionAuditItemView]
+    remainingItems: list[EpicCompletionAuditItemView]
+    blockedOperations: list[str]
+    recommendedApproval: str
+    requiredEvidence: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    epicComplete: bool = False
+    remoteDeliveryApproved: bool = False
+    providerExecutionApproved: bool = False
+    cleanupApproved: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

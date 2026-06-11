@@ -1228,6 +1228,34 @@ export interface TrustedAutonomyReadinessReportView {
   autonomousCleanupApproved: boolean;
 }
 
+export interface EpicCompletionAuditItemView {
+  itemId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface EpicCompletionAuditReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  epicId: string;
+  overallStatus: string;
+  completedItems: EpicCompletionAuditItemView[];
+  remainingItems: EpicCompletionAuditItemView[];
+  blockedOperations: string[];
+  recommendedApproval: string;
+  requiredEvidence: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  epicComplete: boolean;
+  remoteDeliveryApproved: boolean;
+  providerExecutionApproved: boolean;
+  cleanupApproved: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;
