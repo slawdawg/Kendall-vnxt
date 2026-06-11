@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -74,6 +74,30 @@ try {
     const result = run(["finish-pr", "verify-profile", "--verify", "anything", "--dry-run", "--state-root", stateRoot]);
     assert(result.code !== 0, "unknown verification profile unexpectedly passed");
     assert(result.stderr.includes("Unknown verification profile"));
+  });
+
+  test("cleanup-orphans lists orphan directories without deleting by default", () => {
+    const orphanPath = join(stateRoot, "worktrees", "orphan-story");
+    mkdirSync(join(orphanPath, "services", "supervisor", ".pytest_cache"), { recursive: true });
+
+    const result = run(["cleanup-orphans", "--state-root", stateRoot]);
+
+    assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("orphan directory:"));
+    assert(result.stdout.includes("Pass a query to target one orphan"));
+    assert(existsSync(orphanPath), "cleanup-orphans unexpectedly deleted without --apply");
+  });
+
+  test("cleanup-orphans removes targeted orphan directory when applied", () => {
+    const orphanPath = join(stateRoot, "worktrees", "remove-this-orphan");
+    mkdirSync(join(orphanPath, "services", "supervisor", ".pytest_cache"), { recursive: true });
+    writeFileSync(join(orphanPath, "services", "supervisor", ".pytest_cache", "README.md"), "cache\n");
+
+    const result = run(["cleanup-orphans", "remove-this", "--apply", "--state-root", stateRoot]);
+
+    assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("Removed orphan directory"));
+    assert(!existsSync(orphanPath), "cleanup-orphans did not remove targeted orphan directory");
   });
 } finally {
   rmSync(stateRoot, { recursive: true, force: true });

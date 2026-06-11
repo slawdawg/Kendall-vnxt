@@ -123,6 +123,7 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `6-22-remote-cleanup-sync-readiness.md` | Add a read-only remote cleanup and issue/story sync readiness report before remote deletion or GitHub status updates are enabled. |
 | `6-23-trusted-autonomy-readiness.md` | Add a read-only trusted autonomy readiness report for low-risk workflow graduation gates before autonomous execution is enabled. |
 | `6-24-epic-6-completion-audit.md` | Add a read-only Dev Console audit showing Epic 6 completion evidence, remaining authority blockers, and the next delivery approval needed. |
+| `6-25-trusted-delivery-eligibility-policy.md` | Add read-only trusted delivery eligibility stages for softening push, PR, merge, and cleanup blockers only after strict evidence is satisfied. |
 
 ## Completed Foundation Stories
 

@@ -1135,6 +1135,17 @@ export interface GitHubDeliveryAuthorityStepView {
   evidence: string[];
 }
 
+export interface GitHubDeliveryEligibilityStageView {
+  stageId: string;
+  label: string;
+  status: string;
+  summary: string;
+  eligibleWhen: string[];
+  hardStops: string[];
+  allowedOperations: string[];
+  blockedOperations: string[];
+}
+
 export interface GitHubDeliveryAuthorityReportView {
   reportId: string;
   generatedAt: string;
@@ -1142,6 +1153,8 @@ export interface GitHubDeliveryAuthorityReportView {
   authorityFamily: string;
   approvalPrompt: string;
   ladder: GitHubDeliveryAuthorityStepView[];
+  trustedDeliveryPolicy: string[];
+  eligibilityStages: GitHubDeliveryEligibilityStageView[];
   requiredEvidence: string[];
   rollbackPlan: string[];
   stopConditions: string[];
@@ -1153,6 +1166,7 @@ export interface GitHubDeliveryAuthorityReportView {
   reviewResolutionApproved: boolean;
   mergeApproved: boolean;
   remoteCleanupApproved: boolean;
+  automaticDeliveryApproved: boolean;
 }
 
 export interface LocalCleanupPolicyItemView {

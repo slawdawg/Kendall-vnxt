@@ -16,7 +16,8 @@ const runTempDir = mkdtempSync(join(tempDir, "run-"));
 const windowsUvPath = process.env.USERPROFILE ? join(process.env.USERPROFILE, ".local", "bin", "uv.exe") : "";
 const uvCommand = process.env.UV_EXE || (process.platform === "win32" && existsSync(windowsUvPath) ? windowsUvPath : "uv");
 const pytestArgs = process.argv.slice(2).filter((arg) => arg !== "--");
-const args = ["run", "--directory", "services/supervisor", "pytest", "-p", "no:cacheprovider", ...pytestArgs];
+const selectedPytestArgs = pytestArgs.length > 0 ? pytestArgs : ["tests"];
+const args = ["run", "--directory", "services/supervisor", "pytest", "-p", "no:cacheprovider", ...selectedPytestArgs];
 
 const result = spawnSync(uvCommand, args, {
   cwd: rootDir,

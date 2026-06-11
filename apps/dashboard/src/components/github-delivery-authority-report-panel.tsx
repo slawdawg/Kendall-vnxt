@@ -1,4 +1,8 @@
-import type { GitHubDeliveryAuthorityReportView, GitHubDeliveryAuthorityStepView } from "@kendall/contracts";
+import type {
+  GitHubDeliveryAuthorityReportView,
+  GitHubDeliveryAuthorityStepView,
+  GitHubDeliveryEligibilityStageView,
+} from "@kendall/contracts";
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
@@ -46,6 +50,44 @@ function ListPanel({ title, items, warn = false }: { title: string; items: strin
   );
 }
 
+function InlineList({ title, items, warn = false }: { title: string; items: string[]; warn?: boolean }) {
+  return (
+    <div>
+      <h6 className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">{title}</h6>
+      <div className="mt-2 space-y-1">
+        {items.map((item) => (
+          <p key={item} className={`text-xs leading-5 ${warn ? "text-[var(--warn)]" : "text-[var(--muted)]"}`}>
+            {item}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EligibilityCard({ stage }: { stage: GitHubDeliveryEligibilityStageView }) {
+  return (
+    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{stage.stageId}</p>
+          <h5 className="mt-1 text-sm font-semibold">{stage.label}</h5>
+        </div>
+        <span className="w-fit rounded-full bg-[color-mix(in_srgb,var(--warn)_16%,transparent)] px-3 py-1 font-mono text-[11px] text-[var(--warn)]">
+          {stage.status}
+        </span>
+      </div>
+      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{stage.summary}</p>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <InlineList title="Eligible when" items={stage.eligibleWhen} />
+        <InlineList title="Hard stops" items={stage.hardStops} warn />
+        <InlineList title="Allowed" items={stage.allowedOperations} />
+        <InlineList title="Blocked" items={stage.blockedOperations} warn />
+      </div>
+    </article>
+  );
+}
+
 export function GitHubDeliveryAuthorityReportPanel({ report }: { report: GitHubDeliveryAuthorityReportView }) {
   return (
     <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
@@ -73,12 +115,25 @@ export function GitHubDeliveryAuthorityReportPanel({ report }: { report: GitHubD
           ["Reviews", report.reviewResolutionApproved ? "approved" : "blocked"],
           ["Merge", report.mergeApproved ? "approved" : "blocked"],
           ["Cleanup", report.remoteCleanupApproved ? "approved" : "blocked"],
+          ["Auto", report.automaticDeliveryApproved ? "approved" : "blocked"],
         ].map(([label, value]) => (
           <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 break-words text-sm font-semibold">{value}</p>
           </div>
         ))}
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+        <ListPanel title="Trusted delivery policy" items={report.trustedDeliveryPolicy} />
+        <div>
+          <h4 className="text-base font-semibold">Eligibility stages</h4>
+          <div className="mt-3 grid gap-3">
+            {report.eligibilityStages.map((stage) => (
+              <EligibilityCard key={stage.stageId} stage={stage} />
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="mt-5 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">

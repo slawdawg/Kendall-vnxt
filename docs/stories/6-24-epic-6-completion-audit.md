@@ -32,6 +32,7 @@ The report does not approve GitHub writes, Codex or Claude launch, merge, cleanu
 - Added `EpicCompletionAuditReportPanel` to Controls.
 - Added report catalog, runtime evidence, and report shortcut references.
 - The recommended approval remains scoped to push, integrated PR creation, and read-only PR/CI checks only.
+- Post-merge follow-up refreshed the audit to show PR #86 delivered, local cleanup completed, cleanup hardening still awaiting normal delivery gates, and provider/agent/autonomy expansion still blocked by default.
 
 ## Verification
 
