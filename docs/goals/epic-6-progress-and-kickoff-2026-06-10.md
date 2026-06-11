@@ -46,7 +46,7 @@ Candidate Work
 | 14. Trusted autonomy | Readiness prepared; autonomy blocked | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. |
 | 15. Completion audit visibility | Readiness prepared; completion blocked | Story 6.24 adds a Dev Console completion audit showing prepared local work, remaining blockers, and the next delivery approval. |
 | 16. Trusted delivery eligibility | Delivered in PR #88 | Stories 6.25 and 6.26 define read-only eligibility stages and current-branch evaluation for softening push, PR, merge, and cleanup gates after strict evidence is satisfied. Actual future GitHub mutation remains gated per target. |
-| 17. MVP proof | Trial packet in progress locally | Story 6.27 defines the read-only approval packet for one real BMAD story trial through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. |
+| 17. MVP proof | Trial packet delivered; real trial blocked | Story 6.27 delivered the read-only approval packet for one real BMAD story trial through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. Bob story selection and bounded launch approval are still required before a real trial. |
 
 ## Approval Queue
 
@@ -65,6 +65,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 ## Current Safe Work
 
 - Prepare the next real BMAD story trial approval packet with exact implementation scope, provider lane, verification command, review plan, delivery target, and cleanup target.
+- Current real-story trial approval packet: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
 - Keep report catalog, runtime evidence export, and Controls page anchors aligned when adding or changing evidence reports.
 - Continue root-cause maintenance only when scoped and verified.
 - Prepare exact approval text for the next unavoidable high-blast-radius operation when Bob is ready.
@@ -127,6 +128,7 @@ After a PR is opened under explicit approval and CI is green, the line softens o
 - 2026-06-11: Story 6.26 added a read-only trusted delivery eligibility evaluator for the current branch, base, head revision, working tree, commits ahead, diffstat, missing proof, and hard stops. It performs no GitHub query or mutation.
 - 2026-06-11: PR #88 delivered Story 6.26 into `main` after CI `check` passed and one review comment was resolved by switching delivery diffstat to merge-base branch scope.
 - 2026-06-11: Story 6.27 added a read-only Epic 6 MVP proof trial packet that names the selected story, bounded Codex implementation, local/Ollama evidence, bounded Claude review, GitHub delivery, cleanup, and done-evidence approvals required for the next real BMAD story proof.
+- 2026-06-11: PR #90 delivered Story 6.27 into `main`. Local verification after merge passed with `pnpm.cmd run check` including preflight, all drift checks, dashboard build, and 143 supervisor tests.
 
 ## Current GitHub State Snapshot
 
@@ -134,12 +136,13 @@ Snapshot date: 2026-06-11.
 
 - Delivered milestone branch: `codex/implement-story-6-23-trusted-autonomy-readiness`; PR #86 was merged into `main`.
 - PR #85 and PR #86 are closed as merged, and their remote branches were cleaned up after approval.
-- Stories 6.4-6.24 were included in PR #86. Cleanup hardening and audit refresh were delivered in PR #87. Trusted delivery eligibility was delivered in PR #88.
+- Stories 6.4-6.24 were included in PR #86. Cleanup hardening and audit refresh were delivered in PR #87. Trusted delivery eligibility was delivered in PR #88. Epic 6 audit refresh was delivered in PR #89. MVP proof trial packet was delivered in PR #90.
 - Delivery packaging plan: `docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md`.
 - Integrated PR body draft: `docs/goals/epic-6-integrated-pr-body-draft-2026-06-11.md`.
 - Follow-up hardening delivery plan: `docs/goals/epic-6-follow-up-hardening-delivery-plan-2026-06-11.md`.
 - Follow-up hardening PR body draft: `docs/goals/epic-6-follow-up-hardening-pr-body-draft-2026-06-11.md`.
 - Trusted delivery eligibility PR: `https://github.com/slawdawg/Kendall-vnxt/pull/88`.
+- MVP proof trial packet PR: `https://github.com/slawdawg/Kendall-vnxt/pull/90`.
 
 ## Completion Audit
 
@@ -150,9 +153,9 @@ Evidence that is complete locally:
 - Story map through 6.24 was delivered through PR #86.
 - Cleanup hardening was delivered through PR #87.
 - Story 6.26 trusted delivery eligibility was delivered through PR #88.
-- Story 6.27 MVP proof trial packet is being prepared locally to make the next approval exact before any worker launch.
+- Story 6.27 MVP proof trial packet was delivered through PR #90 to make the next approval exact before any worker launch.
 - Controls page includes read-only surfaces for execution readiness, authority readiness, Git/GitHub posture, local cleanup, remote cleanup/sync, Codex, Claude, trusted autonomy, trusted delivery eligibility, and Epic 6 completion audit visibility.
-- Full local verification passed on the merged milestone and follow-up branches with 142 supervisor tests.
+- Full local verification passed on the merged milestone and follow-up branches with 143 supervisor tests after PR #90.
 - Local cleanup for the merged milestone was performed, Windows cleanup hardening was delivered, and one empty Codex workspace directory remains locked by another process outside Git worktree registration.
 
 Evidence still missing for completion:
@@ -162,7 +165,7 @@ Evidence still missing for completion:
 - GitHub delivery Gate 1 and merge are complete for PR #86, PR #87, and PR #88.
 - Automatic cleanup, remote cleanup, issue/story sync, and trusted autonomy remain blocked by default.
 - No real BMAD story has reached the final Dev Console done/evidence state through approved implementation, delivery, and cleanup.
-- The next real-story trial packet exists locally but no Codex or Claude worker launch has been approved from it.
+- The next real-story trial packet is delivered, but no story has been selected and no Codex or Claude worker launch has been approved from it.
 
 Next unavoidable gate:
 
