@@ -58,6 +58,19 @@ Snapshot date: 2026-06-11.
 - PR #91 and PR #92 provide initial evidence for `epic-6-low-risk-doc-evidence-pr-v1`.
 - On 2026-06-11, Bob approved `epic-6-low-risk-doc-evidence-pr-v1`: for matching doc/evidence-only changes, Codex may create an isolated branch/worktree from `main`, implement bounded documentation/evidence changes, run `pnpm.cmd run check`, commit, push, open one PR to `main`, and run read-only PR/CI checks without per-step approval. Auto-merge, cleanup, issue sync, Claude launch, provider expansion, secrets access, destructive operations, failed-check bypass, and unrelated source changes remain separately gated.
 
+## Current Epic 6 MVP Proof Trial State
+
+Snapshot date: 2026-06-11.
+
+- Selected successor proof story: `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md`.
+- Current supervisor proof instance: `http://127.0.0.1:8010` using repo-local proof database `.data/epic-6-proof-supervisor.db`.
+- Candidate Work: `8afea99f-bb79-4f51-a66c-f1b02dff9005`, approved from `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md` with metadata-only BMAD import retention.
+- Active WorkItem: `a8e43bba-a2dd-4b2e-b995-22fecea85611`.
+- Task packet/routing evidence selected `local_readonly` with preview-only authority, no provider calls, and no command execution.
+- Local evidence event: `local-evidence-route-a8e43bba-a2dd-4b2e-b995-22fecea85611-epic-6-mvp-proof-local-evidence-task_classification`.
+- Runtime export: `runtime-evidence-export-a8e43bba-a2dd-4b2e-b995-22fecea85611`.
+- Current stop line: WorkItem is blocked before implementation because the repository contains uncommitted proof-selection documentation. Bounded Codex implementation, GitHub push/PR/checks, merge, cleanup, Claude review, provider expansion, issue/story sync, and done-state completion remain separately gated.
+
 ## Approval Request Format
 
 Every approval request should include:

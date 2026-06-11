@@ -24,9 +24,9 @@ Story 3.61 has now completed an initial doc/evidence-only proof lane through bou
 
 ## Selected Story
 
-Selected initial trial story: `docs/stories/3-61-maintenance-action-evidence-links.md`.
+Completed initial doc/evidence trial story: `docs/stories/3-61-maintenance-action-evidence-links.md`.
 
-No successor full-lifecycle MVP proof story is selected yet.
+Selected successor full-lifecycle MVP proof story: `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md`.
 
 Selection requirements:
 
@@ -40,7 +40,7 @@ Selection requirements:
 Approval phrase:
 
 ```text
-Approve one Epic 6 MVP proof trial for docs/stories/<story-id>.md: create/use one isolated local Codex worktree from main, launch one bounded Codex implementation for that selected story only, limit changes to the approved story scope, run pnpm.cmd run check for verification, and do not launch Claude, push, open/update a PR, merge, delete branches/worktrees, sync issues, or perform cleanup without separate approval.
+Approve one Epic 6 MVP proof trial for docs/stories/3-66-epic-6-mvp-proof-done-evidence.md: create/use one isolated local Codex worktree from main, launch one bounded Codex implementation for that selected story only, limit changes to the approved proof scope, run pnpm.cmd run check for verification, and do not launch Claude, push, open/update a PR, merge, delete branches/worktrees, sync issues, or perform cleanup without separate approval.
 ```
 
 This approval would allow only:
