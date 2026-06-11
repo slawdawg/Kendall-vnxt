@@ -3253,7 +3253,7 @@ class SupervisorService:
         status_ok, status_output = self._git_output(["git", "status", "--porcelain=v1"])
         base_ok, _ = self._git_output(["git", "rev-parse", "--verify", base_branch])
         ahead_ok, ahead_output = self._git_output(["git", "rev-list", "--count", f"{base_branch}..HEAD"])
-        diff_ok, diff_output = self._git_output(["git", "diff", "--stat", f"{base_branch}..HEAD"])
+        diff_ok, diff_output = self._git_output(["git", "diff", "--stat", f"{base_branch}...HEAD"])
 
         current_branch = branch_output if branch_ok and branch_output else "detached"
         head_revision = head_output if head_ok else "unknown"
