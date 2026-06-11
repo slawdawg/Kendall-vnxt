@@ -30,7 +30,7 @@ Candidate Work
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
-| 1. Candidate Work foundation | Complete locally | Stories 6.3, 6.4, 6.5, and 6.6 implemented and verified locally; remote delivery remains approval-gated. |
+| 1. Candidate Work foundation | Delivered in PR #86 | Stories 6.3, 6.4, 6.5, and 6.6 implemented, verified, and delivered through the integrated Epic 6 milestone PR. |
 | 2. Orchestrated preview foundation | Complete locally | Stories 6.7 and 6.8 implemented read-only task packet preview/evidence links without execution authority. |
 | 3. Dev Console live pipeline | Complete locally | Story 6.9 implemented SSE-backed dashboard refresh without polling or full browser reloads. |
 | 4. Proof workflow | Complete locally | Stories 6.10 and 6.11 prove synthetic and real BMAD artifacts through Candidate, Active, routing preview, fake/blocked attempt evidence, and runtime evidence. |
@@ -41,8 +41,8 @@ Candidate Work
 | 9. Local worktree management | Plan-only complete locally | Story 6.15 adds guarded local worktree planning without create/remove authority. |
 | 10. Codex authority | Readiness prepared; real launch blocked | Stories 6.16 and 6.17 add no-launch readiness and bounded implementation approval packet. Real Codex process/task execution is not approved. |
 | 11. Claude authority | Readiness prepared; real launch blocked | Stories 6.18 and 6.19 add no-launch readiness and review-only approval packet. Real Claude process/task execution is not approved. |
-| 12. GitHub delivery | Readiness prepared; remote writes blocked | Story 6.20 adds delivery authority ladder. Push, PR mutation, CI wait, review resolution, merge, and cleanup remain approval-gated. |
-| 13. Cleanup | Readiness prepared; deletion blocked | Stories 6.21 and 6.22 add local cleanup and remote cleanup/sync readiness without deletion or remote mutation. |
+| 12. GitHub delivery | Milestone delivered; future writes gated | Story 6.20 adds delivery authority ladder. PR #86 was merged after approval; future push, PR mutation, CI wait, review resolution, merge, and cleanup remain approval-gated per target. |
+| 13. Cleanup | Milestone cleanup performed; automation blocked | Stories 6.21 and 6.22 add local cleanup and remote cleanup/sync readiness. Local cleanup was performed for the merged milestone; automatic cleanup and remote mutation remain blocked. |
 | 14. Trusted autonomy | Readiness prepared; autonomy blocked | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. |
 | 15. Completion audit visibility | Readiness prepared; completion blocked | Story 6.24 adds a Dev Console completion audit showing prepared local work, remaining blockers, and the next delivery approval. |
 | 16. MVP proof | Blocked pending approval | One real BMAD story still must complete through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. |
@@ -55,18 +55,18 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 | --- | --- | --- | --- | --- |
 | Codex process launch/task execution | pending explicit approval | One approved Active work item in isolated worktree | Approval packet, path scope, expected command shape, verification command, rollback/cleanup plan | TBD |
 | Claude review task execution | pending explicit approval | One high-risk or explicitly approved work item review | Review trigger, bounded context, review-only command shape, scarcity reason, output contract | TBD |
-| GitHub push/PR/update/check delivery | approved and completed for PR #86 Gate 1 | Push `codex/implement-story-6-23-trusted-autonomy-readiness`, open one PR to `main`, run read-only PR/CI checks | Branch/PR plan, target remote, CI/check evidence, rollback plan | PR #86 opened; CI `check` passed; merge remains gated |
-| Merge | pending explicit approval | Merge one approved PR | Green checks, review gates, exact merge method, explicit merge approval | TBD |
-| Local cleanup deletion | pending explicit approval | Remove one local worktree/branch target | Retained evidence, clean status/diffstat, target path/branch, rollback note | TBD |
+| GitHub push/PR/update/check delivery | approved and completed for PR #86 Gate 1 | Push `codex/implement-story-6-23-trusted-autonomy-readiness`, open one PR to `main`, run read-only PR/CI checks | Branch/PR plan, target remote, CI/check evidence, rollback plan | PR #86 opened and CI `check` passed |
+| Merge | approved and completed for PR #86 only | Merge PR #86 into `main` | Green checks, review gates, exact merge method, explicit merge approval | PR #86 merged; future merges remain gated per PR |
+| Local cleanup deletion | approved and completed for merged Epic 6 targets | Remove delivered local worktrees/branches after retained evidence | Retained evidence, clean status/diffstat, target path/branch, rollback note | Merged Epic 6 worktrees/branches cleaned up; future cleanup remains gated per target |
 | Remote cleanup / issue-story sync | stretch / pending explicit approval | Delete remote branch or sync issue/story status | Completed delivery evidence, remote target, before/after metadata, cleanup plan | TBD |
 | Trusted low-risk autonomy | stretch / pending future policy | One narrow repeated workflow class | Repeated successful evidence, stop conditions, approved exception policy | TBD |
 
 ## Current Safe Work
 
-- Package local Story 6.3-6.24 branch stack into reviewable remote PRs after Bob approves push/PR authority.
+- Package follow-up hardening branches into reviewable remote PRs after Bob approves push/PR authority.
 - Keep report catalog, runtime evidence export, and Controls page anchors aligned when adding or changing evidence reports.
 - Continue root-cause maintenance only when scoped and verified.
-- Prepare exact approval text for the first unavoidable high-blast-radius operation when Bob is ready.
+- Prepare exact approval text for the next unavoidable high-blast-radius operation when Bob is ready.
 
 ## Stop/Continue Rules
 
@@ -126,9 +126,9 @@ After a PR is opened under explicit approval and CI is green, the line softens o
 
 Snapshot date: 2026-06-11.
 
-- Current local stack branch: `codex/implement-story-6-23-trusted-autonomy-readiness`; latest delivered commit for PR #86 was `a5b3035`.
-- Current open GitHub PRs found by `gh pr list --state open --limit 20`: PR #86, `Implement Epic 6 Dev Console orchestration pipeline and readiness controls`, branch `codex/implement-story-6-23-trusted-autonomy-readiness`, merge state `CLEAN`, CI `check` success; PR #85, `Implement Story 6.3 Candidate Work model API`, branch `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success.
-- Stories 6.4-6.24 are included in PR #86. PR #85 remains open and must not be closed without separate approval.
+- Delivered milestone branch: `codex/implement-story-6-23-trusted-autonomy-readiness`; PR #86 was merged into `main`.
+- PR #85 and PR #86 are closed as merged, and their remote branches were cleaned up after approval.
+- Stories 6.4-6.24 were included in PR #86. Follow-up cleanup hardening and audit refresh now continue on a separate branch.
 - Delivery packaging plan: `docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md`.
 - Integrated PR body draft: `docs/goals/epic-6-integrated-pr-body-draft-2026-06-11.md`.
 
@@ -138,19 +138,19 @@ Epic 6 is not complete as of this snapshot.
 
 Evidence that is complete locally:
 
-- Story map through 6.24 has local commits on the current stack.
+- Story map through 6.24 was delivered through PR #86.
 - Controls page includes read-only surfaces for execution readiness, authority readiness, Git/GitHub posture, local cleanup, remote cleanup/sync, Codex, Claude, trusted autonomy, and Epic 6 completion audit visibility.
-- Full local verification passed on the latest stack head with 141 supervisor tests.
+- Full local verification passed on the merged milestone and on the current follow-up branch with 141 supervisor tests.
+- Local cleanup for the merged milestone was performed, and Windows cleanup hardening was implemented as a follow-up.
 
 Evidence still missing for completion:
 
 - No approved real Codex implementation attempt has been executed.
 - No approved real Claude review attempt has been executed.
-- GitHub delivery Gate 1 is complete through PR #86 creation and passing CI.
-- No approved merge has occurred for PR #86.
-- No approved local cleanup deletion has occurred after delivery.
+- GitHub delivery Gate 1 and merge are complete for PR #86.
+- Automatic cleanup, remote cleanup, issue/story sync, and trusted autonomy remain blocked by default.
 - No real BMAD story has reached the final Dev Console done/evidence state through approved implementation, delivery, and cleanup.
 
 Next unavoidable gate:
 
-- Bob approval is required before remote push/PR packaging, real Codex launch, real Claude launch, merge, or destructive cleanup. If Bob wants the stack delivered first, the immediate request should be branch/PR-scoped GitHub push and PR creation/update authority.
+- Bob approval is required before follow-up remote push/PR packaging, real Codex launch, real Claude launch, future merge, or destructive cleanup. The immediate delivery request should be scoped to the current follow-up branch only.
