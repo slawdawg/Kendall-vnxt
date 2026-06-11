@@ -1,7 +1,7 @@
 # Epic 6 Progress And Kickoff
 
-Date: 2026-06-10
-Status: draft kickoff artifact
+Date: 2026-06-11
+Status: current milestone state
 
 ## Purpose
 
@@ -33,17 +33,18 @@ Candidate Work
 | 1. Candidate Work foundation | Complete locally | Stories 6.3, 6.4, 6.5, and 6.6 implemented and verified locally; remote delivery remains approval-gated. |
 | 2. Orchestrated preview foundation | Complete locally | Stories 6.7 and 6.8 implemented read-only task packet preview/evidence links without execution authority. |
 | 3. Dev Console live pipeline | Complete locally | Story 6.9 implemented SSE-backed dashboard refresh without polling or full browser reloads. |
-| 4. Proof workflow | In progress | Story 6.10 implements the synthetic BMAD proof; Story 6.11 implements the real BMAD story proof. |
-| 5. Refactoring and maintenance foundation | Not started | Root-cause maintenance allowed when scoped. |
+| 4. Proof workflow | Complete locally | Stories 6.10 and 6.11 prove synthetic and real BMAD artifacts through Candidate, Active, routing preview, fake/blocked attempt evidence, and runtime evidence. |
+| 5. Refactoring and maintenance foundation | Ongoing | Root-cause maintenance has been performed when scoped, including browser selector hardening and report drift checks. |
 | 6. Startup availability | Complete locally | Story 6.12 adds verification for Windows logon startup tasks and live endpoints. |
-| 7. Safe local execution | Not started | Ollama approved only within current endpoint/model boundary until expanded. |
-| 8. Git hygiene foundation | Not started | Read-only first. |
-| 9. Local worktree management | Not started | Local only, no remote. |
-| 10. Codex authority | Blocked pending approval | Dry-run/read-only first, then bounded implementation with approval. |
-| 11. Claude authority | Blocked pending approval | Review-only, scarce-use policy. |
-| 12. GitHub delivery | Blocked pending approval | Human-approved remote actions only. |
-| 13. Cleanup | Not started | Local cleanup after done with evidence. |
-| 14. MVP proof | Not started | One real BMAD story through delivery and cleanup. |
+| 7. Safe local execution | Complete within approved boundary | Story 6.13 adds approved local evidence explanation for safe work-item checks; Ollama remains limited to the approved VM-to-host endpoint/model boundary. |
+| 8. Git hygiene foundation | Complete locally | Story 6.14 adds read-only local repo, branch, worktree, PR, and CI posture. |
+| 9. Local worktree management | Plan-only complete locally | Story 6.15 adds guarded local worktree planning without create/remove authority. |
+| 10. Codex authority | Readiness prepared; real launch blocked | Stories 6.16 and 6.17 add no-launch readiness and bounded implementation approval packet. Real Codex process/task execution is not approved. |
+| 11. Claude authority | Readiness prepared; real launch blocked | Stories 6.18 and 6.19 add no-launch readiness and review-only approval packet. Real Claude process/task execution is not approved. |
+| 12. GitHub delivery | Readiness prepared; remote writes blocked | Story 6.20 adds delivery authority ladder. Push, PR mutation, CI wait, review resolution, merge, and cleanup remain approval-gated. |
+| 13. Cleanup | Readiness prepared; deletion blocked | Stories 6.21 and 6.22 add local cleanup and remote cleanup/sync readiness without deletion or remote mutation. |
+| 14. Trusted autonomy | Readiness prepared; autonomy blocked | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. |
+| 15. MVP proof | Blocked pending approval | One real BMAD story still must complete through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. |
 
 ## Approval Queue
 
@@ -51,27 +52,20 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 
 | Request | Status | Scope | Requested Evidence | Decision |
 | --- | --- | --- | --- | --- |
-| Codex dry-run/read-only checks | pending future request | Verify CLI availability/auth and no-write behavior | Command shape, no-write proof, retention proof | TBD |
-| Codex bounded implementation | pending future request | One approved Active work item in isolated worktree | Worktree plan, path scope, verification command, rollback/cleanup plan | TBD |
-| Claude dry-run/read-only review | pending future request | Verify review-only invocation and scarce-use policy | Command shape, no-write proof, bounded context proof | TBD |
-| Claude bounded review | pending future request | High-risk or explicitly approved work item review | Diff/context scope, review-only output, usage reason | TBD |
-| GitHub delivery remote actions | pending future request | Push/PR/update/check delivery for approved work | Branch/PR plan, CI/check evidence, rollback plan | TBD |
-| Merge | stretch / pending future request | Merge approved PR | Green checks, review gates, explicit merge approval | TBD |
-| Remote cleanup | stretch / pending future request | Delete remote branch or sync issue/story status | Completed delivery evidence, cleanup plan | TBD |
+| Codex process launch/task execution | pending explicit approval | One approved Active work item in isolated worktree | Approval packet, path scope, expected command shape, verification command, rollback/cleanup plan | TBD |
+| Claude review task execution | pending explicit approval | One high-risk or explicitly approved work item review | Review trigger, bounded context, review-only command shape, scarcity reason, output contract | TBD |
+| GitHub push/PR/update/check delivery | pending explicit approval | One named branch/PR/delivery step | Branch/PR plan, target remote, CI/check evidence, rollback plan | TBD |
+| Merge | pending explicit approval | Merge one approved PR | Green checks, review gates, exact merge method, explicit merge approval | TBD |
+| Local cleanup deletion | pending explicit approval | Remove one local worktree/branch target | Retained evidence, clean status/diffstat, target path/branch, rollback note | TBD |
+| Remote cleanup / issue-story sync | stretch / pending explicit approval | Delete remote branch or sync issue/story status | Completed delivery evidence, remote target, before/after metadata, cleanup plan | TBD |
+| Trusted low-risk autonomy | stretch / pending future policy | One narrow repeated workflow class | Repeated successful evidence, stop conditions, approved exception policy | TBD |
 
 ## Current Safe Work
 
-- Implement Candidate Work model/API.
-- Story 6.3 implemented Candidate Work persistence/API/contracts with no promotion or execution side effects.
-- Story 6.4 implemented BMAD import package parser/contracts with metadata-only artifact summaries.
-- Story 6.5 implemented the read-only Proposed Work Dev Console view.
-- Implement Candidate priority/order/promote.
-- Implement task packet v0 and orchestrated preview without execution.
-- Implement SSE-backed Dev Console live refresh without polling or full browser reloads.
-- Prove the synthetic BMAD artifact path through Candidate Work, Active Work, routing preview, fake/blocked attempt, and runtime evidence.
-- Prove a real BMAD story artifact path with metadata-only story evidence preserved through Task Packet and runtime evidence.
-- Verify Windows startup/logon tasks and live Dashboard/Supervisor availability through a redacted startup readiness report.
-- Improve docs/tests/scripts when root-cause maintenance is scoped and verified.
+- Package local Story 6.3-6.23 branch stack into reviewable remote PRs after Bob approves push/PR authority.
+- Keep report catalog, runtime evidence export, and Controls page anchors aligned when adding or changing evidence reports.
+- Continue root-cause maintenance only when scoped and verified.
+- Prepare exact approval text for the first unavoidable high-blast-radius operation when Bob is ready.
 
 ## Stop/Continue Rules
 
@@ -107,3 +101,41 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - 2026-06-10: Story 6.14 added a read-only Git hygiene report and Controls page panel for local repo, branch, worktree, PR, and CI posture without push, PR creation, CI wait, merge, branch deletion, worktree removal, or cleanup authority. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k "git_hygiene_report or supervisor_report_catalog or runtime_evidence_export"`, `pnpm.cmd --filter @kendall/dashboard build`, `PLAYWRIGHT_BROWSERS_PATH=C:\Users\slaw_dawg\Kendall_Nxt\.data\ms-playwright pnpm.cmd exec playwright test tests/e2e/dashboard.spec.ts -g "compact routing fleet data"`, and `pnpm.cmd run check`.
 - 2026-06-10: Story 6.15 added a guarded local worktree plan endpoint and work-item detail panel for managed recipe work without creating, removing, or cleaning up worktrees. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_supervisor_flow.py -q -k "local_worktree_plan"`, `pnpm.cmd --filter @kendall/dashboard build`, `PLAYWRIGHT_BROWSERS_PATH=C:\Users\slaw_dawg\Kendall_Nxt\.data\ms-playwright pnpm.cmd exec playwright test tests/e2e/dashboard.spec.ts -g "shows delivery readiness controls for managed recipe work"`, and `pnpm.cmd run check`.
 - 2026-06-10: Story 6.16 added a no-launch Codex readiness report and Controls page panel for CLI discovery, auth-check posture, worker-launch stop lines, and source-mutation boundaries without running Codex or sending tasks. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k "codex_readiness_report or supervisor_report_catalog or runtime_evidence_export"`, `pnpm.cmd --filter @kendall/dashboard build`, `PLAYWRIGHT_BROWSERS_PATH=C:\Users\slaw_dawg\Kendall_Nxt\.data\ms-playwright pnpm.cmd exec playwright test tests/e2e/dashboard.spec.ts -g "compact routing fleet data"`, and `pnpm.cmd run check`.
+- 2026-06-11: Story 6.17 added a read-only Codex implementation approval packet with target scope, allowed/blocked paths, command shape, evidence, rollback, and stop conditions. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
+- 2026-06-11: Story 6.18 added a no-launch Claude review readiness report with CLI discovery, review-only posture, scarcity controls, and launch/source-mutation stop lines. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
+- 2026-06-11: Story 6.19 added a read-only Claude review approval packet with trigger policy, context scope, blocked inputs, review-only output contract, evidence, scarcity controls, and stop conditions. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
+- 2026-06-11: Story 6.20 added a read-only GitHub delivery authority ladder for push, PR, CI wait, review resolution, merge, and remote cleanup approvals. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
+- 2026-06-11: Story 6.21 added a read-only local cleanup readiness report for completed, stale, abandoned, and evidence-retention cleanup policy without deletion. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
+- 2026-06-11: Story 6.22 added a read-only remote cleanup and issue/story sync readiness report without remote mutation. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
+- 2026-06-11: Story 6.23 added a read-only trusted autonomy readiness report for low-risk graduation gates with all autonomy booleans false. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
+
+## Current GitHub State Snapshot
+
+Snapshot date: 2026-06-11.
+
+- Current local stack head: `codex/implement-story-6-23-trusted-autonomy-readiness` at `3320ee3`.
+- Current open GitHub PR found by `gh pr list --state open --limit 20`: PR #85, `Implement Story 6.3 Candidate Work model API`, branch `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success.
+- Stories 6.4-6.23 are committed locally in stacked branches but have not been pushed or packaged into remote PRs from this run.
+
+## Completion Audit
+
+Epic 6 is not complete as of this snapshot.
+
+Evidence that is complete locally:
+
+- Story map through 6.23 has local commits on the current stack.
+- Controls page includes read-only surfaces for execution readiness, authority readiness, Git/GitHub posture, local cleanup, remote cleanup/sync, Codex, Claude, and trusted autonomy.
+- Full local verification passed on the latest stack head with 140 supervisor tests.
+
+Evidence still missing for completion:
+
+- No approved real Codex implementation attempt has been executed.
+- No approved real Claude review attempt has been executed.
+- GitHub delivery for the local stack beyond PR #85 has not been pushed or PR-packaged.
+- No approved merge has occurred for the Epic 6 stack.
+- No approved local cleanup deletion has occurred after delivery.
+- No real BMAD story has reached the final Dev Console done/evidence state through approved implementation, delivery, and cleanup.
+
+Next unavoidable gate:
+
+- Bob approval is required before remote push/PR packaging, real Codex launch, real Claude launch, merge, or destructive cleanup. If Bob wants the stack delivered first, the immediate request should be branch/PR-scoped GitHub push and PR creation/update authority.
