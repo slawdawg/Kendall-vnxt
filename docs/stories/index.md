@@ -113,6 +113,7 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `6-12-startup-availability.md` | Verify Windows logon startup tasks and live Dashboard/Supervisor endpoints for Dev Console availability. |
 | `6-13-safe-local-execution.md` | Add a work-item Local check panel that records local read-only evidence explanations while preserving disabled write, command, worker, Git, and provider expansion boundaries. |
 | `6-14-git-hygiene-read-only.md` | Add a read-only Git hygiene report and Dev Console panel for repository, worktree, branch, PR, and CI posture without remote writes or cleanup. |
+| `6-15-local-worktree-management.md` | Add a guarded local worktree plan for managed work items without creating, removing, or cleaning up local worktrees. |
 
 ## Completed Foundation Stories
 

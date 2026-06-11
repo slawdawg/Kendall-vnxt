@@ -844,6 +844,11 @@ test.describe("dashboard workflow coverage", () => {
 
     await expect(page.getByRole("button", { name: "Prepare branch" })).toBeVisible();
     await expect(page.getByText("Prepare execution branch")).toBeVisible();
+    await expect(page.getByText("Isolated workspace plan")).toBeVisible();
+    await expect(page.getByText("Create off")).toBeVisible();
+    await expect(page.getByText("Cleanup off")).toBeVisible();
+    await expect(page.getByText("local_worktree_creation_not_enabled")).toBeVisible();
+    await expect(page.getByText("Plan only: no local filesystem mutation was performed.")).toBeVisible();
   });
 
   test("surfaces recovery guidance when managed recipe blocks on branch policy", async ({ page, request }) => {

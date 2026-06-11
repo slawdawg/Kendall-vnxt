@@ -1107,6 +1107,25 @@ class GitHygieneReportView(BaseModel):
     cleanupApproved: bool = False
 
 
+class LocalWorktreePlanView(BaseModel):
+    planId: str
+    workItemId: str
+    title: str
+    executionBranch: str
+    baseBranch: str
+    baseRevision: str
+    worktreePath: str
+    status: str
+    createCommand: list[str]
+    cleanupCommand: list[str]
+    safetyChecks: list[str]
+    blockedBy: list[str]
+    evidence: list[str]
+    createAllowed: bool = False
+    cleanupAllowed: bool = False
+    remoteOperationsAllowed: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

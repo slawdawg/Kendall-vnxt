@@ -397,6 +397,20 @@ async def prepare_work_item_branch(
     return ApiEnvelope(data=service.to_work_item_view(item))
 
 
+@app.get("/work-items/{work_item_id}/local-worktree-plan", response_model=ApiEnvelope)
+async def get_work_item_local_worktree_plan(work_item_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        plan = await service.get_local_worktree_plan(session, work_item_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_response(str(exc), "invalid_local_worktree_plan").model_dump(),
+        ) from exc
+    if not plan:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=plan)
+
+
 @app.post("/work-items/{work_item_id}/retry", response_model=ApiEnvelope)
 async def retry_work_item(work_item_id: str, session: AsyncSession = Depends(get_session)):
     item = await service.retry_item(session, work_item_id)

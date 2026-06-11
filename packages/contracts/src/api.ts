@@ -998,6 +998,25 @@ export interface GitHygieneReportView {
   cleanupApproved: boolean;
 }
 
+export interface LocalWorktreePlanView {
+  planId: string;
+  workItemId: string;
+  title: string;
+  executionBranch: string;
+  baseBranch: string;
+  baseRevision: string;
+  worktreePath: string;
+  status: string;
+  createCommand: string[];
+  cleanupCommand: string[];
+  safetyChecks: string[];
+  blockedBy: string[];
+  evidence: string[];
+  createAllowed: boolean;
+  cleanupAllowed: boolean;
+  remoteOperationsAllowed: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

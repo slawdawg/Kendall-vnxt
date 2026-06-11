@@ -15,6 +15,7 @@ import type {
   GitHygieneReportView,
   LocalEvidenceExplanationPayload,
   LocalEvidenceExplanationView,
+  LocalWorktreePlanView,
   ManagedRecipePolicyReportView,
   MaintenanceActionPlanReportView,
   MaintenanceReadinessReportView,
@@ -133,6 +134,10 @@ export async function getExecutionAttempts(workItemId: string): Promise<Executio
 
 export async function getRuntimeEvidenceExport(workItemId: string): Promise<RuntimeEvidenceExportView> {
   return requestJson<RuntimeEvidenceExportView>(`/work-items/${workItemId}/runtime-evidence-export`);
+}
+
+export async function getLocalWorktreePlan(workItemId: string): Promise<LocalWorktreePlanView> {
+  return requestJson<LocalWorktreePlanView>(`/work-items/${workItemId}/local-worktree-plan`);
 }
 
 export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView[]> {

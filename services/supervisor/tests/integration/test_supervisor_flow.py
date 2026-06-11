@@ -888,6 +888,64 @@ def test_recipe_branch_preparation_blocks_when_repo_is_dirty(tmp_path, monkeypat
         }
 
 
+def test_local_worktree_plan_is_read_only_and_authority_blocked(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "local-worktree-plan.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, process_once_for_tests, service
+
+    service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+    service._repo_root = lambda: "C:/repo/Kendall_Nxt"  # type: ignore[method-assign]
+    service._git_output = lambda args: (  # type: ignore[method-assign]
+        (True, "main")
+        if args == ["git", "branch", "--show-current"]
+        else (True, "base-revision")
+    )
+    service._run_git_command = lambda args: (_ for _ in ()).throw(AssertionError("worktree plan must not run git commands"))  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Plan local worktree",
+                "requestedOutcome": "Show the isolated worktree plan without creating or removing local files.",
+                "source": "operator-dashboard:improvement",
+                "riskLevel": "medium",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "e2e-local-worktree-plan",
+                    "baseBranch": "main",
+                    "baseRevision": "base-revision",
+                },
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        asyncio.run(process_once_for_tests())
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get(f"/work-items/{work_item_id}/local-worktree-plan")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+    plan = response.json()["data"]
+    assert plan["planId"] == f"local-worktree-plan-{work_item_id}"
+    assert plan["executionBranch"] == "e2e-local-worktree-plan"
+    assert plan["baseBranch"] == "main"
+    assert plan["baseRevision"] == "base-revision"
+    assert plan["worktreePath"].replace("\\", "/").endswith("Kendall_Nxt-worktrees/e2e-local-worktree-plan")
+    assert plan["status"] == "blocked_pending_authority"
+    assert plan["createAllowed"] is False
+    assert plan["cleanupAllowed"] is False
+    assert plan["remoteOperationsAllowed"] is False
+    assert "local_worktree_creation_not_enabled" in plan["blockedBy"]
+    assert "local_worktree_cleanup_not_enabled" in plan["blockedBy"]
+    assert plan["createCommand"][:3] == ["git", "worktree", "add"]
+    assert plan["cleanupCommand"][:3] == ["git", "worktree", "remove"]
+
+
 def test_managed_next_action_executes_only_current_recipe_step(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "recipe-managed-next-action.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")

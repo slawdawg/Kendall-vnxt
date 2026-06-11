@@ -48,6 +48,7 @@ from supervisor.api.schemas import (
     LocalEvidencePacketView,
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
+    LocalWorktreePlanView,
     ManagedRecipePolicyReportView,
     MaintenanceActionPlanReportView,
     MaintenanceActionPlanStepView,
@@ -5842,6 +5843,73 @@ class SupervisorService:
         await self._publish_item(item)
         return item
 
+    async def get_local_worktree_plan(self, session: AsyncSession, work_item_id: str) -> LocalWorktreePlanView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+
+        recipe = self._execution_recipe_for_item(item)
+        if not recipe:
+            raise ValueError("Local worktree planning is available only for managed recipe work.")
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        repo_root = self._repo_root() or str(Path.cwd())
+        branch_ok, current_branch = self._git_output(["git", "branch", "--show-current"])
+        revision_ok, current_revision = self._git_output(["git", "rev-parse", "HEAD"])
+        base_branch = metadata.get("baseBranch") if isinstance(metadata.get("baseBranch"), str) and metadata.get("baseBranch").strip() else current_branch
+        base_revision = (
+            metadata.get("baseRevision")
+            if isinstance(metadata.get("baseRevision"), str) and metadata.get("baseRevision").strip()
+            else current_revision
+        )
+        execution_branch = (
+            metadata.get("executionBranch")
+            if isinstance(metadata.get("executionBranch"), str) and metadata.get("executionBranch").strip()
+            else self._recipe_execution_branch(item, recipe)
+        )
+        if not base_branch:
+            base_branch = "unknown"
+        if not base_revision:
+            base_revision = "unknown"
+
+        worktree_path = str(self._planned_worktree_path(repo_root, execution_branch))
+        dirty = self._repo_is_dirty()
+        blocked_by = ["local_worktree_creation_not_enabled", "local_worktree_cleanup_not_enabled"]
+        if dirty:
+            blocked_by.append("current_repo_has_uncommitted_changes")
+        if not branch_ok:
+            blocked_by.append("base_branch_unavailable")
+        if not revision_ok:
+            blocked_by.append("base_revision_unavailable")
+
+        return LocalWorktreePlanView(
+            planId=f"local-worktree-plan-{item.id}",
+            workItemId=item.id,
+            title=item.title,
+            executionBranch=execution_branch,
+            baseBranch=base_branch,
+            baseRevision=base_revision,
+            worktreePath=worktree_path,
+            status="blocked_pending_authority",
+            createCommand=["git", "worktree", "add", "-b", execution_branch, worktree_path, base_branch],
+            cleanupCommand=["git", "worktree", "remove", worktree_path],
+            safetyChecks=[
+                "Confirm current repository status is clean before creating an isolated worktree.",
+                "Confirm execution branch starts with the managed recipe branch prefix.",
+                "Keep all implementation changes inside recipe allowed paths.",
+                "Record verification evidence before any delivery or cleanup action.",
+            ],
+            blockedBy=blocked_by,
+            evidence=[
+                "Plan only: no local filesystem mutation was performed.",
+                f"Recipe branch prefix: {recipe.branch_prefix}.",
+                f"Allowed paths: {', '.join(recipe.allowed_paths)}.",
+            ],
+            createAllowed=False,
+            cleanupAllowed=False,
+            remoteOperationsAllowed=False,
+        )
+
     async def process_once(self, session: AsyncSession) -> None:
         async with self._loop_lock:
             control = await self.ensure_control(session)
@@ -7418,6 +7486,11 @@ class SupervisorService:
                 normalized.append("-")
         slug = "".join(normalized).strip("-")[:32] or "work"
         return f"{recipe.branch_prefix}{slug}-{item.id[:8]}"
+
+    def _planned_worktree_path(self, repo_root: str, execution_branch: str) -> Path:
+        safe_branch = "".join(character if character.isalnum() or character in {"-", "_"} else "-" for character in execution_branch).strip("-")
+        root = Path(repo_root)
+        return root.parent / f"{root.name}-worktrees" / (safe_branch or "worktree")
 
     def _recipe_delivery_gate_payload(self, item: WorkItem, recipe: ExecutionRecipe | None) -> dict:
         metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
