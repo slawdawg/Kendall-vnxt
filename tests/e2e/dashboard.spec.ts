@@ -507,11 +507,11 @@ test.describe("dashboard workflow coverage", () => {
     const epicCompletionPanel = page.locator("#epic-6-completion-audit-report");
     await expect(epicCompletionPanel.getByText("Epic 6 audit", { exact: true })).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Completion status" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("merged_progressive_hardening")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("delivery_eligibility_ready_progressive_hardening")).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Local readiness stack" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Cleanup hardening delivery" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Trusted delivery eligibility" })).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Real BMAD story done proof" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Approve the next follow-up branch")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Approve one real BMAD story trial")).toBeVisible();
     await expect(epicCompletionPanel.getByText("Launching Codex or Claude workers without bounded approval.")).toBeVisible();
     await expect(page.locator("#epic-6-completion-audit-report")).toBeVisible();
 

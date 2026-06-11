@@ -3698,18 +3698,18 @@ class SupervisorService:
             reportId="epic-6-completion-audit-report-v1",
             generatedAt=datetime.now(timezone.utc),
             summary=(
-                "Read-only Epic 6 completion audit. The integrated Epic 6 milestone PR was merged and local cleanup was "
-                "handled, but Epic 6 remains in progressive hardening until provider execution, subscription-agent launch, "
-                "trusted autonomy, and follow-up delivery gates are approved by scope."
+                "Read-only Epic 6 completion audit. The integrated Epic 6 milestone, cleanup hardening, and trusted "
+                "delivery eligibility follow-ups were merged, but Epic 6 remains in progressive hardening until one real "
+                "BMAD story completes the approved implementation, review, delivery, cleanup, and done-evidence path."
             ),
             epicId="6",
-            overallStatus="merged_progressive_hardening",
+            overallStatus="delivery_eligibility_ready_progressive_hardening",
             completedItems=[
                 EpicCompletionAuditItemView(
                     itemId="local-readiness-stack",
                     label="Local readiness stack",
                     status="prepared_locally",
-                    summary="Stories 6.3 through 6.24 have implementation evidence for proposed work, routing preview, Dev Console visibility, authority readiness reports, and completion audit visibility.",
+                    summary="Stories 6.3 through 6.26 have implementation evidence for proposed work, routing preview, Dev Console visibility, authority readiness reports, delivery eligibility, and completion audit visibility.",
                     evidence=[
                         "Candidate Work and BMAD import surfaces exist.",
                         "Task Packet preview, fake or blocked attempts, runtime evidence, and Dev Console live state are wired.",
@@ -3735,8 +3735,8 @@ class SupervisorService:
                     summary="Merged Epic 6 worktrees and branches were cleaned up, and Windows cleanup RCA produced a hardening follow-up.",
                     evidence=[
                         "Local Git worktree list was reduced to the main checkout plus intentional ongoing work.",
-                        "Remote merged branches for PR #85 and PR #86 were cleaned up.",
-                        "Windows cache and ACL cleanup prevention was prepared as a follow-up implementation slice.",
+                        "Remote merged branches for PR #85, PR #86, PR #87, and PR #88 were cleaned up.",
+                        "Windows cache and ACL cleanup prevention was delivered through PR #87.",
                     ],
                 ),
                 EpicCompletionAuditItemView(
@@ -3749,26 +3749,27 @@ class SupervisorService:
                         "Report shortcut anchors link evidence to the right dashboard sections.",
                     ],
                 ),
-            ],
-            remainingItems=[
                 EpicCompletionAuditItemView(
-                    itemId="cleanup-hardening-delivery",
-                    label="Cleanup hardening delivery",
-                    status="needs_approval",
-                    summary="The Windows cleanup RCA follow-up must still be delivered through the normal push, PR, CI, review, merge, and cleanup gates.",
+                    itemId="trusted-delivery-eligibility",
+                    label="Trusted delivery eligibility",
+                    status="merged",
+                    summary="Story 6.26 now evaluates the current branch before any future push, PR, merge, or cleanup action is considered eligible.",
                     evidence=[
-                        "A local cleanup hardening branch exists separately from the merged Epic 6 milestone.",
-                        "Follow-up delivery should use the same progressive PR, merge, and cleanup policy.",
+                        "https://github.com/slawdawg/Kendall-vnxt/pull/88",
+                        "GET /supervisor/trusted-delivery-eligibility-report is wired into Controls and report shortcuts.",
+                        "The evaluator uses branch-scoped merge-base diff evidence and performs no GitHub mutation.",
                     ],
                 ),
+            ],
+            remainingItems=[
                 EpicCompletionAuditItemView(
                     itemId="real-bmad-done-proof",
                     label="Real BMAD story done proof",
                     status="ready_for_next_trial",
-                    summary="The system still needs a full real BMAD story trial through the strengthened delivery and cleanup path before autonomy expands.",
+                    summary="The system still needs a full real BMAD story trial through approved implementation, review, delivery, cleanup, and Dev Console done evidence before autonomy expands.",
                     evidence=[
                         "Synthetic and real-story preview proofs are local evidence only.",
-                        "A final done state requires approved GitHub delivery and retained runtime evidence.",
+                        "A final done state requires approved Codex/Claude boundaries, GitHub delivery, cleanup, and retained runtime evidence.",
                     ],
                 ),
                 EpicCompletionAuditItemView(
@@ -3800,15 +3801,15 @@ class SupervisorService:
                 "Marking trusted autonomy complete before repeated real-story delivery and cleanup evidence exists.",
             ],
             recommendedApproval=(
-                "Approve the next follow-up branch only after its scope, CI, review state, merge target, and cleanup target are visible. "
+                "Approve one real BMAD story trial only after its work item, implementation scope, provider lanes, verification command, review plan, delivery target, and cleanup target are visible. "
                 "Keep Codex launch, Claude launch, provider expansion, autonomous cleanup, remote cleanup, and GitHub issue/story sync separately gated."
             ),
             requiredEvidence=[
-                "Merged PR #86 URL and merge commit retained as milestone delivery evidence.",
-                "Follow-up branch URL, CI/check status, and diffstat recorded after approved push and PR creation.",
+                "Merged PR #86, PR #87, and PR #88 URLs and merge commits retained as milestone and follow-up delivery evidence.",
+                "Real BMAD story work item, approval packet, lane decision, local/Ollama evidence, and implementation diff retained.",
                 "Review comments resolved or explicitly deferred with evidence.",
-                "Merge approval recorded separately before each future merge.",
-                "Cleanup approval and retained evidence recorded after each future delivery.",
+                "Merge approval recorded separately before each future real-story merge.",
+                "Cleanup approval, retained evidence, and Dev Console done state recorded after the real-story delivery.",
             ],
             stopConditions=[
                 "The local worktree is dirty or contains unrelated changes.",
@@ -3818,7 +3819,7 @@ class SupervisorService:
                 "Evidence needed for audit or rollback would be lost.",
             ],
             nextSafeActions=[
-                "Use this audit to request one narrow follow-up delivery approval packet at a time.",
+                "Use this audit to request one bounded real BMAD story trial approval packet.",
                 "Continue implementation on non-gated hardening while provider, launch, merge, and cleanup gates wait for approval.",
                 "Run the next real BMAD story trial through the visible Dev Console pipeline before softening autonomy gates.",
             ],
