@@ -30,6 +30,7 @@ export interface CandidateWorkCreatePayload {
   riskLevel?: RiskLevel;
   priority?: CandidateWorkPriority;
   sortOrder?: number;
+  importMetadata?: Record<string, unknown>;
 }
 
 export interface CandidateWorkUpdatePayload {
@@ -59,6 +60,7 @@ export interface CandidateWorkView {
   updatedAt: string;
   approvedAt?: string | null;
   promotedWorkItemId?: string | null;
+  importMetadata: Record<string, unknown>;
 }
 
 export interface CandidateWorkPromotionView {

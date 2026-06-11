@@ -219,6 +219,10 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         assert candidate["sortOrder"] == 7
         assert candidate["status"] == "proposed"
         assert "As Bob," in candidate["requestedOutcome"]
+        assert candidate["importMetadata"]["retentionPolicy"] == "metadata_only_no_raw_artifact_content"
+        assert candidate["importMetadata"]["artifactTitle"] == "Update Dev Console Label Copy"
+        assert "Proposed Work labels use plain language." in candidate["importMetadata"]["acceptanceCriteria"]
+        assert "Import this artifact as Candidate Work." in candidate["importMetadata"]["verificationSummary"]
 
         assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
         promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
@@ -231,6 +235,8 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         assert work_item["metadata"]["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
         assert work_item["metadata"]["sourceArtifactType"] == "bmad_research"
         assert work_item["metadata"]["candidatePriority"] == "high"
+        assert work_item["metadata"]["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
+        assert work_item["metadata"]["acceptanceCriteriaSummary"] == candidate["importMetadata"]["acceptanceCriteria"]
 
         packet_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
         assert packet_response.status_code == 200
@@ -239,6 +245,7 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         assert packet["workItemId"] == work_item_id
         assert packet["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
         assert packet["priority"] == "high"
+        assert packet["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
         assert packet_preview["previewOnly"] is True
         assert packet_preview["executionAttemptCreated"] is False
         assert packet_preview["providerCallsAllowed"] is False
@@ -294,3 +301,73 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         assert "candidate_work.promoted" in event_types
         assert "routing.preview_recorded" in event_types
         assert "execution_attempt.rejected" in event_types
+
+
+def test_real_bmad_story_flows_through_import_preview_attempt_and_runtime_evidence(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "real-bmad-proof.db") as client:
+        import_response = client.post(
+            "/candidate-work/import-bmad",
+            json={
+                "artifactPath": "docs/stories/6-5-proposed-work-dev-console-view.md",
+                "sortOrder": 11,
+            },
+        )
+        assert import_response.status_code == 200
+        candidate = import_response.json()["data"]
+        candidate_id = candidate["id"]
+        assert candidate["title"] == "Review Story 6.5: Proposed Work Dev Console View"
+        assert candidate["source"] == "bmad"
+        assert candidate["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
+        assert candidate["sourceArtifactType"] == "bmad_story"
+        assert candidate["priority"] == "high"
+        assert candidate["sortOrder"] == 11
+        assert candidate["importMetadata"]["storyId"] == "6-5"
+        assert candidate["importMetadata"]["epicId"] == "6"
+        assert "Proposed Work displays Candidate Work cards or rows" in candidate["importMetadata"]["acceptanceCriteria"]
+        assert "dashboard build or focused type check" in candidate["importMetadata"]["verificationSummary"]
+        assert candidate["importMetadata"]["retentionPolicy"] == "metadata_only_no_raw_artifact_content"
+
+        assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
+        promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promote_response.status_code == 200
+        work_item = promote_response.json()["data"]["workItem"]
+        work_item_id = work_item["id"]
+        assert work_item["metadata"]["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
+        assert work_item["metadata"]["sourceArtifactType"] == "bmad_story"
+        assert work_item["metadata"]["importMetadata"]["storyId"] == "6-5"
+        assert work_item["metadata"]["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
+        assert work_item["metadata"]["acceptanceCriteriaSummary"] == candidate["importMetadata"]["acceptanceCriteria"]
+
+        packet_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
+        assert packet_response.status_code == 200
+        packet_preview = packet_response.json()["data"]
+        assert packet_preview["packet"]["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
+        assert packet_preview["packet"]["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
+        assert packet_preview["previewOnly"] is True
+        assert packet_preview["providerCallsAllowed"] is False
+        assert packet_preview["commandExecutionAllowed"] is False
+
+        attempt_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts",
+            json={"taskKind": "evidence_summary", "actorId": "real-proof", "actorLabel": "Real Proof"},
+        )
+        assert attempt_response.status_code == 200
+        attempt = attempt_response.json()["data"]
+        assert attempt["status"] == "rejected"
+        assert attempt["artifactRefs"][0]["artifactType"] == "task_packet_v0"
+        assert attempt["artifactRefs"][0]["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
+        assert attempt["artifactRefs"][0]["executionAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["networkAllowed"] is False
+
+        export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
+        assert export_response.status_code == 200
+        export = export_response.json()["data"]
+        assert export["workItem"]["metadata"]["importMetadata"]["storyId"] == "6-5"
+        assert export["workItem"]["metadata"]["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
+        assert export["executionAttempts"][0]["artifactRefs"][0]["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
+        assert export["safety"]["processLaunchAllowed"] is False
+        assert export["safety"]["providerCallsAllowed"] is False
+        assert export["safety"]["commandExecutionAllowed"] is False
+        assert export["safety"]["sourceMutationAllowed"] is False

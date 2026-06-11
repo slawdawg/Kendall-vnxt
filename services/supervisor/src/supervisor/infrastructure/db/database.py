@@ -30,6 +30,7 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_by_label VARCHAR(120)"))
             await connection.execute(text("ALTER TABLE execution_attempts ADD COLUMN IF NOT EXISTS workspace_isolation_plan_json JSON"))
             await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN IF NOT EXISTS sort_order INTEGER"))
+            await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN IF NOT EXISTS import_metadata_json JSON"))
         elif dialect == "sqlite":
             result = await connection.execute(text("PRAGMA table_info(workflow_events)"))
             column_names = {row[1] for row in result.fetchall()}
@@ -57,6 +58,8 @@ async def init_db() -> None:
             candidate_columns = {row[1] for row in result.fetchall()}
             if "sort_order" not in candidate_columns:
                 await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN sort_order INTEGER DEFAULT 0"))
+            if "import_metadata_json" not in candidate_columns:
+                await connection.execute(text("ALTER TABLE candidate_work ADD COLUMN import_metadata_json JSON DEFAULT '{}'"))
 
 
 async def get_session() -> AsyncSession:

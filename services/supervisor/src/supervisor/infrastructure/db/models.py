@@ -57,6 +57,7 @@ class CandidateWork(Base):
     risk_level: Mapped[str] = mapped_column(String(16), default=RiskLevel.LOW.value)
     priority: Mapped[str] = mapped_column(String(16), default=CandidateWorkPriority.NORMAL.value)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    import_metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(16), default=CandidateWorkStatus.PROPOSED.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

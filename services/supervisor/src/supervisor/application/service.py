@@ -318,6 +318,7 @@ class SupervisorService:
             risk_level=payload.riskLevel.value,
             priority=payload.priority.value,
             sort_order=payload.sortOrder,
+            import_metadata_json=dict(payload.importMetadata),
             status=CandidateWorkStatus.PROPOSED.value,
         )
         session.add(candidate)
@@ -340,6 +341,16 @@ class SupervisorService:
                 riskLevel=package.risk_level,
                 priority=package.recommended_priority,
                 sortOrder=payload.sortOrder,
+                importMetadata={
+                    "artifactTitle": package.artifact_title,
+                    "storyId": package.story_id,
+                    "epicId": package.epic_id,
+                    "acceptanceCriteria": package.acceptance_criteria,
+                    "verificationSummary": package.verification_summary,
+                    "allowedScope": package.allowed_scope,
+                    "notes": list(package.notes),
+                    "retentionPolicy": "metadata_only_no_raw_artifact_content",
+                },
             ),
         )
 
@@ -380,20 +391,30 @@ class SupervisorService:
         if candidate.promoted_work_item_id:
             raise ValueError("Candidate work has already been promoted.")
 
+        import_metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+        item_metadata = {
+            "candidateWorkId": candidate.id,
+            "candidatePriority": candidate.priority,
+            "candidateSortOrder": candidate.sort_order,
+            "sourceArtifactPath": candidate.source_artifact_path,
+            "sourceArtifactType": candidate.source_artifact_type,
+            "source": candidate.source,
+            "importMetadata": import_metadata,
+        }
+        verification_summary = import_metadata.get("verificationSummary")
+        acceptance_criteria = import_metadata.get("acceptanceCriteria")
+        if isinstance(verification_summary, str) and verification_summary:
+            item_metadata["verificationSummary"] = verification_summary
+        if isinstance(acceptance_criteria, str) and acceptance_criteria:
+            item_metadata["acceptanceCriteriaSummary"] = acceptance_criteria
+
         item = WorkItem(
             title=candidate.title,
             requested_outcome=candidate.requested_outcome,
             source=f"candidate_work:{candidate.id}",
             details=None,
             risk_level=candidate.risk_level,
-            metadata_json={
-                "candidateWorkId": candidate.id,
-                "candidatePriority": candidate.priority,
-                "candidateSortOrder": candidate.sort_order,
-                "sourceArtifactPath": candidate.source_artifact_path,
-                "sourceArtifactType": candidate.source_artifact_type,
-                "source": candidate.source,
-            },
+            metadata_json=item_metadata,
             state=WorkflowState.QUEUED.value,
             lane=None,
             status_summary=default_status_summary(WorkflowState.QUEUED),
@@ -417,6 +438,7 @@ class SupervisorService:
                 "sourceArtifactType": candidate.source_artifact_type,
                 "candidatePriority": candidate.priority,
                 "candidateSortOrder": candidate.sort_order,
+                "importMetadata": import_metadata,
             },
         )
         await session.commit()
@@ -6552,6 +6574,7 @@ class SupervisorService:
                     "sortOrder": candidate.sort_order,
                     "status": candidate.status,
                     "promotedWorkItemId": candidate.promoted_work_item_id,
+                    "importMetadata": candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {},
                     "summary": f"Proposed work updated: {candidate.title}",
                 },
             )
@@ -7687,6 +7710,7 @@ class SupervisorService:
             updatedAt=self._normalize_timestamp(candidate.updated_at),
             approvedAt=self._normalize_timestamp(candidate.approved_at) if candidate.approved_at else None,
             promotedWorkItemId=candidate.promoted_work_item_id,
+            importMetadata=candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {},
         )
 
     def to_work_item_view(self, item: WorkItem) -> WorkItemView:

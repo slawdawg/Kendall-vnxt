@@ -38,6 +38,7 @@ class CandidateWorkCreate(BaseModel):
     riskLevel: RiskLevel = RiskLevel.LOW
     priority: CandidateWorkPriority = CandidateWorkPriority.NORMAL
     sortOrder: int = 0
+    importMetadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class CandidateWorkUpdate(BaseModel):
@@ -62,6 +63,7 @@ class CandidateWorkView(BaseModel):
     updatedAt: datetime
     approvedAt: datetime | None = None
     promotedWorkItemId: str | None = None
+    importMetadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class BmadImportPackageView(BaseModel):

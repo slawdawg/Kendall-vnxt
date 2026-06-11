@@ -109,6 +109,7 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `6-8-execution-attempt-integration.md` | Attach Task Packet preview evidence to fake or blocked execution attempts without worker launch authority. |
 | `6-9-dev-console-realtime-live-state.md` | Refresh Dev Console cards, counts, attempts, and evidence from supervisor SSE events without polling or full reloads. |
 | `6-10-synthetic-bmad-proof.md` | Prove a synthetic BMAD artifact can flow through Candidate Work, Active Work, routing preview, and fake/blocked attempt evidence. |
+| `6-11-real-bmad-story-proof.md` | Prove a real existing BMAD story can preserve metadata through Candidate Work, Active Work, Task Packet, attempt, and runtime evidence. |
 
 ## Completed Foundation Stories
 
