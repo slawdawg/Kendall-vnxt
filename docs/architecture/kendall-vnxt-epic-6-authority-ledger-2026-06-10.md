@@ -73,6 +73,7 @@ Snapshot date: 2026-06-11.
 - Draft PR: `https://github.com/slawdawg/Kendall-vnxt/pull/96`.
 - PR #96 CI `check` passed on 2026-06-11.
 - PR #96 merge approval packet: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
+- Story 3.66 bounded implementation scope: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
 - Current state: after proof-selection docs were committed and the dirty-repo blocker was cleared, the WorkItem reached `implementing` state. Runtime evidence still shows zero execution attempts and all process/provider/command/source-mutation authority flags disabled.
 - Current stop line: the proof supervisor instance was stopped before bounded Codex implementation. Bounded Codex implementation, GitHub push/PR/checks, merge, cleanup, Claude review, provider expansion, issue/story sync, and done-state completion remain separately gated.
 

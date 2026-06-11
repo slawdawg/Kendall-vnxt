@@ -64,3 +64,4 @@ Approve one Epic 6 MVP proof trial for `docs/stories/3-66-epic-6-mvp-proof-done-
 - Runtime export: `runtime-evidence-export-a8e43bba-a2dd-4b2e-b995-22fecea85611`.
 - Current WorkItem state reached `implementing` after the repo was cleaned, but runtime evidence still shows zero execution attempts and all process/provider/command/source-mutation authority flags disabled.
 - The proof supervisor instance was stopped before any bounded Codex implementation, Claude review, GitHub delivery, merge, cleanup, or done-state completion.
+- The bounded implementation scope, allowed paths, blocked operations, verification, and rollback plan are defined in `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.

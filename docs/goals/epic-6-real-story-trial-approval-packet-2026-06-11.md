@@ -63,6 +63,61 @@ This approval would not allow:
 - automatic cleanup,
 - trusted autonomy.
 
+## Story 3.66 Bounded Implementation Scope
+
+The bounded implementation should complete the smallest product change needed to retain and display the Story 3.66 proof evidence without broadening execution authority.
+
+Expected outcome:
+
+- Dev Console/runtime evidence can show Story 3.66 proof progress using retained metadata: Candidate Work ID, WorkItem ID, task packet/routing evidence, local evidence explanation, runtime export ID, PR #96, CI state, and remaining gated steps.
+- The proof path stays visible as incomplete until bounded implementation, verification, merge, cleanup, and final done evidence exist.
+
+Allowed paths:
+
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/src/supervisor/api/main.py`
+- `services/supervisor/src/supervisor/api/schemas.py`
+- `packages/contracts/src/api.ts`
+- `apps/dashboard/src/lib/supervisor.ts`
+- `apps/dashboard/src/lib/report-shortcuts.ts`
+- `apps/dashboard/src/app/controls/page.tsx`
+- `apps/dashboard/src/components/*epic*`
+- `apps/dashboard/src/components/*proof*`
+- `services/supervisor/tests/integration/test_routing_preview.py`
+- `tests/e2e/dashboard.spec.ts`
+- `scripts/check-supervisor-report-catalog.mjs`
+- `scripts/check-runtime-evidence-export.mjs`
+- `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md`
+- `docs/goals/epic-6-progress-and-kickoff-2026-06-10.md`
+- `docs/architecture/kendall-vnxt-epic-6-authority-ledger-2026-06-10.md`
+
+Blocked paths and operations:
+
+- no secrets, credentials, `.env`, token files, or account-security state,
+- no provider/model calls beyond existing approved metadata-only evidence boundaries,
+- no raw prompt, completion, reasoning trace, provider payload, or unrelated source-copy retention,
+- no subscription-agent launch, Claude launch, arbitrary shell runner, or process supervisor,
+- no GitHub merge, branch deletion, local cleanup, remote cleanup, issue/story sync, or auto-merge,
+- no unrelated refactors or repo-wide formatting.
+
+Expected diff shape:
+
+- one focused report or panel/evidence extension,
+- focused supervisor/dashboard tests or drift checks that prove the new evidence is wired,
+- retained story/progress/authority evidence updates.
+
+Required verification:
+
+- focused supervisor test for the changed report/evidence surface,
+- focused dashboard build or e2e check if rendering changes,
+- `pnpm.cmd run check`.
+
+Rollback plan:
+
+- revert the bounded implementation commit or branch if verification fails,
+- preserve the existing PR #96 evidence and runtime IDs,
+- leave the WorkItem in non-done state with a retained failure note if the proof cannot proceed.
+
 ## Evidence To Retain
 
 - selected story path and approved scope,
