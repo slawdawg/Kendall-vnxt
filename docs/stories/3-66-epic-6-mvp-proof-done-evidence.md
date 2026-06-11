@@ -57,6 +57,8 @@ Approve one Epic 6 MVP proof trial for `docs/stories/3-66-epic-6-mvp-proof-done-
 - Candidate Work: `8afea99f-bb79-4f51-a66c-f1b02dff9005`.
 - Active WorkItem: `a8e43bba-a2dd-4b2e-b995-22fecea85611`.
 - Local proof-selection commit: `1c79711` on `codex/epic-6-proof-selection-evidence`.
+- Draft PR: `https://github.com/slawdawg/Kendall-vnxt/pull/96`.
+- PR #96 CI `check` passed on 2026-06-11.
 - Task packet/routing preview selected `local_readonly`, preview-only authority, no provider calls, and no command execution.
 - Local evidence explanation: `local-evidence-route-a8e43bba-a2dd-4b2e-b995-22fecea85611-epic-6-mvp-proof-local-evidence-task_classification`.
 - Runtime export: `runtime-evidence-export-a8e43bba-a2dd-4b2e-b995-22fecea85611`.
