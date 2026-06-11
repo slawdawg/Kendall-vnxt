@@ -23,6 +23,12 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 
 ## Recent Ready For Review Stories
 
+## Selected Epic 6 MVP Proof Trial Story
+
+| Story | Slice |
+| --- | --- |
+| `3-66-epic-6-mvp-proof-done-evidence.md` | Selected low-risk real BMAD story for proving the full Epic 6 MVP lifecycle from Candidate Work through Dev Console done evidence. |
+
 | Story | Slice |
 | --- | --- |
 | `6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md` | Orchestrator fake-worker spike with deterministic lane selection, metadata-only evidence, blocked real CLI launch, and 10 scenario fixtures for Ollama, Codex, Claude review, and GitHub workflow rails. |

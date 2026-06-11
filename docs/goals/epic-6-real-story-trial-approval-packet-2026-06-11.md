@@ -21,12 +21,14 @@ Story 3.61 has now completed an initial doc/evidence-only proof lane through bou
 - PR #91 delivered Story 3.61 proof-trial evidence after bounded Codex implementation and local `pnpm.cmd run check`.
 - PR #91 CI `check` passed, PR #91 was merged after explicit approval, and its branch/worktree cleanup was performed after explicit approval.
 - PR #92 refreshed post-trial progress and authority docs after CI success, approved merge, and approved branch cleanup.
+- PR #96 is an open draft doc/evidence PR for Story 3.66 proof-selection evidence: `https://github.com/slawdawg/Kendall-vnxt/pull/96`.
+- PR #96 head `b8cabebbfbc1847c847576cbd6b7bf922c1343bc` has CI `check` success, clean merge state, and no source/runtime code changes.
 
 ## Selected Story
 
-Selected initial trial story: `docs/stories/3-61-maintenance-action-evidence-links.md`.
+Completed initial doc/evidence trial story: `docs/stories/3-61-maintenance-action-evidence-links.md`.
 
-No successor full-lifecycle MVP proof story is selected yet.
+Selected successor full-lifecycle MVP proof story: `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md`.
 
 Selection requirements:
 
@@ -40,7 +42,7 @@ Selection requirements:
 Approval phrase:
 
 ```text
-Approve one Epic 6 MVP proof trial for docs/stories/<story-id>.md: create/use one isolated local Codex worktree from main, launch one bounded Codex implementation for that selected story only, limit changes to the approved story scope, run pnpm.cmd run check for verification, and do not launch Claude, push, open/update a PR, merge, delete branches/worktrees, sync issues, or perform cleanup without separate approval.
+Approve one Epic 6 MVP proof trial for docs/stories/3-66-epic-6-mvp-proof-done-evidence.md: create/use one isolated local Codex worktree from main, launch one bounded Codex implementation for that selected story only, limit changes to the approved proof scope, run pnpm.cmd run check for verification, and do not launch Claude, push, open/update a PR, merge, delete branches/worktrees, sync issues, or perform cleanup without separate approval.
 ```
 
 This approval would allow only:
@@ -60,6 +62,68 @@ This approval would not allow:
 - issue/story sync,
 - automatic cleanup,
 - trusted autonomy.
+
+## Story 3.66 Bounded Implementation Scope
+
+The bounded implementation should complete the smallest product change needed to retain and display the Story 3.66 proof evidence without broadening execution authority.
+
+Expected outcome:
+
+- Dev Console/runtime evidence can show Story 3.66 proof progress using retained metadata: Candidate Work ID, WorkItem ID, task packet/routing evidence, local evidence explanation, runtime export ID, PR #96, CI state, and remaining gated steps.
+- The proof path stays visible as incomplete until bounded implementation, verification, merge, cleanup, and final done evidence exist.
+
+Allowed paths:
+
+- `services/supervisor/src/supervisor/application/service.py`
+- `services/supervisor/src/supervisor/api/main.py`
+- `services/supervisor/src/supervisor/api/schemas.py`
+- `packages/contracts/src/api.ts`
+- `apps/dashboard/src/lib/supervisor.ts`
+- `apps/dashboard/src/lib/report-shortcuts.ts`
+- `apps/dashboard/src/app/controls/page.tsx`
+- `apps/dashboard/src/components/*epic*`
+- `apps/dashboard/src/components/*proof*`
+- `services/supervisor/tests/integration/test_routing_preview.py`
+- `tests/e2e/dashboard.spec.ts`
+- `scripts/check-supervisor-report-catalog.mjs`
+- `scripts/check-runtime-evidence-export.mjs`
+- `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md`
+- `docs/goals/epic-6-progress-and-kickoff-2026-06-10.md`
+- `docs/architecture/kendall-vnxt-epic-6-authority-ledger-2026-06-10.md`
+
+Blocked paths and operations:
+
+- no secrets, credentials, `.env`, token files, or account-security state,
+- no provider/model calls beyond existing approved metadata-only evidence boundaries,
+- no raw prompt, completion, reasoning trace, provider payload, or unrelated source-copy retention,
+- no subscription-agent launch, Claude launch, arbitrary shell runner, or process supervisor,
+- no GitHub merge, branch deletion, local cleanup, remote cleanup, issue/story sync, or auto-merge,
+- no unrelated refactors or repo-wide formatting.
+
+Expected diff shape:
+
+- one focused report or panel/evidence extension,
+- focused supervisor/dashboard tests or drift checks that prove the new evidence is wired,
+- retained story/progress/authority evidence updates.
+
+Preferred implementation design:
+
+- update the existing Epic 6 MVP proof trial report content instead of adding a new report,
+- update the existing Epic 6 completion audit report content instead of adding a new completion mechanism,
+- keep the existing dashboard panels unless a contract change is strictly necessary,
+- keep the WorkItem non-done until merge, cleanup, and final done evidence exist.
+
+Required verification:
+
+- focused supervisor test for the changed report/evidence surface,
+- focused dashboard build or e2e check if rendering changes,
+- `pnpm.cmd run check`.
+
+Rollback plan:
+
+- revert the bounded implementation commit or branch if verification fails,
+- preserve the existing PR #96 evidence and runtime IDs,
+- leave the WorkItem in non-done state with a retained failure note if the proof cannot proceed.
 
 ## Evidence To Retain
 
@@ -90,3 +154,35 @@ After any local implementation and verification evidence exists, these remain se
 - GitHub push/PR/check approval for the exact branch and target PR.
 - Merge approval after CI/review evidence is visible.
 - Cleanup approval for exact local and remote targets after merge evidence is retained.
+
+## Current PR #96 Merge Gate
+
+PR #96 is still a documentation/evidence-only proof-selection PR. It does not perform bounded Codex implementation or complete the Epic 6 MVP proof by itself.
+
+Merge approval phrase:
+
+```text
+Approve merge of PR #96 only: merge https://github.com/slawdawg/Kendall-vnxt/pull/96 from codex/epic-6-proof-selection-evidence into main after confirming the latest head is b8cabebbfbc1847c847576cbd6b7bf922c1343bc, CI check is green, merge state is clean, and no source/runtime code is included. Do not perform local cleanup, remote branch deletion, issue/story sync, Claude launch, provider expansion, or bounded Codex implementation under this approval.
+```
+
+This approval would allow only:
+
+- merge PR #96 into `main`,
+- retain PR URL, head SHA, CI status, and merge commit evidence,
+- refresh local `main` after merge if needed for verification.
+
+This approval would not allow:
+
+- local branch/worktree cleanup,
+- remote branch deletion,
+- issue/story sync,
+- bounded Codex implementation,
+- Claude review,
+- provider/model expansion,
+- failed-check bypass.
+
+PR #96 cleanup approval phrase, to use only after merge evidence exists:
+
+```text
+Approve cleanup for merged PR #96 only: after retaining PR URL, merge commit, green CI evidence, and current git status, delete local branch codex/epic-6-proof-selection-evidence and remote branch origin/codex/epic-6-proof-selection-evidence if GitHub reports the PR merged. Do not delete unrelated branches, worktrees, artifacts, issue links, or evidence.
+```
