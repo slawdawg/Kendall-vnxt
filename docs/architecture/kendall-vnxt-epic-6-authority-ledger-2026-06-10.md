@@ -69,7 +69,9 @@ Snapshot date: 2026-06-11.
 - Task packet/routing evidence selected `local_readonly` with preview-only authority, no provider calls, and no command execution.
 - Local evidence event: `local-evidence-route-a8e43bba-a2dd-4b2e-b995-22fecea85611-epic-6-mvp-proof-local-evidence-task_classification`.
 - Runtime export: `runtime-evidence-export-a8e43bba-a2dd-4b2e-b995-22fecea85611`.
-- Current stop line: WorkItem is blocked before implementation because the repository contains uncommitted proof-selection documentation. Bounded Codex implementation, GitHub push/PR/checks, merge, cleanup, Claude review, provider expansion, issue/story sync, and done-state completion remain separately gated.
+- Local proof-selection commit: `1c79711` on `codex/epic-6-proof-selection-evidence`.
+- Current state: after proof-selection docs were committed and the dirty-repo blocker was cleared, the WorkItem reached `implementing` state. Runtime evidence still shows zero execution attempts and all process/provider/command/source-mutation authority flags disabled.
+- Current stop line: the proof supervisor instance was stopped before bounded Codex implementation. Bounded Codex implementation, GitHub push/PR/checks, merge, cleanup, Claude review, provider expansion, issue/story sync, and done-state completion remain separately gated.
 
 ## Approval Request Format
 

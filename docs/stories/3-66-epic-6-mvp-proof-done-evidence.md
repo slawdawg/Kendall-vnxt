@@ -1,7 +1,7 @@
 # Story 3.66: Epic 6 MVP Proof Done Evidence
 
 Date: 2026-06-11
-Status: selected for Epic 6 MVP proof trial; not implemented
+Status: Epic 6 MVP proof trial in progress; bounded implementation not approved
 
 ## Goal
 
@@ -51,3 +51,14 @@ This story is selected because it exercises the real Dev Console and evidence su
 ## Approval Required Before Implementation
 
 Approve one Epic 6 MVP proof trial for `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md`: create/use one isolated local Codex worktree from `main`, launch one bounded Codex implementation for this story only, limit changes to the approved proof scope, run `pnpm.cmd run check` for verification, and do not launch Claude, push, open/update a PR, merge, delete branches/worktrees, sync issues, or perform cleanup without separate approval.
+
+## Current Proof Evidence
+
+- Candidate Work: `8afea99f-bb79-4f51-a66c-f1b02dff9005`.
+- Active WorkItem: `a8e43bba-a2dd-4b2e-b995-22fecea85611`.
+- Local proof-selection commit: `1c79711` on `codex/epic-6-proof-selection-evidence`.
+- Task packet/routing preview selected `local_readonly`, preview-only authority, no provider calls, and no command execution.
+- Local evidence explanation: `local-evidence-route-a8e43bba-a2dd-4b2e-b995-22fecea85611-epic-6-mvp-proof-local-evidence-task_classification`.
+- Runtime export: `runtime-evidence-export-a8e43bba-a2dd-4b2e-b995-22fecea85611`.
+- Current WorkItem state reached `implementing` after the repo was cleaned, but runtime evidence still shows zero execution attempts and all process/provider/command/source-mutation authority flags disabled.
+- The proof supervisor instance was stopped before any bounded Codex implementation, Claude review, GitHub delivery, merge, cleanup, or done-state completion.
