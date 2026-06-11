@@ -579,6 +579,11 @@ async def get_github_workflow_policy_report():
     return ApiEnvelope(data=service.get_github_workflow_policy_report())
 
 
+@app.get("/supervisor/git-hygiene-report", response_model=ApiEnvelope)
+async def get_git_hygiene_report():
+    return ApiEnvelope(data=service.get_git_hygiene_report())
+
+
 @app.get("/supervisor/delivery-readiness-policy-report", response_model=ApiEnvelope)
 async def get_delivery_readiness_policy_report():
     return ApiEnvelope(data=service.get_delivery_readiness_policy_report())

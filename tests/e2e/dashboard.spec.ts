@@ -212,17 +212,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(readinessPanel.getByText("Provider proofs")).toBeVisible();
     await expect(readinessPanel.getByText("Provider no-call proofs")).toBeVisible();
     await expect(readinessPanel.getByText("Ollama OpenAI-compatible local worker")).toBeVisible();
-    await expect(readinessPanel.getByText("Registry: disabled")).toBeVisible();
-    await expect(readinessPanel.getByText("Provider gate: disabled")).toBeVisible();
+    await expect(readinessPanel.getByText("Registry: disabled").first()).toBeVisible();
+    await expect(readinessPanel.getByText("Provider gate: disabled").first()).toBeVisible();
     await expect(readinessPanel.getByText("Prompt sources: work_item_title")).toBeVisible();
-    await expect(readinessPanel.getByText("Timeout policy: connect 5s, total 30s.")).toBeVisible();
+    await expect(readinessPanel.getByText("Timeout policy: connect 2s, total 120s.")).toBeVisible();
     await expect(readinessPanel.getByText("cancel_requested -> request_abort_recorded")).toBeVisible();
 
     const documentationPanel = page.locator("section").filter({ hasText: "Indexes and approval stop lines" }).first();
     await expect(documentationPanel.getByText("Documentation authority", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("Indexes and approval stop lines")).toBeVisible();
     await expect(documentationPanel.getByText("Blocked authority stories")).toBeVisible();
-    await expect(documentationPanel.getByText("6 pending approval")).toBeVisible();
+    await expect(documentationPanel.getByText("2 pending approval")).toBeVisible();
     await expect(documentationPanel.getByText("docs/architecture/index.md", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("blocked pending explicit approval").first()).toBeVisible();
     await expect(documentationPanel.getByText("Documentation drift command")).toBeVisible();
@@ -305,6 +305,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/git-hygiene-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/delivery-readiness-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/disabled-provider-proofs")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-state-boundary")).toBeVisible();
@@ -428,6 +429,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(githubPolicyPanel.getByText("Plaintext tokens")).toBeVisible();
     await expect(githubPolicyPanel.getByText("Do not create persistent plaintext GitHub CLI tokens")).toBeVisible();
     await expect(page.locator("#github-workflow-policy-report")).toBeVisible();
+
+    const gitHygienePanel = page.locator("section").filter({ hasText: "Repository readiness" }).first();
+    await expect(gitHygienePanel.getByText("Git hygiene", { exact: true })).toBeVisible();
+    await expect(gitHygienePanel.getByText("Repository readiness")).toBeVisible();
+    await expect(gitHygienePanel.getByRole("heading", { name: "Working tree" })).toBeVisible();
+    await expect(gitHygienePanel.getByRole("heading", { name: "Current branch" })).toBeVisible();
+    await expect(gitHygienePanel.getByRole("heading", { name: "Worktree inventory" })).toBeVisible();
+    await expect(gitHygienePanel.getByRole("heading", { name: "PR and CI" })).toBeVisible();
+    await expect(gitHygienePanel.getByText("No GitHub PR lookup was performed by this read-only local report.")).toBeVisible();
+    await expect(gitHygienePanel.getByText("This report is not approval to push")).toBeVisible();
+    await expect(page.locator("#git-hygiene-report")).toBeVisible();
 
     const deliveryReadinessPolicyPanel = page.locator("section").filter({ hasText: "Review gate policy" }).first();
     await expect(deliveryReadinessPolicyPanel.getByText("Delivery readiness", { exact: true })).toBeVisible();

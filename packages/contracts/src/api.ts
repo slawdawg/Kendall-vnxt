@@ -961,6 +961,43 @@ export interface GitHubWorkflowPolicyReportView {
   remoteAutomationApproved: boolean;
 }
 
+export interface GitHygieneSignalView {
+  signalId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface GitHygieneWorktreeView {
+  path: string;
+  branch?: string | null;
+  head?: string | null;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+}
+
+export interface GitHygieneReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  repoRoot: string;
+  currentBranch: string;
+  headRevision: string;
+  upstreamBranch?: string | null;
+  workingTreeStatus: string;
+  statusCounts: Record<string, number>;
+  worktrees: GitHygieneWorktreeView[];
+  localSignals: GitHygieneSignalView[];
+  remoteSignals: GitHygieneSignalView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  remoteMutationApproved: boolean;
+  cleanupApproved: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

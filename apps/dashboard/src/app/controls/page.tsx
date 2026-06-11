@@ -6,6 +6,7 @@ import { DevelopmentRunwayReportPanel } from "../../components/development-runwa
 import { DocumentationAuthorityReportPanel } from "../../components/documentation-authority-report-panel";
 import { ExecutionReadinessReportPanel } from "../../components/execution-readiness-report-panel";
 import { GitHubWorkflowPolicyReportPanel } from "../../components/github-workflow-policy-report-panel";
+import { GitHygieneReportPanel } from "../../components/git-hygiene-report-panel";
 import { MaintenanceActionPlanReportPanel } from "../../components/maintenance-action-plan-report-panel";
 import { MaintenanceReadinessReportPanel } from "../../components/maintenance-readiness-report-panel";
 import { ManagedRecipePolicyReportPanel } from "../../components/managed-recipe-policy-report-panel";
@@ -26,6 +27,7 @@ import {
   getDevelopmentRunwayReport,
   getExecutionReadinessReport,
   getGitHubWorkflowPolicyReport,
+  getGitHygieneReport,
   getMaintenanceActionPlanReport,
   getMaintenanceReadinessReport,
   getManagedRecipePolicyReport,
@@ -58,6 +60,7 @@ export default async function ControlsPage() {
     safeDevelopmentBacklog,
     managedRecipePolicyReport,
     githubWorkflowPolicyReport,
+    gitHygieneReport,
     deliveryReadinessPolicyReport,
   ] = await Promise.all([
     getRunStatus(),
@@ -77,6 +80,7 @@ export default async function ControlsPage() {
     getSafeDevelopmentBacklogReport(),
     getManagedRecipePolicyReport(),
     getGitHubWorkflowPolicyReport(),
+    getGitHygieneReport(),
     getDeliveryReadinessPolicyReport(),
   ]);
   const navStats = buildNavStats(items);
@@ -134,6 +138,9 @@ export default async function ControlsPage() {
       </div>
       <div id="github-workflow-policy-report" className="scroll-mt-28">
         <GitHubWorkflowPolicyReportPanel report={githubWorkflowPolicyReport} />
+      </div>
+      <div id="git-hygiene-report" className="scroll-mt-28">
+        <GitHygieneReportPanel report={gitHygieneReport} />
       </div>
       <div id="delivery-readiness-policy-report" className="scroll-mt-28">
         <DeliveryReadinessPolicyReportPanel report={deliveryReadinessPolicyReport} />

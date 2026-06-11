@@ -118,6 +118,13 @@ const reports = [
     dashboardFetch: "getGitHubWorkflowPolicyReport",
   },
   {
+    reportId: "git-hygiene-report-v1",
+    endpoint: "GET /supervisor/git-hygiene-report",
+    apiPath: "/supervisor/git-hygiene-report",
+    story: "docs/stories/6-14-git-hygiene-read-only.md",
+    dashboardFetch: "getGitHygieneReport",
+  },
+  {
     reportId: "delivery-readiness-policy-report-v1",
     endpoint: "GET /supervisor/delivery-readiness-policy-report",
     apiPath: "/supervisor/delivery-readiness-policy-report",
@@ -205,6 +212,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/safe-development-backlog",
   "GET /supervisor/managed-recipe-policy-report",
   "GET /supervisor/github-workflow-policy-report",
+  "GET /supervisor/git-hygiene-report",
   "GET /supervisor/delivery-readiness-policy-report",
 ]) {
   assertCondition(
@@ -269,6 +277,7 @@ for (const controlsAnchor of [
   'id="runtime-evidence-review-report"',
   'id="managed-recipe-policy-report"',
   'id="github-workflow-policy-report"',
+  'id="git-hygiene-report"',
   'id="delivery-readiness-policy-report"',
 ]) {
   assertCondition(
@@ -311,6 +320,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-42-github-workflow-policy-report.md"),
   "Story index must reference Story 3.42 GitHub workflow policy report",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-14-git-hygiene-read-only.md"),
+  "Story index must reference Story 6.14 Git hygiene read-only",
   failures,
 );
 assertCondition(

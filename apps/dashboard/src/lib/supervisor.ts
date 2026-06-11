@@ -12,6 +12,7 @@ import type {
   ExecutionAttemptView,
   ExecutionReadinessReportView,
   GitHubWorkflowPolicyReportView,
+  GitHygieneReportView,
   LocalEvidenceExplanationPayload,
   LocalEvidenceExplanationView,
   ManagedRecipePolicyReportView,
@@ -219,6 +220,10 @@ export async function getManagedRecipePolicyReport(): Promise<ManagedRecipePolic
 
 export async function getGitHubWorkflowPolicyReport(): Promise<GitHubWorkflowPolicyReportView> {
   return requestJson<GitHubWorkflowPolicyReportView>("/supervisor/github-workflow-policy-report");
+}
+
+export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
+  return requestJson<GitHygieneReportView>("/supervisor/git-hygiene-report");
 }
 
 export async function getDeliveryReadinessPolicyReport(): Promise<DeliveryReadinessPolicyReportView> {

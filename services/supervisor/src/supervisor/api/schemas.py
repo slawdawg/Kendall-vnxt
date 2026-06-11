@@ -1070,6 +1070,43 @@ class GitHubWorkflowPolicyReportView(BaseModel):
     remoteAutomationApproved: bool = False
 
 
+class GitHygieneSignalView(BaseModel):
+    signalId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class GitHygieneWorktreeView(BaseModel):
+    path: str
+    branch: str | None = None
+    head: str | None = None
+    detached: bool = False
+    locked: bool = False
+    prunable: bool = False
+
+
+class GitHygieneReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    repoRoot: str
+    currentBranch: str
+    headRevision: str
+    upstreamBranch: str | None = None
+    workingTreeStatus: str
+    statusCounts: dict[str, int]
+    worktrees: list[GitHygieneWorktreeView]
+    localSignals: list[GitHygieneSignalView]
+    remoteSignals: list[GitHygieneSignalView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    remoteMutationApproved: bool = False
+    cleanupApproved: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

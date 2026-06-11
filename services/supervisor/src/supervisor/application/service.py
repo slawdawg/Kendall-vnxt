@@ -39,6 +39,9 @@ from supervisor.api.schemas import (
     DisabledProviderProofView,
     GitHubWorkflowPolicyItemView,
     GitHubWorkflowPolicyReportView,
+    GitHygieneReportView,
+    GitHygieneSignalView,
+    GitHygieneWorktreeView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
@@ -1582,6 +1585,15 @@ class SupervisorService:
                 ],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="git-hygiene-report-v1",
+                label="Git hygiene report",
+                endpoint="GET /supervisor/git-hygiene-report",
+                status="active",
+                summary="Shows read-only repository, worktree, branch, PR, and CI hygiene signals before delivery automation is approved.",
+                evidenceScope=["local Git status", "branch and upstream status", "worktree inventory", "PR/CI query posture"],
+                relatedDocs=["docs/stories/6-14-git-hygiene-read-only.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
                 label="Delivery readiness policy report",
                 endpoint="GET /supervisor/delivery-readiness-policy-report",
@@ -2468,6 +2480,107 @@ class SupervisorService:
             remoteAutomationApproved=False,
         )
 
+    def get_git_hygiene_report(self) -> GitHygieneReportView:
+        repo_root = self._repo_root() or str(Path.cwd())
+        branch_ok, branch_output = self._git_hygiene_output(["git", "branch", "--show-current"], repo_root)
+        head_ok, head_output = self._git_hygiene_output(["git", "rev-parse", "--short", "HEAD"], repo_root)
+        upstream_ok, upstream_output = self._git_hygiene_output(
+            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            repo_root,
+        )
+        status_ok, status_output = self._git_hygiene_output(["git", "status", "--porcelain=v1"], repo_root)
+        worktree_ok, worktree_output = self._git_hygiene_output(["git", "worktree", "list", "--porcelain"], repo_root)
+
+        status_counts = self._git_hygiene_status_counts(status_output if status_ok else "")
+        working_tree_status = "clean" if status_ok and not status_output.strip() else "attention"
+        current_branch = branch_output if branch_ok and branch_output else ("detached" if head_ok else "unknown")
+        head_revision = head_output if head_ok else "unknown"
+        upstream_branch = upstream_output if upstream_ok and upstream_output else None
+        worktrees = self._parse_git_worktrees(worktree_output if worktree_ok else "")
+
+        return GitHygieneReportView(
+            reportId="git-hygiene-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only Git hygiene snapshot for the current repository, isolated worktrees, branch posture, "
+                "and PR/CI query readiness. It does not push, pull, merge, create PRs, wait for CI, or clean up files."
+            ),
+            repoRoot=repo_root,
+            currentBranch=current_branch,
+            headRevision=head_revision,
+            upstreamBranch=upstream_branch,
+            workingTreeStatus=working_tree_status,
+            statusCounts=status_counts,
+            worktrees=worktrees,
+            localSignals=[
+                GitHygieneSignalView(
+                    signalId="working-tree",
+                    label="Working tree",
+                    status=working_tree_status,
+                    summary=(
+                        "No local file changes are visible to Git."
+                        if working_tree_status == "clean"
+                        else "Local file changes are visible and should be reviewed before delivery."
+                    ),
+                    evidence=["git status --porcelain=v1", f"changed={sum(status_counts.values())}"],
+                ),
+                GitHygieneSignalView(
+                    signalId="branch",
+                    label="Current branch",
+                    status="detached" if current_branch == "detached" else "detected",
+                    summary=f"Current branch is {current_branch}.",
+                    evidence=["git branch --show-current", f"HEAD {head_revision}"],
+                ),
+                GitHygieneSignalView(
+                    signalId="upstream",
+                    label="Upstream tracking",
+                    status="configured" if upstream_branch else "not_configured",
+                    summary=(
+                        f"Branch tracks {upstream_branch}."
+                        if upstream_branch
+                        else "No upstream branch is configured for the current branch."
+                    ),
+                    evidence=["git rev-parse --abbrev-ref --symbolic-full-name @{u}"],
+                ),
+                GitHygieneSignalView(
+                    signalId="worktrees",
+                    label="Worktree inventory",
+                    status="detected" if worktrees else "unavailable",
+                    summary=f"{len(worktrees)} local worktree(s) are visible to Git.",
+                    evidence=["git worktree list --porcelain"],
+                ),
+            ],
+            remoteSignals=[
+                GitHygieneSignalView(
+                    signalId="pull-request",
+                    label="Pull request",
+                    status="not_queried",
+                    summary="No GitHub PR lookup was performed by this read-only local report.",
+                    evidence=["Use the GitHub connector or `pnpm run doctor:github -- --remote` only when remote checks are approved."],
+                ),
+                GitHygieneSignalView(
+                    signalId="ci",
+                    label="CI checks",
+                    status="not_queried",
+                    summary="No remote CI lookup or wait was performed by this read-only local report.",
+                    evidence=["CI evidence remains a delivery-readiness record, not an automatic action."],
+                ),
+            ],
+            stopLines=[
+                "This report is not approval to push, pull, create PRs, wait for CI, merge, delete branches, or remove worktrees.",
+                "Remote GitHub writes remain blocked until explicit operator approval names the action and scope.",
+                "Cleanup remains blocked until local cleanup policy and evidence retention are implemented.",
+            ],
+            nextSafeActions=[
+                "Review changed-file counts before preparing delivery.",
+                "Use isolated worktrees for implementation stories before source mutation authority expands.",
+                "Record PR and CI evidence through delivery readiness surfaces after remote delivery is approved.",
+            ],
+            readOnly=True,
+            remoteMutationApproved=False,
+            cleanupApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3079,6 +3192,7 @@ class SupervisorService:
             "GET /supervisor/safe-development-backlog",
             "GET /supervisor/managed-recipe-policy-report",
             "GET /supervisor/github-workflow-policy-report",
+            "GET /supervisor/git-hygiene-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -3127,6 +3241,7 @@ class SupervisorService:
             "docs/stories/3-40-runtime-report-anchor-links.md",
             "docs/stories/3-41-current-gap-review-refresh.md",
             "docs/stories/3-42-github-workflow-policy-report.md",
+            "docs/stories/6-14-git-hygiene-read-only.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
@@ -6633,6 +6748,94 @@ class SupervisorService:
             return False, str(exc)
         output = result.stdout.strip() or result.stderr.strip()
         return result.returncode == 0, output
+
+    def _git_hygiene_output(self, args: list[str], repo_root: str) -> tuple[bool, str]:
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+                cwd=repo_root,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, str(exc)
+        output = result.stdout.strip() or result.stderr.strip()
+        return result.returncode == 0, output
+
+    def _git_hygiene_status_counts(self, porcelain: str) -> dict[str, int]:
+        counts = {
+            "added": 0,
+            "modified": 0,
+            "deleted": 0,
+            "renamed": 0,
+            "untracked": 0,
+            "conflicted": 0,
+        }
+        for line in porcelain.splitlines():
+            if not line:
+                continue
+            status = line[:2]
+            if status == "??":
+                counts["untracked"] += 1
+                continue
+            if "U" in status or status in {"AA", "DD"}:
+                counts["conflicted"] += 1
+            if "A" in status:
+                counts["added"] += 1
+            if "M" in status:
+                counts["modified"] += 1
+            if "D" in status:
+                counts["deleted"] += 1
+            if "R" in status:
+                counts["renamed"] += 1
+        return counts
+
+    def _parse_git_worktrees(self, porcelain: str) -> list[GitHygieneWorktreeView]:
+        worktrees: list[GitHygieneWorktreeView] = []
+        current: dict[str, str | bool | None] | None = None
+        for raw_line in porcelain.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("worktree "):
+                if current:
+                    worktrees.append(self._git_hygiene_worktree_view(current))
+                current = {
+                    "path": line.removeprefix("worktree "),
+                    "branch": None,
+                    "head": None,
+                    "detached": False,
+                    "locked": False,
+                    "prunable": False,
+                }
+                continue
+            if current is None:
+                continue
+            if line.startswith("HEAD "):
+                current["head"] = line.removeprefix("HEAD ")[:12]
+            elif line.startswith("branch "):
+                current["branch"] = line.removeprefix("branch ").removeprefix("refs/heads/")
+            elif line == "detached":
+                current["detached"] = True
+            elif line.startswith("locked"):
+                current["locked"] = True
+            elif line.startswith("prunable"):
+                current["prunable"] = True
+        if current:
+            worktrees.append(self._git_hygiene_worktree_view(current))
+        return worktrees
+
+    def _git_hygiene_worktree_view(self, data: dict[str, str | bool | None]) -> GitHygieneWorktreeView:
+        return GitHygieneWorktreeView(
+            path=str(data.get("path") or ""),
+            branch=str(data["branch"]) if data.get("branch") else None,
+            head=str(data["head"]) if data.get("head") else None,
+            detached=bool(data.get("detached")),
+            locked=bool(data.get("locked")),
+            prunable=bool(data.get("prunable")),
+        )
 
     def _git_success(self, args: list[str]) -> bool:
         try:
