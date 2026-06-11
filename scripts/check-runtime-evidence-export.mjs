@@ -123,6 +123,7 @@ for (const shortcutText of [
   "#github-workflow-policy-report",
   "#git-hygiene-report",
   "#codex-readiness-report",
+  "#codex-implementation-approval-report",
   "#delivery-readiness-policy-report",
   "#supervisor-report-catalog",
 ]) {
@@ -200,6 +201,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-16-codex-readiness-no-launch.md"),
   "Story index must reference Story 6.16 Codex readiness no-launch",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-17-codex-implementation-approval-packet.md"),
+  "Story index must reference Story 6.17 Codex implementation approval packet",
   failures,
 );
 assertCondition(

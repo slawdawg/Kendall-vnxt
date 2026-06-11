@@ -5,6 +5,7 @@ import type {
   CandidateWorkPromotionView,
   CandidateWorkUpdatePayload,
   CandidateWorkView,
+  CodexImplementationApprovalReportView,
   CodexReadinessReportView,
   DashboardE2EReportView,
   DeliveryReadinessPolicyReportView,
@@ -234,6 +235,10 @@ export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
 
 export async function getCodexReadinessReport(): Promise<CodexReadinessReportView> {
   return requestJson<CodexReadinessReportView>("/supervisor/codex-readiness-report");
+}
+
+export async function getCodexImplementationApprovalReport(): Promise<CodexImplementationApprovalReportView> {
+  return requestJson<CodexImplementationApprovalReportView>("/supervisor/codex-implementation-approval-report");
 }
 
 export async function getDeliveryReadinessPolicyReport(): Promise<DeliveryReadinessPolicyReportView> {

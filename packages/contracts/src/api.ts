@@ -1039,6 +1039,37 @@ export interface CodexReadinessReportView {
   sourceMutationApproved: boolean;
 }
 
+export interface CodexImplementationApprovalRequirementView {
+  requirementId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface CodexImplementationApprovalReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  approvalPrompt: string;
+  authorityFamily: string;
+  operation: string;
+  targetScope: string[];
+  allowedPaths: string[];
+  blockedPaths: string[];
+  expectedCommandShape: string[];
+  requiredEvidence: string[];
+  rollbackPlan: string[];
+  stopConditions: string[];
+  requirements: CodexImplementationApprovalRequirementView[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  workerTaskExecutionApproved: boolean;
+  sourceMutationApproved: boolean;
+  approvalBindingImplemented: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

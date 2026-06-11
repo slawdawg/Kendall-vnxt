@@ -19,6 +19,8 @@ from supervisor.api.schemas import (
     CandidateWorkCreate,
     CandidateWorkUpdate,
     CandidateWorkView,
+    CodexImplementationApprovalReportView,
+    CodexImplementationApprovalRequirementView,
     CodexReadinessCheckView,
     CodexReadinessReportView,
     DashboardE2EReportView,
@@ -1606,6 +1608,15 @@ class SupervisorService:
                 relatedDocs=["docs/stories/6-16-codex-readiness-no-launch.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="codex-implementation-approval-report-v1",
+                label="Codex implementation approval report",
+                endpoint="GET /supervisor/codex-implementation-approval-report",
+                status="active",
+                summary="Defines the exact approval packet for a future bounded Codex implementation run without launching Codex.",
+                evidenceScope=["approval request", "isolated worktree scope", "path boundaries", "verification and rollback evidence"],
+                relatedDocs=["docs/stories/6-17-codex-implementation-approval-packet.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
                 label="Delivery readiness policy report",
                 endpoint="GET /supervisor/delivery-readiness-policy-report",
@@ -2654,6 +2665,116 @@ class SupervisorService:
             sourceMutationApproved=False,
         )
 
+    def get_codex_implementation_approval_report(self) -> CodexImplementationApprovalReportView:
+        return CodexImplementationApprovalReportView(
+            reportId="codex-implementation-approval-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only approval packet for the first future bounded Codex implementation run. "
+                "It does not launch Codex, send a task, inspect auth, create a worktree, write source, run Git, or execute shell commands."
+            ),
+            approvalPrompt=(
+                "Approve one bounded Codex implementation attempt for the selected work item only, in an isolated worktree, "
+                "limited to the listed paths and verification commands, with metadata evidence retained and stop conditions enforced."
+            ),
+            authorityFamily="codex_implementation",
+            operation="one_time_bounded_implementation_attempt",
+            targetScope=[
+                "One named Active work item or story.",
+                "One isolated local worktree created by the approved worktree-management path.",
+                "One Codex worker task packet generated from existing supervisor evidence.",
+            ],
+            allowedPaths=[
+                "docs/stories/<approved-story>.md",
+                "services/supervisor/** only when the approved story requires backend behavior",
+                "apps/dashboard/** only when the approved story requires Dev Console behavior",
+                "packages/contracts/** only when API/dashboard contracts change",
+                "tests/** only for verification tied to the approved story",
+                "scripts/** only for drift checks tied to the approved story",
+            ],
+            blockedPaths=[
+                ".env and credential files",
+                ".git/**",
+                "node_modules/**",
+                "services/supervisor/.venv/**",
+                "Any path outside the approved worktree",
+                "Any unrelated source, docs, or generated output not named by the approval",
+            ],
+            expectedCommandShape=[
+                "codex <non-interactive task mode> --cwd <approved-worktree> -- <bounded task packet>",
+                "pnpm.cmd run check or narrower approved verification command",
+                "git diff --stat and git status --short for evidence only",
+            ],
+            requiredEvidence=[
+                "approval text with authority family, operation, target story, allowed paths, expected command shape, and stop conditions",
+                "worktree path, branch, base revision, and task packet id",
+                "Codex process start/finish metadata without raw prompt or completion retention",
+                "changed-file list and diffstat",
+                "verification commands and exit codes",
+                "rollback or cleanup recommendation",
+            ],
+            rollbackPlan=[
+                "Leave all changes in the isolated worktree until Bob reviews them.",
+                "If verification fails, keep the branch blocked and retain failure evidence.",
+                "Do not push, merge, delete branches, or remove the worktree without separate authority.",
+                "Use Git diff/status evidence to decide whether to repair, abandon, or manually inspect the attempt.",
+            ],
+            stopConditions=[
+                "Codex attempts to read or write outside the approved worktree or allowed paths.",
+                "Codex asks for credentials, secrets, browser session access, or external account changes.",
+                "The task packet expands beyond the approved story or requested operation.",
+                "Verification fails in a way that cannot be repaired within the approved scope.",
+                "The run would require GitHub remote writes, merge, cleanup, Claude review, or a new provider/model authority.",
+            ],
+            requirements=[
+                CodexImplementationApprovalRequirementView(
+                    requirementId="isolated-worktree",
+                    label="Isolated worktree",
+                    status="required",
+                    summary="The run must happen in a named local worktree with branch and base revision evidence.",
+                    evidence=["Story 6.15 local worktree plan", "git status --short", "git diff --stat"],
+                ),
+                CodexImplementationApprovalRequirementView(
+                    requirementId="path-scope",
+                    label="Path scope",
+                    status="required",
+                    summary="Allowed and blocked paths must be named before any Codex task execution.",
+                    evidence=["allowedPaths", "blockedPaths", "approval text"],
+                ),
+                CodexImplementationApprovalRequirementView(
+                    requirementId="verification",
+                    label="Verification",
+                    status="required",
+                    summary="The approval must name the focused and broad checks that prove the attempt.",
+                    evidence=["pnpm.cmd run check", "focused supervisor/dashboard checks when applicable"],
+                ),
+                CodexImplementationApprovalRequirementView(
+                    requirementId="retention",
+                    label="Evidence retention",
+                    status="metadata_only",
+                    summary="Store process/task metadata and verification evidence, not raw prompt or completion bodies.",
+                    evidence=["task packet id", "exit code", "changed-file list", "verification command output summary"],
+                ),
+                CodexImplementationApprovalRequirementView(
+                    requirementId="approval-binding",
+                    label="Approval binding",
+                    status="not_implemented",
+                    summary="The backend does not yet bind a recorded approval to a real Codex launch.",
+                    evidence=["processLaunchApproved=false", "workerTaskExecutionApproved=false", "sourceMutationApproved=false"],
+                ),
+            ],
+            nextSafeActions=[
+                "Use this packet to ask Bob for one story-scoped Codex implementation authority when ready.",
+                "Add approval binding before any backend endpoint can launch Codex.",
+                "Keep Claude review, GitHub delivery, merge, and cleanup on separate authority paths.",
+            ],
+            readOnly=True,
+            processLaunchApproved=False,
+            workerTaskExecutionApproved=False,
+            sourceMutationApproved=False,
+            approvalBindingImplemented=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3267,6 +3388,7 @@ class SupervisorService:
             "GET /supervisor/github-workflow-policy-report",
             "GET /supervisor/git-hygiene-report",
             "GET /supervisor/codex-readiness-report",
+            "GET /supervisor/codex-implementation-approval-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -3317,6 +3439,7 @@ class SupervisorService:
             "docs/stories/3-42-github-workflow-policy-report.md",
             "docs/stories/6-14-git-hygiene-read-only.md",
             "docs/stories/6-16-codex-readiness-no-launch.md",
+            "docs/stories/6-17-codex-implementation-approval-packet.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",

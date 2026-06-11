@@ -1148,6 +1148,37 @@ class CodexReadinessReportView(BaseModel):
     sourceMutationApproved: bool = False
 
 
+class CodexImplementationApprovalRequirementView(BaseModel):
+    requirementId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class CodexImplementationApprovalReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    approvalPrompt: str
+    authorityFamily: str
+    operation: str
+    targetScope: list[str]
+    allowedPaths: list[str]
+    blockedPaths: list[str]
+    expectedCommandShape: list[str]
+    requiredEvidence: list[str]
+    rollbackPlan: list[str]
+    stopConditions: list[str]
+    requirements: list[CodexImplementationApprovalRequirementView]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    workerTaskExecutionApproved: bool = False
+    sourceMutationApproved: bool = False
+    approvalBindingImplemented: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

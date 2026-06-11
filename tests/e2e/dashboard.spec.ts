@@ -307,6 +307,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/git-hygiene-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/delivery-readiness-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/disabled-provider-proofs")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-state-boundary")).toBeVisible();
@@ -450,6 +451,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(codexReadinessPanel.getByRole("heading", { name: "Worker launch" })).toBeVisible();
     await expect(codexReadinessPanel.getByText("This report does not approve Codex CLI process launch.")).toBeVisible();
     await expect(page.locator("#codex-readiness-report")).toBeVisible();
+
+    const codexImplementationPanel = page.locator("section").filter({ hasText: "Approval text" }).first();
+    await expect(codexImplementationPanel.getByText("Codex implementation", { exact: true })).toBeVisible();
+    await expect(codexImplementationPanel.getByRole("heading", { name: "Approval packet" })).toBeVisible();
+    await expect(codexImplementationPanel.getByText("Approve one bounded Codex implementation attempt")).toBeVisible();
+    await expect(codexImplementationPanel.getByRole("heading", { name: "Isolated worktree" })).toBeVisible();
+    await expect(codexImplementationPanel.getByRole("heading", { name: "Path scope" })).toBeVisible();
+    await expect(codexImplementationPanel.getByRole("heading", { name: "Approval binding" })).toBeVisible();
+    await expect(codexImplementationPanel.getByText("codex <non-interactive task mode> --cwd <approved-worktree>")).toBeVisible();
+    await expect(codexImplementationPanel.getByText("Codex asks for credentials")).toBeVisible();
+    await expect(page.locator("#codex-implementation-approval-report")).toBeVisible();
 
     const deliveryReadinessPolicyPanel = page.locator("section").filter({ hasText: "Review gate policy" }).first();
     await expect(deliveryReadinessPolicyPanel.getByText("Delivery readiness", { exact: true })).toBeVisible();
