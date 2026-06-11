@@ -127,6 +127,7 @@ for (const shortcutText of [
   "#local-cleanup-readiness-report",
   "#remote-cleanup-sync-readiness-report",
   "#trusted-autonomy-readiness-report",
+  "#epic-6-mvp-proof-trial-report",
   "#codex-readiness-report",
   "#codex-implementation-approval-report",
   "#claude-review-readiness-report",
@@ -233,6 +234,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-26-trusted-delivery-eligibility-evaluator.md"),
   "Story index must reference Story 6.26 trusted delivery eligibility evaluator",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-27-epic-6-mvp-proof-trial-packet.md"),
+  "Story index must reference Story 6.27 Epic 6 MVP proof trial packet",
   failures,
 );
 assertCondition(

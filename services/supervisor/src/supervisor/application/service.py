@@ -69,6 +69,8 @@ from supervisor.api.schemas import (
     MaintenanceActionPlanStepView,
     MaintenanceReadinessReportView,
     MaintenanceReadinessTrackView,
+    MvpProofTrialReportView,
+    MvpProofTrialStepView,
     OperatorViewCreate,
     OperatorViewResponse,
     PremiumApprovalEvidenceView,
@@ -1708,6 +1710,18 @@ class SupervisorService:
                     "docs/goals/epic-6-progress-and-kickoff-2026-06-10.md",
                     "docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md",
                     "docs/stories/6-24-epic-6-completion-audit.md",
+                ],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="epic-6-mvp-proof-trial-report-v1",
+                label="Epic 6 MVP proof trial packet",
+                endpoint="GET /supervisor/epic-6-mvp-proof-trial-report",
+                status="active",
+                summary="Defines the exact read-only approval packet needed before one real BMAD story trial can use bounded Codex, Claude, delivery, and cleanup lanes.",
+                evidenceScope=["selected story", "approval packets", "blocked operations", "stop conditions", "next safe actions"],
+                relatedDocs=[
+                    "docs/goals/epic-6-progress-and-kickoff-2026-06-10.md",
+                    "docs/stories/6-27-epic-6-mvp-proof-trial-packet.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -3830,6 +3844,127 @@ class SupervisorService:
             cleanupApproved=True,
         )
 
+    def get_epic_6_mvp_proof_trial_report(self) -> MvpProofTrialReportView:
+        return MvpProofTrialReportView(
+            reportId="epic-6-mvp-proof-trial-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only MVP proof trial packet. It names the next real BMAD story trial steps and approvals, "
+                "but does not launch Codex, launch Claude, call providers, mutate GitHub, or clean up state."
+            ),
+            selectedStory="Select one existing low-risk BMAD story from docs/stories before approval.",
+            trialStatus="waiting_for_bounded_trial_approval",
+            steps=[
+                MvpProofTrialStepView(
+                    stepId="select-real-story",
+                    label="Select real story",
+                    status="operator_required",
+                    summary="Choose one existing low-risk BMAD story and keep its scope narrow enough for a first real proof run.",
+                    requiredApproval="Bob selects the story id, expected outcome, and any out-of-scope changes.",
+                    evidence=[
+                        "Story markdown path",
+                        "Candidate Work import evidence",
+                        "Active Work item id after promotion",
+                    ],
+                ),
+                MvpProofTrialStepView(
+                    stepId="bounded-codex-implementation",
+                    label="Bounded Codex implementation",
+                    status="blocked_pending_approval",
+                    summary="Codex may implement only after the exact worktree, file scope, command shape, verification command, and rollback plan are approved.",
+                    requiredApproval="Approve one Codex implementation launch for the selected story and named worktree.",
+                    evidence=[
+                        "Codex implementation approval packet",
+                        "Allowed and blocked paths",
+                        "Expected diff summary",
+                        "Rollback and cleanup plan",
+                    ],
+                ),
+                MvpProofTrialStepView(
+                    stepId="local-and-ollama-checks",
+                    label="Local and Ollama checks",
+                    status="bounded",
+                    summary="Use approved local checks and the approved VM-to-host Ollama endpoint/model only when the work item needs economical reasoning evidence.",
+                    requiredApproval="No provider expansion; stay within approved Ollama endpoint/model and record metadata-only evidence.",
+                    evidence=[
+                        "Local evidence explanation",
+                        "Approved endpoint/model boundary",
+                        "No secret or prompt retention outside the allowed metadata policy",
+                    ],
+                ),
+                MvpProofTrialStepView(
+                    stepId="bounded-claude-review",
+                    label="Bounded Claude review",
+                    status="blocked_pending_approval",
+                    summary="Claude review remains scarce and should be used only for adversarial review of the implementation diff when justified.",
+                    requiredApproval="Approve one Claude review launch with review-only output and bounded context.",
+                    evidence=[
+                        "Claude review approval packet",
+                        "Diff or file list under review",
+                        "Review findings and disposition",
+                    ],
+                ),
+                MvpProofTrialStepView(
+                    stepId="github-delivery",
+                    label="GitHub delivery",
+                    status="gated_per_target",
+                    summary="Push, PR, CI, merge, and branch cleanup stay gated to the selected story branch and exact PR.",
+                    requiredApproval="Approve push/PR/check, then approve merge and cleanup after CI/review evidence is visible.",
+                    evidence=[
+                        "Trusted delivery eligibility report",
+                        "PR URL and CI status",
+                        "Resolved review comments",
+                        "Merge commit and cleanup evidence",
+                    ],
+                ),
+                MvpProofTrialStepView(
+                    stepId="done-evidence",
+                    label="Done evidence",
+                    status="required",
+                    summary="The Dev Console must show the work item done state, retained runtime evidence, and any remaining follow-up blockers.",
+                    requiredApproval="No separate approval unless done evidence requires remote issue/story sync.",
+                    evidence=[
+                        "Runtime evidence export",
+                        "Work item final state",
+                        "Cleanup and rollback evidence",
+                    ],
+                ),
+            ],
+            approvalPackets=[
+                "Selected real BMAD story id and path.",
+                "One Codex implementation launch approval with path, command, verification, rollback, and cleanup boundaries.",
+                "One Claude review approval only if adversarial review is justified.",
+                "One GitHub delivery approval packet for push, PR, and read-only CI/review inspection.",
+                "One merge approval packet after CI is green and review comments are resolved.",
+                "One cleanup approval packet for the exact local and remote targets after merge evidence is retained.",
+            ],
+            blockedOperations=[
+                "Launching Codex without the selected-story implementation approval.",
+                "Launching Claude without the selected-story review approval.",
+                "Using providers outside the approved Ollama endpoint/model boundary.",
+                "Pushing, merging, deleting branches, or syncing issues without the matching target approval.",
+                "Marking Epic 6 MVP complete without Dev Console done evidence and retained runtime evidence.",
+            ],
+            stopConditions=[
+                "The selected story is ambiguous, broad, or not already represented by a BMAD/story artifact.",
+                "The implementation scope expands beyond the approved paths or expected outcome.",
+                "Verification fails or becomes flaky.",
+                "Claude usage is requested without an adversarial review need.",
+                "GitHub reports unresolved review comments, failed CI, or merge conflicts.",
+                "Cleanup would remove evidence needed for rollback or audit.",
+            ],
+            nextSafeActions=[
+                "Pick one low-risk real BMAD story and record the selected story id/path.",
+                "Prepare the exact Codex implementation approval packet for that story.",
+                "Keep Claude, merge, cleanup, remote sync, and autonomy separately gated until their evidence exists.",
+            ],
+            readOnly=True,
+            codexLaunchApproved=False,
+            claudeLaunchApproved=False,
+            providerExpansionApproved=False,
+            autonomousDeliveryApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -4452,6 +4587,7 @@ class SupervisorService:
             "GET /supervisor/remote-cleanup-sync-readiness-report",
             "GET /supervisor/trusted-autonomy-readiness-report",
             "GET /supervisor/epic-6-completion-audit-report",
+            "GET /supervisor/epic-6-mvp-proof-trial-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -4511,6 +4647,7 @@ class SupervisorService:
             "docs/stories/6-22-remote-cleanup-sync-readiness.md",
             "docs/stories/6-23-trusted-autonomy-readiness.md",
             "docs/stories/6-24-epic-6-completion-audit.md",
+            "docs/stories/6-27-epic-6-mvp-proof-trial-packet.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",

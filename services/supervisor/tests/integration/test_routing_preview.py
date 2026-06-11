@@ -1398,6 +1398,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/remote-cleanup-sync-readiness-report",
         "GET /supervisor/trusted-autonomy-readiness-report",
         "GET /supervisor/epic-6-completion-audit-report",
+        "GET /supervisor/epic-6-mvp-proof-trial-report",
         "GET /supervisor/delivery-readiness-policy-report",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
@@ -3260,6 +3261,45 @@ def test_epic_6_completion_audit_report_shows_remaining_blockers_without_mutatio
     assert any("Merging, closing, or deleting" in operation for operation in report["blockedOperations"])
     assert any("Merged PR #86, PR #87, and PR #88" in evidence for evidence in report["requiredEvidence"])
     assert any("worktree is dirty" in condition for condition in report["stopConditions"])
+
+
+def test_epic_6_mvp_proof_trial_report_defines_next_approval_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "epic-6-mvp-proof-trial-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/epic-6-mvp-proof-trial-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "epic-6-mvp-proof-trial-report-v1"
+    assert report["readOnly"] is True
+    assert report["codexLaunchApproved"] is False
+    assert report["claudeLaunchApproved"] is False
+    assert report["providerExpansionApproved"] is False
+    assert report["autonomousDeliveryApproved"] is False
+    assert report["trialStatus"] == "waiting_for_bounded_trial_approval"
+    assert {step["stepId"] for step in report["steps"]} == {
+        "select-real-story",
+        "bounded-codex-implementation",
+        "local-and-ollama-checks",
+        "bounded-claude-review",
+        "github-delivery",
+        "done-evidence",
+    }
+    assert any("One Codex implementation launch approval" in packet for packet in report["approvalPackets"])
+    assert any("Launching Codex" in operation for operation in report["blockedOperations"])
+    assert any("selected story is ambiguous" in condition for condition in report["stopConditions"])
 
 
 def test_delivery_readiness_policy_report_documents_review_gate_without_mutation(tmp_path, monkeypatch) -> None:

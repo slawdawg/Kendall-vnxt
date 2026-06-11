@@ -46,7 +46,7 @@ Candidate Work
 | 14. Trusted autonomy | Readiness prepared; autonomy blocked | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. |
 | 15. Completion audit visibility | Readiness prepared; completion blocked | Story 6.24 adds a Dev Console completion audit showing prepared local work, remaining blockers, and the next delivery approval. |
 | 16. Trusted delivery eligibility | Delivered in PR #88 | Stories 6.25 and 6.26 define read-only eligibility stages and current-branch evaluation for softening push, PR, merge, and cleanup gates after strict evidence is satisfied. Actual future GitHub mutation remains gated per target. |
-| 17. MVP proof | Blocked pending approval | One real BMAD story still must complete through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. |
+| 17. MVP proof | Trial packet in progress locally | Story 6.27 defines the read-only approval packet for one real BMAD story trial through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. |
 
 ## Approval Queue
 
@@ -126,6 +126,7 @@ After a PR is opened under explicit approval and CI is green, the line softens o
 - 2026-06-11: Story 6.25 added read-only trusted delivery eligibility stages to the GitHub delivery authority report so push, PR, merge, and cleanup can later soften only after strict evidence is satisfied. Actual GitHub mutation, merge, cleanup, Codex, Claude, provider expansion, and autonomy remain blocked by default.
 - 2026-06-11: Story 6.26 added a read-only trusted delivery eligibility evaluator for the current branch, base, head revision, working tree, commits ahead, diffstat, missing proof, and hard stops. It performs no GitHub query or mutation.
 - 2026-06-11: PR #88 delivered Story 6.26 into `main` after CI `check` passed and one review comment was resolved by switching delivery diffstat to merge-base branch scope.
+- 2026-06-11: Story 6.27 added a read-only Epic 6 MVP proof trial packet that names the selected story, bounded Codex implementation, local/Ollama evidence, bounded Claude review, GitHub delivery, cleanup, and done-evidence approvals required for the next real BMAD story proof.
 
 ## Current GitHub State Snapshot
 
@@ -149,6 +150,7 @@ Evidence that is complete locally:
 - Story map through 6.24 was delivered through PR #86.
 - Cleanup hardening was delivered through PR #87.
 - Story 6.26 trusted delivery eligibility was delivered through PR #88.
+- Story 6.27 MVP proof trial packet is being prepared locally to make the next approval exact before any worker launch.
 - Controls page includes read-only surfaces for execution readiness, authority readiness, Git/GitHub posture, local cleanup, remote cleanup/sync, Codex, Claude, trusted autonomy, trusted delivery eligibility, and Epic 6 completion audit visibility.
 - Full local verification passed on the merged milestone and follow-up branches with 142 supervisor tests.
 - Local cleanup for the merged milestone was performed, Windows cleanup hardening was delivered, and one empty Codex workspace directory remains locked by another process outside Git worktree registration.
@@ -160,6 +162,7 @@ Evidence still missing for completion:
 - GitHub delivery Gate 1 and merge are complete for PR #86, PR #87, and PR #88.
 - Automatic cleanup, remote cleanup, issue/story sync, and trusted autonomy remain blocked by default.
 - No real BMAD story has reached the final Dev Console done/evidence state through approved implementation, delivery, and cleanup.
+- The next real-story trial packet exists locally but no Codex or Claude worker launch has been approved from it.
 
 Next unavoidable gate:
 

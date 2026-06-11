@@ -21,6 +21,7 @@ export const reportAnchorByEndpoint: Record<string, string> = {
   "GET /supervisor/remote-cleanup-sync-readiness-report": "#remote-cleanup-sync-readiness-report",
   "GET /supervisor/trusted-autonomy-readiness-report": "#trusted-autonomy-readiness-report",
   "GET /supervisor/epic-6-completion-audit-report": "#epic-6-completion-audit-report",
+  "GET /supervisor/epic-6-mvp-proof-trial-report": "#epic-6-mvp-proof-trial-report",
   "GET /supervisor/codex-readiness-report": "#codex-readiness-report",
   "GET /supervisor/codex-implementation-approval-report": "#codex-implementation-approval-report",
   "GET /supervisor/claude-review-readiness-report": "#claude-review-readiness-report",

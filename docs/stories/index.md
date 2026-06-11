@@ -125,6 +125,8 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `6-24-epic-6-completion-audit.md` | Add a read-only Dev Console audit showing Epic 6 completion evidence, remaining authority blockers, and the next delivery approval needed. |
 | `6-25-trusted-delivery-eligibility-policy.md` | Add read-only trusted delivery eligibility stages for softening push, PR, merge, and cleanup blockers only after strict evidence is satisfied. |
 | `6-26-trusted-delivery-eligibility-evaluator.md` | Add a read-only evaluator for current-branch trusted delivery eligibility before any push, PR, merge, or cleanup action is allowed. |
+| `6-27-epic-6-mvp-proof-trial-packet.md` | Add a read-only approval packet for the next real BMAD story proof trial across Codex, Claude, local/Ollama evidence, GitHub delivery, cleanup, and done evidence. |
+| `6-27-epic-6-mvp-proof-trial-packet.md` | Add a read-only trial packet for the next real BMAD story proof approval without launching Codex, Claude, GitHub delivery, cleanup, or autonomy. |
 
 ## Completed Foundation Stories
 
