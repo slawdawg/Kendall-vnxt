@@ -31,6 +31,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1 -Verify
 ```
 
 - Latest readiness report under `.data/bootstrap/` shows `remote-ready`.
+- Startup tasks are installed:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\Install-KendallNxtStartup.ps1
+```
+
+- Startup task registration check passes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\Test-KendallNxtStartup.ps1 -SkipEndpointChecks -WriteReport
+```
+
+- After signing out and back in, startup endpoint check passes and `.data/startup/` contains the readiness report:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\Test-KendallNxtStartup.ps1 -WriteReport
+```
 
 ## Auth And GitHub
 

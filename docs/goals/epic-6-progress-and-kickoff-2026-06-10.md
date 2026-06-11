@@ -35,14 +35,15 @@ Candidate Work
 | 3. Dev Console live pipeline | Complete locally | Story 6.9 implemented SSE-backed dashboard refresh without polling or full browser reloads. |
 | 4. Proof workflow | In progress | Story 6.10 implements the synthetic BMAD proof; Story 6.11 implements the real BMAD story proof. |
 | 5. Refactoring and maintenance foundation | Not started | Root-cause maintenance allowed when scoped. |
-| 6. Safe local execution | Not started | Ollama approved only within current endpoint/model boundary until expanded. |
-| 7. Git hygiene foundation | Not started | Read-only first. |
-| 8. Local worktree management | Not started | Local only, no remote. |
-| 9. Codex authority | Blocked pending approval | Dry-run/read-only first, then bounded implementation with approval. |
-| 10. Claude authority | Blocked pending approval | Review-only, scarce-use policy. |
-| 11. GitHub delivery | Blocked pending approval | Human-approved remote actions only. |
-| 12. Cleanup | Not started | Local cleanup after done with evidence. |
-| 13. MVP proof | Not started | One real BMAD story through delivery and cleanup. |
+| 6. Startup availability | Complete locally | Story 6.12 adds verification for Windows logon startup tasks and live endpoints. |
+| 7. Safe local execution | Not started | Ollama approved only within current endpoint/model boundary until expanded. |
+| 8. Git hygiene foundation | Not started | Read-only first. |
+| 9. Local worktree management | Not started | Local only, no remote. |
+| 10. Codex authority | Blocked pending approval | Dry-run/read-only first, then bounded implementation with approval. |
+| 11. Claude authority | Blocked pending approval | Review-only, scarce-use policy. |
+| 12. GitHub delivery | Blocked pending approval | Human-approved remote actions only. |
+| 13. Cleanup | Not started | Local cleanup after done with evidence. |
+| 14. MVP proof | Not started | One real BMAD story through delivery and cleanup. |
 
 ## Approval Queue
 
@@ -69,6 +70,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - Implement SSE-backed Dev Console live refresh without polling or full browser reloads.
 - Prove the synthetic BMAD artifact path through Candidate Work, Active Work, routing preview, fake/blocked attempt, and runtime evidence.
 - Prove a real BMAD story artifact path with metadata-only story evidence preserved through Task Packet and runtime evidence.
+- Verify Windows startup/logon tasks and live Dashboard/Supervisor availability through a redacted startup readiness report.
 - Improve docs/tests/scripts when root-cause maintenance is scoped and verified.
 
 ## Stop/Continue Rules
@@ -100,3 +102,4 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - 2026-06-10: Story 6.9 implemented SSE-backed Dev Console refresh for Candidate Work and WorkItem changes, mounted a shared realtime refresh listener across dashboard pages, kept live feed EventSource reconnect behavior active, and removed full browser reloads from Proposed Work controls. Verification passed with `pnpm.cmd --filter @kendall/dashboard build`, `PLAYWRIGHT_BROWSERS_PATH=C:\Users\slaw_dawg\Kendall_Nxt\.data\ms-playwright pnpm.cmd exec playwright test tests/e2e/dashboard.spec.ts -g "shows proposed work"`, and `pnpm.cmd run check`.
 - 2026-06-10: Story 6.10 implemented a metadata-only BMAD import endpoint and synthetic BMAD proof fixture that flows through Candidate Work, approval/promotion, Task Packet preview, routing preview, fake/blocked execution attempt evidence, and runtime evidence export without worker launch, provider calls, command execution, source mutation, Git, or GitHub operations. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_candidate_work_api.py -q` and `pnpm.cmd run check`.
 - 2026-06-10: Story 6.11 preserved metadata-only BMAD import evidence for a real story artifact through Candidate Work, promoted WorkItem metadata, Task Packet preview, fake/blocked attempt evidence, and runtime evidence export. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_candidate_work_api.py -q` and `pnpm.cmd run check`.
+- 2026-06-10: Story 6.12 added Windows startup verification for scheduled logon tasks, Dashboard/Supervisor endpoint readiness, and redacted startup reports. Verification passed with PowerShell parser validation for `scripts/windows/*.ps1` startup scripts and `pnpm.cmd run check`.
