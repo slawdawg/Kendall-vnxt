@@ -7,7 +7,7 @@ Status: proposal only; not active policy
 
 Reduce approval overhead for repeatable low-risk documentation and evidence updates while keeping high-blast-radius operations gated.
 
-This proposal is based on the successful Epic 6 proof sequence through PR #91 and PR #92:
+This proposal is based on initial partial evidence from the Epic 6 proof sequence through PR #91 and PR #92:
 
 - bounded Codex implementation in an isolated worktree,
 - local verification with `pnpm.cmd run check`,
@@ -15,6 +15,8 @@ This proposal is based on the successful Epic 6 proof sequence through PR #91 an
 - CI success,
 - merge after explicit approval,
 - cleanup after explicit approval.
+
+This evidence is enough to propose a narrow policy, not enough to activate broad autonomy. The proof covered one documentation/evidence-only story and one follow-up documentation update. It did not prove autonomous merge, cleanup, issue sync, Claude review, provider expansion, or non-documentation source changes.
 
 ## Proposed Autonomy Class
 
@@ -83,7 +85,7 @@ Codex must stop and ask for explicit approval if:
 
 ## Promotion Criteria
 
-This proposal should become active policy only after Bob explicitly approves it as policy.
+This proposal should become active policy only after Bob explicitly approves it as policy. Approval should treat PR #91 and PR #92 as initial low-risk evidence, not as complete proof that broader autonomy is safe.
 
 Suggested activation approval phrase:
 
