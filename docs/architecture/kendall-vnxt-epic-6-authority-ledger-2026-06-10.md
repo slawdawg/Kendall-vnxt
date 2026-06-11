@@ -41,6 +41,7 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 - Remote cleanup/sync: `GET /supervisor/remote-cleanup-sync-readiness-report`.
 - Trusted autonomy: `GET /supervisor/trusted-autonomy-readiness-report`.
 - Epic completion audit: `GET /supervisor/epic-6-completion-audit-report`.
+- MVP proof trial packet: `GET /supervisor/epic-6-mvp-proof-trial-report`.
 
 These reports are evidence and approval-prep surfaces only. They do not grant the authority they describe.
 
@@ -48,10 +49,10 @@ These reports are evidence and approval-prep surfaces only. They do not grant th
 
 Snapshot date: 2026-06-11.
 
-- Open remote PR observed: PR #85 for `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success.
-- Open remote PR observed: PR #86 for `codex/implement-story-6-23-trusted-autonomy-readiness`, merge state `CLEAN`, CI `check` success.
-- Gate 1 was approved for pushing `codex/implement-story-6-23-trusted-autonomy-readiness`, opening one integrated PR to `main`, and running read-only PR/CI status checks.
-- Merge, PR #85 closeout, branch deletion, local cleanup, remote cleanup, Codex launch, Claude launch, and issue/story sync still require explicit Bob approval naming action and scope.
+- PR #85, PR #86, PR #87, PR #88, PR #89, and PR #90 are merged into `main`.
+- PR #90 delivered the read-only Epic 6 MVP proof trial packet from `codex/epic-6-mvp-proof-run`.
+- Current `main` verification passed after PR #90 with `pnpm.cmd run check`, including dashboard build and 143 supervisor tests.
+- Future branch deletion, local cleanup, remote cleanup, Codex launch, Claude launch, push/PR delivery, merge, and issue/story sync still require explicit Bob approval naming action and scope.
 
 ## Approval Request Format
 
