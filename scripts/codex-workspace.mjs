@@ -42,6 +42,9 @@ try {
     case "cleanup-merged":
       cleanupMerged(commandArgs);
       break;
+    case "cleanup-orphans":
+      cleanupOrphans(commandArgs);
+      break;
     case "rebuild-index":
       rebuildIndex(commandArgs);
       break;
@@ -65,6 +68,7 @@ Commands:
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
+  cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
   rebuild-index             Rebuild missing manifests from Git worktrees.
   doctor                    Check local workspace protocol readiness.
 
@@ -413,6 +417,7 @@ function cleanupMerged(argv) {
     }
 
     const plan = [`git worktree remove ${manifest.worktree_path}`, `git branch -d ${manifest.branch}`];
+    plan.unshift(`clean generated artifacts under ${manifest.worktree_path}`);
     if (deleteRemote) {
       plan.push(`git push origin --delete ${manifest.branch}`);
     }
@@ -454,6 +459,53 @@ function cleanupMerged(argv) {
       writeManifest(manifestPath, manifest);
     });
     console.log(`Closed ${manifest.task_id}`);
+  }
+}
+
+function cleanupOrphans(argv) {
+  const { positional, options } = parseOptions(argv);
+  const state = workspaceState(options);
+  const query = positional.join(" ").trim().toLowerCase();
+  const apply = Boolean(options.apply);
+
+  if (!existsSync(state.worktreesDir)) {
+    console.log(`No managed worktree directory exists: ${state.worktreesDir}`);
+    return;
+  }
+
+  const directories = readdirSync(state.worktreesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(state.worktreesDir, entry.name))
+    .filter((worktreePath) => !worktreeListed(worktreePath))
+    .filter((worktreePath) => !query || basename(worktreePath).toLowerCase().includes(query));
+
+  if (directories.length === 0) {
+    console.log(query ? `No orphan worktree directories matched: ${query}` : "No orphan worktree directories found.");
+    return;
+  }
+  if (!query && !options.all) {
+    printPlan("cleanup-orphans", directories.map((worktreePath) => `orphan directory: ${worktreePath}`));
+    console.log("Pass a query to target one orphan, or pass --all to include every orphan directory.");
+    console.log("Add --apply to remove matched orphan directories.");
+    return;
+  }
+
+  const plan = directories.flatMap((worktreePath) => [
+    `clean generated artifacts under ${worktreePath}`,
+    `remove orphan directory ${worktreePath}`,
+  ]);
+
+  if (options.dryRun || !apply) {
+    printPlan("cleanup-orphans", plan);
+    if (!apply) {
+      console.log("Add --apply to remove matched orphan directories.");
+    }
+    return;
+  }
+
+  for (const worktreePath of directories) {
+    removeManagedDirectory(worktreePath, state);
+    console.log(`Removed orphan directory ${worktreePath}`);
   }
 }
 
@@ -816,10 +868,11 @@ function appendTaskEvent(manifest, type, message) {
 
 function removeWorktree(worktreePath, state) {
   assertManagedWorktreePath(worktreePath, state);
+  cleanupGeneratedArtifacts(worktreePath);
   const result = git(["worktree", "remove", worktreePath], { cwd: repoRoot });
   if (result.code === 0) {
     if (existsSync(worktreePath)) {
-      throw new Error(`Git removed worktree metadata but path still exists: ${worktreePath}`);
+      removeManagedDirectory(worktreePath, state);
     }
     return true;
   }
@@ -828,12 +881,47 @@ function removeWorktree(worktreePath, state) {
     throw new Error(result.stderr || result.stdout || `Could not remove worktree: ${worktreePath}`);
   }
 
+  removeManagedDirectory(worktreePath, state);
+  return true;
+}
+
+function removeManagedDirectory(worktreePath, state) {
+  assertManagedWorktreePath(worktreePath, state);
+  cleanupGeneratedArtifacts(worktreePath);
   normalizeAttributes(worktreePath);
   rmSync(worktreePath, { recursive: true, force: true });
   if (existsSync(worktreePath)) {
-    throw new Error(`Worktree path still exists after fallback removal: ${worktreePath}`);
+    throw new Error(adminCleanupMessage(worktreePath));
   }
-  return true;
+}
+
+function cleanupGeneratedArtifacts(worktreePath) {
+  if (!existsSync(worktreePath)) {
+    return;
+  }
+  for (const artifact of generatedCleanupArtifacts()) {
+    const artifactPath = join(worktreePath, artifact);
+    if (existsSync(artifactPath)) {
+      normalizeAttributes(artifactPath);
+      try {
+        rmSync(artifactPath, { recursive: true, force: true });
+      } catch {
+        throw new Error(adminCleanupMessage(worktreePath));
+      }
+    }
+  }
+}
+
+function generatedCleanupArtifacts() {
+  return [
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "services/supervisor/.pytest_cache",
+    "services/supervisor/.mypy_cache",
+    "services/supervisor/.ruff_cache",
+    "services/supervisor/.venv",
+  ];
 }
 
 function assertManagedWorktreePath(worktreePath, state) {
@@ -866,8 +954,26 @@ function normalizeAttributes(targetPath) {
     `$target = ${JSON.stringify(targetPath)}; Get-ChildItem -LiteralPath $target -Recurse -Force | ForEach-Object { $_.Attributes = 'Normal' }`,
   ]);
   if (result.code !== 0) {
-    throw new Error(result.stderr || result.stdout || `Could not normalize attributes for ${targetPath}`);
+    console.warn(`WARN: Could not normalize attributes for ${targetPath}.`);
   }
+}
+
+function adminCleanupMessage(worktreePath) {
+  const root = JSON.stringify(dirname(worktreePath));
+  const name = JSON.stringify(basename(worktreePath));
+  return [
+    `Worktree path still exists after cleanup: ${worktreePath}`,
+    "Windows may require an elevated PowerShell window to repair ACLs and remove generated cache folders.",
+    "Run this exact scoped command as Administrator:",
+    `$root = ${root}`,
+    `$target = Join-Path $root ${name}`,
+    "$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+    "$grant = \"*$sid`:(OI)(CI)F\"",
+    "takeown.exe /F $target /R /D Y",
+    "icacls.exe $target /reset /T /C",
+    "icacls.exe $target /grant:r $grant /T /C",
+    "Remove-Item -LiteralPath $target -Recurse -Force",
+  ].join("\n");
 }
 
 function parseWorktreePorcelain(value) {

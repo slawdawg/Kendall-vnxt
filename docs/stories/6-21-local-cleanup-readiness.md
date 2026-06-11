@@ -32,6 +32,7 @@ This story does not remove worktrees, delete branches, delete files, delete evid
 - Added `LocalCleanupReadinessReportPanel` to Controls.
 - Added report catalog and runtime evidence references.
 - No worktree removal, branch deletion, file deletion, Git command, shell command, remote operation, or evidence deletion is performed by this report.
+- Implementation follow-up added `scripts/codex-workspace.mjs cleanup-orphans` and generated-artifact pre-cleaning for workspace cleanup. Use `docs/codex-workspace-cleanup-runbook.md` for the operator flow and Windows admin fallback.
 
 ## Verification
 

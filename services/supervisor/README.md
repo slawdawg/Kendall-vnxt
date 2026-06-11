@@ -17,4 +17,6 @@ pnpm run dev:supervisor
 pnpm run test:supervisor
 ```
 
+Use `pnpm run test:supervisor -- <pytest args>` for focused checks. The wrapper and pytest config disable pytest cache writes and default collection to `tests`, which keeps generated temp/cache paths from blocking Windows worktree cleanup.
+
 `uv sync --directory services/supervisor` keeps the local virtualenv aligned with `services/supervisor/uv.lock`.
