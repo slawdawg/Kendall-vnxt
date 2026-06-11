@@ -12,6 +12,8 @@ import type {
   ExecutionAttemptView,
   ExecutionReadinessReportView,
   GitHubWorkflowPolicyReportView,
+  LocalEvidenceExplanationPayload,
+  LocalEvidenceExplanationView,
   ManagedRecipePolicyReportView,
   MaintenanceActionPlanReportView,
   MaintenanceReadinessReportView,
@@ -146,6 +148,25 @@ export async function getRoutingPreview(workItemId: string): Promise<RoutingPrev
 
 export async function getRoutingLaneProfiles(): Promise<RoutingLaneEvidenceProfileView[]> {
   return requestJson<RoutingLaneEvidenceProfileView[]>("/routing/lane-profiles");
+}
+
+export async function createLocalEvidenceExplanation(
+  workItemId: string,
+  payload: LocalEvidenceExplanationPayload,
+): Promise<LocalEvidenceExplanationView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/work-items/${workItemId}/local-evidence-explanation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as
+      | { detail?: { error?: { message?: string } } }
+      | null;
+    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to run the local check.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<LocalEvidenceExplanationView>;
+  return envelope.data;
 }
 
 export async function getExecutionReadinessReport(): Promise<ExecutionReadinessReportView> {

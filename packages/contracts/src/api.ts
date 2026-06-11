@@ -432,6 +432,13 @@ export interface LocalReadonlyWorkerPreviewView {
   writesAllowed: boolean;
   commandsAllowed: boolean;
 }
+
+export interface LocalEvidenceExplanationPayload {
+  stepId?: string | null;
+  taskKind?: string | null;
+  recordEvent?: boolean;
+}
+
 export interface LocalEvidenceItemView {
   eventType: string;
   summary: string;

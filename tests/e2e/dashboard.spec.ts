@@ -446,6 +446,27 @@ test.describe("dashboard workflow coverage", () => {
     await expect(fleetPanel.getByText("Decisions 1")).toBeVisible();
     await expect(fleetPanel.getByText("Task Deterministic Check")).toBeVisible();
   });
+
+  test("runs a safe local check from the work item detail page", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Local evidence check",
+      requestedOutcome: "Summarize the available workflow evidence without changing files or running commands.",
+    });
+
+    await page.goto(`/work-items/${workItemId}`);
+
+    const localCheck = page.locator("#local-check");
+    await expect(localCheck.getByRole("heading", { name: "Ask the local lane to explain this work" })).toBeVisible();
+    await expect(localCheck.getByText("Changes off")).toBeVisible();
+    await expect(localCheck.getByText("Commands off")).toBeVisible();
+
+    await localCheck.getByRole("button", { name: "Run local check" }).click();
+
+    await expect(localCheck.getByText("Local read-only", { exact: true })).toBeVisible();
+    await expect(localCheck.getByText("No model call was made. This check used existing work evidence only.")).toBeVisible();
+    await expect(localCheck.getByText("Read-only explanation only; file writes are not allowed.")).toBeVisible();
+  });
+
   test("guides a non-coder through intake templates and advanced fields", async ({ page }) => {
     await page.goto("/");
 

@@ -6,6 +6,7 @@ import { EscalationPanel } from "../../../components/escalation-panel";
 import { EvidenceOverviewPanel } from "../../../components/evidence-overview-panel";
 import { ExecutionAttemptEvidencePanel } from "../../../components/execution-attempt-evidence-panel";
 import { ExecutionRecipePanel } from "../../../components/execution-recipe-panel";
+import { LocalEvidencePanel } from "../../../components/local-evidence-panel";
 import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
 import { RoutingPreviewPanel } from "../../../components/routing-preview-panel";
 import { RuntimeEvidenceExportPanel } from "../../../components/runtime-evidence-export-panel";
@@ -137,6 +138,12 @@ export default async function WorkItemDetailPage({
               Routing
             </a>
             <a
+              href="#local-check"
+              className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Local check
+            </a>
+            <a
               href="#execution-attempts"
               className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
@@ -181,6 +188,7 @@ export default async function WorkItemDetailPage({
             events={events}
           />
           <RoutingPreviewPanel preview={routingPreview} />
+          <LocalEvidencePanel workItemId={item.id} />
           <ExecutionAttemptEvidencePanel attempts={executionAttempts} />
           <RuntimeEvidenceExportPanel exportView={runtimeEvidenceExport} />
           {item.executionRecipe ? <ExecutionRecipePanel recipe={item.executionRecipe} /> : null}
