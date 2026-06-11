@@ -1094,6 +1094,38 @@ export interface ClaudeReviewReadinessReportView {
   scarceUseApproved: boolean;
 }
 
+export interface ClaudeReviewApprovalRequirementView {
+  requirementId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface ClaudeReviewApprovalReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  approvalPrompt: string;
+  authorityFamily: string;
+  operation: string;
+  triggerPolicy: ClaudeReviewApprovalRequirementView[];
+  contextScope: string[];
+  blockedInputs: string[];
+  expectedCommandShape: string[];
+  outputContract: string[];
+  requiredEvidence: string[];
+  scarcityControls: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  reviewTaskExecutionApproved: boolean;
+  sourceMutationApproved: boolean;
+  scarceUseApproved: boolean;
+  approvalBindingImplemented: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

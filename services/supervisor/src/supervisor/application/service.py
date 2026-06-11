@@ -20,6 +20,8 @@ from supervisor.api.schemas import (
     CandidateWorkUpdate,
     CandidateWorkView,
     ClaudeReadinessCheckView,
+    ClaudeReviewApprovalReportView,
+    ClaudeReviewApprovalRequirementView,
     ClaudeReviewReadinessReportView,
     CodexImplementationApprovalReportView,
     CodexImplementationApprovalRequirementView,
@@ -1628,6 +1630,15 @@ class SupervisorService:
                 relatedDocs=["docs/stories/6-18-claude-readiness-no-launch.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="claude-review-approval-report-v1",
+                label="Claude review approval report",
+                endpoint="GET /supervisor/claude-review-approval-report",
+                status="active",
+                summary="Defines the exact approval packet for a future bounded Claude adversarial review without launching Claude.",
+                evidenceScope=["review trigger", "context scope", "no-edit boundary", "scarcity controls", "output contract"],
+                relatedDocs=["docs/stories/6-19-claude-review-approval-packet.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
                 label="Delivery readiness policy report",
                 endpoint="GET /supervisor/delivery-readiness-policy-report",
@@ -2872,6 +2883,108 @@ class SupervisorService:
             scarceUseApproved=False,
         )
 
+    def get_claude_review_approval_report(self) -> ClaudeReviewApprovalReportView:
+        return ClaudeReviewApprovalReportView(
+            reportId="claude-review-approval-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only approval packet for a future bounded Claude adversarial review. "
+                "It does not launch Claude, send code or diffs, consume subscription usage, write files, or mutate workflow state."
+            ),
+            approvalPrompt=(
+                "Approve one bounded Claude review-only attempt for the selected work item only, using the listed context scope, "
+                "scarcity controls, output contract, and stop conditions. Claude may produce findings only; file edits remain blocked."
+            ),
+            authorityFamily="claude_review",
+            operation="one_time_bounded_review_only_attempt",
+            triggerPolicy=[
+                ClaudeReviewApprovalRequirementView(
+                    requirementId="explicit-request",
+                    label="Explicit request",
+                    status="allowed",
+                    summary="Bob can explicitly request Claude review for a named work item or diff.",
+                    evidence=["approvalPrompt", "target work item id", "review reason"],
+                ),
+                ClaudeReviewApprovalRequirementView(
+                    requirementId="high-risk-diff",
+                    label="High-risk diff",
+                    status="allowed",
+                    summary="Security-sensitive, broad, or architecture-changing diffs can qualify for scarce review.",
+                    evidence=["riskLevel=high", "security-sensitive paths", "architecture decision impact"],
+                ),
+                ClaudeReviewApprovalRequirementView(
+                    requirementId="codex-output-check",
+                    label="Codex output check",
+                    status="allowed",
+                    summary="Claude can review Codex output for flaws after Codex implementation authority is separately approved.",
+                    evidence=["Codex changed-file list", "verification summary", "review question"],
+                ),
+                ClaudeReviewApprovalRequirementView(
+                    requirementId="routine-generation",
+                    label="Routine generation",
+                    status="blocked",
+                    summary="Claude is not a routine generation or implementation lane.",
+                    evidence=["scarceUseApproved=false", "sourceMutationApproved=false"],
+                ),
+            ],
+            contextScope=[
+                "Named work item, story, or PR/diff summary.",
+                "Changed-file list and bounded diff excerpts only when approved.",
+                "Relevant architecture/product docs needed to judge risk.",
+                "Verification results and known failure summaries.",
+                "A precise review question and expected finding format.",
+            ],
+            blockedInputs=[
+                "Credentials, tokens, secrets, cookies, browser sessions, or account data.",
+                "Raw unrelated repository context.",
+                "Private data not required for the review question.",
+                "Instructions to edit files, run commands, push branches, merge, or clean up.",
+                "Any context outside the approved work item or review scope.",
+            ],
+            expectedCommandShape=[
+                "claude <review-only non-interactive mode> --cwd <approved-worktree> -- <bounded review packet>",
+                "No write flags, no shell execution request, and no edit-mode approval.",
+                "Supervisor records metadata, review reason, context scope, exit status, and findings artifact location.",
+            ],
+            outputContract=[
+                "Risk-ranked findings with file/path references where applicable.",
+                "False-positive tolerant critique; no implementation patch is expected.",
+                "Explicit statement if no material issues are found.",
+                "Questions or blockers that require Bob rather than autonomous expansion.",
+            ],
+            requiredEvidence=[
+                "approval text with authority family, operation, target work item, review reason, and context scope",
+                "scarce-use reason and review trigger",
+                "bounded context manifest without raw secrets",
+                "Claude process metadata without raw prompt retention",
+                "findings artifact summary and verification follow-up recommendation",
+            ],
+            scarcityControls=[
+                "One Claude review attempt per approval unless Bob grants a wider policy.",
+                "Do not use Claude for routine generation, low-risk changes, formatting, or ordinary docs cleanup.",
+                "Record why Codex, Ollama, deterministic checks, or human review were insufficient.",
+                "Stop before retrying or expanding context if the review fails or asks for more authority.",
+            ],
+            stopConditions=[
+                "Claude invocation would require credentials, secrets, account state, or browser/session access.",
+                "Claude would edit files, run commands, or mutate Git/GitHub state.",
+                "The review packet expands beyond the approved work item, diff, or question.",
+                "The review would consume scarce subscription usage without a recorded reason.",
+                "The review output requires implementation, merge, delivery, or cleanup authority.",
+            ],
+            nextSafeActions=[
+                "Use this packet to ask Bob for one review-only Claude authority when a high-risk work item is ready.",
+                "Implement approval binding before any endpoint can launch Claude.",
+                "Keep implementation fixes, GitHub delivery, and cleanup on separate authority paths.",
+            ],
+            readOnly=True,
+            processLaunchApproved=False,
+            reviewTaskExecutionApproved=False,
+            sourceMutationApproved=False,
+            scarceUseApproved=False,
+            approvalBindingImplemented=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3487,6 +3600,7 @@ class SupervisorService:
             "GET /supervisor/codex-readiness-report",
             "GET /supervisor/codex-implementation-approval-report",
             "GET /supervisor/claude-review-readiness-report",
+            "GET /supervisor/claude-review-approval-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -3539,6 +3653,7 @@ class SupervisorService:
             "docs/stories/6-16-codex-readiness-no-launch.md",
             "docs/stories/6-17-codex-implementation-approval-packet.md",
             "docs/stories/6-18-claude-readiness-no-launch.md",
+            "docs/stories/6-19-claude-review-approval-packet.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",

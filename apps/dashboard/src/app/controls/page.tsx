@@ -1,4 +1,5 @@
 import { ControlPanel } from "../../components/control-panel";
+import { ClaudeReviewApprovalReportPanel } from "../../components/claude-review-approval-report-panel";
 import { ClaudeReviewReadinessReportPanel } from "../../components/claude-review-readiness-report-panel";
 import { CodexImplementationApprovalReportPanel } from "../../components/codex-implementation-approval-report-panel";
 import { CodexReadinessReportPanel } from "../../components/codex-readiness-report-panel";
@@ -24,6 +25,7 @@ import { VerificationReadinessReportPanel } from "../../components/verification-
 import { buildNavStats } from "../../lib/nav-stats";
 import {
   getAuthorityReadinessMatrixReport,
+  getClaudeReviewApprovalReport,
   getClaudeReviewReadinessReport,
   getCodexImplementationApprovalReport,
   getCodexReadinessReport,
@@ -70,6 +72,7 @@ export default async function ControlsPage() {
     codexReadinessReport,
     codexImplementationApprovalReport,
     claudeReviewReadinessReport,
+    claudeReviewApprovalReport,
     deliveryReadinessPolicyReport,
   ] = await Promise.all([
     getRunStatus(),
@@ -93,6 +96,7 @@ export default async function ControlsPage() {
     getCodexReadinessReport(),
     getCodexImplementationApprovalReport(),
     getClaudeReviewReadinessReport(),
+    getClaudeReviewApprovalReport(),
     getDeliveryReadinessPolicyReport(),
   ]);
   const navStats = buildNavStats(items);
@@ -162,6 +166,9 @@ export default async function ControlsPage() {
       </div>
       <div id="claude-review-readiness-report" className="scroll-mt-28">
         <ClaudeReviewReadinessReportPanel report={claudeReviewReadinessReport} />
+      </div>
+      <div id="claude-review-approval-report" className="scroll-mt-28">
+        <ClaudeReviewApprovalReportPanel report={claudeReviewApprovalReport} />
       </div>
       <div id="delivery-readiness-policy-report" className="scroll-mt-28">
         <DeliveryReadinessPolicyReportPanel report={deliveryReadinessPolicyReport} />

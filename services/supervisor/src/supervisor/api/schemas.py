@@ -1203,6 +1203,38 @@ class ClaudeReviewReadinessReportView(BaseModel):
     scarceUseApproved: bool = False
 
 
+class ClaudeReviewApprovalRequirementView(BaseModel):
+    requirementId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class ClaudeReviewApprovalReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    approvalPrompt: str
+    authorityFamily: str
+    operation: str
+    triggerPolicy: list[ClaudeReviewApprovalRequirementView]
+    contextScope: list[str]
+    blockedInputs: list[str]
+    expectedCommandShape: list[str]
+    outputContract: list[str]
+    requiredEvidence: list[str]
+    scarcityControls: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    reviewTaskExecutionApproved: bool = False
+    sourceMutationApproved: bool = False
+    scarceUseApproved: bool = False
+    approvalBindingImplemented: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

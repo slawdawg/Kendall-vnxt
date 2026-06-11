@@ -309,6 +309,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/delivery-readiness-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/disabled-provider-proofs")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-state-boundary")).toBeVisible();
@@ -473,6 +474,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(claudeReviewPanel.getByText("This report does not approve Claude CLI process launch.")).toBeVisible();
     await expect(claudeReviewPanel.getByText("scarce Claude subscription usage")).toBeVisible();
     await expect(page.locator("#claude-review-readiness-report")).toBeVisible();
+
+    const claudeApprovalPanel = page.locator("#claude-review-approval-report");
+    await expect(claudeApprovalPanel.getByText("Claude review approval", { exact: true })).toBeVisible();
+    await expect(claudeApprovalPanel.getByRole("heading", { name: "Review-only approval packet" })).toBeVisible();
+    await expect(claudeApprovalPanel.getByText("Approve one bounded Claude review-only attempt")).toBeVisible();
+    await expect(claudeApprovalPanel.getByRole("heading", { name: "Explicit request" })).toBeVisible();
+    await expect(claudeApprovalPanel.getByRole("heading", { name: "Routine generation" })).toBeVisible();
+    await expect(claudeApprovalPanel.getByRole("heading", { name: "Blocked inputs" })).toBeVisible();
+    await expect(claudeApprovalPanel.getByText("Risk-ranked findings")).toBeVisible();
+    await expect(claudeApprovalPanel.getByText("One Claude review attempt per approval")).toBeVisible();
+    await expect(page.locator("#claude-review-approval-report")).toBeVisible();
 
     const deliveryReadinessPolicyPanel = page.locator("section").filter({ hasText: "Review gate policy" }).first();
     await expect(deliveryReadinessPolicyPanel.getByText("Delivery readiness", { exact: true })).toBeVisible();

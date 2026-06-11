@@ -146,6 +146,13 @@ const reports = [
     dashboardFetch: "getClaudeReviewReadinessReport",
   },
   {
+    reportId: "claude-review-approval-report-v1",
+    endpoint: "GET /supervisor/claude-review-approval-report",
+    apiPath: "/supervisor/claude-review-approval-report",
+    story: "docs/stories/6-19-claude-review-approval-packet.md",
+    dashboardFetch: "getClaudeReviewApprovalReport",
+  },
+  {
     reportId: "delivery-readiness-policy-report-v1",
     endpoint: "GET /supervisor/delivery-readiness-policy-report",
     apiPath: "/supervisor/delivery-readiness-policy-report",
@@ -237,6 +244,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/codex-readiness-report",
   "GET /supervisor/codex-implementation-approval-report",
   "GET /supervisor/claude-review-readiness-report",
+  "GET /supervisor/claude-review-approval-report",
   "GET /supervisor/delivery-readiness-policy-report",
 ]) {
   assertCondition(
@@ -305,6 +313,7 @@ for (const controlsAnchor of [
   'id="codex-readiness-report"',
   'id="codex-implementation-approval-report"',
   'id="claude-review-readiness-report"',
+  'id="claude-review-approval-report"',
   'id="delivery-readiness-policy-report"',
 ]) {
   assertCondition(
@@ -367,6 +376,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-18-claude-readiness-no-launch.md"),
   "Story index must reference Story 6.18 Claude readiness no-launch",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-19-claude-review-approval-packet.md"),
+  "Story index must reference Story 6.19 Claude review approval packet",
   failures,
 );
 assertCondition(
