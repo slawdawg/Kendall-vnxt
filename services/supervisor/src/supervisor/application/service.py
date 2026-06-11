@@ -99,6 +99,9 @@ from supervisor.api.schemas import (
     TaskPacketV0View,
     ThreatBoundaryRuleView,
     ThreatBoundaryView,
+    TrustedDeliveryEligibilityCheckView,
+    TrustedDeliveryEligibilityReportView,
+    TrustedDeliveryEligibilityStageEvaluationView,
     TrustedAutonomyReadinessGateView,
     TrustedAutonomyReadinessReportView,
     VerificationCommandView,
@@ -1657,6 +1660,15 @@ class SupervisorService:
                 summary="Defines the progressive approval ladder for push, PR, CI, review resolution, merge, and remote cleanup without remote writes.",
                 evidenceScope=["push approval", "PR approval", "CI wait approval", "merge approval", "remote cleanup boundary"],
                 relatedDocs=["docs/stories/6-20-github-delivery-authority-ladder.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="trusted-delivery-eligibility-report-v1",
+                label="Trusted delivery eligibility report",
+                endpoint="GET /supervisor/trusted-delivery-eligibility-report",
+                status="active",
+                summary="Evaluates local branch and evidence readiness for future trusted push, PR, merge, and cleanup without remote mutation.",
+                evidenceScope=["current branch", "working tree", "commits ahead", "missing delivery evidence", "hard stops"],
+                relatedDocs=["docs/stories/6-26-trusted-delivery-eligibility-evaluator.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="local-cleanup-readiness-report-v1",
@@ -3234,6 +3246,232 @@ class SupervisorService:
             automaticDeliveryApproved=False,
         )
 
+    def get_trusted_delivery_eligibility_report(self) -> TrustedDeliveryEligibilityReportView:
+        base_branch = "main"
+        branch_ok, branch_output = self._git_output(["git", "branch", "--show-current"])
+        head_ok, head_output = self._git_output(["git", "rev-parse", "--short", "HEAD"])
+        status_ok, status_output = self._git_output(["git", "status", "--porcelain=v1"])
+        base_ok, _ = self._git_output(["git", "rev-parse", "--verify", base_branch])
+        ahead_ok, ahead_output = self._git_output(["git", "rev-list", "--count", f"{base_branch}..HEAD"])
+        diff_ok, diff_output = self._git_output(["git", "diff", "--stat", f"{base_branch}..HEAD"])
+
+        current_branch = branch_output if branch_ok and branch_output else "detached"
+        head_revision = head_output if head_ok else "unknown"
+        working_tree_status = "clean" if status_ok and not status_output.strip() else "attention"
+        commits_ahead = int(ahead_output) if ahead_ok and ahead_output.isdigit() else 0
+        diff_stat = diff_output if diff_ok and diff_output else "No committed diff from main."
+
+        system_branch = current_branch.startswith("codex/")
+        branch_not_main = current_branch not in {"main", "master", "detached", ""}
+        clean_tree = working_tree_status == "clean"
+        has_commits = commits_ahead > 0
+
+        push_checks = [
+            self._eligibility_check(
+                "system-branch",
+                "System-owned branch",
+                system_branch,
+                f"Current branch is {current_branch}.",
+                ["git branch --show-current", "required prefix: codex/"],
+            ),
+            self._eligibility_check(
+                "not-main",
+                "Not main",
+                branch_not_main,
+                "Delivery automation must never run directly from main.",
+                [f"branch={current_branch}"],
+            ),
+            self._eligibility_check(
+                "base-main",
+                "Base branch",
+                base_ok,
+                "Base branch main must resolve locally before delivery evaluation.",
+                ["git rev-parse --verify main"],
+            ),
+            self._eligibility_check(
+                "clean-tree",
+                "Clean working tree",
+                clean_tree,
+                "Working tree must be clean before remote delivery can soften.",
+                ["git status --porcelain=v1", f"workingTreeStatus={working_tree_status}"],
+            ),
+            self._eligibility_check(
+                "commits-ahead",
+                "Committed diff",
+                has_commits,
+                "Branch must contain committed work ahead of main.",
+                ["git rev-list --count main..HEAD", f"commitsAhead={commits_ahead}"],
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="local-check-evidence",
+                label="Local check evidence",
+                status="not_recorded",
+                summary="A recent `pnpm.cmd run check` result must be retained before auto-eligible push or PR.",
+                evidence=["manual verification record required", "no command executed by this report"],
+            ),
+        ]
+        push_eligible = all(check.status == "passed" for check in push_checks)
+
+        ci_checks = [
+            TrustedDeliveryEligibilityCheckView(
+                checkId="pr-url",
+                label="PR URL",
+                status="not_recorded",
+                summary="A PR URL is required before CI and review inspection can become auto-eligible.",
+                evidence=["No GitHub query performed by this read-only local report."],
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="ci-target",
+                label="CI target",
+                status="not_recorded",
+                summary="A named PR or commit check target is required before CI wait can soften.",
+                evidence=["No remote CI query performed."],
+            ),
+        ]
+
+        merge_checks = [
+            TrustedDeliveryEligibilityCheckView(
+                checkId="ci-green",
+                label="Green CI",
+                status="not_recorded",
+                summary="Merge cannot soften until remote CI is known green for the named PR.",
+                evidence=["CI status must come from approved PR/CI inspection."],
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="mergeability-clean",
+                label="Clean mergeability",
+                status="not_recorded",
+                summary="Mergeability must be clean immediately before merge.",
+                evidence=["No GitHub mergeability query performed."],
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="review-resolution",
+                label="Review resolution",
+                status="not_recorded",
+                summary="Review threads must be resolved or explicitly waived before merge can soften.",
+                evidence=["No review thread query performed."],
+            ),
+        ]
+
+        cleanup_checks = [
+            TrustedDeliveryEligibilityCheckView(
+                checkId="merge-evidence",
+                label="Merge evidence",
+                status="not_recorded",
+                summary="Cleanup cannot soften until merge commit and branch evidence are retained.",
+                evidence=["merged PR URL and merge commit required"],
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="cleanup-dry-run",
+                label="Cleanup dry run",
+                status="not_recorded",
+                summary="Cleanup dry-run must name exactly one safe target.",
+                evidence=["cleanup dry-run required; no cleanup command executed by this report"],
+            ),
+        ]
+
+        stages = [
+            self._trusted_delivery_stage(
+                "push-pr-auto-eligible",
+                "Push and PR",
+                push_checks,
+                ["push named branch", "open or update one PR", "read PR metadata"],
+                ["merge", "cleanup", "issue/story sync", "Codex or Claude launch"],
+            ),
+            self._trusted_delivery_stage(
+                "ci-review-auto-eligible",
+                "CI and review inspection",
+                ci_checks,
+                ["read PR status", "read CI status", "prepare merge packet"],
+                ["resolve comments", "merge", "delete branches"],
+            ),
+            self._trusted_delivery_stage(
+                "merge-auto-eligible",
+                "Merge",
+                merge_checks,
+                ["merge approved eligible PR", "record merge commit"],
+                ["cleanup", "issue/story sync", "force push"],
+            ),
+            self._trusted_delivery_stage(
+                "cleanup-auto-eligible",
+                "Cleanup",
+                cleanup_checks,
+                ["remove exact merged worktree", "delete exact merged local branch"],
+                ["delete main checkout", "delete arbitrary directories", "remote deletion without retained merge evidence"],
+            ),
+        ]
+
+        hard_stops = [
+            "current branch is main, detached, or not system-owned",
+            "working tree is dirty",
+            "local full check evidence is missing",
+            "PR URL, CI state, mergeability, review state, or merge evidence is missing",
+            "the action would require auth changes, provider execution, Codex launch, Claude launch, or secret access",
+        ]
+
+        return TrustedDeliveryEligibilityReportView(
+            reportId="trusted-delivery-eligibility-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only evaluator for trusted delivery eligibility. It inspects local branch and Git evidence, "
+                "names missing proof, and performs no push, PR, CI wait, merge, cleanup, or GitHub mutation."
+            ),
+            currentBranch=current_branch,
+            baseBranch=base_branch,
+            headRevision=head_revision,
+            workingTreeStatus=working_tree_status,
+            commitsAhead=commits_ahead,
+            diffStat=diff_stat,
+            stages=stages,
+            hardStops=hard_stops,
+            nextSafeActions=[
+                "Use this report before requesting or exercising delivery authority.",
+                "Record local check evidence before push or PR can become auto-eligible.",
+                "Keep merge and cleanup blocked until remote PR, CI, review, and merge evidence are retained.",
+            ],
+            readOnly=True,
+            automaticDeliveryApproved=False,
+            pushPrAutoEligible=push_eligible,
+            mergeAutoEligible=False,
+            cleanupAutoEligible=False,
+        )
+
+    def _eligibility_check(
+        self,
+        check_id: str,
+        label: str,
+        passed: bool,
+        summary: str,
+        evidence: list[str],
+    ) -> TrustedDeliveryEligibilityCheckView:
+        return TrustedDeliveryEligibilityCheckView(
+            checkId=check_id,
+            label=label,
+            status="passed" if passed else "blocked",
+            summary=summary,
+            evidence=evidence,
+        )
+
+    def _trusted_delivery_stage(
+        self,
+        stage_id: str,
+        label: str,
+        checks: list[TrustedDeliveryEligibilityCheckView],
+        allowed_operations: list[str],
+        blocked_operations: list[str],
+    ) -> TrustedDeliveryEligibilityStageEvaluationView:
+        eligible = all(check.status == "passed" for check in checks)
+        return TrustedDeliveryEligibilityStageEvaluationView(
+            stageId=stage_id,
+            label=label,
+            status="eligible" if eligible else "blocked",
+            eligible=eligible,
+            checks=checks,
+            allowedOperations=allowed_operations if eligible else [],
+            blockedOperations=blocked_operations,
+            nextAction="ready_for_operator_review" if eligible else "retain_missing_evidence",
+        )
+
     def get_local_cleanup_readiness_report(self) -> LocalCleanupReadinessReportView:
         return LocalCleanupReadinessReportView(
             reportId="local-cleanup-readiness-report-v1",
@@ -4208,6 +4446,7 @@ class SupervisorService:
             "GET /supervisor/claude-review-readiness-report",
             "GET /supervisor/claude-review-approval-report",
             "GET /supervisor/github-delivery-authority-report",
+            "GET /supervisor/trusted-delivery-eligibility-report",
             "GET /supervisor/local-cleanup-readiness-report",
             "GET /supervisor/remote-cleanup-sync-readiness-report",
             "GET /supervisor/trusted-autonomy-readiness-report",
@@ -4266,6 +4505,7 @@ class SupervisorService:
             "docs/stories/6-18-claude-readiness-no-launch.md",
             "docs/stories/6-19-claude-review-approval-packet.md",
             "docs/stories/6-20-github-delivery-authority-ladder.md",
+            "docs/stories/6-26-trusted-delivery-eligibility-evaluator.md",
             "docs/stories/6-21-local-cleanup-readiness.md",
             "docs/stories/6-22-remote-cleanup-sync-readiness.md",
             "docs/stories/6-23-trusted-autonomy-readiness.md",

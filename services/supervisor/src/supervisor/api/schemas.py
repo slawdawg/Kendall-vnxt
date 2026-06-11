@@ -1278,6 +1278,45 @@ class GitHubDeliveryAuthorityReportView(BaseModel):
     automaticDeliveryApproved: bool = False
 
 
+class TrustedDeliveryEligibilityCheckView(BaseModel):
+    checkId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str] = Field(default_factory=list)
+
+
+class TrustedDeliveryEligibilityStageEvaluationView(BaseModel):
+    stageId: str
+    label: str
+    status: str
+    eligible: bool
+    checks: list[TrustedDeliveryEligibilityCheckView]
+    allowedOperations: list[str] = Field(default_factory=list)
+    blockedOperations: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
+class TrustedDeliveryEligibilityReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    currentBranch: str
+    baseBranch: str
+    headRevision: str
+    workingTreeStatus: str
+    commitsAhead: int
+    diffStat: str
+    stages: list[TrustedDeliveryEligibilityStageEvaluationView]
+    hardStops: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    automaticDeliveryApproved: bool = False
+    pushPrAutoEligible: bool = False
+    mergeAutoEligible: bool = False
+    cleanupAutoEligible: bool = False
+
+
 class LocalCleanupPolicyItemView(BaseModel):
     itemId: str
     label: str
