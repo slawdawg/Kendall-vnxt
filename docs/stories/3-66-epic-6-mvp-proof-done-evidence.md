@@ -1,7 +1,7 @@
 # Story 3.66: Epic 6 MVP Proof Done Evidence
 
 Date: 2026-06-11
-Status: Epic 6 MVP proof trial in progress; bounded implementation approved locally
+Status: Done; Epic 6 MVP proof complete
 
 ## Goal
 
@@ -63,11 +63,16 @@ Approve one Epic 6 MVP proof trial for `docs/stories/3-66-epic-6-mvp-proof-done-
 - Task packet/routing preview selected `local_readonly`, preview-only authority, no provider calls, and no command execution.
 - Local evidence explanation: `local-evidence-route-a8e43bba-a2dd-4b2e-b995-22fecea85611-epic-6-mvp-proof-local-evidence-task_classification`.
 - Runtime export: `runtime-evidence-export-a8e43bba-a2dd-4b2e-b995-22fecea85611`.
-- Current WorkItem state reached `implementing` after the repo was cleaned, but runtime evidence still shows zero execution attempts and all process/provider/command/source-mutation authority flags disabled.
-- The proof supervisor instance was stopped before any Claude review, Story 3.66 implementation GitHub delivery, merge, cleanup, or done-state completion.
-- Bounded implementation approval is active for one isolated local worktree only: `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260611-epic-6-mvp-proof-story-3-66-bounded-implementati` on branch `codex/epic-6-mvp-proof-story-3-66-bounded-implementati`.
+- WorkItem state reached `implementing` after the repo was cleaned, then Story 3.66 completion evidence was retained after PR #97 delivery, merge, and cleanup.
+- The original proof supervisor database was not present during final closeout, so final done evidence is retained in the Dev Console report surfaces, story file, progress doc, and authority ledger rather than by committing a local SQLite database.
+- Bounded implementation used isolated local worktree `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260611-epic-6-mvp-proof-story-3-66-bounded-implementati` on branch `codex/epic-6-mvp-proof-story-3-66-bounded-implementati`.
 - Focused supervisor verification passed for the changed report surfaces: `pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k "epic_6_completion_audit_report or epic_6_mvp_proof_trial_report"` reported 2 passed, 86 deselected.
 - Full local verification passed for the bounded implementation worktree: `pnpm.cmd run check` completed preflight, all drift checks, dashboard build, and 143 supervisor integration tests.
+- Implementation delivery PR #97: `https://github.com/slawdawg/Kendall-vnxt/pull/97`.
+- PR #97 CI `check` passed on 2026-06-11, then PR #97 was marked ready and merged into `main` at `a750601af1d0144507f6cc05b3ca1ada676d2d07`.
+- PR #97 branch/worktree `codex/epic-6-mvp-proof-story-3-66-bounded-implementati` was deleted locally and remotely after cleanup approval.
+- Final report state: `GET /supervisor/epic-6-mvp-proof-trial-report` returns `trialStatus=epic_6_mvp_proof_complete`; `GET /supervisor/epic-6-completion-audit-report` returns `epicComplete=true`.
+- Final local verification for the completion update passed with focused report tests and full `pnpm.cmd run check`, including preflight, drift checks, dashboard build, and 143 supervisor tests.
 - The bounded implementation scope, allowed paths, blocked operations, verification, and rollback plan are defined in `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
 
 ## Implementation Design Notes
@@ -77,8 +82,8 @@ The smallest useful implementation is to update existing Epic 6 report content r
 Target behavior:
 
 - `GET /supervisor/epic-6-mvp-proof-trial-report` names Story 3.66 as the selected story.
-- The MVP proof report shows the proof has completed selection, Candidate Work import, Active Work promotion, local-readonly routing evidence, runtime export, PR #96 proof-selection delivery/cleanup, and is in the bounded local implementation gate.
-- `GET /supervisor/epic-6-completion-audit-report` reflects the same progress while keeping `epicComplete=false`.
+- The MVP proof report shows the proof has completed selection, Candidate Work import, Active Work promotion, local-readonly routing evidence, runtime export, PR #96 proof-selection delivery/cleanup, PR #97 implementation delivery/merge/cleanup, and done evidence.
+- `GET /supervisor/epic-6-completion-audit-report` reflects the same progress with `epicComplete=true`.
 - Controls page continues using the existing `MvpProofTrialReportPanel` and `EpicCompletionAuditReportPanel`; no new component should be needed unless the report contract changes.
 - Report catalog/runtime export drift checks include any new Story 3.66 evidence references.
 

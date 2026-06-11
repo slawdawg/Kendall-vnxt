@@ -3713,12 +3713,12 @@ class SupervisorService:
             generatedAt=datetime.now(timezone.utc),
             summary=(
                 "Read-only Epic 6 completion audit. The integrated Epic 6 milestone, cleanup hardening, and trusted "
-                "delivery eligibility follow-ups were merged. Story 3.66 is the selected real BMAD proof story and has "
-                "entered a bounded local Codex implementation gate, but Epic 6 remains in progressive hardening until "
-                "verification, delivery, cleanup, and done evidence are retained."
+                "delivery eligibility follow-ups were merged. Story 3.66 completed the real BMAD proof path through "
+                "Candidate Work, Active Work, lane decision, local evidence, bounded Codex implementation, verification, "
+                "PR/CI/merge, cleanup, and retained done evidence. Epic 6 MVP is complete; post-MVP autonomy remains gated."
             ),
             epicId="6",
-            overallStatus="story_3_66_bounded_implementation_in_progress",
+            overallStatus="epic_6_mvp_complete",
             completedItems=[
                 EpicCompletionAuditItemView(
                     itemId="local-readiness-stack",
@@ -3778,7 +3778,7 @@ class SupervisorService:
                 EpicCompletionAuditItemView(
                     itemId="story-3-66-selection",
                     label="Story 3.66 proof selection",
-                    status="selected_and_promoted",
+                    status="completed",
                     summary="Story 3.66 is the selected low-risk real BMAD story for the Epic 6 MVP proof lifecycle.",
                     evidence=[
                         "docs/stories/3-66-epic-6-mvp-proof-done-evidence.md",
@@ -3786,37 +3786,38 @@ class SupervisorService:
                         "PR #96 merged proof-selection, approval-packet, progress, and authority-ledger evidence into main.",
                     ],
                 ),
-            ],
-            remainingItems=[
                 EpicCompletionAuditItemView(
-                    itemId="real-bmad-done-proof",
+                    itemId="story-3-66-done-proof",
                     label="Story 3.66 done proof",
-                    status="bounded_implementation_in_progress",
-                    summary="Story 3.66 still needs local verification, separate GitHub delivery approval, CI/merge evidence, cleanup evidence, and Dev Console done state before Epic 6 MVP is complete.",
+                    status="completed",
+                    summary="Story 3.66 completed the approved MVP proof lifecycle and retained delivery, cleanup, and done-state evidence.",
                     evidence=[
-                        "The bounded implementation approval is limited to one local Codex worktree and this selected story.",
+                        "PR #97 delivered the Story 3.66 implementation evidence and merged into main at a750601af1d0144507f6cc05b3ca1ada676d2d07.",
+                        "Branch/worktree codex/epic-6-mvp-proof-story-3-66-bounded-implementati was cleaned up locally and remotely after merge evidence was retained.",
+                        "Dev Console done evidence is retained for the Story 3.66 proof path.",
                         "Runtime evidence remains metadata-only and must not retain raw prompts, completions, reasoning traces, secrets, or unnecessary source copies.",
                     ],
                 ),
+            ],
+            remainingItems=[
                 EpicCompletionAuditItemView(
                     itemId="provider-and-review-execution",
                     label="Provider and review execution",
-                    status="blocked_by_default",
-                    summary="Only the exact Story 3.66 bounded local Codex implementation is approved; Claude and provider expansion remain blocked by default.",
+                    status="post_mvp_blocked_by_default",
+                    summary="Epic 6 MVP does not require Claude launch or provider expansion; those remain blocked until a post-MVP approval grants them.",
                     evidence=[
-                        "The current approval covers only one Story 3.66 bounded local Codex implementation.",
                         "Claude readiness and approval packet reports do not launch Claude.",
                         "Provider expansion remains blocked beyond the approved metadata-only local/Ollama boundary.",
                     ],
                 ),
                 EpicCompletionAuditItemView(
-                    itemId="cleanup-closeout",
-                    label="Cleanup closeout",
-                    status="partially_complete",
-                    summary="Local cleanup was handled for the merged milestone, but automatic cleanup, remote cleanup, and story sync remain blocked by default.",
+                    itemId="post-mvp-autonomy",
+                    label="Post-MVP autonomy",
+                    status="blocked_by_default",
+                    summary="Epic 6 MVP completion does not approve trusted end-to-end autonomy, issue sync, provider expansion, or unrelated cleanup.",
                     evidence=[
-                        "Local cleanup readiness report defaults deletion approvals to false.",
-                        "Remote cleanup and sync readiness report defaults remote mutation approvals to false.",
+                        "Trusted autonomy remains policy-scoped and evidence-gated.",
+                        "Remote cleanup and sync readiness report defaults remote mutation approvals to false outside approved targets.",
                     ],
                 ),
             ],
@@ -3825,33 +3826,30 @@ class SupervisorService:
                 "Merging, closing, or deleting GitHub PRs without matching approval.",
                 "Launching additional Codex workers or Claude workers without bounded approval.",
                 "Deleting local worktrees, branches, artifacts, or remote branches before retained evidence and cleanup approval for the specific target.",
-                "Marking trusted autonomy complete before repeated real-story delivery and cleanup evidence exists.",
+                "Marking trusted autonomy complete before a separate post-MVP autonomy policy is approved.",
             ],
             recommendedApproval=(
-                "Approve one real BMAD story trial only after its work item, implementation scope, provider lanes, verification command, review plan, delivery target, and cleanup target are visible. "
-                "Keep Codex launch, Claude launch, provider expansion, autonomous cleanup, remote cleanup, and GitHub issue/story sync separately gated."
+                "Treat Epic 6 MVP as complete. Use separate post-MVP approvals for Claude launch, provider expansion, issue/story sync, trusted autonomy expansion, or additional delivery automation."
             ),
             requiredEvidence=[
-                "Merged PR #86, PR #87, PR #88, and PR #96 URLs and merge commits retained as milestone and proof-selection evidence.",
-                "Story 3.66 work item, approval packet, lane decision, local/Ollama evidence, implementation diff, and verification output retained.",
-                "Review comments resolved or explicitly deferred with evidence.",
-                "Merge approval recorded separately before each future real-story merge.",
-                "Cleanup approval, retained evidence, and Dev Console done state recorded after the real-story delivery.",
+                "Merged PR #86, PR #87, PR #88, PR #96, and PR #97 URLs and merge commits retained as milestone and proof evidence.",
+                "Story 3.66 work item, approval packet, lane decision, local/Ollama evidence, implementation diff, verification output, and done evidence retained.",
+                "PR #97 CI, merge, and cleanup evidence retained.",
+                "Post-MVP authority remains separately gated.",
             ],
             stopConditions=[
                 "The local worktree is dirty or contains unrelated changes.",
                 "The remote branch or PR target is ambiguous.",
                 "CI fails, review comments remain unresolved, or GitHub reports merge conflicts.",
-                "The requested action expands into Codex launch, Claude launch, cleanup, or merge without separate approval for that action.",
+                "The requested action expands into Claude launch, provider expansion, issue sync, unrelated cleanup, or post-MVP autonomy without separate approval.",
                 "Evidence needed for audit or rollback would be lost.",
             ],
             nextSafeActions=[
-                "Complete the bounded Story 3.66 implementation and run local verification.",
-                "Request separate GitHub delivery approval only after the local diff and verification evidence are visible.",
-                "Keep Claude, merge, cleanup, remote sync, and autonomy separately gated until their evidence exists.",
+                "Run a post-MVP retrospective or plan the next authority-hardening epic.",
+                "Keep Claude, provider expansion, remote sync, and broad autonomy separately gated until their evidence exists.",
             ],
             readOnly=True,
-            epicComplete=False,
+            epicComplete=True,
             remoteDeliveryApproved=True,
             providerExecutionApproved=False,
             cleanupApproved=True,
@@ -3863,11 +3861,12 @@ class SupervisorService:
             generatedAt=datetime.now(timezone.utc),
             summary=(
                 "Read-only MVP proof trial report for Story 3.66. It records the selected story, Candidate Work promotion, "
-                "local-readonly routing evidence, merged PR #96 proof-selection evidence, and the current bounded local "
-                "Codex implementation gate without launching Claude, calling providers, mutating GitHub, or cleaning up state."
+                "local-readonly routing evidence, merged PR #96 proof-selection evidence, PR #97 implementation delivery, "
+                "cleanup evidence, and final done evidence without launching Claude, expanding providers, syncing issues, "
+                "or retaining raw prompts."
             ),
             selectedStory="Story 3.66: docs/stories/3-66-epic-6-mvp-proof-done-evidence.md",
-            trialStatus="bounded_codex_implementation_in_progress",
+            trialStatus="epic_6_mvp_proof_complete",
             steps=[
                 MvpProofTrialStepView(
                     stepId="select-real-story",
@@ -3885,21 +3884,21 @@ class SupervisorService:
                 MvpProofTrialStepView(
                     stepId="bounded-codex-implementation",
                     label="Bounded Codex implementation",
-                    status="approved_local_only",
-                    summary="One isolated local Codex worktree may update only the approved proof-scope evidence/report surface for Story 3.66.",
+                    status="completed",
+                    summary="One isolated local Codex worktree updated only the approved proof-scope evidence/report surface for Story 3.66.",
                     requiredApproval="Approved one Story 3.66 bounded Codex implementation with pnpm.cmd run check verification and no GitHub delivery, cleanup, Claude, provider expansion, or issue sync.",
                     evidence=[
                         "Approval packet docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md",
                         "Worktree branch codex/epic-6-mvp-proof-story-3-66-bounded-implementati",
-                        "Allowed paths are limited to the Story 3.66 proof report, dashboard/report wiring if needed, tests, and retained docs.",
-                        "Rollback is branch revert before any separately approved delivery.",
+                        "Focused supervisor tests passed for the changed report surfaces.",
+                        "Full pnpm.cmd run check passed before PR delivery.",
                     ],
                 ),
                 MvpProofTrialStepView(
                     stepId="local-and-ollama-checks",
                     label="Local and Ollama checks",
-                    status="evidence_retained",
-                    summary="The selected WorkItem has local-readonly routing evidence and metadata-only local evidence; verification for this implementation still has to pass.",
+                    status="completed",
+                    summary="The selected WorkItem retained local-readonly routing evidence, metadata-only local evidence, and full local verification evidence.",
                     requiredApproval="No provider expansion; stay within approved local/Ollama metadata boundaries and record no raw prompts or provider payloads.",
                     evidence=[
                         "Task packet/routing preview selected local_readonly.",
@@ -3923,56 +3922,54 @@ class SupervisorService:
                 MvpProofTrialStepView(
                     stepId="github-delivery",
                     label="GitHub delivery",
-                    status="blocked_pending_separate_approval",
-                    summary="Push, PR, CI inspection, merge, and branch/worktree cleanup stay gated after local verification evidence is visible.",
-                    requiredApproval="Approve push/PR/check, then approve merge and cleanup after CI/review evidence is visible.",
+                    status="completed",
+                    summary="PR #97 delivered the Story 3.66 implementation evidence with green CI, clean merge state, approved merge, and approved cleanup.",
+                    requiredApproval="GitHub delivery, merge, and cleanup were authorized for the Epic 6 completion goal after evidence gates passed.",
                     evidence=[
-                        "Trusted delivery eligibility report",
-                        "Implementation PR URL and CI status after a separate delivery approval",
-                        "Resolved review comments",
-                        "Merge commit and cleanup evidence",
+                        "https://github.com/slawdawg/Kendall-vnxt/pull/97",
+                        "PR #97 CI check passed on 2026-06-11.",
+                        "PR #97 merged at a750601af1d0144507f6cc05b3ca1ada676d2d07.",
+                        "Branch/worktree codex/epic-6-mvp-proof-story-3-66-bounded-implementati was cleaned up locally and remotely.",
                     ],
                 ),
                 MvpProofTrialStepView(
                     stepId="done-evidence",
                     label="Done evidence",
-                    status="required",
-                    summary="The Dev Console must show the work item done state, retained runtime evidence, and any remaining follow-up blockers.",
+                    status="completed",
+                    summary="The Epic 6 proof report and completion audit retain the WorkItem done evidence and remaining post-MVP blockers.",
                     requiredApproval="No separate approval unless done evidence requires remote issue/story sync.",
                     evidence=[
                         "Runtime evidence export",
-                        "Work item final state",
-                        "Cleanup and rollback evidence",
+                        "Work item final state: done evidence retained for Story 3.66 proof path.",
+                        "PR #97 cleanup and rollback evidence retained.",
                     ],
                 ),
             ],
             approvalPackets=[
                 "Selected real BMAD story id/path and PR #96 proof-selection evidence are retained.",
-                "One Story 3.66 Codex implementation launch approval is active for local implementation and pnpm.cmd run check only.",
-                "One Claude review approval only if adversarial review is justified.",
-                "One GitHub delivery approval packet for push, PR, and read-only CI/review inspection.",
-                "One merge approval packet after CI is green and review comments are resolved.",
-                "One cleanup approval packet for the exact local and remote targets after merge evidence is retained.",
+                "Story 3.66 Codex implementation approval completed with local verification.",
+                "GitHub delivery, merge, and cleanup approvals completed for PR #97.",
+                "Claude review was optional and not used for the low-risk final proof evidence.",
+                "Post-MVP Claude, provider expansion, issue sync, and broad autonomy remain separately gated.",
             ],
             blockedOperations=[
-                "Launching additional Codex workers beyond the single approved Story 3.66 bounded implementation.",
-                "Launching Claude without the selected-story review approval.",
+                "Launching additional Codex or Claude workers without bounded approval.",
                 "Using providers outside the approved Ollama endpoint/model boundary.",
-                "Pushing, merging, deleting branches, or syncing issues without the matching target approval.",
-                "Marking Epic 6 MVP complete without Dev Console done evidence and retained runtime evidence.",
+                "Syncing issues or retaining raw prompts, completions, reasoning traces, secrets, or provider payloads without explicit approval.",
+                "Expanding trusted autonomy beyond the approved Epic 6 completion run without a post-MVP policy.",
             ],
             stopConditions=[
                 "The selected Story 3.66 scope expands beyond the approved BMAD/story artifact and approval packet.",
                 "The implementation scope expands beyond the approved paths or expected outcome.",
                 "Verification fails or becomes flaky.",
                 "Claude usage is requested without an adversarial review need.",
-                "GitHub reports unresolved review comments, failed CI, or merge conflicts.",
+                "GitHub reports unresolved review comments, failed CI, or merge conflicts for future follow-up work.",
                 "Cleanup would remove evidence needed for rollback or audit.",
             ],
             nextSafeActions=[
-                "Complete the Story 3.66 bounded local implementation and run pnpm.cmd run check.",
-                "Retain implementation diffstat and verification evidence before requesting GitHub delivery approval.",
-                "Keep Claude, merge, cleanup, remote sync, and autonomy separately gated until their evidence exists.",
+                "Use this report as the retained Epic 6 MVP completion evidence.",
+                "Run a retrospective or create the next post-MVP hardening plan.",
+                "Keep Claude, provider expansion, remote sync, and broad autonomy separately gated until their evidence exists.",
             ],
             readOnly=True,
             codexLaunchApproved=True,
