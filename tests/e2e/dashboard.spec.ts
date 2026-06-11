@@ -306,6 +306,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/git-hygiene-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/delivery-readiness-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/disabled-provider-proofs")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-state-boundary")).toBeVisible();
@@ -440,6 +441,15 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gitHygienePanel.getByText("No GitHub PR lookup was performed by this read-only local report.")).toBeVisible();
     await expect(gitHygienePanel.getByText("This report is not approval to push")).toBeVisible();
     await expect(page.locator("#git-hygiene-report")).toBeVisible();
+
+    const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();
+    await expect(codexReadinessPanel.getByText("Codex readiness", { exact: true })).toBeVisible();
+    await expect(codexReadinessPanel.getByRole("heading", { name: "No-launch readiness" })).toBeVisible();
+    await expect(codexReadinessPanel.getByRole("heading", { name: "CLI discovery" })).toBeVisible();
+    await expect(codexReadinessPanel.getByRole("heading", { name: "Auth posture" })).toBeVisible();
+    await expect(codexReadinessPanel.getByRole("heading", { name: "Worker launch" })).toBeVisible();
+    await expect(codexReadinessPanel.getByText("This report does not approve Codex CLI process launch.")).toBeVisible();
+    await expect(page.locator("#codex-readiness-report")).toBeVisible();
 
     const deliveryReadinessPolicyPanel = page.locator("section").filter({ hasText: "Review gate policy" }).first();
     await expect(deliveryReadinessPolicyPanel.getByText("Delivery readiness", { exact: true })).toBeVisible();

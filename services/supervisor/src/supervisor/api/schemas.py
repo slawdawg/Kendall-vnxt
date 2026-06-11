@@ -1126,6 +1126,28 @@ class LocalWorktreePlanView(BaseModel):
     remoteOperationsAllowed: bool = False
 
 
+class CodexReadinessCheckView(BaseModel):
+    checkId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str]
+
+
+class CodexReadinessReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    cliPath: str | None = None
+    checks: list[CodexReadinessCheckView]
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    workerTaskExecutionApproved: bool = False
+    sourceMutationApproved: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

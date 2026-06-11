@@ -1017,6 +1017,28 @@ export interface LocalWorktreePlanView {
   remoteOperationsAllowed: boolean;
 }
 
+export interface CodexReadinessCheckView {
+  checkId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface CodexReadinessReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  cliPath?: string | null;
+  checks: CodexReadinessCheckView[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  workerTaskExecutionApproved: boolean;
+  sourceMutationApproved: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

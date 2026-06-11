@@ -1,4 +1,5 @@
 import { ControlPanel } from "../../components/control-panel";
+import { CodexReadinessReportPanel } from "../../components/codex-readiness-report-panel";
 import { AuthorityReadinessMatrixReportPanel } from "../../components/authority-readiness-matrix-report-panel";
 import { DashboardE2EReportPanel } from "../../components/dashboard-e2e-report-panel";
 import { DeliveryReadinessPolicyReportPanel } from "../../components/delivery-readiness-policy-report-panel";
@@ -21,6 +22,7 @@ import { VerificationReadinessReportPanel } from "../../components/verification-
 import { buildNavStats } from "../../lib/nav-stats";
 import {
   getAuthorityReadinessMatrixReport,
+  getCodexReadinessReport,
   getDocumentationAuthorityReport,
   getDashboardE2EReport,
   getDeliveryReadinessPolicyReport,
@@ -61,6 +63,7 @@ export default async function ControlsPage() {
     managedRecipePolicyReport,
     githubWorkflowPolicyReport,
     gitHygieneReport,
+    codexReadinessReport,
     deliveryReadinessPolicyReport,
   ] = await Promise.all([
     getRunStatus(),
@@ -81,6 +84,7 @@ export default async function ControlsPage() {
     getManagedRecipePolicyReport(),
     getGitHubWorkflowPolicyReport(),
     getGitHygieneReport(),
+    getCodexReadinessReport(),
     getDeliveryReadinessPolicyReport(),
   ]);
   const navStats = buildNavStats(items);
@@ -141,6 +145,9 @@ export default async function ControlsPage() {
       </div>
       <div id="git-hygiene-report" className="scroll-mt-28">
         <GitHygieneReportPanel report={gitHygieneReport} />
+      </div>
+      <div id="codex-readiness-report" className="scroll-mt-28">
+        <CodexReadinessReportPanel report={codexReadinessReport} />
       </div>
       <div id="delivery-readiness-policy-report" className="scroll-mt-28">
         <DeliveryReadinessPolicyReportPanel report={deliveryReadinessPolicyReport} />

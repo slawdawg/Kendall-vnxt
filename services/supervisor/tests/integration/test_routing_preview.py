@@ -1388,6 +1388,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/managed-recipe-policy-report",
         "GET /supervisor/github-workflow-policy-report",
         "GET /supervisor/git-hygiene-report",
+        "GET /supervisor/codex-readiness-report",
         "GET /supervisor/delivery-readiness-policy-report",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
@@ -2661,6 +2662,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "docs/stories/3-41-current-gap-review-refresh.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-42-github-workflow-policy-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/6-14-git-hygiene-read-only.md" in export["boundary"]["gitBackedEvidence"]
+    assert "docs/stories/6-16-codex-readiness-no-launch.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-43-safe-delivery-hygiene.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-44-delivery-readiness-policy-report.md" in export["boundary"]["gitBackedEvidence"]
     assert "docs/stories/3-45-delivery-readiness-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
@@ -2694,6 +2696,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/managed-recipe-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/github-workflow-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/git-hygiene-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/codex-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/execution-state-boundary" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/disabled-provider-proofs" in export["boundary"]["relatedSupervisorReports"]
@@ -2833,6 +2836,35 @@ def test_git_hygiene_report_reads_local_status_without_mutation(tmp_path, monkey
     assert {signal["signalId"] for signal in report["remoteSignals"]} == {"pull-request", "ci"}
     assert all(signal["status"] == "not_queried" for signal in report["remoteSignals"])
     assert any("not approval to push" in stop_line for stop_line in report["stopLines"])
+
+
+def test_codex_readiness_report_does_not_launch_codex(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "codex-readiness-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/codex-readiness-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+    report = response.json()["data"]
+    assert report["reportId"] == "codex-readiness-report-v1"
+    assert report["readOnly"] is True
+    assert report["processLaunchApproved"] is False
+    assert report["workerTaskExecutionApproved"] is False
+    assert report["sourceMutationApproved"] is False
+    assert {check["checkId"] for check in report["checks"]} == {"cli-discovery", "auth-posture", "worker-launch", "source-mutation"}
+    assert next(check for check in report["checks"] if check["checkId"] == "auth-posture")["status"] == "not_checked"
+    assert next(check for check in report["checks"] if check["checkId"] == "worker-launch")["status"] == "blocked"
+    assert any("does not approve Codex CLI process launch" in stop_line for stop_line in report["stopLines"])
 
 
 def test_delivery_readiness_policy_report_documents_review_gate_without_mutation(tmp_path, monkeypatch) -> None:

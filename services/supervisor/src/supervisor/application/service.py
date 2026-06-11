@@ -19,6 +19,8 @@ from supervisor.api.schemas import (
     CandidateWorkCreate,
     CandidateWorkUpdate,
     CandidateWorkView,
+    CodexReadinessCheckView,
+    CodexReadinessReportView,
     DashboardE2EReportView,
     DashboardE2ERunnerView,
     DeliveryReadinessPolicyItemView,
@@ -1595,6 +1597,15 @@ class SupervisorService:
                 relatedDocs=["docs/stories/6-14-git-hygiene-read-only.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="codex-readiness-report-v1",
+                label="Codex readiness report",
+                endpoint="GET /supervisor/codex-readiness-report",
+                status="active",
+                summary="Shows no-launch Codex CLI discovery, auth-check posture, worker-launch stop lines, and source-mutation boundaries.",
+                evidenceScope=["PATH discovery", "auth check posture", "worker launch boundary", "source mutation boundary"],
+                relatedDocs=["docs/stories/6-16-codex-readiness-no-launch.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
                 label="Delivery readiness policy report",
                 endpoint="GET /supervisor/delivery-readiness-policy-report",
@@ -2582,6 +2593,67 @@ class SupervisorService:
             cleanupApproved=False,
         )
 
+    def get_codex_readiness_report(self) -> CodexReadinessReportView:
+        cli_path = shutil.which("codex") or shutil.which("codex.cmd")
+        cli_detected = bool(cli_path)
+        return CodexReadinessReportView(
+            reportId="codex-readiness-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "No-launch Codex readiness report. It discovers whether a Codex CLI executable is on PATH, "
+                "but does not run Codex, check auth, start a session, send a task, write files, or mutate source."
+            ),
+            cliPath=cli_path,
+            checks=[
+                CodexReadinessCheckView(
+                    checkId="cli-discovery",
+                    label="CLI discovery",
+                    status="available" if cli_detected else "not_found",
+                    summary=(
+                        "A Codex CLI executable was found on PATH."
+                        if cli_detected
+                        else "No Codex CLI executable was found on PATH."
+                    ),
+                    evidence=["shutil.which('codex')", "shutil.which('codex.cmd')"],
+                ),
+                CodexReadinessCheckView(
+                    checkId="auth-posture",
+                    label="Auth posture",
+                    status="not_checked",
+                    summary="No Codex auth or account command was executed by this report.",
+                    evidence=["Auth checks require an explicit successor story or operator-approved manual command."],
+                ),
+                CodexReadinessCheckView(
+                    checkId="worker-launch",
+                    label="Worker launch",
+                    status="blocked",
+                    summary="Codex worker process launch remains blocked pending explicit authority.",
+                    evidence=["Story 6.16 is no-launch readiness only."],
+                ),
+                CodexReadinessCheckView(
+                    checkId="source-mutation",
+                    label="Source mutation",
+                    status="blocked",
+                    summary="Codex source mutation remains blocked until isolated worktree, path scope, tests, and approval binding are implemented.",
+                    evidence=["Story 6.17 is the first bounded implementation authority candidate."],
+                ),
+            ],
+            stopLines=[
+                "This report does not approve Codex CLI process launch.",
+                "This report does not approve sending tasks, prompts, repository context, or credentials to Codex.",
+                "This report does not approve source mutation, command execution, Git operations, GitHub delivery, or merge.",
+            ],
+            nextSafeActions=[
+                "Use this report to decide whether a future manual Codex availability check is needed.",
+                "Keep bounded Codex implementation behind isolated worktree, path scope, verification, and explicit approval.",
+                "Use Claude review only through its separate scarce-review authority path.",
+            ],
+            readOnly=True,
+            processLaunchApproved=False,
+            workerTaskExecutionApproved=False,
+            sourceMutationApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3194,6 +3266,7 @@ class SupervisorService:
             "GET /supervisor/managed-recipe-policy-report",
             "GET /supervisor/github-workflow-policy-report",
             "GET /supervisor/git-hygiene-report",
+            "GET /supervisor/codex-readiness-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -3243,6 +3316,7 @@ class SupervisorService:
             "docs/stories/3-41-current-gap-review-refresh.md",
             "docs/stories/3-42-github-workflow-policy-report.md",
             "docs/stories/6-14-git-hygiene-read-only.md",
+            "docs/stories/6-16-codex-readiness-no-launch.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",

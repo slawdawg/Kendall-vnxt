@@ -114,6 +114,7 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `6-13-safe-local-execution.md` | Add a work-item Local check panel that records local read-only evidence explanations while preserving disabled write, command, worker, Git, and provider expansion boundaries. |
 | `6-14-git-hygiene-read-only.md` | Add a read-only Git hygiene report and Dev Console panel for repository, worktree, branch, PR, and CI posture without remote writes or cleanup. |
 | `6-15-local-worktree-management.md` | Add a guarded local worktree plan for managed work items without creating, removing, or cleaning up local worktrees. |
+| `6-16-codex-readiness-no-launch.md` | Add a no-launch Codex readiness report for CLI discovery, auth-check posture, worker-launch stop lines, and source-mutation boundaries. |
 
 ## Completed Foundation Stories
 

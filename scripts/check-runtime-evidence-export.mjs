@@ -122,6 +122,7 @@ for (const shortcutText of [
   "#safe-development-backlog",
   "#github-workflow-policy-report",
   "#git-hygiene-report",
+  "#codex-readiness-report",
   "#delivery-readiness-policy-report",
   "#supervisor-report-catalog",
 ]) {
@@ -194,6 +195,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-14-git-hygiene-read-only.md"),
   "Story index must reference Story 6.14 Git hygiene read-only",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-16-codex-readiness-no-launch.md"),
+  "Story index must reference Story 6.16 Codex readiness no-launch",
   failures,
 );
 assertCondition(

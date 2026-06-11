@@ -125,6 +125,13 @@ const reports = [
     dashboardFetch: "getGitHygieneReport",
   },
   {
+    reportId: "codex-readiness-report-v1",
+    endpoint: "GET /supervisor/codex-readiness-report",
+    apiPath: "/supervisor/codex-readiness-report",
+    story: "docs/stories/6-16-codex-readiness-no-launch.md",
+    dashboardFetch: "getCodexReadinessReport",
+  },
+  {
     reportId: "delivery-readiness-policy-report-v1",
     endpoint: "GET /supervisor/delivery-readiness-policy-report",
     apiPath: "/supervisor/delivery-readiness-policy-report",
@@ -213,6 +220,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/managed-recipe-policy-report",
   "GET /supervisor/github-workflow-policy-report",
   "GET /supervisor/git-hygiene-report",
+  "GET /supervisor/codex-readiness-report",
   "GET /supervisor/delivery-readiness-policy-report",
 ]) {
   assertCondition(
@@ -278,6 +286,7 @@ for (const controlsAnchor of [
   'id="managed-recipe-policy-report"',
   'id="github-workflow-policy-report"',
   'id="git-hygiene-report"',
+  'id="codex-readiness-report"',
   'id="delivery-readiness-policy-report"',
 ]) {
   assertCondition(
@@ -325,6 +334,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-14-git-hygiene-read-only.md"),
   "Story index must reference Story 6.14 Git hygiene read-only",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-16-codex-readiness-no-launch.md"),
+  "Story index must reference Story 6.16 Codex readiness no-launch",
   failures,
 );
 assertCondition(
