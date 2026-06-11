@@ -26,6 +26,7 @@ import type {
   ManagedRecipePolicyReportView,
   MaintenanceActionPlanReportView,
   MaintenanceReadinessReportView,
+  MvpProofTrialReportView,
   RuntimeEvidenceReviewReportView,
   RuntimeEvidenceExportView,
   RemoteCleanupSyncReadinessReportView,
@@ -263,6 +264,10 @@ export async function getTrustedAutonomyReadinessReport(): Promise<TrustedAutono
 
 export async function getEpic6CompletionAuditReport(): Promise<EpicCompletionAuditReportView> {
   return requestJson<EpicCompletionAuditReportView>("/supervisor/epic-6-completion-audit-report");
+}
+
+export async function getMvpProofTrialReport(): Promise<MvpProofTrialReportView> {
+  return requestJson<MvpProofTrialReportView>("/supervisor/epic-6-mvp-proof-trial-report");
 }
 
 export async function getCodexReadinessReport(): Promise<CodexReadinessReportView> {

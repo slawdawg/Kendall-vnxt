@@ -311,6 +311,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/remote-cleanup-sync-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/trusted-autonomy-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/epic-6-completion-audit-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/epic-6-mvp-proof-trial-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-readiness-report")).toBeVisible();
@@ -514,6 +515,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(epicCompletionPanel.getByText("Approve one real BMAD story trial")).toBeVisible();
     await expect(epicCompletionPanel.getByText("Launching Codex or Claude workers without bounded approval.")).toBeVisible();
     await expect(page.locator("#epic-6-completion-audit-report")).toBeVisible();
+
+    const mvpProofPanel = page.locator("#epic-6-mvp-proof-trial-report");
+    await expect(mvpProofPanel.getByText("MVP proof", { exact: true })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "Trial packet" })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "Bounded Codex implementation" })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "Bounded Claude review" })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "GitHub delivery" })).toBeVisible();
+    await expect(mvpProofPanel.getByText("waiting_for_bounded_trial_approval")).toBeVisible();
+    await expect(mvpProofPanel.getByText("One Codex implementation launch approval")).toBeVisible();
+    await expect(page.locator("#epic-6-mvp-proof-trial-report")).toBeVisible();
 
     const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();
     await expect(codexReadinessPanel.getByText("Codex readiness", { exact: true })).toBeVisible();

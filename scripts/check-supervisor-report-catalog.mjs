@@ -160,6 +160,13 @@ const reports = [
     dashboardFetch: "getTrustedAutonomyReadinessReport",
   },
   {
+    reportId: "epic-6-mvp-proof-trial-report-v1",
+    endpoint: "GET /supervisor/epic-6-mvp-proof-trial-report",
+    apiPath: "/supervisor/epic-6-mvp-proof-trial-report",
+    story: "docs/stories/6-27-epic-6-mvp-proof-trial-packet.md",
+    dashboardFetch: "getMvpProofTrialReport",
+  },
+  {
     reportId: "codex-readiness-report-v1",
     endpoint: "GET /supervisor/codex-readiness-report",
     apiPath: "/supervisor/codex-readiness-report",
@@ -281,6 +288,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/local-cleanup-readiness-report",
   "GET /supervisor/remote-cleanup-sync-readiness-report",
   "GET /supervisor/trusted-autonomy-readiness-report",
+  "GET /supervisor/epic-6-mvp-proof-trial-report",
   "GET /supervisor/codex-readiness-report",
   "GET /supervisor/codex-implementation-approval-report",
   "GET /supervisor/claude-review-readiness-report",
@@ -355,6 +363,7 @@ for (const controlsAnchor of [
   'id="local-cleanup-readiness-report"',
   'id="remote-cleanup-sync-readiness-report"',
   'id="trusted-autonomy-readiness-report"',
+  'id="epic-6-mvp-proof-trial-report"',
   'id="codex-readiness-report"',
   'id="codex-implementation-approval-report"',
   'id="claude-review-readiness-report"',
@@ -436,6 +445,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-26-trusted-delivery-eligibility-evaluator.md"),
   "Story index must reference Story 6.26 trusted delivery eligibility evaluator",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-27-epic-6-mvp-proof-trial-packet.md"),
+  "Story index must reference Story 6.27 Epic 6 MVP proof trial packet",
   failures,
 );
 assertCondition(

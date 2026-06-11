@@ -16,6 +16,7 @@ import { GitHygieneReportPanel } from "../../components/git-hygiene-report-panel
 import { LocalCleanupReadinessReportPanel } from "../../components/local-cleanup-readiness-report-panel";
 import { MaintenanceActionPlanReportPanel } from "../../components/maintenance-action-plan-report-panel";
 import { MaintenanceReadinessReportPanel } from "../../components/maintenance-readiness-report-panel";
+import { MvpProofTrialReportPanel } from "../../components/mvp-proof-trial-report-panel";
 import { ManagedRecipePolicyReportPanel } from "../../components/managed-recipe-policy-report-panel";
 import { OperatorProfilePanel } from "../../components/operator-profile-panel";
 import { PageIntro } from "../../components/page-intro";
@@ -47,6 +48,7 @@ import {
   getLocalCleanupReadinessReport,
   getMaintenanceActionPlanReport,
   getMaintenanceReadinessReport,
+  getMvpProofTrialReport,
   getManagedRecipePolicyReport,
   getRoutingLaneProfiles,
   getRunStatus,
@@ -87,6 +89,7 @@ export default async function ControlsPage() {
     trustedDeliveryEligibilityReport,
     trustedAutonomyReadinessReport,
     epic6CompletionAuditReport,
+    mvpProofTrialReport,
     codexReadinessReport,
     codexImplementationApprovalReport,
     claudeReviewReadinessReport,
@@ -117,6 +120,7 @@ export default async function ControlsPage() {
     getTrustedDeliveryEligibilityReport(),
     getTrustedAutonomyReadinessReport(),
     getEpic6CompletionAuditReport(),
+    getMvpProofTrialReport(),
     getCodexReadinessReport(),
     getCodexImplementationApprovalReport(),
     getClaudeReviewReadinessReport(),
@@ -199,6 +203,9 @@ export default async function ControlsPage() {
       </div>
       <div id="epic-6-completion-audit-report" className="scroll-mt-28">
         <EpicCompletionAuditReportPanel report={epic6CompletionAuditReport} />
+      </div>
+      <div id="epic-6-mvp-proof-trial-report" className="scroll-mt-28">
+        <MvpProofTrialReportPanel report={mvpProofTrialReport} />
       </div>
       <div id="codex-readiness-report" className="scroll-mt-28">
         <CodexReadinessReportPanel report={codexReadinessReport} />

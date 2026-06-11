@@ -1418,6 +1418,33 @@ class EpicCompletionAuditReportView(BaseModel):
     cleanupApproved: bool = False
 
 
+class MvpProofTrialStepView(BaseModel):
+    stepId: str
+    label: str
+    status: str
+    summary: str
+    requiredApproval: str
+    evidence: list[str]
+
+
+class MvpProofTrialReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    selectedStory: str
+    trialStatus: str
+    steps: list[MvpProofTrialStepView]
+    approvalPackets: list[str]
+    blockedOperations: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    codexLaunchApproved: bool = False
+    claudeLaunchApproved: bool = False
+    providerExpansionApproved: bool = False
+    autonomousDeliveryApproved: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str

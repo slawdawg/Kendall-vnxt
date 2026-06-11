@@ -1309,6 +1309,33 @@ export interface EpicCompletionAuditReportView {
   cleanupApproved: boolean;
 }
 
+export interface MvpProofTrialStepView {
+  stepId: string;
+  label: string;
+  status: string;
+  summary: string;
+  requiredApproval: string;
+  evidence: string[];
+}
+
+export interface MvpProofTrialReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  selectedStory: string;
+  trialStatus: string;
+  steps: MvpProofTrialStepView[];
+  approvalPackets: string[];
+  blockedOperations: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  codexLaunchApproved: boolean;
+  claudeLaunchApproved: boolean;
+  providerExpansionApproved: boolean;
+  autonomousDeliveryApproved: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;
