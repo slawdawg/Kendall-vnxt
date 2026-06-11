@@ -21,6 +21,8 @@ Story 3.61 has now completed an initial doc/evidence-only proof lane through bou
 - PR #91 delivered Story 3.61 proof-trial evidence after bounded Codex implementation and local `pnpm.cmd run check`.
 - PR #91 CI `check` passed, PR #91 was merged after explicit approval, and its branch/worktree cleanup was performed after explicit approval.
 - PR #92 refreshed post-trial progress and authority docs after CI success, approved merge, and approved branch cleanup.
+- PR #96 is an open draft doc/evidence PR for Story 3.66 proof-selection evidence: `https://github.com/slawdawg/Kendall-vnxt/pull/96`.
+- PR #96 head `b8cabebbfbc1847c847576cbd6b7bf922c1343bc` has CI `check` success, clean merge state, and no source/runtime code changes.
 
 ## Selected Story
 
@@ -90,3 +92,35 @@ After any local implementation and verification evidence exists, these remain se
 - GitHub push/PR/check approval for the exact branch and target PR.
 - Merge approval after CI/review evidence is visible.
 - Cleanup approval for exact local and remote targets after merge evidence is retained.
+
+## Current PR #96 Merge Gate
+
+PR #96 is still a documentation/evidence-only proof-selection PR. It does not perform bounded Codex implementation or complete the Epic 6 MVP proof by itself.
+
+Merge approval phrase:
+
+```text
+Approve merge of PR #96 only: merge https://github.com/slawdawg/Kendall-vnxt/pull/96 from codex/epic-6-proof-selection-evidence into main after confirming the latest head is b8cabebbfbc1847c847576cbd6b7bf922c1343bc, CI check is green, merge state is clean, and no source/runtime code is included. Do not perform local cleanup, remote branch deletion, issue/story sync, Claude launch, provider expansion, or bounded Codex implementation under this approval.
+```
+
+This approval would allow only:
+
+- merge PR #96 into `main`,
+- retain PR URL, head SHA, CI status, and merge commit evidence,
+- refresh local `main` after merge if needed for verification.
+
+This approval would not allow:
+
+- local branch/worktree cleanup,
+- remote branch deletion,
+- issue/story sync,
+- bounded Codex implementation,
+- Claude review,
+- provider/model expansion,
+- failed-check bypass.
+
+PR #96 cleanup approval phrase, to use only after merge evidence exists:
+
+```text
+Approve cleanup for merged PR #96 only: after retaining PR URL, merge commit, green CI evidence, and current git status, delete local branch codex/epic-6-proof-selection-evidence and remote branch origin/codex/epic-6-proof-selection-evidence if GitHub reports the PR merged. Do not delete unrelated branches, worktrees, artifacts, issue links, or evidence.
+```
