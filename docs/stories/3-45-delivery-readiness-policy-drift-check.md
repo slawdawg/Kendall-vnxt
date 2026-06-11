@@ -1,7 +1,7 @@
 # Story 3.45: Delivery Readiness Policy Drift Check
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

@@ -1,7 +1,7 @@
 # Story 3.23: Dashboard E2E Runner Lifecycle Helper
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

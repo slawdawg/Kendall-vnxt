@@ -1,5 +1,6 @@
 # Story 5.1: Subscription Launch Settings Policy And Target Registry
 
+Status: done as non-executing subscription-launch preparation; supervised process launch deferred post-MVP
 ## Status
 
 done

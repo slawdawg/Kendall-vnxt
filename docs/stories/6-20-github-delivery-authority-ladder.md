@@ -1,7 +1,7 @@
 # Story 6.20: GitHub Delivery Authority Ladder
 
 Date: 2026-06-11
-Status: implemented locally
+Status: done
 
 ## User Story
 

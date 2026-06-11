@@ -1,7 +1,7 @@
 # Story 6.4: BMAD Import Package Parser
 
 Date: 2026-06-10
-Status: Review
+Status: done
 
 ## Story
 

@@ -1,7 +1,7 @@
 # Story 3.60: Safe Backlog Report Anchors
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

@@ -1,5 +1,6 @@
 # Story 5.5: Subscription Launch Supervised Process Behind Approval
 
+Status: deferred post-MVP; blocked pending explicit supervised process-launch approval
 ## Status
 
 Blocked Pending Explicit Approval

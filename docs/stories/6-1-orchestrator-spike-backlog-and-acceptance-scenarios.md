@@ -1,6 +1,6 @@
 # Story 6.1: Orchestrator Spike Backlog And Acceptance Scenarios
 
-Status: Review
+Status: done
 Date: 2026-06-10
 
 ## Story

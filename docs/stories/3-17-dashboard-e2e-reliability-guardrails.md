@@ -1,6 +1,6 @@
 # Story 3.17: Dashboard E2E Reliability Guardrails
 
-Status: ready for review
+Status: done
 Date: 2026-06-08
 
 ## Goal

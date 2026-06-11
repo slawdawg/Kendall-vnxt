@@ -1,7 +1,7 @@
 # Story 3.25: Managed Recipe E2E Runners
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

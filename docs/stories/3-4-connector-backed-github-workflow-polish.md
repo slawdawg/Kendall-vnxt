@@ -1,5 +1,6 @@
 # Story 3.4: Connector-Backed GitHub Workflow Polish
 
+Status: done
 ## Status
 
 Ready for Review

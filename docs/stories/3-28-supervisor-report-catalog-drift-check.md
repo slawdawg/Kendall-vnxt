@@ -1,7 +1,7 @@
 # Story 3.28: Supervisor Report Catalog Drift Check
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

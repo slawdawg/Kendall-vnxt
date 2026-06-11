@@ -1,5 +1,6 @@
 # Story 3.6: Dashboard Command Boundary Contract
 
+Status: done
 ## Status
 
 Ready for Review

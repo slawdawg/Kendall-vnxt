@@ -1,5 +1,6 @@
 # Story 5.2: Subscription Launch Approval Binding And Stale Rejection
 
+Status: done as non-executing subscription-launch preparation; supervised process launch deferred post-MVP
 ## Status
 
 done

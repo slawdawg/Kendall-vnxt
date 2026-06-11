@@ -1,7 +1,7 @@
 # Story 6.14: Git Hygiene Read-Only
 
 Date: 2026-06-10
-Status: implemented locally
+Status: done
 
 ## User Story
 

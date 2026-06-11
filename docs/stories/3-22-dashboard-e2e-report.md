@@ -1,7 +1,7 @@
 # Story 3.22: Dashboard E2E Report
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

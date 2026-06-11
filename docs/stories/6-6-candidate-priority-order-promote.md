@@ -1,7 +1,7 @@
 # Story 6.6: Candidate Priority, Order, And Promotion
 
 Date: 2026-06-10
-Status: Review
+Status: done
 
 ## Story
 

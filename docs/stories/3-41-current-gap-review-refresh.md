@@ -1,7 +1,7 @@
 # Story 3.41: Current Gap Review Refresh
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

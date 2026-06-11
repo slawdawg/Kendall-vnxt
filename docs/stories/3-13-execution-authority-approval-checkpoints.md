@@ -1,5 +1,6 @@
 # Story 3.13: Execution Authority Approval Checkpoints
 
+Status: done
 ## Status
 
 Ready for Review

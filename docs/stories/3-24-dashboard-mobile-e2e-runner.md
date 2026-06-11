@@ -1,7 +1,7 @@
 # Story 3.24: Dashboard Mobile E2E Runner
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

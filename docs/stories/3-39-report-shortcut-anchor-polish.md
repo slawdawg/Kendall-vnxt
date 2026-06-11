@@ -1,7 +1,7 @@
 # Story 3.39: Report Shortcut Anchor Polish
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

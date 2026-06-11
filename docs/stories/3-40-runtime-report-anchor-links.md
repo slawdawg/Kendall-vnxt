@@ -1,7 +1,7 @@
 # Story 3.40: Runtime Report Anchor Links
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

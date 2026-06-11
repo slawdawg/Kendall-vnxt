@@ -1,7 +1,7 @@
 # Story 3.56: Verification Execution Plan Groups
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

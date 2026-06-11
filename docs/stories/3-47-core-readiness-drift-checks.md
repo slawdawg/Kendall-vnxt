@@ -1,7 +1,7 @@
 # Story 3.47: Core Readiness Drift Checks
 
 Date: 2026-06-09
-Status: ready for review
+Status: done
 
 ## Goal
 

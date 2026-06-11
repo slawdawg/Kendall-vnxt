@@ -1,7 +1,7 @@
 # Story 6.8: ExecutionAttempt Integration
 
 Date: 2026-06-10
-Status: Review
+Status: done
 
 ## Story
 

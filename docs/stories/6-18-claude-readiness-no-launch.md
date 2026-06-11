@@ -1,7 +1,7 @@
 # Story 6.18: Claude Readiness No-Launch
 
 Date: 2026-06-11
-Status: implemented locally
+Status: done
 
 ## User Story
 

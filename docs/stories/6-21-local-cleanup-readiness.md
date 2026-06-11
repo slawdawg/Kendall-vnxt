@@ -1,7 +1,7 @@
 # Story 6.21: Local Cleanup Readiness
 
 Date: 2026-06-11
-Status: implemented locally
+Status: done
 
 ## User Story
 

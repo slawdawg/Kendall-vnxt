@@ -1,4 +1,5 @@
 ---
+Status: done as non-executing Ollama/provider preparation; broader provider expansion deferred post-MVP
 baseline_commit: 2bab713c87972dd8468bc159624781b6e4c00f8e
 ---
 

@@ -1,7 +1,7 @@
 # Story 3.18: Supervisor Report Catalog
 
 Date: 2026-06-08
-Status: ready for review
+Status: done
 
 ## Goal
 

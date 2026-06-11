@@ -1,7 +1,7 @@
 # Story 6.22: Remote Cleanup Sync Readiness
 
 Date: 2026-06-11
-Status: implemented locally
+Status: done
 
 ## User Story
 

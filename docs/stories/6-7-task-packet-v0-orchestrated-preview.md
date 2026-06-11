@@ -1,7 +1,7 @@
 # Story 6.7: Task Packet v0 And Orchestrated Preview
 
 Date: 2026-06-10
-Status: Review
+Status: done
 
 ## Story
 
