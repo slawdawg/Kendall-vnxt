@@ -1,6 +1,7 @@
 import type {
   ApiEnvelope,
   AuthorityReadinessMatrixReportView,
+  CandidateWorkBmadImportPayload,
   CandidateWorkPromotionView,
   CandidateWorkUpdatePayload,
   CandidateWorkView,
@@ -70,6 +71,22 @@ export async function getWorkItems(): Promise<WorkItemView[]> {
 
 export async function getCandidateWork(): Promise<CandidateWorkView[]> {
   return requestJson<CandidateWorkView[]>("/candidate-work");
+}
+
+export async function importBmadCandidateWork(payload: CandidateWorkBmadImportPayload): Promise<CandidateWorkView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/import-bmad`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as
+      | { detail?: { error?: { message?: string } } }
+      | null;
+    throw new Error(errorPayload?.detail?.error?.message ?? "Unable to import BMAD work.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
+  return envelope.data;
 }
 
 export async function updateCandidateWork(candidateWorkId: string, payload: CandidateWorkUpdatePayload): Promise<CandidateWorkView> {

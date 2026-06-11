@@ -15,6 +15,7 @@ from supervisor.api.schemas import (
     AuditEventView,
     AuthorityReadinessFamilyView,
     AuthorityReadinessMatrixReportView,
+    CandidateWorkBmadImportRequest,
     CandidateWorkCreate,
     CandidateWorkUpdate,
     CandidateWorkView,
@@ -108,6 +109,7 @@ from supervisor.api.schemas import (
     WorkItemView,
 )
 from supervisor.config.settings import Settings
+from supervisor.domain.bmad_import import parse_bmad_import_package
 from supervisor.domain.disabled_provider_adapter import DisabledLocalProviderAdapter
 from supervisor.domain.local_readonly_worker import MockLocalReadonlyWorkerAdapter
 from supervisor.domain.ollama_provider_adapter import OllamaProviderAdapter
@@ -323,6 +325,23 @@ class SupervisorService:
         await session.refresh(candidate)
         await self._publish_candidate_work(candidate)
         return candidate
+
+    async def import_bmad_candidate_work(self, session: AsyncSession, payload: CandidateWorkBmadImportRequest) -> CandidateWork:
+        repo_root = Path(__file__).resolve().parents[5]
+        package = parse_bmad_import_package(repo_root, payload.artifactPath)
+        return await self.create_candidate_work(
+            session,
+            CandidateWorkCreate(
+                title=package.title,
+                requestedOutcome=package.requested_outcome,
+                source="bmad",
+                sourceArtifactPath=package.source_artifact_path,
+                sourceArtifactType=package.source_artifact_type,
+                riskLevel=package.risk_level,
+                priority=package.recommended_priority,
+                sortOrder=payload.sortOrder,
+            ),
+        )
 
     async def list_candidate_work(self, session: AsyncSession) -> list[CandidateWork]:
         result = await session.execute(select(CandidateWork).order_by(CandidateWork.sort_order.asc(), CandidateWork.created_at.desc()))

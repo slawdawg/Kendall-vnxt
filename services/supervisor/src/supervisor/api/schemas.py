@@ -80,6 +80,11 @@ class BmadImportPackageView(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class CandidateWorkBmadImportRequest(BaseModel):
+    artifactPath: str
+    sortOrder: int = 0
+
+
 class WorkItemActionRequest(BaseModel):
     action: WorkflowAction
     note: str | None = None

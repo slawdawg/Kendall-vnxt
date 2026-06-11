@@ -117,6 +117,10 @@ def test_candidate_work_rejects_invalid_enum_values_and_missing_candidate(tmp_pa
         assert missing_update.status_code == 404
         assert missing_update.json()["detail"]["error"]["code"] == "candidate_work_not_found"
 
+        invalid_import = client.post("/candidate-work/import-bmad", json={"artifactPath": "../README.md"})
+        assert invalid_import.status_code == 400
+        assert invalid_import.json()["detail"]["error"]["code"] == "invalid_bmad_import"
+
 
 def test_candidate_work_promotes_once_into_active_work_with_metadata(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "candidate-work-promotion.db") as client:
@@ -192,3 +196,101 @@ def test_candidate_work_list_uses_sort_order(tmp_path, monkeypatch) -> None:
         listed_response = client.get("/candidate-work")
         assert listed_response.status_code == 200
         assert [item["title"] for item in listed_response.json()["data"]] == ["First", "Second"]
+
+
+def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_attempt_evidence(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "synthetic-bmad-proof.db") as client:
+        import_response = client.post(
+            "/candidate-work/import-bmad",
+            json={
+                "artifactPath": "docs/product/epic-6-synthetic-dev-console-label-copy.md",
+                "sortOrder": 7,
+            },
+        )
+        assert import_response.status_code == 200
+        candidate = import_response.json()["data"]
+        candidate_id = candidate["id"]
+        assert candidate["title"] == "Review Update Dev Console Label Copy"
+        assert candidate["source"] == "bmad"
+        assert candidate["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
+        assert candidate["sourceArtifactType"] == "bmad_research"
+        assert candidate["riskLevel"] == "low"
+        assert candidate["priority"] == "high"
+        assert candidate["sortOrder"] == 7
+        assert candidate["status"] == "proposed"
+        assert "As Bob," in candidate["requestedOutcome"]
+
+        assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
+        promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promote_response.status_code == 200
+        promoted = promote_response.json()["data"]
+        work_item = promoted["workItem"]
+        work_item_id = work_item["id"]
+        assert promoted["candidateWork"]["promotedWorkItemId"] == work_item_id
+        assert work_item["source"] == f"candidate_work:{candidate_id}"
+        assert work_item["metadata"]["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
+        assert work_item["metadata"]["sourceArtifactType"] == "bmad_research"
+        assert work_item["metadata"]["candidatePriority"] == "high"
+
+        packet_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
+        assert packet_response.status_code == 200
+        packet_preview = packet_response.json()["data"]
+        packet = packet_preview["packet"]
+        assert packet["workItemId"] == work_item_id
+        assert packet["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
+        assert packet["priority"] == "high"
+        assert packet_preview["previewOnly"] is True
+        assert packet_preview["executionAttemptCreated"] is False
+        assert packet_preview["providerCallsAllowed"] is False
+        assert packet_preview["commandExecutionAllowed"] is False
+
+        routing_response = client.post(
+            f"/work-items/{work_item_id}/routing-preview",
+            json={"taskKind": "evidence_summary", "recordEvent": True},
+        )
+        assert routing_response.status_code == 200
+        route = routing_response.json()["data"]["decision"]
+        assert route["workItemId"] == work_item_id
+        assert route["selectedLane"] == "local_readonly"
+        assert route["authorityMode"] == "advisory"
+
+        attempt_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts",
+            json={"taskKind": "evidence_summary", "actorId": "synthetic-proof", "actorLabel": "Synthetic Proof"},
+        )
+        assert attempt_response.status_code == 200
+        attempt = attempt_response.json()["data"]
+        assert attempt["status"] == "rejected"
+        assert attempt["lane"] == "local_readonly"
+        assert attempt["authorityMode"] == "advisory"
+        assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["networkAllowed"] is False
+        assert attempt["workspaceIsolationPlan"]["credentialAccessAllowed"] is False
+        assert len(attempt["artifactRefs"]) == 1
+        packet_ref = attempt["artifactRefs"][0]
+        assert packet_ref["artifactType"] == "task_packet_v0"
+        assert packet_ref["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
+        assert packet_ref["taskKind"] == "evidence_summary"
+        assert packet_ref["previewOnly"] is True
+        assert packet_ref["executionAllowed"] is False
+        assert "Acceptance Criteria" not in str(packet_ref)
+
+        export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
+        assert export_response.status_code == 200
+        export = export_response.json()["data"]
+        assert export["workItem"]["metadata"]["candidateWorkId"] == candidate_id
+        assert export["workItem"]["metadata"]["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
+        assert export["executionAttempts"][0]["attemptId"] == attempt["attemptId"]
+        assert export["executionAttempts"][0]["artifactRefs"][0]["artifactType"] == "task_packet_v0"
+        assert export["safety"]["processLaunchAllowed"] is False
+        assert export["safety"]["providerCallsAllowed"] is False
+        assert export["safety"]["commandExecutionAllowed"] is False
+        assert export["safety"]["sourceMutationAllowed"] is False
+
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        assert events_response.status_code == 200
+        event_types = [event["eventType"] for event in events_response.json()["data"]]
+        assert "candidate_work.promoted" in event_types
+        assert "routing.preview_recorded" in event_types
+        assert "execution_attempt.rejected" in event_types

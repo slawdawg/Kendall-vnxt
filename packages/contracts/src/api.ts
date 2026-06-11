@@ -39,6 +39,11 @@ export interface CandidateWorkUpdatePayload {
   sortOrder?: number | null;
 }
 
+export interface CandidateWorkBmadImportPayload {
+  artifactPath: string;
+  sortOrder?: number;
+}
+
 export interface CandidateWorkView {
   id: string;
   title: string;

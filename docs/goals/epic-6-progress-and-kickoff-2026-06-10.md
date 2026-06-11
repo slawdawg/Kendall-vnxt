@@ -33,7 +33,7 @@ Candidate Work
 | 1. Candidate Work foundation | Complete locally | Stories 6.3, 6.4, 6.5, and 6.6 implemented and verified locally; remote delivery remains approval-gated. |
 | 2. Orchestrated preview foundation | Complete locally | Stories 6.7 and 6.8 implemented read-only task packet preview/evidence links without execution authority. |
 | 3. Dev Console live pipeline | Complete locally | Story 6.9 implemented SSE-backed dashboard refresh without polling or full browser reloads. |
-| 4. Proof workflow | Not started | Synthetic first, then real BMAD story. |
+| 4. Proof workflow | In progress | Story 6.10 implements the synthetic BMAD proof; Story 6.11 remains the real BMAD story proof. |
 | 5. Refactoring and maintenance foundation | Not started | Root-cause maintenance allowed when scoped. |
 | 6. Safe local execution | Not started | Ollama approved only within current endpoint/model boundary until expanded. |
 | 7. Git hygiene foundation | Not started | Read-only first. |
@@ -67,6 +67,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - Implement Candidate priority/order/promote.
 - Implement task packet v0 and orchestrated preview without execution.
 - Implement SSE-backed Dev Console live refresh without polling or full browser reloads.
+- Prove the synthetic BMAD artifact path through Candidate Work, Active Work, routing preview, fake/blocked attempt, and runtime evidence.
 - Improve docs/tests/scripts when root-cause maintenance is scoped and verified.
 
 ## Stop/Continue Rules
@@ -96,3 +97,4 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - 2026-06-10: Story 6.7 implemented Task Packet v0 and a read-only orchestrated preview endpoint that reuses routing preview decisions without creating execution attempts or granting provider/command authority. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k "task_packet_preview"`, `pnpm.cmd --filter @kendall/dashboard build`, and `pnpm.cmd run check`.
 - 2026-06-10: Story 6.8 attached Task Packet v0 evidence to existing fake/blocked execution attempts through artifact refs and workflow-event payloads without worker launch, provider calls, command execution, source mutation, Git, or GitHub operations. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k "task_packet_artifact or packet_linked_attempt"` and `pnpm.cmd run check`.
 - 2026-06-10: Story 6.9 implemented SSE-backed Dev Console refresh for Candidate Work and WorkItem changes, mounted a shared realtime refresh listener across dashboard pages, kept live feed EventSource reconnect behavior active, and removed full browser reloads from Proposed Work controls. Verification passed with `pnpm.cmd --filter @kendall/dashboard build`, `PLAYWRIGHT_BROWSERS_PATH=C:\Users\slaw_dawg\Kendall_Nxt\.data\ms-playwright pnpm.cmd exec playwright test tests/e2e/dashboard.spec.ts -g "shows proposed work"`, and `pnpm.cmd run check`.
+- 2026-06-10: Story 6.10 implemented a metadata-only BMAD import endpoint and synthetic BMAD proof fixture that flows through Candidate Work, approval/promotion, Task Packet preview, routing preview, fake/blocked execution attempt evidence, and runtime evidence export without worker launch, provider calls, command execution, source mutation, Git, or GitHub operations. Verification passed with `pnpm.cmd run test:supervisor -- tests/integration/test_candidate_work_api.py -q` and `pnpm.cmd run check`.
