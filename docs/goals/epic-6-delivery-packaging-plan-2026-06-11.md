@@ -27,6 +27,7 @@ The current stack contains:
 - Stories 6.12-6.15: startup availability, safe local evidence checks, Git hygiene, and local worktree planning.
 - Stories 6.16-6.24: Codex/Claude readiness and approval packets, GitHub delivery authority ladder, local cleanup readiness, remote cleanup/sync readiness, trusted autonomy readiness, and Epic 6 completion audit visibility.
 - Progress and authority audit update: `docs/goals/epic-6-progress-and-kickoff-2026-06-10.md` and `docs/architecture/kendall-vnxt-epic-6-authority-ledger-2026-06-10.md`.
+- Integrated PR body draft: `docs/goals/epic-6-integrated-pr-body-draft-2026-06-11.md`.
 
 ## Recommended Packaging
 
@@ -111,6 +112,7 @@ Recommended just before remote delivery:
 - `git status --short --branch`
 - `git log --oneline a460271..HEAD`
 - `pnpm.cmd run check`
+- Review `docs/goals/epic-6-integrated-pr-body-draft-2026-06-11.md` against the current head before using it.
 - optional `gh pr list --state open --limit 20 --json number,title,headRefName,mergeStateStatus,statusCheckRollup,url`
 
 ## Non-Approvals

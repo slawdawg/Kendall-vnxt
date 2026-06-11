@@ -40,6 +40,7 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 - Local cleanup: `GET /supervisor/local-cleanup-readiness-report`.
 - Remote cleanup/sync: `GET /supervisor/remote-cleanup-sync-readiness-report`.
 - Trusted autonomy: `GET /supervisor/trusted-autonomy-readiness-report`.
+- Epic completion audit: `GET /supervisor/epic-6-completion-audit-report`.
 
 These reports are evidence and approval-prep surfaces only. They do not grant the authority they describe.
 
@@ -48,7 +49,7 @@ These reports are evidence and approval-prep surfaces only. They do not grant th
 Snapshot date: 2026-06-11.
 
 - Open remote PR observed: PR #85 for `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success.
-- Local branch stack through Story 6.23 is not delivered remotely from this run.
+- Local branch stack through Story 6.24 is not delivered remotely from this run.
 - Push, PR creation/update, CI wait, merge, remote cleanup, and issue/story sync still require explicit Bob approval naming action and scope.
 
 ## Approval Request Format
