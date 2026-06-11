@@ -316,6 +316,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/delivery-readiness-policy-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/trusted-delivery-eligibility-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/disabled-provider-proofs")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-state-boundary")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
@@ -450,6 +451,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(githubDeliveryPanel.getByText("Use this ladder to request one delivery step at a time.")).toBeVisible();
     await expect(page.locator("#github-delivery-authority-report")).toBeVisible();
 
+    const trustedDeliveryEligibilityPanel = page.locator("#trusted-delivery-eligibility-report");
+    await expect(trustedDeliveryEligibilityPanel.getByText("Trusted delivery", { exact: true })).toBeVisible();
+    await expect(trustedDeliveryEligibilityPanel.getByRole("heading", { name: "Eligibility evaluator" })).toBeVisible();
+    await expect(trustedDeliveryEligibilityPanel.getByRole("heading", { name: "Push and PR" })).toBeVisible();
+    await expect(trustedDeliveryEligibilityPanel.getByRole("heading", { name: "CI and review" })).toBeVisible();
+    await expect(trustedDeliveryEligibilityPanel.getByRole("heading", { name: "Merge" })).toBeVisible();
+    await expect(trustedDeliveryEligibilityPanel.getByRole("heading", { name: "Cleanup" })).toBeVisible();
+    await expect(trustedDeliveryEligibilityPanel.getByText("No automatic operation allowed.").first()).toBeVisible();
+    await expect(trustedDeliveryEligibilityPanel.getByText("Local check evidence", { exact: true })).toBeVisible();
+    await expect(page.locator("#trusted-delivery-eligibility-report")).toBeVisible();
+
     const gitHygienePanel = page.locator("section").filter({ hasText: "Repository readiness" }).first();
     await expect(gitHygienePanel.getByText("Git hygiene", { exact: true })).toBeVisible();
     await expect(gitHygienePanel.getByText("Repository readiness")).toBeVisible();
@@ -495,12 +507,12 @@ test.describe("dashboard workflow coverage", () => {
     const epicCompletionPanel = page.locator("#epic-6-completion-audit-report");
     await expect(epicCompletionPanel.getByText("Epic 6 audit", { exact: true })).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Completion status" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("blocked_pending_merge_authority")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("merged_progressive_hardening")).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Local readiness stack" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Remote stack delivery closeout" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Cleanup hardening delivery" })).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Real BMAD story done proof" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Approve merging PR #86")).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Marking Epic 6 complete before real delivery and cleanup evidence exists.")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Approve the next follow-up branch")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Launching Codex or Claude workers without bounded approval.")).toBeVisible();
     await expect(page.locator("#epic-6-completion-audit-report")).toBeVisible();
 
     const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();

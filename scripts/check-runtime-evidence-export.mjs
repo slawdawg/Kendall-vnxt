@@ -122,6 +122,7 @@ for (const shortcutText of [
   "#safe-development-backlog",
   "#github-workflow-policy-report",
   "#github-delivery-authority-report",
+  "#trusted-delivery-eligibility-report",
   "#git-hygiene-report",
   "#local-cleanup-readiness-report",
   "#remote-cleanup-sync-readiness-report",
@@ -227,6 +228,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-20-github-delivery-authority-ladder.md"),
   "Story index must reference Story 6.20 GitHub delivery authority ladder",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-26-trusted-delivery-eligibility-evaluator.md"),
+  "Story index must reference Story 6.26 trusted delivery eligibility evaluator",
   failures,
 );
 assertCondition(

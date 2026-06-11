@@ -125,6 +125,13 @@ const reports = [
     dashboardFetch: "getGitHubDeliveryAuthorityReport",
   },
   {
+    reportId: "trusted-delivery-eligibility-report-v1",
+    endpoint: "GET /supervisor/trusted-delivery-eligibility-report",
+    apiPath: "/supervisor/trusted-delivery-eligibility-report",
+    story: "docs/stories/6-26-trusted-delivery-eligibility-evaluator.md",
+    dashboardFetch: "getTrustedDeliveryEligibilityReport",
+  },
+  {
     reportId: "git-hygiene-report-v1",
     endpoint: "GET /supervisor/git-hygiene-report",
     apiPath: "/supervisor/git-hygiene-report",
@@ -269,6 +276,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/managed-recipe-policy-report",
   "GET /supervisor/github-workflow-policy-report",
   "GET /supervisor/github-delivery-authority-report",
+  "GET /supervisor/trusted-delivery-eligibility-report",
   "GET /supervisor/git-hygiene-report",
   "GET /supervisor/local-cleanup-readiness-report",
   "GET /supervisor/remote-cleanup-sync-readiness-report",
@@ -342,6 +350,7 @@ for (const controlsAnchor of [
   'id="managed-recipe-policy-report"',
   'id="github-workflow-policy-report"',
   'id="github-delivery-authority-report"',
+  'id="trusted-delivery-eligibility-report"',
   'id="git-hygiene-report"',
   'id="local-cleanup-readiness-report"',
   'id="remote-cleanup-sync-readiness-report"',
@@ -422,6 +431,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-20-github-delivery-authority-ladder.md"),
   "Story index must reference Story 6.20 GitHub delivery authority ladder",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-26-trusted-delivery-eligibility-evaluator.md"),
+  "Story index must reference Story 6.26 trusted delivery eligibility evaluator",
   failures,
 );
 assertCondition(

@@ -1393,6 +1393,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/claude-review-readiness-report",
         "GET /supervisor/claude-review-approval-report",
         "GET /supervisor/github-delivery-authority-report",
+        "GET /supervisor/trusted-delivery-eligibility-report",
         "GET /supervisor/local-cleanup-readiness-report",
         "GET /supervisor/remote-cleanup-sync-readiness-report",
         "GET /supervisor/trusted-autonomy-readiness-report",
@@ -3069,6 +3070,44 @@ def test_github_delivery_authority_report_stays_read_only_and_blocks_remote_step
     assert any("green CI" in evidence for step in report["ladder"] for evidence in step["evidence"])
     assert any("plaintext tokens" in stop_condition for stop_condition in report["stopConditions"])
     assert any("one delivery step at a time" in action for action in report["nextSafeActions"])
+
+
+def test_trusted_delivery_eligibility_report_evaluates_local_evidence_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "trusted-delivery-eligibility-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/trusted-delivery-eligibility-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "trusted-delivery-eligibility-report-v1"
+    assert report["readOnly"] is True
+    assert report["automaticDeliveryApproved"] is False
+    assert report["mergeAutoEligible"] is False
+    assert report["cleanupAutoEligible"] is False
+    assert report["baseBranch"] == "main"
+    assert report["currentBranch"]
+    assert {stage["stageId"] for stage in report["stages"]} == {
+        "push-pr-auto-eligible",
+        "ci-review-auto-eligible",
+        "merge-auto-eligible",
+        "cleanup-auto-eligible",
+    }
+    push_stage = next(stage for stage in report["stages"] if stage["stageId"] == "push-pr-auto-eligible")
+    assert any(check["checkId"] == "local-check-evidence" for check in push_stage["checks"])
+    assert any("working tree is dirty" in stop for stop in report["hardStops"])
+    assert "no push, PR, CI wait, merge, cleanup" in report["summary"]
 
 
 def test_local_cleanup_readiness_report_is_read_only_and_blocks_deletion(tmp_path, monkeypatch) -> None:

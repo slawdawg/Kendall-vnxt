@@ -1169,6 +1169,45 @@ export interface GitHubDeliveryAuthorityReportView {
   automaticDeliveryApproved: boolean;
 }
 
+export interface TrustedDeliveryEligibilityCheckView {
+  checkId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+export interface TrustedDeliveryEligibilityStageEvaluationView {
+  stageId: string;
+  label: string;
+  status: string;
+  eligible: boolean;
+  checks: TrustedDeliveryEligibilityCheckView[];
+  allowedOperations: string[];
+  blockedOperations: string[];
+  nextAction: string;
+}
+
+export interface TrustedDeliveryEligibilityReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  currentBranch: string;
+  baseBranch: string;
+  headRevision: string;
+  workingTreeStatus: string;
+  commitsAhead: number;
+  diffStat: string;
+  stages: TrustedDeliveryEligibilityStageEvaluationView[];
+  hardStops: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  automaticDeliveryApproved: boolean;
+  pushPrAutoEligible: boolean;
+  mergeAutoEligible: boolean;
+  cleanupAutoEligible: boolean;
+}
+
 export interface LocalCleanupPolicyItemView {
   itemId: string;
   label: string;

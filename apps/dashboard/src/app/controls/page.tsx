@@ -25,6 +25,7 @@ import { RemoteCleanupSyncReadinessReportPanel } from "../../components/remote-c
 import { SafeDevelopmentBacklogPanel } from "../../components/safe-development-backlog-panel";
 import { Shell } from "../../components/shell";
 import { SupervisorReportCatalogPanel } from "../../components/supervisor-report-catalog-panel";
+import { TrustedDeliveryEligibilityReportPanel } from "../../components/trusted-delivery-eligibility-report-panel";
 import { TrustedAutonomyReadinessReportPanel } from "../../components/trusted-autonomy-readiness-report-panel";
 import { VerificationReadinessReportPanel } from "../../components/verification-readiness-report-panel";
 import { buildNavStats } from "../../lib/nav-stats";
@@ -53,6 +54,7 @@ import {
   getRemoteCleanupSyncReadinessReport,
   getSafeDevelopmentBacklogReport,
   getSupervisorReportCatalog,
+  getTrustedDeliveryEligibilityReport,
   getTrustedAutonomyReadinessReport,
   getVerificationReadinessReport,
   getWorkerRegistry,
@@ -82,6 +84,7 @@ export default async function ControlsPage() {
     gitHygieneReport,
     localCleanupReadinessReport,
     remoteCleanupSyncReadinessReport,
+    trustedDeliveryEligibilityReport,
     trustedAutonomyReadinessReport,
     epic6CompletionAuditReport,
     codexReadinessReport,
@@ -111,6 +114,7 @@ export default async function ControlsPage() {
     getGitHygieneReport(),
     getLocalCleanupReadinessReport(),
     getRemoteCleanupSyncReadinessReport(),
+    getTrustedDeliveryEligibilityReport(),
     getTrustedAutonomyReadinessReport(),
     getEpic6CompletionAuditReport(),
     getCodexReadinessReport(),
@@ -186,6 +190,9 @@ export default async function ControlsPage() {
       </div>
       <div id="remote-cleanup-sync-readiness-report" className="scroll-mt-28">
         <RemoteCleanupSyncReadinessReportPanel report={remoteCleanupSyncReadinessReport} />
+      </div>
+      <div id="trusted-delivery-eligibility-report" className="scroll-mt-28">
+        <TrustedDeliveryEligibilityReportPanel report={trustedDeliveryEligibilityReport} />
       </div>
       <div id="trusted-autonomy-readiness-report" className="scroll-mt-28">
         <TrustedAutonomyReadinessReportPanel report={trustedAutonomyReadinessReport} />

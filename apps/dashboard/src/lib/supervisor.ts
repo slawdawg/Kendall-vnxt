@@ -36,6 +36,7 @@ import type {
   SavedWorkItemView,
   SavedWorkItemViewPayload,
   SupervisorReportCatalogView,
+  TrustedDeliveryEligibilityReportView,
   TrustedAutonomyReadinessReportView,
   WorkItemBranchPreparationPayload,
   WorkItemAssignmentPayload,
@@ -238,6 +239,10 @@ export async function getGitHubWorkflowPolicyReport(): Promise<GitHubWorkflowPol
 
 export async function getGitHubDeliveryAuthorityReport(): Promise<GitHubDeliveryAuthorityReportView> {
   return requestJson<GitHubDeliveryAuthorityReportView>("/supervisor/github-delivery-authority-report");
+}
+
+export async function getTrustedDeliveryEligibilityReport(): Promise<TrustedDeliveryEligibilityReportView> {
+  return requestJson<TrustedDeliveryEligibilityReportView>("/supervisor/trusted-delivery-eligibility-report");
 }
 
 export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
