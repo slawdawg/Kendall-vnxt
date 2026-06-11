@@ -9,6 +9,7 @@ import { DeliveryReadinessPolicyReportPanel } from "../../components/delivery-re
 import { DevelopmentRunwayReportPanel } from "../../components/development-runway-report-panel";
 import { DocumentationAuthorityReportPanel } from "../../components/documentation-authority-report-panel";
 import { ExecutionReadinessReportPanel } from "../../components/execution-readiness-report-panel";
+import { GitHubDeliveryAuthorityReportPanel } from "../../components/github-delivery-authority-report-panel";
 import { GitHubWorkflowPolicyReportPanel } from "../../components/github-workflow-policy-report-panel";
 import { GitHygieneReportPanel } from "../../components/git-hygiene-report-panel";
 import { MaintenanceActionPlanReportPanel } from "../../components/maintenance-action-plan-report-panel";
@@ -34,6 +35,7 @@ import {
   getDeliveryReadinessPolicyReport,
   getDevelopmentRunwayReport,
   getExecutionReadinessReport,
+  getGitHubDeliveryAuthorityReport,
   getGitHubWorkflowPolicyReport,
   getGitHygieneReport,
   getMaintenanceActionPlanReport,
@@ -68,6 +70,7 @@ export default async function ControlsPage() {
     safeDevelopmentBacklog,
     managedRecipePolicyReport,
     githubWorkflowPolicyReport,
+    githubDeliveryAuthorityReport,
     gitHygieneReport,
     codexReadinessReport,
     codexImplementationApprovalReport,
@@ -92,6 +95,7 @@ export default async function ControlsPage() {
     getSafeDevelopmentBacklogReport(),
     getManagedRecipePolicyReport(),
     getGitHubWorkflowPolicyReport(),
+    getGitHubDeliveryAuthorityReport(),
     getGitHygieneReport(),
     getCodexReadinessReport(),
     getCodexImplementationApprovalReport(),
@@ -154,6 +158,9 @@ export default async function ControlsPage() {
       </div>
       <div id="github-workflow-policy-report" className="scroll-mt-28">
         <GitHubWorkflowPolicyReportPanel report={githubWorkflowPolicyReport} />
+      </div>
+      <div id="github-delivery-authority-report" className="scroll-mt-28">
+        <GitHubDeliveryAuthorityReportPanel report={githubDeliveryAuthorityReport} />
       </div>
       <div id="git-hygiene-report" className="scroll-mt-28">
         <GitHygieneReportPanel report={gitHygieneReport} />

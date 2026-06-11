@@ -1126,6 +1126,35 @@ export interface ClaudeReviewApprovalReportView {
   approvalBindingImplemented: boolean;
 }
 
+export interface GitHubDeliveryAuthorityStepView {
+  stepId: string;
+  label: string;
+  status: string;
+  summary: string;
+  requiredApproval: string;
+  evidence: string[];
+}
+
+export interface GitHubDeliveryAuthorityReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  authorityFamily: string;
+  approvalPrompt: string;
+  ladder: GitHubDeliveryAuthorityStepView[];
+  requiredEvidence: string[];
+  rollbackPlan: string[];
+  stopConditions: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  pushApproved: boolean;
+  pullRequestApproved: boolean;
+  ciWaitApproved: boolean;
+  reviewResolutionApproved: boolean;
+  mergeApproved: boolean;
+  remoteCleanupApproved: boolean;
+}
+
 export interface DeliveryReadinessPolicyItemView {
   itemId: string;
   label: string;

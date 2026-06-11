@@ -46,6 +46,8 @@ from supervisor.api.schemas import (
     ExecutionStateBoundaryView,
     DisabledProviderProofView,
     GitHubWorkflowPolicyItemView,
+    GitHubDeliveryAuthorityReportView,
+    GitHubDeliveryAuthorityStepView,
     GitHubWorkflowPolicyReportView,
     GitHygieneReportView,
     GitHygieneSignalView,
@@ -1639,6 +1641,15 @@ class SupervisorService:
                 relatedDocs=["docs/stories/6-19-claude-review-approval-packet.md"],
             ),
             SupervisorReportCatalogEntryView(
+                reportId="github-delivery-authority-report-v1",
+                label="GitHub delivery authority report",
+                endpoint="GET /supervisor/github-delivery-authority-report",
+                status="active",
+                summary="Defines the progressive approval ladder for push, PR, CI, review resolution, merge, and remote cleanup without remote writes.",
+                evidenceScope=["push approval", "PR approval", "CI wait approval", "merge approval", "remote cleanup boundary"],
+                relatedDocs=["docs/stories/6-20-github-delivery-authority-ladder.md"],
+            ),
+            SupervisorReportCatalogEntryView(
                 reportId="delivery-readiness-policy-report-v1",
                 label="Delivery readiness policy report",
                 endpoint="GET /supervisor/delivery-readiness-policy-report",
@@ -2985,6 +2996,103 @@ class SupervisorService:
             approvalBindingImplemented=False,
         )
 
+    def get_github_delivery_authority_report(self) -> GitHubDeliveryAuthorityReportView:
+        return GitHubDeliveryAuthorityReportView(
+            reportId="github-delivery-authority-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only GitHub delivery authority ladder. It documents the progressive approvals needed for remote delivery "
+                "without pushing, creating PRs, waiting for CI, resolving review comments, merging, or deleting remote branches."
+            ),
+            authorityFamily="github_delivery",
+            approvalPrompt=(
+                "Approve only the named GitHub delivery step for the selected branch/PR, with required evidence retained and stop conditions enforced."
+            ),
+            ladder=[
+                GitHubDeliveryAuthorityStepView(
+                    stepId="push-branch",
+                    label="Push branch",
+                    status="blocked",
+                    summary="Push a named local branch to origin only after branch, diffstat, and target remote are approved.",
+                    requiredApproval="branch-scoped push approval",
+                    evidence=["git status --short", "git diff --stat", "target remote and branch name"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="open-or-update-pr",
+                    label="Open or update PR",
+                    status="blocked",
+                    summary="Create or update one pull request only after title, body, base branch, and source branch are approved.",
+                    requiredApproval="PR-scoped create/update approval",
+                    evidence=["PR title/body", "base branch", "source branch", "linked story evidence"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="wait-for-ci",
+                    label="Wait for CI",
+                    status="blocked",
+                    summary="Read CI status only after remote checks are approved for the named PR or commit.",
+                    requiredApproval="read-only CI wait approval",
+                    evidence=["PR number or commit sha", "check suite summary", "timeout"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="resolve-review-comments",
+                    label="Resolve review comments",
+                    status="blocked",
+                    summary="Resolve or reply to review comments only after Bob confirms comments were addressed.",
+                    requiredApproval="comment-resolution approval",
+                    evidence=["review thread ids", "resolution summary", "verification after changes"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="merge-pr",
+                    label="Merge PR",
+                    status="blocked",
+                    summary="Merge only after PR, CI, review, and final branch evidence are ready and Bob approves the merge.",
+                    requiredApproval="PR-scoped merge approval",
+                    evidence=["green CI", "review resolved", "merge method", "post-merge target branch"],
+                ),
+                GitHubDeliveryAuthorityStepView(
+                    stepId="remote-cleanup",
+                    label="Remote cleanup",
+                    status="blocked",
+                    summary="Delete remote branches or close stale remote state only after delivery completion and cleanup approval.",
+                    requiredApproval="remote cleanup approval",
+                    evidence=["merged PR", "branch name", "cleanup target", "rollback note"],
+                ),
+            ],
+            requiredEvidence=[
+                "named branch, PR, commit, or remote target for each approved step",
+                "operator approval text naming action and scope",
+                "pre-action local git status and diffstat where relevant",
+                "remote result metadata without credential retention",
+                "post-action status, URL, check result, or merge summary",
+            ],
+            rollbackPlan=[
+                "If push or PR creation fails, leave local branch untouched and record the error.",
+                "If CI fails, stop delivery and return the work item to blocked or repair status.",
+                "If review comments require changes, create a new local implementation/repair slice before merge.",
+                "If merge fails, do not retry with a different method without new approval.",
+                "Do not delete local or remote branches until cleanup authority is separately approved.",
+            ],
+            stopConditions=[
+                "The remote target, branch, PR, or merge base is ambiguous.",
+                "Local git status is dirty outside the approved delivery changes.",
+                "CI fails, review comments remain unresolved, or required evidence is missing.",
+                "The operation would expose credentials, persist plaintext tokens, or alter GitHub auth state.",
+                "The requested step expands into merge, cleanup, issue sync, or branch deletion without matching approval.",
+            ],
+            nextSafeActions=[
+                "Use this ladder to request one delivery step at a time.",
+                "Keep GitHub remote writes, merge, and cleanup separate until the system earns broader policy authority.",
+                "Record remote evidence through delivery readiness and runtime evidence surfaces after approval.",
+            ],
+            readOnly=True,
+            pushApproved=False,
+            pullRequestApproved=False,
+            ciWaitApproved=False,
+            reviewResolutionApproved=False,
+            mergeApproved=False,
+            remoteCleanupApproved=False,
+        )
+
     def get_delivery_readiness_policy_report(self) -> DeliveryReadinessPolicyReportView:
         return DeliveryReadinessPolicyReportView(
             reportId="delivery-readiness-policy-report-v1",
@@ -3601,6 +3709,7 @@ class SupervisorService:
             "GET /supervisor/codex-implementation-approval-report",
             "GET /supervisor/claude-review-readiness-report",
             "GET /supervisor/claude-review-approval-report",
+            "GET /supervisor/github-delivery-authority-report",
             "GET /supervisor/delivery-readiness-policy-report",
             "GET /supervisor/execution-state-boundary",
             "GET /supervisor/disabled-provider-proofs",
@@ -3654,6 +3763,7 @@ class SupervisorService:
             "docs/stories/6-17-codex-implementation-approval-packet.md",
             "docs/stories/6-18-claude-readiness-no-launch.md",
             "docs/stories/6-19-claude-review-approval-packet.md",
+            "docs/stories/6-20-github-delivery-authority-ladder.md",
             "docs/stories/3-43-safe-delivery-hygiene.md",
             "docs/stories/3-44-delivery-readiness-policy-report.md",
             "docs/stories/3-45-delivery-readiness-policy-drift-check.md",

@@ -305,6 +305,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/safe-development-backlog")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/managed-recipe-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/github-workflow-policy-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/github-delivery-authority-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/git-hygiene-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
@@ -434,6 +435,17 @@ test.describe("dashboard workflow coverage", () => {
     await expect(githubPolicyPanel.getByText("Do not create persistent plaintext GitHub CLI tokens")).toBeVisible();
     await expect(page.locator("#github-workflow-policy-report")).toBeVisible();
 
+    const githubDeliveryPanel = page.locator("#github-delivery-authority-report");
+    await expect(githubDeliveryPanel.getByText("GitHub delivery", { exact: true })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Delivery authority ladder" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Push branch" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Open or update PR" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Wait for CI" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByRole("heading", { name: "Merge PR" })).toBeVisible();
+    await expect(githubDeliveryPanel.getByText("branch-scoped push approval")).toBeVisible();
+    await expect(githubDeliveryPanel.getByText("Use this ladder to request one delivery step at a time.")).toBeVisible();
+    await expect(page.locator("#github-delivery-authority-report")).toBeVisible();
+
     const gitHygienePanel = page.locator("section").filter({ hasText: "Repository readiness" }).first();
     await expect(gitHygienePanel.getByText("Git hygiene", { exact: true })).toBeVisible();
     await expect(gitHygienePanel.getByText("Repository readiness")).toBeVisible();
@@ -454,7 +466,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(codexReadinessPanel.getByText("This report does not approve Codex CLI process launch.")).toBeVisible();
     await expect(page.locator("#codex-readiness-report")).toBeVisible();
 
-    const codexImplementationPanel = page.locator("section").filter({ hasText: "Approval text" }).first();
+    const codexImplementationPanel = page.locator("#codex-implementation-approval-report");
     await expect(codexImplementationPanel.getByText("Codex implementation", { exact: true })).toBeVisible();
     await expect(codexImplementationPanel.getByRole("heading", { name: "Approval packet" })).toBeVisible();
     await expect(codexImplementationPanel.getByText("Approve one bounded Codex implementation attempt")).toBeVisible();

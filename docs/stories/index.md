@@ -118,6 +118,7 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 | `6-17-codex-implementation-approval-packet.md` | Add a read-only approval packet for future bounded Codex implementation with target scope, path boundaries, command shape, evidence, rollback, and stop conditions. |
 | `6-18-claude-readiness-no-launch.md` | Add a no-launch Claude review readiness report for CLI discovery, review-only posture, scarce-use policy, and source-mutation boundaries. |
 | `6-19-claude-review-approval-packet.md` | Add a read-only approval packet for future bounded Claude review with trigger policy, context scope, blocked inputs, output contract, and scarcity controls. |
+| `6-20-github-delivery-authority-ladder.md` | Add a read-only GitHub delivery authority ladder for push, PR, CI, review resolution, merge, and remote cleanup approvals. |
 
 ## Completed Foundation Stories
 

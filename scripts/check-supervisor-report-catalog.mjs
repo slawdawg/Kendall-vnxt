@@ -118,6 +118,13 @@ const reports = [
     dashboardFetch: "getGitHubWorkflowPolicyReport",
   },
   {
+    reportId: "github-delivery-authority-report-v1",
+    endpoint: "GET /supervisor/github-delivery-authority-report",
+    apiPath: "/supervisor/github-delivery-authority-report",
+    story: "docs/stories/6-20-github-delivery-authority-ladder.md",
+    dashboardFetch: "getGitHubDeliveryAuthorityReport",
+  },
+  {
     reportId: "git-hygiene-report-v1",
     endpoint: "GET /supervisor/git-hygiene-report",
     apiPath: "/supervisor/git-hygiene-report",
@@ -240,6 +247,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/safe-development-backlog",
   "GET /supervisor/managed-recipe-policy-report",
   "GET /supervisor/github-workflow-policy-report",
+  "GET /supervisor/github-delivery-authority-report",
   "GET /supervisor/git-hygiene-report",
   "GET /supervisor/codex-readiness-report",
   "GET /supervisor/codex-implementation-approval-report",
@@ -309,6 +317,7 @@ for (const controlsAnchor of [
   'id="runtime-evidence-review-report"',
   'id="managed-recipe-policy-report"',
   'id="github-workflow-policy-report"',
+  'id="github-delivery-authority-report"',
   'id="git-hygiene-report"',
   'id="codex-readiness-report"',
   'id="codex-implementation-approval-report"',
@@ -381,6 +390,11 @@ assertCondition(
 assertCondition(
   storyIndex.includes("6-19-claude-review-approval-packet.md"),
   "Story index must reference Story 6.19 Claude review approval packet",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("6-20-github-delivery-authority-ladder.md"),
+  "Story index must reference Story 6.20 GitHub delivery authority ladder",
   failures,
 );
 assertCondition(

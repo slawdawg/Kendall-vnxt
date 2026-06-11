@@ -1235,6 +1235,35 @@ class ClaudeReviewApprovalReportView(BaseModel):
     approvalBindingImplemented: bool = False
 
 
+class GitHubDeliveryAuthorityStepView(BaseModel):
+    stepId: str
+    label: str
+    status: str
+    summary: str
+    requiredApproval: str
+    evidence: list[str]
+
+
+class GitHubDeliveryAuthorityReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    authorityFamily: str
+    approvalPrompt: str
+    ladder: list[GitHubDeliveryAuthorityStepView]
+    requiredEvidence: list[str]
+    rollbackPlan: list[str]
+    stopConditions: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    pushApproved: bool = False
+    pullRequestApproved: bool = False
+    ciWaitApproved: bool = False
+    reviewResolutionApproved: bool = False
+    mergeApproved: bool = False
+    remoteCleanupApproved: bool = False
+
+
 class DeliveryReadinessPolicyItemView(BaseModel):
     itemId: str
     label: str
