@@ -3244,13 +3244,14 @@ def test_epic_6_completion_audit_report_shows_remaining_blockers_without_mutatio
     assert report["remoteDeliveryApproved"] is True
     assert report["providerExecutionApproved"] is False
     assert report["cleanupApproved"] is True
-    assert report["overallStatus"] == "delivery_eligibility_ready_progressive_hardening"
+    assert report["overallStatus"] == "story_3_66_bounded_implementation_in_progress"
     assert {item["itemId"] for item in report["completedItems"]} == {
         "local-readiness-stack",
         "delivery-packaging-plan",
         "local-cleanup-closeout",
         "dev-console-integration",
         "trusted-delivery-eligibility",
+        "story-3-66-selection",
     }
     assert {item["itemId"] for item in report["remainingItems"]} == {
         "real-bmad-done-proof",
@@ -3259,8 +3260,13 @@ def test_epic_6_completion_audit_report_shows_remaining_blockers_without_mutatio
     }
     assert "Approve one real BMAD story trial" in report["recommendedApproval"]
     assert any("Merging, closing, or deleting" in operation for operation in report["blockedOperations"])
-    assert any("Merged PR #86, PR #87, and PR #88" in evidence for evidence in report["requiredEvidence"])
+    assert any("PR #96" in evidence for evidence in report["requiredEvidence"])
     assert any("worktree is dirty" in condition for condition in report["stopConditions"])
+    assert any(
+        "docs/stories/3-66-epic-6-mvp-proof-done-evidence.md" in evidence
+        for item in report["completedItems"]
+        for evidence in item["evidence"]
+    )
 
 
 def test_epic_6_mvp_proof_trial_report_defines_next_approval_without_mutation(tmp_path, monkeypatch) -> None:
@@ -3284,11 +3290,12 @@ def test_epic_6_mvp_proof_trial_report_defines_next_approval_without_mutation(tm
     report = response.json()["data"]
     assert report["reportId"] == "epic-6-mvp-proof-trial-report-v1"
     assert report["readOnly"] is True
-    assert report["codexLaunchApproved"] is False
+    assert report["codexLaunchApproved"] is True
     assert report["claudeLaunchApproved"] is False
     assert report["providerExpansionApproved"] is False
     assert report["autonomousDeliveryApproved"] is False
-    assert report["trialStatus"] == "waiting_for_bounded_trial_approval"
+    assert report["selectedStory"] == "Story 3.66: docs/stories/3-66-epic-6-mvp-proof-done-evidence.md"
+    assert report["trialStatus"] == "bounded_codex_implementation_in_progress"
     assert {step["stepId"] for step in report["steps"]} == {
         "select-real-story",
         "bounded-codex-implementation",
@@ -3297,9 +3304,19 @@ def test_epic_6_mvp_proof_trial_report_defines_next_approval_without_mutation(tm
         "github-delivery",
         "done-evidence",
     }
-    assert any("One Codex implementation launch approval" in packet for packet in report["approvalPackets"])
-    assert any("Launching Codex" in operation for operation in report["blockedOperations"])
-    assert any("selected story is ambiguous" in condition for condition in report["stopConditions"])
+    assert any("Story 3.66 Codex implementation launch approval" in packet for packet in report["approvalPackets"])
+    assert any("additional Codex workers" in operation for operation in report["blockedOperations"])
+    assert any("Story 3.66 scope expands" in condition for condition in report["stopConditions"])
+    assert any(
+        "Candidate Work 8afea99f-bb79-4f51-a66c-f1b02dff9005" in evidence
+        for step in report["steps"]
+        for evidence in step["evidence"]
+    )
+    assert any(
+        "runtime-evidence-export-a8e43bba-a2dd-4b2e-b995-22fecea85611" in evidence
+        for step in report["steps"]
+        for evidence in step["evidence"]
+    )
 
 
 def test_delivery_readiness_policy_report_documents_review_gate_without_mutation(tmp_path, monkeypatch) -> None:
