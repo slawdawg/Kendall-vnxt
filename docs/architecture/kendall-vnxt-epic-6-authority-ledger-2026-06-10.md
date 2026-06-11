@@ -29,7 +29,7 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 | Merge | Not approved | Bob-approved or stretch | Blocked |
 | Local cleanup | Readiness only | Automatic after done with evidence | Deletion blocked |
 | Remote cleanup | Readiness only | Stretch | Blocked |
-| Trusted low-risk autonomy | Proposal drafted | Stretch | Blocked until Bob approves a named autonomy policy |
+| Trusted low-risk autonomy | Active for doc/evidence PR preparation only | Stretch | Allowed only for `epic-6-low-risk-doc-evidence-pr-v1`; merge, cleanup, issue sync, Claude, providers, secrets, destructive operations, and failed-check bypass remain blocked |
 | Raw prompt/completion retention | Not approved | Not part of MVP | Blocked |
 
 ## Current Evidence Surfaces
@@ -42,7 +42,7 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 - Trusted autonomy: `GET /supervisor/trusted-autonomy-readiness-report`.
 - Epic completion audit: `GET /supervisor/epic-6-completion-audit-report`.
 - MVP proof trial packet: `GET /supervisor/epic-6-mvp-proof-trial-report`.
-- Low-risk doc/evidence autonomy proposal: `docs/goals/epic-6-low-risk-doc-evidence-autonomy-policy-proposal-2026-06-11.md`.
+- Low-risk doc/evidence autonomy policy: `docs/goals/epic-6-low-risk-doc-evidence-autonomy-policy-proposal-2026-06-11.md`.
 
 These reports are evidence and approval-prep surfaces only. They do not grant the authority they describe.
 
@@ -53,8 +53,9 @@ Snapshot date: 2026-06-11.
 - PR #85, PR #86, PR #87, PR #88, PR #89, and PR #90 are merged into `main`.
 - PR #90 delivered the read-only Epic 6 MVP proof trial packet from `codex/epic-6-mvp-proof-run`.
 - Current `main` verification passed after PR #90 with `pnpm.cmd run check`, including dashboard build and 143 supervisor tests.
-- Future branch deletion, local cleanup, remote cleanup, Codex launch, Claude launch, push/PR delivery, merge, and issue/story sync still require explicit Bob approval naming action and scope.
-- PR #91 and PR #92 provide initial evidence for a future low-risk doc/evidence-only PR autonomy policy, but no autonomy policy is active yet.
+- Future branch deletion, local cleanup, remote cleanup, Claude launch, provider expansion, merge, and issue/story sync still require explicit Bob approval naming action and scope.
+- PR #91 and PR #92 provide initial evidence for `epic-6-low-risk-doc-evidence-pr-v1`.
+- On 2026-06-11, Bob approved `epic-6-low-risk-doc-evidence-pr-v1`: for matching doc/evidence-only changes, Codex may create an isolated branch/worktree from `main`, implement bounded documentation/evidence changes, run `pnpm.cmd run check`, commit, push, open one PR to `main`, and run read-only PR/CI checks without per-step approval. Auto-merge, cleanup, issue sync, Claude launch, provider expansion, secrets access, destructive operations, failed-check bypass, and unrelated source changes remain separately gated.
 
 ## Approval Request Format
 
