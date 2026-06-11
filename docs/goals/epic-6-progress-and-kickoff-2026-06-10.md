@@ -55,7 +55,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 | --- | --- | --- | --- | --- |
 | Codex process launch/task execution | pending explicit approval | One approved Active work item in isolated worktree | Approval packet, path scope, expected command shape, verification command, rollback/cleanup plan | TBD |
 | Claude review task execution | pending explicit approval | One high-risk or explicitly approved work item review | Review trigger, bounded context, review-only command shape, scarcity reason, output contract | TBD |
-| GitHub push/PR/update/check delivery | pending explicit approval | One named branch/PR/delivery step | Branch/PR plan, target remote, CI/check evidence, rollback plan | TBD |
+| GitHub push/PR/update/check delivery | approved and completed for PR #86 Gate 1 | Push `codex/implement-story-6-23-trusted-autonomy-readiness`, open one PR to `main`, run read-only PR/CI checks | Branch/PR plan, target remote, CI/check evidence, rollback plan | PR #86 opened; CI `check` passed; merge remains gated |
 | Merge | pending explicit approval | Merge one approved PR | Green checks, review gates, exact merge method, explicit merge approval | TBD |
 | Local cleanup deletion | pending explicit approval | Remove one local worktree/branch target | Retained evidence, clean status/diffstat, target path/branch, rollback note | TBD |
 | Remote cleanup / issue-story sync | stretch / pending explicit approval | Delete remote branch or sync issue/story status | Completed delivery evidence, remote target, before/after metadata, cleanup plan | TBD |
@@ -74,6 +74,17 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 - Stop only when no meaningful safe work remains, unsafe behavior appears, scope expands beyond MVP, or the gated operation is the next unavoidable step.
 - Generic continuation language does not approve new authority families.
 - Record all approvals and denials in the authority ledger.
+
+When a long goal hits a gate, split the work into two lanes:
+
+- Blocked lane: park the exact gated operation with approval scope, stop conditions, and evidence to retain.
+- Continue lane: keep doing safe local or read-only work that advances the goal, including verification, docs, PR body prep, read-only PR/CI/review inspection, merge packet prep, cleanup plans, tests, follow-on stories, and root-cause fixes.
+
+After a PR is opened under explicit approval and CI is green, the line softens only for read-only and preparation actions:
+
+- Allowed: PR inspection, CI/status refreshes, review-comment inspection, PR evidence/body prep, merge packet preparation, cleanup/rollback planning.
+- Still separately gated: merge, closing superseded PRs, local or remote branch deletion, cleanup, issue/story sync, Codex launch, Claude launch, and autonomous delivery.
+- Default next gate: one narrow merge approval packet for the specific clean PR.
 
 ## Kickoff Checklist
 
@@ -115,9 +126,9 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 
 Snapshot date: 2026-06-11.
 
-- Current local stack branch: `codex/implement-story-6-23-trusted-autonomy-readiness`; verify the latest commit with `git rev-parse --short HEAD` immediately before push.
-- Current open GitHub PR found by `gh pr list --state open --limit 20`: PR #85, `Implement Story 6.3 Candidate Work model API`, branch `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success.
-- Stories 6.4-6.24 are committed locally in stacked branches but have not been pushed or packaged into remote PRs from this run.
+- Current local stack branch: `codex/implement-story-6-23-trusted-autonomy-readiness`; latest delivered commit for PR #86 was `a5b3035`.
+- Current open GitHub PRs found by `gh pr list --state open --limit 20`: PR #86, `Implement Epic 6 Dev Console orchestration pipeline and readiness controls`, branch `codex/implement-story-6-23-trusted-autonomy-readiness`, merge state `CLEAN`, CI `check` success; PR #85, `Implement Story 6.3 Candidate Work model API`, branch `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success.
+- Stories 6.4-6.24 are included in PR #86. PR #85 remains open and must not be closed without separate approval.
 - Delivery packaging plan: `docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md`.
 - Integrated PR body draft: `docs/goals/epic-6-integrated-pr-body-draft-2026-06-11.md`.
 
@@ -135,8 +146,8 @@ Evidence still missing for completion:
 
 - No approved real Codex implementation attempt has been executed.
 - No approved real Claude review attempt has been executed.
-- GitHub delivery for the local stack beyond PR #85 has not been pushed or PR-packaged.
-- No approved merge has occurred for the Epic 6 stack.
+- GitHub delivery Gate 1 is complete through PR #86 creation and passing CI.
+- No approved merge has occurred for PR #86.
 - No approved local cleanup deletion has occurred after delivery.
 - No real BMAD story has reached the final Dev Console done/evidence state through approved implementation, delivery, and cleanup.
 

@@ -3367,17 +3367,17 @@ class SupervisorService:
             reportId="epic-6-completion-audit-report-v1",
             generatedAt=datetime.now(timezone.utc),
             summary=(
-                "Read-only Epic 6 completion audit. The local readiness stack is prepared, but Epic 6 is not complete until "
-                "approved remote delivery, one real BMAD story proof through done, and approved cleanup evidence are recorded."
+                "Read-only Epic 6 completion audit. PR #86 is open with CI passing, but Epic 6 is not complete until "
+                "approved merge, one real BMAD story proof through done, and approved cleanup evidence are recorded."
             ),
             epicId="6",
-            overallStatus="blocked_pending_explicit_delivery_authority",
+            overallStatus="blocked_pending_merge_authority",
             completedItems=[
                 EpicCompletionAuditItemView(
                     itemId="local-readiness-stack",
                     label="Local readiness stack",
                     status="prepared_locally",
-                    summary="Stories 6.3 through 6.23 have local implementation evidence for proposed work, routing preview, Dev Console visibility, and authority readiness reports.",
+                    summary="Stories 6.3 through 6.24 have implementation evidence for proposed work, routing preview, Dev Console visibility, authority readiness reports, and completion audit visibility.",
                     evidence=[
                         "Candidate Work and BMAD import surfaces exist.",
                         "Task Packet preview, fake or blocked attempts, runtime evidence, and Dev Console live state are wired.",
@@ -3387,11 +3387,13 @@ class SupervisorService:
                 EpicCompletionAuditItemView(
                     itemId="delivery-packaging-plan",
                     label="Delivery packaging plan",
-                    status="prepared_locally",
-                    summary="A local packaging plan recommends one integrated Epic 6 milestone PR after explicit approval.",
+                    status="pr_open_ci_passed",
+                    summary="Gate 1 opened integrated PR #86 for the Epic 6 milestone stack and CI passed.",
                     evidence=[
+                        "https://github.com/slawdawg/Kendall-vnxt/pull/86",
+                        "PR #86 merge state was CLEAN and CI `check` passed after the approved push/PR gate.",
                         "docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md",
-                        "Plan does not approve push, PR creation, merge, close, delete, Codex, or Claude.",
+                        "The delivery plan does not approve merge, close, delete, cleanup, Codex, or Claude.",
                     ],
                 ),
                 EpicCompletionAuditItemView(
@@ -3408,12 +3410,12 @@ class SupervisorService:
             remainingItems=[
                 EpicCompletionAuditItemView(
                     itemId="remote-stack-delivery",
-                    label="Remote stack delivery",
+                    label="Remote stack delivery closeout",
                     status="needs_approval",
-                    summary="The local Epic 6 stack still needs approved push and PR packaging before it can be reviewed or merged remotely.",
+                    summary="PR #86 exists and CI passed; merge remains gated and PR #85 closeout remains separately gated.",
                     evidence=[
-                        "Open remote PR #85 covers the earlier 6.3 branch only.",
-                        "Stories 6.4 through this audit are local-stack work until an approved delivery action occurs.",
+                        "Open remote PR #86 covers the integrated Epic 6 branch.",
+                        "Open remote PR #85 covers the earlier 6.3 branch and must not be closed without separate approval.",
                     ],
                 ),
                 EpicCompletionAuditItemView(
@@ -3448,20 +3450,20 @@ class SupervisorService:
                 ),
             ],
             blockedOperations=[
-                "Pushing the local Epic 6 stack without explicit branch and PR approval.",
-                "Creating, updating, merging, closing, or deleting GitHub PRs without matching approval.",
+                "Pushing additional PR #86 updates without explicit update approval.",
+                "Merging, closing, or deleting GitHub PRs without matching approval.",
                 "Launching Codex or Claude workers without bounded approval.",
                 "Deleting local worktrees, branches, artifacts, or remote branches before retained evidence and cleanup approval.",
                 "Marking Epic 6 complete before real delivery and cleanup evidence exists.",
             ],
             recommendedApproval=(
-                "Approve pushing branch `codex/implement-story-6-23-trusted-autonomy-readiness`, opening one integrated Epic 6 milestone PR "
-                "against `main`, and running read-only PR/CI status checks. Do not merge, close PR #85, delete branches, launch Codex, launch Claude, "
-                "or run cleanup until separately approved."
+                "Approve merging PR #86, `Implement Epic 6 Dev Console orchestration pipeline and readiness controls`, into `main` after "
+                "confirming it remains clean and CI `check` is successful. Do not close PR #85, delete branches, run cleanup, launch Codex, "
+                "launch Claude, or perform GitHub issue/story sync until separately approved."
             ),
             requiredEvidence=[
-                "Latest local head verified with `git rev-parse --short HEAD` immediately before push.",
-                "Remote PR URL and CI/check status recorded after approved push and PR creation.",
+                "PR #86 URL and CI/check status recorded after approved push and PR creation.",
+                "Merge state remains CLEAN immediately before merge approval is exercised.",
                 "Review comments resolved or explicitly deferred with evidence.",
                 "Merge approval recorded separately before merge.",
                 "Cleanup approval and retained evidence recorded after delivery.",
@@ -3474,13 +3476,13 @@ class SupervisorService:
                 "Evidence needed for audit or rollback would be lost.",
             ],
             nextSafeActions=[
-                "Use this audit and the delivery packaging plan to request the integrated PR approval.",
-                "Continue only read-only local checks until that approval is granted.",
-                "After approved PR creation, record PR URL, CI status, review status, and merge readiness before requesting merge authority.",
+                "Use this audit and PR #86 status to request one narrow merge approval packet.",
+                "Continue read-only PR/CI/review inspection and merge packet preparation while merge authority is pending.",
+                "After merge approval is granted, re-check PR #86 merge state and CI before merging.",
             ],
             readOnly=True,
             epicComplete=False,
-            remoteDeliveryApproved=False,
+            remoteDeliveryApproved=True,
             providerExecutionApproved=False,
             cleanupApproved=False,
         )

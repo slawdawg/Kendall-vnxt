@@ -115,6 +115,31 @@ Recommended just before remote delivery:
 - Review `docs/goals/epic-6-integrated-pr-body-draft-2026-06-11.md` against the current head before using it.
 - optional `gh pr list --state open --limit 20 --json number,title,headRefName,mergeStateStatus,statusCheckRollup,url`
 
+## After PR Creation And Green CI
+
+Once a PR is opened under explicit approval and CI is green, the next actions become lower-risk only if they are read-only or preparatory.
+
+Allowed without new merge/cleanup approval:
+
+- read-only PR inspection,
+- CI/status refreshes,
+- review-comment inspection,
+- PR evidence/body prep,
+- merge approval packet prep,
+- cleanup and rollback planning.
+
+Still separately gated:
+
+- merge,
+- closing PR #85 or any superseded PR,
+- deleting local or remote branches,
+- local worktree cleanup,
+- GitHub issue/story sync,
+- Codex or Claude process launch,
+- autonomous delivery.
+
+The default next approval after PR #86 is clean and CI is green is one narrow merge approval packet for PR #86 only.
+
 ## Non-Approvals
 
 This plan does not approve:

@@ -49,8 +49,9 @@ These reports are evidence and approval-prep surfaces only. They do not grant th
 Snapshot date: 2026-06-11.
 
 - Open remote PR observed: PR #85 for `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success.
-- Local branch stack through Story 6.24 is not delivered remotely from this run.
-- Push, PR creation/update, CI wait, merge, remote cleanup, and issue/story sync still require explicit Bob approval naming action and scope.
+- Open remote PR observed: PR #86 for `codex/implement-story-6-23-trusted-autonomy-readiness`, merge state `CLEAN`, CI `check` success.
+- Gate 1 was approved for pushing `codex/implement-story-6-23-trusted-autonomy-readiness`, opening one integrated PR to `main`, and running read-only PR/CI status checks.
+- Merge, PR #85 closeout, branch deletion, local cleanup, remote cleanup, Codex launch, Claude launch, and issue/story sync still require explicit Bob approval naming action and scope.
 
 ## Approval Request Format
 
@@ -69,6 +70,38 @@ Every approval request should include:
 ## Async Unblocking Rule
 
 Bob may approve, deny, or modify a pending authority request later. While waiting, the long-running goal should continue safe unblocked work.
+
+When an approval-gated operation is reached, use two lanes:
+
+1. Blocked lane: park the exact gated operation with approval scope, stop conditions, and retained evidence requirements.
+2. Continue lane: keep working on safe local or read-only work that still advances the goal, such as local verification, docs, PR body prep, read-only PR/CI/review inspection, merge packet prep, cleanup plans, follow-on story specs, tests, and root-cause fixes.
+
+Do not stop the entire long-running goal at the first gated operation unless no meaningful safe work remains.
+
+## Progressive PR Gate Softening
+
+Creating a PR under explicit approval and seeing CI pass lowers risk for the next narrow actions, but it does not grant downstream authority.
+
+Allowed without a new merge/cleanup approval after an approved PR exists and CI is green:
+
+- read-only PR inspection,
+- CI/status refreshes,
+- review-comment inspection,
+- PR body or evidence-comment preparation,
+- merge approval packet preparation,
+- cleanup and rollback planning.
+
+Still separately gated unless Bob grants a one-time or standing policy:
+
+- merge,
+- closing superseded PRs,
+- local or remote branch deletion,
+- local worktree cleanup,
+- GitHub issue/story sync,
+- Codex or Claude process launch,
+- autonomous end-to-end delivery.
+
+Default next gate after an approved PR has green CI and clean merge state is a narrow merge approval packet, not a broad authority request.
 
 When Bob grants approval:
 

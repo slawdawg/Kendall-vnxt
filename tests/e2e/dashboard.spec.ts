@@ -495,11 +495,11 @@ test.describe("dashboard workflow coverage", () => {
     const epicCompletionPanel = page.locator("#epic-6-completion-audit-report");
     await expect(epicCompletionPanel.getByText("Epic 6 audit", { exact: true })).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Completion status" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("blocked_pending_explicit_delivery_authority")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("blocked_pending_merge_authority")).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Local readiness stack" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Remote stack delivery" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Remote stack delivery closeout" })).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Real BMAD story done proof" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Approve pushing branch")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Approve merging PR #86")).toBeVisible();
     await expect(epicCompletionPanel.getByText("Marking Epic 6 complete before real delivery and cleanup evidence exists.")).toBeVisible();
     await expect(page.locator("#epic-6-completion-audit-report")).toBeVisible();
 
