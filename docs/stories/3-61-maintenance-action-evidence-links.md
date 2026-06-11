@@ -42,3 +42,27 @@ This is read-only evidence navigation. It does not approve:
 - `pnpm run test:supervisor -- tests/integration/test_routing_preview.py -k "maintenance_action_plan"`
 - `pnpm run test:e2e:dashboard:controls`
 - `pnpm run check`
+
+## Epic 6 MVP Proof Trial Evidence
+
+Approved trial scope: one bounded Codex implementation in an isolated local worktree for this story only.
+
+Trial worktree:
+
+```text
+C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260611-epic-6-mvp-proof-trial-for-docs-stories-3-61-mai
+```
+
+Trial branch:
+
+```text
+codex/epic-6-mvp-proof-trial-for-docs-stories-3-61-mai
+```
+
+Pre-implementation drift check:
+
+```text
+pnpm.cmd run check:maintenance-action-plan
+```
+
+Result: passed. The existing maintenance action evidence-link implementation is aligned with the story acceptance criteria before any remote delivery, Claude review, cleanup, or autonomy authority.
