@@ -11,8 +11,9 @@ This plan is evidence only. It does not approve push, PR creation/update, PR clo
 
 ## Current State
 
-- Local stack head: `codex/implement-story-6-23-trusted-autonomy-readiness`
-- Local stack head commit: `85a0461`
+- Local stack branch: `codex/implement-story-6-23-trusted-autonomy-readiness`
+- Pre-delivery audit commit before this plan was added: `85a0461`
+- Verify the latest local head with `git rev-parse --short HEAD` immediately before any push.
 - Base observed from the current stack: `a460271`
 - Open GitHub PR observed by `gh pr list --state open --limit 20`: PR #85, `Implement Story 6.3 Candidate Work model API`
 - PR #85 state at snapshot: branch `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success

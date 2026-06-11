@@ -113,7 +113,7 @@ Use this section for authority requests Bob can handle asynchronously. A pending
 
 Snapshot date: 2026-06-11.
 
-- Current local stack head: `codex/implement-story-6-23-trusted-autonomy-readiness` at `85a0461`.
+- Current local stack branch: `codex/implement-story-6-23-trusted-autonomy-readiness`; verify the latest commit with `git rev-parse --short HEAD` immediately before push.
 - Current open GitHub PR found by `gh pr list --state open --limit 20`: PR #85, `Implement Story 6.3 Candidate Work model API`, branch `codex/implement-story-6-3-candidate-work-model-api`, merge state `CLEAN`, CI `check` success.
 - Stories 6.4-6.23 are committed locally in stacked branches but have not been pushed or packaged into remote PRs from this run.
 - Delivery packaging plan: `docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md`.
