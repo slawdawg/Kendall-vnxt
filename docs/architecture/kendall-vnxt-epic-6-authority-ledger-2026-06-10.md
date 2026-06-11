@@ -20,7 +20,7 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 | Execution attempts | Fake/blocked only | Integrated with orchestrator evidence | Allowed only as fake/blocked until successor approval |
 | Ollama | Approved current host endpoint/model boundary only | Automatic local-safe checks in approved scope | Limited |
 | Codex dry-run/read-only | No-launch readiness only | Dry-run/read-only checks | Prepared; real CLI invocation still blocked |
-| Codex implementation | Not approved | Human-approved isolated worktree implementation | Blocked |
+| Codex implementation | Approved only for low-risk doc/evidence PR prep | Human-approved isolated worktree implementation | `epic-6-low-risk-doc-evidence-pr-v1` active; all other implementation remains blocked |
 | Claude dry-run/read-only | No-launch readiness only | Dry-run/read-only review checks | Prepared; real CLI invocation still blocked |
 | Claude review | Not approved | Human-approved or high-risk policy-triggered review-only | Blocked |
 | Git read-only | Read-only local hygiene | Automatic read-only hygiene | Allowed |
@@ -50,9 +50,10 @@ These reports are evidence and approval-prep surfaces only. They do not grant th
 
 Snapshot date: 2026-06-11.
 
-- PR #85, PR #86, PR #87, PR #88, PR #89, and PR #90 are merged into `main`.
+- PR #85, PR #86, PR #87, PR #88, PR #89, PR #90, PR #91, PR #92, PR #93, and PR #94 are merged into `main`.
 - PR #90 delivered the read-only Epic 6 MVP proof trial packet from `codex/epic-6-mvp-proof-run`.
 - Current `main` verification passed after PR #90 with `pnpm.cmd run check`, including dashboard build and 143 supervisor tests.
+- PR #91 delivered the initial Story 3.61 bounded doc/evidence proof trial. PR #92 refreshed post-proof authority docs. PR #93 proposed `epic-6-low-risk-doc-evidence-pr-v1`. PR #94 activated `epic-6-low-risk-doc-evidence-pr-v1` on `main`.
 - Future branch deletion, local cleanup, remote cleanup, Claude launch, provider expansion, merge, and issue/story sync still require explicit Bob approval naming action and scope.
 - PR #91 and PR #92 provide initial evidence for `epic-6-low-risk-doc-evidence-pr-v1`.
 - On 2026-06-11, Bob approved `epic-6-low-risk-doc-evidence-pr-v1`: for matching doc/evidence-only changes, Codex may create an isolated branch/worktree from `main`, implement bounded documentation/evidence changes, run `pnpm.cmd run check`, commit, push, open one PR to `main`, and run read-only PR/CI checks without per-step approval. Auto-merge, cleanup, issue sync, Claude launch, provider expansion, secrets access, destructive operations, failed-check bypass, and unrelated source changes remain separately gated.
