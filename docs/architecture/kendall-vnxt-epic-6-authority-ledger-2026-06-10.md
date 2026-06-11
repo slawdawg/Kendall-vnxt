@@ -20,14 +20,14 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 | Execution attempts | Fake/blocked only | Integrated with orchestrator evidence | Allowed only as fake/blocked until successor approval |
 | Ollama | Approved current host endpoint/model boundary only | Automatic local-safe checks in approved scope | Limited |
 | Codex dry-run/read-only | No-launch readiness only | Dry-run/read-only checks | Prepared; real CLI invocation still blocked |
-| Codex implementation | Approved only for low-risk doc/evidence PR prep | Human-approved isolated worktree implementation | `epic-6-low-risk-doc-evidence-pr-v1` active; all other implementation remains blocked |
+| Codex implementation | Approved for low-risk doc/evidence PR prep and one Story 3.66 bounded local worktree | Human-approved isolated worktree implementation | `epic-6-low-risk-doc-evidence-pr-v1` active; Story 3.66 branch `codex/epic-6-mvp-proof-story-3-66-bounded-implementati` active for local implementation/check only; additional implementation remains blocked |
 | Claude dry-run/read-only | No-launch readiness only | Dry-run/read-only review checks | Prepared; real CLI invocation still blocked |
 | Claude review | Not approved | Human-approved or high-risk policy-triggered review-only | Blocked |
 | Git read-only | Read-only local hygiene | Automatic read-only hygiene | Allowed |
 | Local worktree management | Plan-only | Approved/policy-bound local worktree create/remove | Creation/removal blocked |
-| GitHub remote write | Not approved | Bob-approved push/PR/delivery | Blocked |
+| GitHub remote write | Not approved for Story 3.66 implementation branch | Bob-approved push/PR/delivery | Blocked pending separate delivery approval |
 | Merge | Not approved | Bob-approved or stretch | Blocked |
-| Local cleanup | Readiness only | Automatic after done with evidence | Deletion blocked |
+| Local cleanup | Readiness only | Automatic after done with evidence | PR #96 branch cleanup completed after approval; Story 3.66 implementation cleanup blocked |
 | Remote cleanup | Readiness only | Stretch | Blocked |
 | Trusted low-risk autonomy | Active for doc/evidence PR preparation only | Stretch | Allowed only for `epic-6-low-risk-doc-evidence-pr-v1`; merge, cleanup, issue sync, Claude, providers, secrets, destructive operations, and failed-check bypass remain blocked |
 | Raw prompt/completion retention | Not approved | Not part of MVP | Blocked |
@@ -50,11 +50,11 @@ These reports are evidence and approval-prep surfaces only. They do not grant th
 
 Snapshot date: 2026-06-11.
 
-- PR #85, PR #86, PR #87, PR #88, PR #89, PR #90, PR #91, PR #92, PR #93, and PR #94 are merged into `main`.
+- PR #85, PR #86, PR #87, PR #88, PR #89, PR #90, PR #91, PR #92, PR #93, PR #94, and PR #96 are merged into `main`.
 - PR #90 delivered the read-only Epic 6 MVP proof trial packet from `codex/epic-6-mvp-proof-run`.
 - Current `main` verification passed after PR #90 with `pnpm.cmd run check`, including dashboard build and 143 supervisor tests.
 - PR #91 delivered the initial Story 3.61 bounded doc/evidence proof trial. PR #92 refreshed post-proof authority docs. PR #93 proposed `epic-6-low-risk-doc-evidence-pr-v1`. PR #94 activated `epic-6-low-risk-doc-evidence-pr-v1` on `main`.
-- Future branch deletion, local cleanup, remote cleanup, Claude launch, provider expansion, merge, and issue/story sync still require explicit Bob approval naming action and scope.
+- Future branch deletion, local cleanup, remote cleanup, Claude launch, provider expansion, GitHub delivery, merge, and issue/story sync still require explicit Bob approval naming action and scope.
 - PR #91 and PR #92 provide initial evidence for `epic-6-low-risk-doc-evidence-pr-v1`.
 - On 2026-06-11, Bob approved `epic-6-low-risk-doc-evidence-pr-v1`: for matching doc/evidence-only changes, Codex may create an isolated branch/worktree from `main`, implement bounded documentation/evidence changes, run `pnpm.cmd run check`, commit, push, open one PR to `main`, and run read-only PR/CI checks without per-step approval. Auto-merge, cleanup, issue sync, Claude launch, provider expansion, secrets access, destructive operations, failed-check bypass, and unrelated source changes remain separately gated.
 
@@ -70,12 +70,15 @@ Snapshot date: 2026-06-11.
 - Local evidence event: `local-evidence-route-a8e43bba-a2dd-4b2e-b995-22fecea85611-epic-6-mvp-proof-local-evidence-task_classification`.
 - Runtime export: `runtime-evidence-export-a8e43bba-a2dd-4b2e-b995-22fecea85611`.
 - Local proof-selection commit: `1c79711` on `codex/epic-6-proof-selection-evidence`.
-- Draft PR: `https://github.com/slawdawg/Kendall-vnxt/pull/96`.
-- PR #96 CI `check` passed on 2026-06-11.
+- Proof-selection PR: `https://github.com/slawdawg/Kendall-vnxt/pull/96`.
+- PR #96 CI `check` passed on 2026-06-11, then PR #96 was marked ready and merged into `main` at `c35ff16339fd53c502b328e3f3b120a303f905e1` after explicit approval.
+- PR #96 branch `codex/epic-6-proof-selection-evidence` was deleted locally and remotely after separate cleanup approval.
 - PR #96 merge approval packet: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
 - Story 3.66 bounded implementation scope: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
 - Current state: after proof-selection docs were committed and the dirty-repo blocker was cleared, the WorkItem reached `implementing` state. Runtime evidence still shows zero execution attempts and all process/provider/command/source-mutation authority flags disabled.
-- Current stop line: the proof supervisor instance was stopped before bounded Codex implementation. Bounded Codex implementation, GitHub push/PR/checks, merge, cleanup, Claude review, provider expansion, issue/story sync, and done-state completion remain separately gated.
+- Current bounded implementation authority: Bob approved one Story 3.66 local Codex implementation in isolated worktree `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260611-epic-6-mvp-proof-story-3-66-bounded-implementati` on branch `codex/epic-6-mvp-proof-story-3-66-bounded-implementati`, limited to the approved proof scope and `pnpm.cmd run check`.
+- Story 3.66 bounded local implementation verification passed with focused report tests and full `pnpm.cmd run check`, including preflight, drift checks, dashboard build, and 143 supervisor integration tests.
+- Current stop line: GitHub push/PR/checks, merge, cleanup, Claude review, provider expansion, issue/story sync, additional Codex launches, and done-state completion remain separately gated.
 
 ## Approval Request Format
 
