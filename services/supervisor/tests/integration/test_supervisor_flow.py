@@ -942,7 +942,9 @@ def test_local_worktree_plan_is_read_only_and_authority_blocked(tmp_path, monkey
     assert plan["remoteOperationsAllowed"] is False
     assert "local_worktree_creation_not_enabled" in plan["blockedBy"]
     assert "local_worktree_cleanup_not_enabled" in plan["blockedBy"]
-    assert plan["createCommand"][:3] == ["git", "worktree", "add"]
+    assert plan["createCommand"][:5] == ["git", "worktree", "add", "-b", "e2e-local-worktree-plan"]
+    assert plan["createCommand"][5].replace("\\", "/").endswith("Kendall_Nxt-worktrees/e2e-local-worktree-plan")
+    assert plan["createCommand"][6] == "base-revision"
     assert plan["cleanupCommand"][:3] == ["git", "worktree", "remove"]
 
 

@@ -6,8 +6,8 @@ import { getCandidateWork, getWorkItems } from "../../lib/supervisor";
 
 export default async function ProposedWorkPage() {
   const [candidates, items] = await Promise.all([getCandidateWork(), getWorkItems()]);
-  const navStats = buildNavStats(items, candidates.length);
   const proposedCount = candidates.filter((candidate) => candidate.status === "proposed").length;
+  const navStats = buildNavStats(items, proposedCount);
   const approvedCount = candidates.filter((candidate) => candidate.status === "approved").length;
   const highPriorityCount = candidates.filter((candidate) => ["high", "urgent"].includes(candidate.priority)).length;
 

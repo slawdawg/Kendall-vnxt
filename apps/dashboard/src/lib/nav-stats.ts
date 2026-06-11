@@ -8,7 +8,7 @@ export type NavStats = {
   attention: number;
 };
 
-export function buildNavStats(items: WorkItemView[], proposed = 0): NavStats {
+export function buildNavStats(items: WorkItemView[], proposed?: number): NavStats {
   return {
     proposed,
     queue: items.filter((item) => ["queued", "triaged", "ready"].includes(item.state)).length,

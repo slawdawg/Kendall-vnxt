@@ -6814,7 +6814,7 @@ class SupervisorService:
             baseRevision=base_revision,
             worktreePath=worktree_path,
             status="blocked_pending_authority",
-            createCommand=["git", "worktree", "add", "-b", execution_branch, worktree_path, base_branch],
+            createCommand=["git", "worktree", "add", "-b", execution_branch, worktree_path, base_revision],
             cleanupCommand=["git", "worktree", "remove", worktree_path],
             safetyChecks=[
                 "Confirm current repository status is clean before creating an isolated worktree.",
