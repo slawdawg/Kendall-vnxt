@@ -45,7 +45,8 @@ Candidate Work
 | 13. Cleanup | Milestone cleanup performed; automation blocked | Stories 6.21 and 6.22 add local cleanup and remote cleanup/sync readiness. Local cleanup was performed for the merged milestone; automatic cleanup and remote mutation remain blocked. |
 | 14. Trusted autonomy | Readiness prepared; autonomy blocked | Story 6.23 adds trusted autonomy readiness with all autonomy booleans false. |
 | 15. Completion audit visibility | Readiness prepared; completion blocked | Story 6.24 adds a Dev Console completion audit showing prepared local work, remaining blockers, and the next delivery approval. |
-| 16. MVP proof | Blocked pending approval | One real BMAD story still must complete through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. |
+| 16. Trusted delivery eligibility | In progress locally | Story 6.25 defines read-only eligibility stages for softening push, PR, merge, and cleanup gates after strict evidence is satisfied. Actual GitHub mutation remains blocked. |
+| 17. MVP proof | Blocked pending approval | One real BMAD story still must complete through approved implementation, verification, delivery, cleanup, and Dev Console done/evidence state. |
 
 ## Approval Queue
 
@@ -122,6 +123,7 @@ After a PR is opened under explicit approval and CI is green, the line softens o
 - 2026-06-11: Story 6.22 added a read-only remote cleanup and issue/story sync readiness report without remote mutation. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
 - 2026-06-11: Story 6.23 added a read-only trusted autonomy readiness report for low-risk graduation gates with all autonomy booleans false. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime drift checks, `pnpm.cmd run check`, and `pnpm.cmd run check:docs`.
 - 2026-06-11: Story 6.24 added a read-only Epic 6 completion audit report and Dev Console panel that shows local prepared evidence, remaining GitHub/provider/cleanup blockers, the recommended delivery approval, and stop conditions. Verification passed with focused supervisor tests, dashboard build, focused Controls browser coverage, report/runtime/docs drift checks, and `pnpm.cmd run check`.
+- 2026-06-11: Story 6.25 added read-only trusted delivery eligibility stages to the GitHub delivery authority report so push, PR, merge, and cleanup can later soften only after strict evidence is satisfied. Actual GitHub mutation, merge, cleanup, Codex, Claude, provider expansion, and autonomy remain blocked by default.
 
 ## Current GitHub State Snapshot
 

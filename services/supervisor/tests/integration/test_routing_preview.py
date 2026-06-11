@@ -3046,6 +3046,7 @@ def test_github_delivery_authority_report_stays_read_only_and_blocks_remote_step
     assert report["reviewResolutionApproved"] is False
     assert report["mergeApproved"] is False
     assert report["remoteCleanupApproved"] is False
+    assert report["automaticDeliveryApproved"] is False
     assert {step["stepId"] for step in report["ladder"]} == {
         "push-branch",
         "open-or-update-pr",
@@ -3054,7 +3055,17 @@ def test_github_delivery_authority_report_stays_read_only_and_blocks_remote_step
         "merge-pr",
         "remote-cleanup",
     }
+    assert {stage["stageId"] for stage in report["eligibilityStages"]} == {
+        "push-pr-auto-eligible",
+        "ci-review-auto-eligible",
+        "merge-auto-eligible",
+        "cleanup-auto-eligible",
+    }
     assert all(step["status"] == "blocked" for step in report["ladder"])
+    assert all(stage["status"] == "policy_defined_not_enabled" for stage in report["eligibilityStages"])
+    assert any("Trusted delivery is evidence-gated" in rule for rule in report["trustedDeliveryPolicy"])
+    assert any("pnpm.cmd run check passed locally" in condition for stage in report["eligibilityStages"] for condition in stage["eligibleWhen"])
+    assert any("Provider execution" in rule for rule in report["trustedDeliveryPolicy"])
     assert any("green CI" in evidence for step in report["ladder"] for evidence in step["evidence"])
     assert any("plaintext tokens" in stop_condition for stop_condition in report["stopConditions"])
     assert any("one delivery step at a time" in action for action in report["nextSafeActions"])

@@ -1244,6 +1244,17 @@ class GitHubDeliveryAuthorityStepView(BaseModel):
     evidence: list[str]
 
 
+class GitHubDeliveryEligibilityStageView(BaseModel):
+    stageId: str
+    label: str
+    status: str
+    summary: str
+    eligibleWhen: list[str]
+    hardStops: list[str]
+    allowedOperations: list[str]
+    blockedOperations: list[str]
+
+
 class GitHubDeliveryAuthorityReportView(BaseModel):
     reportId: str
     generatedAt: datetime
@@ -1251,6 +1262,8 @@ class GitHubDeliveryAuthorityReportView(BaseModel):
     authorityFamily: str
     approvalPrompt: str
     ladder: list[GitHubDeliveryAuthorityStepView]
+    trustedDeliveryPolicy: list[str]
+    eligibilityStages: list[GitHubDeliveryEligibilityStageView]
     requiredEvidence: list[str]
     rollbackPlan: list[str]
     stopConditions: list[str]
@@ -1262,6 +1275,7 @@ class GitHubDeliveryAuthorityReportView(BaseModel):
     reviewResolutionApproved: bool = False
     mergeApproved: bool = False
     remoteCleanupApproved: bool = False
+    automaticDeliveryApproved: bool = False
 
 
 class LocalCleanupPolicyItemView(BaseModel):
