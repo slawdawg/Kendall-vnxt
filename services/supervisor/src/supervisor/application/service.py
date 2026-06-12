@@ -3428,6 +3428,7 @@ class SupervisorService:
         session: AsyncSession | None = None,
         *,
         work_item_id: str | None = None,
+        approved_scope: list[str] | None = None,
     ) -> TrustedDeliveryEligibilityReportView:
         base_branch = "main"
         branch_ok, branch_output = self._git_output(["git", "branch", "--show-current"])
@@ -3450,7 +3451,7 @@ class SupervisorService:
         has_commits = commits_ahead > 0
         launch_evidence = await self._latest_work_item_artifact_evidence(session, work_item_id, "supervised_codex_launch_evidence")
         launch_scope = launch_evidence.get("inputScope") if isinstance(launch_evidence, dict) else None
-        scoped_allowed_paths = (
+        scoped_allowed_paths = approved_scope or (
             launch_scope.get("allowedPaths")
             if isinstance(launch_scope, dict) and isinstance(launch_scope.get("allowedPaths"), list)
             else None
@@ -3776,7 +3777,19 @@ class SupervisorService:
         session: AsyncSession | None,
         work_item_id: str | None,
     ) -> dict | None:
-        return await self._latest_work_item_artifact_evidence(session, work_item_id, "verification_result")
+        if session is None or not work_item_id:
+            return None
+        result = await session.execute(
+            select(ExecutionAttempt)
+            .where(ExecutionAttempt.work_item_id == work_item_id)
+            .order_by(ExecutionAttempt.updated_at.desc(), ExecutionAttempt.created_at.desc())
+        )
+        latest_attempt = result.scalars().first()
+        if latest_attempt is None:
+            return None
+        refs = [ref for ref in list(latest_attempt.artifact_refs_json or []) if isinstance(ref, dict)]
+        verification_refs = [ref for ref in refs if ref.get("artifactType") == "verification_result"]
+        return verification_refs[-1] if verification_refs else None
 
     async def _latest_work_item_artifact_evidence(
         self,
@@ -5915,7 +5928,7 @@ class SupervisorService:
         if not payload.verificationCommand.strip():
             raise ValueError("Supervised Codex launch requires a verification command.")
 
-        eligibility = await self.get_trusted_delivery_eligibility_report()
+        eligibility = await self.get_trusted_delivery_eligibility_report(approved_scope=payload.allowedPaths)
         if not payload.dryRun and eligibility.diffGuard.status != "passed":
             raise ValueError(f"Supervised Codex real launch requires green diff guard; current status is {eligibility.diffGuard.status}.")
         blocked_touched = [

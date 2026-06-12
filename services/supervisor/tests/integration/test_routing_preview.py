@@ -4139,6 +4139,68 @@ def test_supervised_codex_launch_real_mutation_requires_green_diff_guard(tmp_pat
     assert after_events == before_events
 
 
+def test_supervised_codex_launch_real_mutation_scopes_diff_guard_to_request_paths(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "supervised-codex-launch-request-scope.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api import main as api_main
+
+    def fake_git_output(args: list[str]) -> tuple[bool, str]:
+        command = tuple(args)
+        if command == ("git", "branch", "--show-current"):
+            return True, "codex/story-7-4"
+        if command == ("git", "rev-parse", "--short", "HEAD"):
+            return True, "abc1234"
+        if command == ("git", "status", "--porcelain=v1"):
+            return True, ""
+        if command == ("git", "rev-parse", "--verify", "main"):
+            return True, "main"
+        if command == ("git", "rev-list", "--count", "main..HEAD"):
+            return True, "1"
+        if command == ("git", "diff", "--stat", "main...HEAD"):
+            return True, "services/supervisor/src/supervisor/application/service.py | 1 +"
+        if command == ("git", "diff", "--name-status", "main...HEAD"):
+            return True, "M\tservices/supervisor/src/supervisor/application/service.py"
+        return False, "unexpected git command"
+
+    def fail_launch(payload, attempt_id: str) -> dict:
+        raise AssertionError("real launch runner must not start when request scope excludes committed diff")
+
+    monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
+    monkeypatch.setattr(api_main.service, "_run_supervised_codex_worker", fail_launch)
+
+    now = datetime.now(timezone.utc)
+
+    with TestClient(api_main.app) as client:
+        work_item_id = _create_routing_work_item(client)
+        response = client.post(
+            f"/work-items/{work_item_id}/supervised-codex-launch",
+            json={
+                "taskId": "story-7-4-real-launch",
+                "dryRun": False,
+                "allowedPaths": ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"],
+                "blockedPaths": [".env*", ".git/**", "node_modules/**", "services/supervisor/.venv/**"],
+                "verificationCommand": "pnpm.cmd run check",
+                "outputSummary": "Attempt real launch.",
+                "touchedFiles": ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"],
+                "routeDecisionId": "supervised-codex-story-7-4-real-launch",
+                "workerId": "codex.local.supervised",
+                "lane": "utility",
+                "authorityMode": "operator_approved_bounded_source_mutation",
+                "approvalTimestamp": now.isoformat(),
+                "expiresAt": (now + timedelta(minutes=10)).isoformat(),
+            },
+        )
+        history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
+
+    assert response.status_code == 409
+    assert "diff guard" in response.json()["detail"]["error"]["message"]
+    assert history_response.json()["data"] == []
+
+
 def test_supervised_codex_launch_real_mutation_requires_live_binding_and_invokes_runner(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "supervised-codex-launch-real-bound.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -4313,6 +4375,19 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
         readiness_response = client.get(f"/work-items/{work_item_id}/trusted-delivery-eligibility-report")
+        second_launch_response = client.post(
+            f"/work-items/{work_item_id}/supervised-codex-launch",
+            json={
+                "taskId": "story-7-5-newer-unverified-launch",
+                "dryRun": True,
+                "allowedPaths": ["docs/stories/7-5-record-verification-results-and-recovery-evidence.md"],
+                "blockedPaths": [".env*", ".git/**", "node_modules/**", "services/supervisor/.venv/**"],
+                "verificationCommand": "pnpm.cmd run check",
+                "outputSummary": "Newer launch requires fresh verification.",
+                "touchedFiles": ["docs/stories/7-5-record-verification-results-and-recovery-evidence.md"],
+            },
+        )
+        stale_readiness_response = client.get(f"/work-items/{work_item_id}/trusted-delivery-eligibility-report")
 
     assert response.status_code == 200
     updated = response.json()["data"]
@@ -4341,6 +4416,13 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
     assert local_result["status"] == "passed"
     assert local_freshness["status"] == "passed"
     assert readiness["pushPrAutoEligible"] is True
+    assert second_launch_response.status_code == 200
+    stale_readiness = stale_readiness_response.json()["data"]
+    stale_push_stage = next(stage for stage in stale_readiness["stages"] if stage["stageId"] == "push-pr-auto-eligible")
+    stale_local_result = next(check for check in stale_push_stage["checks"] if check["checkId"] == "local-check-result")
+    assert stale_local_result["status"] == "blocked"
+    assert stale_local_result["blockedReason"] == "local-verification-evidence-missing"
+    assert stale_readiness["pushPrAutoEligible"] is False
 
 
 def test_green_gate_verification_evidence_fixtures_cover_terminal_states(tmp_path, monkeypatch) -> None:
