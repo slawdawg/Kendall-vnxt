@@ -29,8 +29,10 @@ from supervisor.api.schemas import (
     WorkItemPremiumApprovalRequest,
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
+    WorkItemSupervisedCodexLaunchRequest,
     WorkItemSubscriptionAgentLaunchStubRequest,
     WorkItemSubscriptionHandoffRequest,
+    WorkItemVerificationEvidenceRequest,
 )
 from supervisor.application.service import SupervisorService
 from supervisor.config.settings import get_settings
@@ -225,6 +227,43 @@ async def transition_work_item_execution_attempt(
         attempt = await service.transition_execution_attempt(session, work_item_id, attempt_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_execution_attempt_transition").model_dump()) from exc
+    if not attempt:
+        raise HTTPException(status_code=404, detail=error_response("Execution attempt not found.", "execution_attempt_not_found").model_dump())
+    return ApiEnvelope(data=attempt)
+
+
+@app.post("/work-items/{work_item_id}/supervised-codex-launch", response_model=ApiEnvelope)
+async def launch_supervised_codex_worker(
+    work_item_id: str,
+    payload: WorkItemSupervisedCodexLaunchRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        attempt = await service.launch_supervised_codex_worker(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_supervised_codex_launch").model_dump()) from exc
+    if not attempt:
+        raise HTTPException(status_code=404, detail=error_response("Execution attempt not found.", "execution_attempt_not_found").model_dump())
+    return ApiEnvelope(data=attempt)
+
+
+@app.post("/work-items/{work_item_id}/execution-attempts/{attempt_id}/verification-evidence", response_model=ApiEnvelope)
+async def record_work_item_execution_attempt_verification_evidence(
+    work_item_id: str,
+    attempt_id: str,
+    payload: WorkItemVerificationEvidenceRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        attempt = await service.record_execution_attempt_verification_evidence(session, work_item_id, attempt_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_verification_evidence").model_dump()) from exc
     if not attempt:
         raise HTTPException(status_code=404, detail=error_response("Execution attempt not found.", "execution_attempt_not_found").model_dump())
     return ApiEnvelope(data=attempt)
@@ -625,7 +664,18 @@ async def get_github_delivery_authority_report():
 
 @app.get("/supervisor/trusted-delivery-eligibility-report", response_model=ApiEnvelope)
 async def get_trusted_delivery_eligibility_report():
-    return ApiEnvelope(data=service.get_trusted_delivery_eligibility_report())
+    return ApiEnvelope(data=await service.get_trusted_delivery_eligibility_report())
+
+
+@app.get("/work-items/{work_item_id}/trusted-delivery-eligibility-report", response_model=ApiEnvelope)
+async def get_work_item_trusted_delivery_eligibility_report(
+    work_item_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=await service.get_trusted_delivery_eligibility_report(session, work_item_id=work_item_id))
 
 
 @app.get("/supervisor/local-cleanup-readiness-report", response_model=ApiEnvelope)

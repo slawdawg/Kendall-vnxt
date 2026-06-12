@@ -124,8 +124,10 @@ from supervisor.api.schemas import (
     WorkItemManagedActionRequest,
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
+    WorkItemSupervisedCodexLaunchRequest,
     WorkItemSubscriptionAgentLaunchStubRequest,
     WorkItemSubscriptionHandoffRequest,
+    WorkItemVerificationEvidenceRequest,
     WorkItemManagedActionView,
     WorkItemPolicyGateView,
     WorkItemRecipeGateAuditEntryView,
@@ -2774,9 +2776,55 @@ class SupervisorService:
         )
 
     def get_codex_implementation_approval_report(self) -> CodexImplementationApprovalReportView:
+        generated_at = datetime.now(timezone.utc)
+        approval_expires_at = generated_at + timedelta(hours=24)
+        allowed_paths = [
+            "docs/stories/<approved-story>.md",
+            "services/supervisor/** only when the approved story requires backend behavior",
+            "apps/dashboard/** only when the approved story requires Dev Console behavior",
+            "packages/contracts/** only when API/dashboard contracts change",
+            "tests/** only for verification tied to the approved story",
+            "scripts/** only for drift checks tied to the approved story",
+        ]
+        blocked_paths = [
+            ".env and credential files",
+            ".git/**",
+            "node_modules/**",
+            "services/supervisor/.venv/**",
+            "Any path outside the approved worktree",
+            "Any unrelated source, docs, or generated output not named by the approval",
+        ]
+        expected_command_shape = [
+            "codex <non-interactive task mode> --cwd <approved-worktree> -- <bounded task packet>",
+            "pnpm.cmd run check or narrower approved verification command",
+            "git diff --stat and git status --short for evidence only",
+        ]
+        required_evidence = [
+            "approval text with authority family, operation, target story, allowed paths, expected command shape, and stop conditions",
+            "worktree path, branch, base revision, and task packet id",
+            "Codex process start/finish metadata without raw prompt or completion retention",
+            "changed-file list and diffstat",
+            "verification commands and exit codes",
+            "rollback or cleanup recommendation",
+        ]
+        stop_conditions = [
+            "Codex attempts to read or write outside the approved worktree or allowed paths.",
+            "Codex asks for credentials, secrets, browser session access, or external account changes.",
+            "The task packet expands beyond the approved story or requested operation.",
+            "Verification fails in a way that cannot be repaired within the approved scope.",
+            "The run would require GitHub remote writes, merge, cleanup, Claude review, or a new provider/model authority.",
+        ]
+        launch_contract = self._codex_launch_contract(
+            allowed_paths=allowed_paths,
+            blocked_paths=blocked_paths,
+            expected_command_shape=expected_command_shape,
+            required_evidence=required_evidence,
+            stop_conditions=stop_conditions,
+            approval_expires_at=approval_expires_at,
+        )
         return CodexImplementationApprovalReportView(
             reportId="codex-implementation-approval-report-v1",
-            generatedAt=datetime.now(timezone.utc),
+            generatedAt=generated_at,
             summary=(
                 "Read-only approval packet for the first future bounded Codex implementation run. "
                 "It does not launch Codex, send a task, inspect auth, create a worktree, write source, run Git, or execute shell commands."
@@ -2792,48 +2840,17 @@ class SupervisorService:
                 "One isolated local worktree created by the approved worktree-management path.",
                 "One Codex worker task packet generated from existing supervisor evidence.",
             ],
-            allowedPaths=[
-                "docs/stories/<approved-story>.md",
-                "services/supervisor/** only when the approved story requires backend behavior",
-                "apps/dashboard/** only when the approved story requires Dev Console behavior",
-                "packages/contracts/** only when API/dashboard contracts change",
-                "tests/** only for verification tied to the approved story",
-                "scripts/** only for drift checks tied to the approved story",
-            ],
-            blockedPaths=[
-                ".env and credential files",
-                ".git/**",
-                "node_modules/**",
-                "services/supervisor/.venv/**",
-                "Any path outside the approved worktree",
-                "Any unrelated source, docs, or generated output not named by the approval",
-            ],
-            expectedCommandShape=[
-                "codex <non-interactive task mode> --cwd <approved-worktree> -- <bounded task packet>",
-                "pnpm.cmd run check or narrower approved verification command",
-                "git diff --stat and git status --short for evidence only",
-            ],
-            requiredEvidence=[
-                "approval text with authority family, operation, target story, allowed paths, expected command shape, and stop conditions",
-                "worktree path, branch, base revision, and task packet id",
-                "Codex process start/finish metadata without raw prompt or completion retention",
-                "changed-file list and diffstat",
-                "verification commands and exit codes",
-                "rollback or cleanup recommendation",
-            ],
+            allowedPaths=allowed_paths,
+            blockedPaths=blocked_paths,
+            expectedCommandShape=expected_command_shape,
+            requiredEvidence=required_evidence,
             rollbackPlan=[
                 "Leave all changes in the isolated worktree until Bob reviews them.",
                 "If verification fails, keep the branch blocked and retain failure evidence.",
                 "Do not push, merge, delete branches, or remove the worktree without separate authority.",
                 "Use Git diff/status evidence to decide whether to repair, abandon, or manually inspect the attempt.",
             ],
-            stopConditions=[
-                "Codex attempts to read or write outside the approved worktree or allowed paths.",
-                "Codex asks for credentials, secrets, browser session access, or external account changes.",
-                "The task packet expands beyond the approved story or requested operation.",
-                "Verification fails in a way that cannot be repaired within the approved scope.",
-                "The run would require GitHub remote writes, merge, cleanup, Claude review, or a new provider/model authority.",
-            ],
+            stopConditions=stop_conditions,
             requirements=[
                 CodexImplementationApprovalRequirementView(
                     requirementId="isolated-worktree",
@@ -2871,6 +2888,9 @@ class SupervisorService:
                     evidence=["processLaunchApproved=false", "workerTaskExecutionApproved=false", "sourceMutationApproved=false"],
                 ),
             ],
+            launchContract=launch_contract,
+            launchContractFixtures=self._codex_launch_contract_fixtures(),
+            blockedAuthorities=self._codex_blocked_authorities(),
             nextSafeActions=[
                 "Use this packet to ask Bob for one story-scoped Codex implementation authority when ready.",
                 "Add approval binding before any backend endpoint can launch Codex.",
@@ -2882,6 +2902,149 @@ class SupervisorService:
             sourceMutationApproved=False,
             approvalBindingImplemented=False,
         )
+
+    def _codex_launch_contract(
+        self,
+        *,
+        allowed_paths: list[str],
+        blocked_paths: list[str],
+        expected_command_shape: list[str],
+        required_evidence: list[str],
+        stop_conditions: list[str],
+        approval_expires_at: datetime,
+    ) -> dict:
+        approval_binding = {
+            "workItemId": "<selected-active-work-item>",
+            "routeDecisionId": "<current-route-decision-id>",
+            "attemptId": "<planned-execution-attempt-id>",
+            "workerId": "codex.local",
+            "lane": "utility",
+            "authorityMode": "operator_approved_bounded_source_mutation",
+            "workspacePlanId": "isolated-codex-worktree",
+            "policyId": "codex-bounded-launch-policy-v1",
+            "approvedScope": allowed_paths,
+            "expiresAt": approval_expires_at,
+        }
+        permission_envelope = {
+            "allowedPaths": allowed_paths,
+            "blockedPaths": blocked_paths,
+            "allowedCommandShape": expected_command_shape,
+            "verificationCommand": "pnpm.cmd run check",
+            "timeoutSeconds": 3600,
+            "budget": "one_bounded_attempt",
+            "evidenceOutputs": required_evidence,
+            "stopConditions": stop_conditions,
+        }
+        return {
+            "contractId": "codex-launch-contract-v1",
+            "targetWorkItem": approval_binding["workItemId"],
+            "routeDecision": approval_binding["routeDecisionId"],
+            "attemptId": approval_binding["attemptId"],
+            "workerId": approval_binding["workerId"],
+            "lane": approval_binding["lane"],
+            "authorityMode": approval_binding["authorityMode"],
+            "workspacePlan": approval_binding["workspacePlanId"],
+            "approvalBinding": approval_binding,
+            "permissionEnvelope": permission_envelope,
+            "evidenceToRetain": required_evidence,
+            "evaluation": self._codex_launch_contract_evaluation("accepted", None, None),
+        }
+
+    def _codex_launch_contract_fixtures(self) -> list[dict]:
+        return [
+            {
+                "fixtureId": "positive-current-contract",
+                "label": "Current route, attempt, workspace, scope, verification, and approval expiry match.",
+                "mutatedField": "none",
+                "evaluation": self._codex_launch_contract_evaluation("accepted", None, None),
+            },
+            {
+                "fixtureId": "stale-route-decision",
+                "label": "Route decision changed after approval.",
+                "mutatedField": "approvalBinding.routeDecisionId",
+                "evaluation": self._codex_launch_contract_evaluation(
+                    "rejected",
+                    "codex_launch.route_decision_stale",
+                    "approvalBinding.routeDecisionId",
+                ),
+            },
+            {
+                "fixtureId": "changed-permission-envelope",
+                "label": "Allowed command, timeout, path, or evidence envelope changed after approval.",
+                "mutatedField": "permissionEnvelope",
+                "evaluation": self._codex_launch_contract_evaluation(
+                    "rejected",
+                    "codex_launch.permission_envelope_changed",
+                    "permissionEnvelope",
+                ),
+            },
+            {
+                "fixtureId": "forbidden-path-scope",
+                "label": "A requested write path is outside approved scope or inside blocked paths.",
+                "mutatedField": "permissionEnvelope.allowedPaths",
+                "evaluation": self._codex_launch_contract_evaluation(
+                    "rejected",
+                    "codex_launch.forbidden_path_scope",
+                    "permissionEnvelope.allowedPaths",
+                ),
+            },
+            {
+                "fixtureId": "missing-verification-command",
+                "label": "The approval omits the verification command required to prove the attempt.",
+                "mutatedField": "permissionEnvelope.verificationCommand",
+                "evaluation": self._codex_launch_contract_evaluation(
+                    "rejected",
+                    "codex_launch.verification_command_missing",
+                    "permissionEnvelope.verificationCommand",
+                ),
+            },
+            {
+                "fixtureId": "expired-approval",
+                "label": "The approval expiry is before the attempted launch time.",
+                "mutatedField": "approvalBinding.expiresAt",
+                "evaluation": self._codex_launch_contract_evaluation(
+                    "rejected",
+                    "codex_launch.approval_expired",
+                    "approvalBinding.expiresAt",
+                ),
+            },
+        ]
+
+    def _codex_launch_contract_evaluation(self, status: str, blocked_reason: str | None, unsafe_field: str | None) -> dict:
+        accepted = status == "accepted"
+        return {
+            "status": status,
+            "launchApproved": False,
+            "processLaunchAttempted": False,
+            "blockedReason": blocked_reason,
+            "unsafeField": unsafe_field,
+            "summary": (
+                "Contract shape is internally consistent, but Story 7.2 remains fake-adapter/no-launch."
+                if accepted
+                else f"Launch rejected before process start because {unsafe_field} is unsafe or stale."
+            ),
+        }
+
+    def _codex_blocked_authorities(self) -> list[dict]:
+        blocked_authorities = [
+            ("claude_launch", "Claude launch"),
+            ("subscription_agent_launch", "Subscription-agent launch"),
+            ("provider_expansion", "Provider expansion"),
+            ("issue_sync", "GitHub issue sync"),
+            ("secret_access", "Secret access"),
+            ("merge", "Merge"),
+            ("cleanup", "Cleanup"),
+            ("broad_autonomy", "Broad autonomy"),
+        ]
+        return [
+            {
+                "authorityId": authority_id,
+                "label": label,
+                "status": "blocked_requires_separate_approval",
+                "summary": f"{label} is outside this bounded Codex launch contract and requires separate explicit approval.",
+            }
+            for authority_id, label in blocked_authorities
+        ]
 
     def get_claude_review_readiness_report(self) -> ClaudeReviewReadinessReportView:
         cli_path = shutil.which("claude") or shutil.which("claude.cmd")
@@ -3260,7 +3423,13 @@ class SupervisorService:
             automaticDeliveryApproved=False,
         )
 
-    def get_trusted_delivery_eligibility_report(self) -> TrustedDeliveryEligibilityReportView:
+    async def get_trusted_delivery_eligibility_report(
+        self,
+        session: AsyncSession | None = None,
+        *,
+        work_item_id: str | None = None,
+        approved_scope: list[str] | None = None,
+    ) -> TrustedDeliveryEligibilityReportView:
         base_branch = "main"
         branch_ok, branch_output = self._git_output(["git", "branch", "--show-current"])
         head_ok, head_output = self._git_output(["git", "rev-parse", "--short", "HEAD"])
@@ -3268,6 +3437,7 @@ class SupervisorService:
         base_ok, _ = self._git_output(["git", "rev-parse", "--verify", base_branch])
         ahead_ok, ahead_output = self._git_output(["git", "rev-list", "--count", f"{base_branch}..HEAD"])
         diff_ok, diff_output = self._git_output(["git", "diff", "--stat", f"{base_branch}...HEAD"])
+        diff_name_ok, diff_name_output = self._git_output(["git", "diff", "--name-status", f"{base_branch}...HEAD"])
 
         current_branch = branch_output if branch_ok and branch_output else "detached"
         head_revision = head_output if head_ok else "unknown"
@@ -3279,49 +3449,137 @@ class SupervisorService:
         branch_not_main = current_branch not in {"main", "master", "detached", ""}
         clean_tree = working_tree_status == "clean"
         has_commits = commits_ahead > 0
+        launch_evidence = await self._latest_work_item_artifact_evidence(session, work_item_id, "supervised_codex_launch_evidence")
+        launch_scope = launch_evidence.get("inputScope") if isinstance(launch_evidence, dict) else None
+        scoped_allowed_paths = approved_scope or (
+            launch_scope.get("allowedPaths")
+            if isinstance(launch_scope, dict) and isinstance(launch_scope.get("allowedPaths"), list)
+            else None
+        )
+        diff_guard = self._trusted_delivery_diff_guard(
+            diff_name_ok=diff_name_ok,
+            diff_name_output=diff_name_output,
+            status_ok=status_ok,
+            status_output=status_output,
+            approved_scope=[str(path) for path in scoped_allowed_paths] if scoped_allowed_paths else None,
+        )
+        verification_evidence = await self._latest_work_item_verification_evidence(session, work_item_id)
+        delivery_evidence = await self._work_item_delivery_evidence(session, work_item_id)
+        verification_status = str(verification_evidence.get("status")) if verification_evidence else "not_recorded"
+        verification_summary = (
+            str(verification_evidence.get("summary"))
+            if verification_evidence and verification_evidence.get("summary")
+            else "A recent `pnpm.cmd run check` result must be retained before auto-eligible push or PR."
+        )
+        verification_command = (
+            str(verification_evidence.get("commandShape"))
+            if verification_evidence and verification_evidence.get("commandShape")
+            else "manual verification record required"
+        )
+        verification_exit_code = verification_evidence.get("exitCode") if verification_evidence else None
+        verification_passed = verification_status == "passed" and verification_exit_code == 0
+        verification_recorded = verification_status != "not_recorded"
+        verification_fresh = bool(verification_evidence and verification_evidence.get("recordedAt"))
+        verification_blocked_reason_by_status = {
+            "failed": "local-verification-failed",
+            "timed_out": "local-verification-timed-out",
+            "could_not_run": "local-verification-could-not-run",
+            "not_recorded": "local-verification-evidence-missing",
+        }
 
         push_checks = [
             self._eligibility_check(
                 "system-branch",
                 "System-owned branch",
+                "scope",
                 system_branch,
                 f"Current branch is {current_branch}.",
                 ["git branch --show-current", "required prefix: codex/"],
+                "scope-branch-not-system-owned",
             ),
             self._eligibility_check(
                 "not-main",
                 "Not main",
+                "scope",
                 branch_not_main,
                 "Delivery automation must never run directly from main.",
                 [f"branch={current_branch}"],
+                "scope-main-branch-blocked",
             ),
             self._eligibility_check(
                 "base-main",
                 "Base branch",
+                "scope",
                 base_ok,
                 "Base branch main must resolve locally before delivery evaluation.",
                 ["git rev-parse --verify main"],
+                "scope-base-main-missing",
             ),
             self._eligibility_check(
                 "clean-tree",
                 "Clean working tree",
+                "local_verification",
                 clean_tree,
                 "Working tree must be clean before remote delivery can soften.",
                 ["git status --porcelain=v1", f"workingTreeStatus={working_tree_status}"],
+                "unexpected-local-diff",
             ),
             self._eligibility_check(
                 "commits-ahead",
                 "Committed diff",
+                "scope",
                 has_commits,
                 "Branch must contain committed work ahead of main.",
                 ["git rev-list --count main..HEAD", f"commitsAhead={commits_ahead}"],
+                "scope-committed-diff-missing",
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="diff-guard",
+                label="Diff guard",
+                gateFamily="scope",
+                status="passed" if diff_guard["status"] == "passed" else diff_guard["status"],
+                summary=(
+                    "Changed files are inside the approved scope."
+                    if diff_guard["status"] == "passed"
+                    else "Changed files include out-of-scope or unsafe paths that block delivery."
+                ),
+                evidence=diff_guard["blockedPaths"] or [item["path"] for item in diff_guard["changedFiles"]],
+                blockedReason=diff_guard["blockedReason"],
             ),
             TrustedDeliveryEligibilityCheckView(
                 checkId="local-check-evidence",
                 label="Local check evidence",
-                status="not_recorded",
-                summary="A recent `pnpm.cmd run check` result must be retained before auto-eligible push or PR.",
-                evidence=["manual verification record required", "no command executed by this report"],
+                gateFamily="local_verification",
+                status="passed" if verification_recorded else "not_recorded",
+                summary=verification_summary if verification_recorded else "A recent `pnpm.cmd run check` result must be retained before auto-eligible push or PR.",
+                evidence=[verification_command],
+                blockedReason=None if verification_recorded else "local-verification-evidence-missing",
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="local-check-result",
+                label="Local check result",
+                gateFamily="local_verification",
+                status="passed" if verification_passed else "blocked",
+                summary=verification_summary,
+                evidence=[f"status={verification_status}", f"exitCode={verification_exit_code}"],
+                blockedReason=None if verification_passed else verification_blocked_reason_by_status.get(verification_status, "local-verification-failed"),
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="local-check-freshness",
+                label="Local check freshness",
+                gateFamily="evidence_retention",
+                status="passed" if verification_fresh else "stale",
+                summary=(
+                    "Latest verification evidence includes a retained timestamp."
+                    if verification_fresh
+                    else "Stale local verification evidence blocks the green gate until a fresh result is retained."
+                ),
+                evidence=[
+                    str(verification_evidence.get("recordedAt"))
+                    if verification_evidence and verification_evidence.get("recordedAt")
+                    else "no freshness timestamp retained by this report"
+                ],
+                blockedReason=None if verification_fresh else "local-verification-evidence-stale",
             ),
         ]
         push_eligible = all(check.status == "passed" for check in push_checks)
@@ -3330,16 +3588,36 @@ class SupervisorService:
             TrustedDeliveryEligibilityCheckView(
                 checkId="pr-url",
                 label="PR URL",
-                status="not_recorded",
-                summary="A PR URL is required before CI and review inspection can become auto-eligible.",
-                evidence=["No GitHub query performed by this read-only local report."],
+                gateFamily="ci",
+                status="passed" if delivery_evidence.get("pullRequestUrl") else "not_recorded",
+                summary=(
+                    "PR URL is retained for this work item."
+                    if delivery_evidence.get("pullRequestUrl")
+                    else "A PR URL is required before CI and review inspection can become auto-eligible."
+                ),
+                evidence=[delivery_evidence.get("pullRequestUrl") or "No GitHub query performed by this read-only local report."],
+                blockedReason=None if delivery_evidence.get("pullRequestUrl") else "ci-evidence-missing",
             ),
             TrustedDeliveryEligibilityCheckView(
                 checkId="ci-target",
                 label="CI target",
-                status="not_recorded",
-                summary="A named PR or commit check target is required before CI wait can soften.",
-                evidence=["No remote CI query performed."],
+                gateFamily="ci",
+                status="passed" if delivery_evidence.get("ciStatus") in {"passed", "waived"} else "not_recorded",
+                summary="Retained CI state can be evaluated for this work item.",
+                evidence=[f"ciStatus={delivery_evidence.get('ciStatus', 'not_recorded')}"],
+                blockedReason=None if delivery_evidence.get("ciStatus") in {"passed", "waived"} else "ci-target-missing",
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="evidence-retained",
+                label="Evidence retained",
+                gateFamily="evidence_retention",
+                status="passed" if delivery_evidence.get("pullRequestUrl") and delivery_evidence.get("ciStatus") in {"passed", "waived"} else "not_recorded",
+                summary="The PR, CI target, and inspection evidence must be retained before CI review can soften.",
+                evidence=[
+                    f"pullRequestStatus={delivery_evidence.get('pullRequestStatus', 'not_recorded')}",
+                    f"ciStatus={delivery_evidence.get('ciStatus', 'not_recorded')}",
+                ],
+                blockedReason=None if delivery_evidence.get("pullRequestUrl") and delivery_evidence.get("ciStatus") in {"passed", "waived"} else "delivery-evidence-missing",
             ),
         ]
 
@@ -3347,23 +3625,38 @@ class SupervisorService:
             TrustedDeliveryEligibilityCheckView(
                 checkId="ci-green",
                 label="Green CI",
-                status="not_recorded",
+                gateFamily="ci",
+                status="passed" if delivery_evidence.get("ciStatus") in {"passed", "waived"} else "not_recorded",
                 summary="Merge cannot soften until remote CI is known green for the named PR.",
-                evidence=["CI status must come from approved PR/CI inspection."],
+                evidence=[f"ciStatus={delivery_evidence.get('ciStatus', 'not_recorded')}"],
+                blockedReason=None if delivery_evidence.get("ciStatus") in {"passed", "waived"} else "ci-evidence-missing",
             ),
             TrustedDeliveryEligibilityCheckView(
                 checkId="mergeability-clean",
                 label="Clean mergeability",
-                status="not_recorded",
+                gateFamily="merge_state",
+                status="passed" if delivery_evidence.get("mergeStatus") in {"ready", "merged", "waived"} else "not_recorded",
                 summary="Mergeability must be clean immediately before merge.",
-                evidence=["No GitHub mergeability query performed."],
+                evidence=[f"mergeStatus={delivery_evidence.get('mergeStatus', 'not_recorded')}"],
+                blockedReason=None if delivery_evidence.get("mergeStatus") in {"ready", "merged", "waived"} else "merge-state-evidence-missing",
             ),
             TrustedDeliveryEligibilityCheckView(
                 checkId="review-resolution",
                 label="Review resolution",
-                status="not_recorded",
+                gateFamily="merge_state",
+                status="passed" if delivery_evidence.get("readyForApproval") else "not_recorded",
                 summary="Review threads must be resolved or explicitly waived before merge can soften.",
-                evidence=["No review thread query performed."],
+                evidence=[f"readyForApproval={delivery_evidence.get('readyForApproval', False)}"],
+                blockedReason=None if delivery_evidence.get("readyForApproval") else "review-evidence-missing",
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="merge-authority",
+                label="Merge authority",
+                gateFamily="authority_boundary",
+                status="passed",
+                summary="This report computes merge readiness only; execution remains unapproved until separate authority names the PR, head, CI, and clean merge state.",
+                evidence=["executionApproved=false", "readiness-reporting-only"],
+                blockedReason=None,
             ),
         ]
 
@@ -3371,16 +3664,29 @@ class SupervisorService:
             TrustedDeliveryEligibilityCheckView(
                 checkId="merge-evidence",
                 label="Merge evidence",
-                status="not_recorded",
+                gateFamily="evidence_retention",
+                status="passed" if delivery_evidence.get("mergeStatus") == "merged" else "not_recorded",
                 summary="Cleanup cannot soften until merge commit and branch evidence are retained.",
-                evidence=["merged PR URL and merge commit required"],
+                evidence=[f"mergeStatus={delivery_evidence.get('mergeStatus', 'not_recorded')}", delivery_evidence.get("pullRequestUrl") or "merged PR URL and merge commit required"],
+                blockedReason=None if delivery_evidence.get("mergeStatus") == "merged" else "merge-evidence-missing",
             ),
             TrustedDeliveryEligibilityCheckView(
                 checkId="cleanup-dry-run",
                 label="Cleanup dry run",
-                status="not_recorded",
+                gateFamily="cleanup_target",
+                status="passed" if delivery_evidence.get("cleanupDryRunStatus") == "passed" else "not_recorded",
                 summary="Cleanup dry-run must name exactly one safe target.",
-                evidence=["cleanup dry-run required; no cleanup command executed by this report"],
+                evidence=[delivery_evidence.get("cleanupTarget") or "cleanup dry-run required; no cleanup command executed by this report"],
+                blockedReason=None if delivery_evidence.get("cleanupDryRunStatus") == "passed" else "cleanup-target-missing",
+            ),
+            TrustedDeliveryEligibilityCheckView(
+                checkId="cleanup-authority",
+                label="Cleanup authority",
+                gateFamily="authority_boundary",
+                status="passed",
+                summary="This report computes cleanup readiness only; execution remains unapproved until separate cleanup authority names the exact merged branch and worktree.",
+                evidence=["executionApproved=false", "readiness-reporting-only"],
+                blockedReason=None,
             ),
         ]
 
@@ -3414,6 +3720,8 @@ class SupervisorService:
                 ["delete main checkout", "delete arbitrary directories", "remote deletion without retained merge evidence"],
             ),
         ]
+        action_eligibility = self._trusted_delivery_action_eligibility(stages)
+        stage_by_id = {stage.stageId: stage for stage in stages}
 
         hard_stops = [
             "current branch is main, detached, or not system-owned",
@@ -3436,6 +3744,20 @@ class SupervisorService:
             workingTreeStatus=working_tree_status,
             commitsAhead=commits_ahead,
             diffStat=diff_stat,
+            diffGuard=diff_guard,
+            diffGuardFixtures=self._trusted_delivery_diff_guard_fixtures(),
+            verificationEvidenceFixtures=self._trusted_delivery_verification_evidence_fixtures(),
+            actionEligibility=action_eligibility,
+            actionEligibilityFixtures=self._trusted_delivery_action_eligibility_fixtures(),
+            unrelatedAuthoritiesBlocked=[
+                "issue_sync",
+                "claude_launch",
+                "provider_expansion",
+                "subscription_agent_launch",
+                "secret_access",
+                "failed_check_bypass",
+                "broad_autonomy",
+            ],
             stages=stages,
             hardStops=hard_stops,
             nextSafeActions=[
@@ -3446,24 +3768,449 @@ class SupervisorService:
             readOnly=True,
             automaticDeliveryApproved=False,
             pushPrAutoEligible=push_eligible,
-            mergeAutoEligible=False,
-            cleanupAutoEligible=False,
+            mergeAutoEligible=stage_by_id["merge-auto-eligible"].eligible,
+            cleanupAutoEligible=stage_by_id["cleanup-auto-eligible"].eligible,
         )
+
+    async def _latest_work_item_verification_evidence(
+        self,
+        session: AsyncSession | None,
+        work_item_id: str | None,
+    ) -> dict | None:
+        if session is None or not work_item_id:
+            return None
+        result = await session.execute(
+            select(ExecutionAttempt)
+            .where(ExecutionAttempt.work_item_id == work_item_id)
+            .order_by(ExecutionAttempt.updated_at.desc(), ExecutionAttempt.created_at.desc())
+        )
+        latest_attempt = result.scalars().first()
+        if latest_attempt is None:
+            return None
+        refs = [ref for ref in list(latest_attempt.artifact_refs_json or []) if isinstance(ref, dict)]
+        verification_refs = [ref for ref in refs if ref.get("artifactType") == "verification_result"]
+        return verification_refs[-1] if verification_refs else None
+
+    async def _latest_work_item_artifact_evidence(
+        self,
+        session: AsyncSession | None,
+        work_item_id: str | None,
+        artifact_type: str,
+    ) -> dict | None:
+        if session is None or not work_item_id:
+            return None
+        result = await session.execute(
+            select(ExecutionAttempt)
+            .where(ExecutionAttempt.work_item_id == work_item_id)
+            .order_by(ExecutionAttempt.updated_at.desc(), ExecutionAttempt.created_at.desc())
+        )
+        for attempt in result.scalars():
+            refs = [ref for ref in list(attempt.artifact_refs_json or []) if isinstance(ref, dict)]
+            artifact_refs = [ref for ref in refs if ref.get("artifactType") == artifact_type]
+            if artifact_refs:
+                return artifact_refs[-1]
+        return None
+
+    async def _work_item_delivery_evidence(
+        self,
+        session: AsyncSession | None,
+        work_item_id: str | None,
+    ) -> dict:
+        if session is None or not work_item_id:
+            return {}
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return {}
+        recipe = self._execution_recipe_for_item(item)
+        if not recipe:
+            return {}
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        cleanup_evidence = metadata.get("cleanupEvidence") if isinstance(metadata.get("cleanupEvidence"), dict) else {}
+        return {
+            **self._recipe_delivery_gate_payload(item, recipe),
+            "cleanupDryRunStatus": cleanup_evidence.get("dryRunStatus"),
+            "cleanupTarget": cleanup_evidence.get("target"),
+        }
+
+    def _trusted_delivery_diff_guard(
+        self,
+        *,
+        diff_name_ok: bool,
+        diff_name_output: str,
+        status_ok: bool,
+        status_output: str,
+        approved_scope: list[str] | None = None,
+    ) -> dict:
+        default_allowed_globs = [
+            "docs/stories/**",
+            "services/supervisor/**",
+            "apps/dashboard/**",
+            "packages/contracts/**",
+            "tests/**",
+            "scripts/**",
+        ]
+        approved_files = [path for path in (approved_scope or ["docs/stories/<approved-story>.md"]) if not path.endswith("/**")]
+        allowed_globs = approved_scope or default_allowed_globs
+        forbidden_paths = [
+            ".env*",
+            ".git/**",
+            "node_modules/**",
+            "services/supervisor/.venv/**",
+        ]
+        generated_file_rules = [
+            "generated files are blocked unless their directory is explicitly approved",
+            "dashboard build output under apps/dashboard/.next/** is never delivery evidence",
+        ]
+        user_owned_dirty_file_rules = [
+            "AGENTS.md requires explicit story scope before worker mutation",
+            "existing dirty files owned by Bob remain blocked until inspected or separated",
+        ]
+        if not diff_name_ok or not status_ok:
+            return {
+                "approvedFiles": approved_files,
+                "allowedGlobs": allowed_globs,
+                "forbiddenPaths": forbidden_paths,
+                "generatedFileRules": generated_file_rules,
+                "userOwnedDirtyFileRules": user_owned_dirty_file_rules,
+                "status": "not_recorded",
+                "blockedReason": "diff-guard-evidence-missing",
+                "changedFiles": [],
+                "blockedPaths": [],
+                "recommendation": "Retain file-level diff evidence before delivery, merge, or cleanup eligibility.",
+            }
+
+        changed_files: list[dict] = []
+        for line in diff_name_output.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            change_type = parts[0].strip()
+            paths = [part.strip() for part in parts[1:] if part.strip()]
+            for path in paths:
+                changed_files.append(self._classify_trusted_delivery_path(path, change_type, allowed_globs))
+
+        for line in status_output.splitlines():
+            if not line.strip():
+                continue
+            status_code = line[:2]
+            path = line[3:].strip()
+            if " -> " in path:
+                path = path.split(" -> ", 1)[1].strip()
+            if status_code == "??":
+                changed_files.append(self._classify_trusted_delivery_path(path, "untracked", allowed_globs))
+            elif path == "AGENTS.md":
+                changed_files.append(
+                    {
+                        "path": path,
+                        "changeType": status_code.strip() or "dirty",
+                        "classification": "blocked",
+                        "reason": "user-owned-dirty-file",
+                    }
+                )
+            else:
+                changed_files.append(self._classify_trusted_delivery_path(path, status_code.strip() or "dirty", allowed_globs))
+
+        blocked_paths = [item["path"] for item in changed_files if item["classification"] != "allowed"]
+        return {
+            "approvedFiles": approved_files,
+            "allowedGlobs": allowed_globs,
+            "forbiddenPaths": forbidden_paths,
+            "generatedFileRules": generated_file_rules,
+            "userOwnedDirtyFileRules": user_owned_dirty_file_rules,
+            "status": "passed" if not blocked_paths else "blocked",
+            "blockedReason": None if not blocked_paths else "diff-guard-out-of-scope",
+            "changedFiles": changed_files,
+            "blockedPaths": blocked_paths,
+            "recommendation": (
+                "Diff guard passed; retain changed-file inventory as delivery evidence."
+                if not blocked_paths
+                else "Out-of-scope changes detected; inspect, revise scope, revert, or abandon before delivery eligibility."
+            ),
+        }
+
+    def _classify_trusted_delivery_path(self, path: str, change_type: str, allowed_globs: list[str]) -> dict:
+        normalized = path.replace("\\", "/")
+        if (
+            normalized.startswith(".env")
+            or normalized.startswith(".git/")
+            or normalized.startswith("node_modules/")
+            or normalized.startswith("services/supervisor/.venv/")
+        ):
+            return {
+                "path": path,
+                "changeType": change_type,
+                "classification": "blocked",
+                "reason": "forbidden-path",
+            }
+        if normalized.startswith("apps/dashboard/.next/"):
+            return {
+                "path": path,
+                "changeType": change_type,
+                "classification": "blocked",
+                "reason": "generated-churn-outside-allowed-generated-paths",
+            }
+        if change_type == "untracked":
+            return {
+                "path": path,
+                "changeType": change_type,
+                "classification": "blocked",
+                "reason": "untracked-file-outside-approved-scope",
+            }
+        allowed_exact_paths = [glob for glob in allowed_globs if not glob.endswith("/**")]
+        if normalized in allowed_exact_paths:
+            return {
+                "path": path,
+                "changeType": change_type,
+                "classification": "allowed",
+                "reason": "approved-scope",
+            }
+        allowed_prefixes = [glob[:-3] for glob in allowed_globs if glob.endswith("/**")]
+        if any(normalized.startswith(prefix) for prefix in allowed_prefixes):
+            return {
+                "path": path,
+                "changeType": change_type,
+                "classification": "allowed",
+                "reason": "approved-scope",
+            }
+        return {
+            "path": path,
+            "changeType": change_type,
+            "classification": "unexpected",
+            "reason": "changed-path-outside-approved-scope",
+        }
+
+    def _trusted_delivery_diff_guard_fixtures(self) -> list[dict]:
+        def guard_for(path: str, change_type: str) -> dict:
+            return self._trusted_delivery_diff_guard(
+                diff_name_ok=True,
+                diff_name_output=f"{change_type}\t{path}",
+                status_ok=True,
+                status_output="",
+            )
+
+        return [
+            {
+                "fixtureId": "positive-approved-paths",
+                "label": "Only approved service source changed.",
+                "guard": guard_for("services/supervisor/src/supervisor/application/service.py", "M"),
+            },
+            {
+                "fixtureId": "unexpected-file",
+                "label": "Unexpected file outside approved scope.",
+                "guard": guard_for("docs/prds/unapproved.md", "M"),
+            },
+            {
+                "fixtureId": "forbidden-path",
+                "label": "Forbidden path changed.",
+                "guard": guard_for(".env.local", "A"),
+            },
+            {
+                "fixtureId": "out-of-scope-deletion",
+                "label": "Deletion outside approved scope.",
+                "guard": guard_for("docs/prds/legacy.md", "D"),
+            },
+            {
+                "fixtureId": "generated-churn",
+                "label": "Generated dashboard build output changed.",
+                "guard": guard_for("apps/dashboard/.next/cache/build-manifest.json", "M"),
+            },
+            {
+                "fixtureId": "untracked-file",
+                "label": "Untracked file outside approved scope.",
+                "guard": self._trusted_delivery_diff_guard(
+                    diff_name_ok=True,
+                    diff_name_output="",
+                    status_ok=True,
+                    status_output="?? scratch/outside.txt",
+                ),
+            },
+            {
+                "fixtureId": "user-owned-dirty-file",
+                "label": "User-owned dirty file requires separation or explicit scope.",
+                "guard": self._trusted_delivery_diff_guard(
+                    diff_name_ok=True,
+                    diff_name_output="",
+                    status_ok=True,
+                    status_output=" M AGENTS.md",
+                ),
+            },
+        ]
+
+    def _trusted_delivery_verification_evidence_fixtures(self) -> list[dict]:
+        def evidence(status: str, exit_code: int | None, summary: str, recovery_action: str) -> dict:
+            return {
+                "commandId": "full-check",
+                "label": "Full workspace check",
+                "commandShape": "pnpm.cmd run check",
+                "status": status,
+                "exitCode": exit_code,
+                "durationMs": 132000 if status == "passed" else None,
+                "summary": summary,
+                "artifactRef": "_bmad-output/execution-attempts/check-summary.txt",
+                "recoveryAction": recovery_action,
+                "rawOutputRetained": False,
+            }
+
+        return [
+            {
+                "fixtureId": "verification-passed",
+                "label": "Approved verification command passed.",
+                "evidence": evidence("passed", 0, "Full check passed with bounded summary.", "retain evidence for green-gate evaluation"),
+                "greenGateContribution": "local_verification_passed",
+                "blockedReason": None,
+            },
+            {
+                "fixtureId": "verification-failed",
+                "label": "Approved verification command failed.",
+                "evidence": evidence("failed", 1, "Full check failed; retain worktree for inspection.", "inspect, retry, resume, or rollback"),
+                "greenGateContribution": "blocked",
+                "blockedReason": "local-verification-failed",
+            },
+            {
+                "fixtureId": "verification-timed-out",
+                "label": "Approved verification command timed out.",
+                "evidence": evidence("timed_out", None, "Full check timed out; retain worktree and partial evidence.", "inspect timeout, retry, resume, or rollback"),
+                "greenGateContribution": "blocked",
+                "blockedReason": "local-verification-timed-out",
+            },
+            {
+                "fixtureId": "verification-could-not-run",
+                "label": "Approved verification command could not run.",
+                "evidence": evidence("could_not_run", None, "Full check could not run in this environment.", "repair environment before retry"),
+                "greenGateContribution": "blocked",
+                "blockedReason": "local-verification-could-not-run",
+            },
+            {
+                "fixtureId": "verification-not-recorded",
+                "label": "Verification evidence is missing.",
+                "evidence": evidence("not_recorded", None, "No verification evidence retained.", "run approved verification command before delivery"),
+                "greenGateContribution": "blocked",
+                "blockedReason": "local-verification-evidence-missing",
+            },
+        ]
+
+    def _trusted_delivery_action_eligibility(self, stages: list[TrustedDeliveryEligibilityStageEvaluationView]) -> list[dict]:
+        by_id = {stage.stageId: stage for stage in stages}
+        return [
+            self._trusted_delivery_action_from_stage(
+                "pr",
+                "PR",
+                by_id["push-pr-auto-eligible"],
+                "PR creation/update remains reporting-only until an explicit delivery policy or approval exists.",
+            ),
+            self._trusted_delivery_action_from_stage(
+                "merge",
+                "Merge",
+                by_id["merge-auto-eligible"],
+                "Merge remains reporting-only until explicit merge authority names the PR, head, CI, and clean merge state.",
+            ),
+            self._trusted_delivery_action_from_stage(
+                "cleanup",
+                "Cleanup",
+                by_id["cleanup-auto-eligible"],
+                "Cleanup remains reporting-only until explicit cleanup authority names exact branch/worktree targets.",
+            ),
+        ]
+
+    def _trusted_delivery_action_from_stage(
+        self,
+        action_id: str,
+        label: str,
+        stage: TrustedDeliveryEligibilityStageEvaluationView,
+        next_action: str,
+    ) -> dict:
+        blocked_reasons = [
+            check.blockedReason
+            for check in stage.checks
+            if check.status != "passed" and check.blockedReason
+        ]
+        return {
+            "actionId": action_id,
+            "label": label,
+            "status": "eligible" if not blocked_reasons else "blocked",
+            "evidence": [evidence for check in stage.checks for evidence in check.evidence],
+            "blockedReasons": blocked_reasons,
+            "nextAction": next_action,
+            "executionApproved": False,
+        }
+
+    def _trusted_delivery_action_eligibility_fixtures(self) -> list[dict]:
+        all_green = [
+            self._trusted_delivery_action_fixture("pr", "PR", "eligible", [], ["scope approved", "diff guard passed", "verification passed", "evidence retained"]),
+            self._trusted_delivery_action_fixture("merge", "Merge", "eligible", [], ["PR URL retained", "CI green", "merge state clean", "review resolved"]),
+            self._trusted_delivery_action_fixture("cleanup", "Cleanup", "eligible", [], ["PR merged", "merge commit retained", "exact cleanup target retained", "cleanup dry-run retained"]),
+        ]
+        return [
+            {
+                "fixtureId": "all-green-reporting-only",
+                "label": "All gates green but execution still requires policy.",
+                "actions": all_green,
+            },
+            {
+                "fixtureId": "missing-verification-blocks-pr",
+                "label": "Missing verification blocks PR eligibility.",
+                "actions": [
+                    self._trusted_delivery_action_fixture("pr", "PR", "blocked", ["local-verification-evidence-missing"], ["scope approved", "diff guard passed"]),
+                    all_green[1],
+                    all_green[2],
+                ],
+            },
+            {
+                "fixtureId": "failed-ci-blocks-merge",
+                "label": "Failed CI blocks merge eligibility.",
+                "actions": [
+                    all_green[0],
+                    self._trusted_delivery_action_fixture("merge", "Merge", "blocked", ["ci-not-green"], ["PR URL retained", "merge target retained"]),
+                    all_green[2],
+                ],
+            },
+            {
+                "fixtureId": "ambiguous-cleanup-target-fails-closed",
+                "label": "Ambiguous cleanup target blocks cleanup eligibility.",
+                "actions": [
+                    all_green[0],
+                    all_green[1],
+                    self._trusted_delivery_action_fixture("cleanup", "Cleanup", "blocked", ["cleanup-target-ambiguous"], ["PR merged", "merge commit retained"]),
+                ],
+            },
+        ]
+
+    def _trusted_delivery_action_fixture(
+        self,
+        action_id: str,
+        label: str,
+        status: str,
+        blocked_reasons: list[str],
+        evidence: list[str],
+    ) -> dict:
+        return {
+            "actionId": action_id,
+            "label": label,
+            "status": status,
+            "evidence": evidence,
+            "blockedReasons": blocked_reasons,
+            "nextAction": "Report eligibility only; do not execute without explicit policy approval.",
+            "executionApproved": False,
+        }
 
     def _eligibility_check(
         self,
         check_id: str,
         label: str,
+        gate_family: str,
         passed: bool,
         summary: str,
         evidence: list[str],
+        blocked_reason: str,
     ) -> TrustedDeliveryEligibilityCheckView:
         return TrustedDeliveryEligibilityCheckView(
             checkId=check_id,
             label=label,
+            gateFamily=gate_family,
             status="passed" if passed else "blocked",
             summary=summary,
             evidence=evidence,
+            blockedReason=None if passed else blocked_reason,
         )
 
     def _trusted_delivery_stage(
@@ -5165,6 +5912,335 @@ class SupervisorService:
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)
 
+    async def launch_supervised_codex_worker(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemSupervisedCodexLaunchRequest,
+    ) -> ExecutionAttemptView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        if not payload.taskId.strip():
+            raise ValueError("Supervised Codex launch requires a taskId.")
+        if not payload.allowedPaths:
+            raise ValueError("Supervised Codex launch requires allowed paths.")
+        if not payload.verificationCommand.strip():
+            raise ValueError("Supervised Codex launch requires a verification command.")
+
+        eligibility = await self.get_trusted_delivery_eligibility_report(approved_scope=payload.allowedPaths)
+        if not payload.dryRun and eligibility.diffGuard.status != "passed":
+            raise ValueError(f"Supervised Codex real launch requires green diff guard; current status is {eligibility.diffGuard.status}.")
+        blocked_touched = [
+            path
+            for path in payload.touchedFiles
+            if not self._path_allowed_for_supervised_codex_launch(path, payload.allowedPaths, payload.blockedPaths)
+        ]
+        if blocked_touched:
+            raise ValueError(f"Supervised Codex launch touched files outside approved scope: {', '.join(blocked_touched)}.")
+
+        active_attempt = await self._active_execution_attempt(session, work_item_id)
+        if active_attempt:
+            raise ValueError(f"Work item already has active execution attempt {active_attempt.id}.")
+
+        attempt_id = str(uuid.uuid4())
+        route_decision_id = f"supervised-codex-{payload.taskId}"
+        worker_id = "codex.local.supervised"
+        lane = ExecutionLane.UTILITY.value
+        authority_mode = "operator_approved_bounded_source_mutation"
+        self._validate_supervised_codex_launch_binding(
+            payload,
+            route_decision_id=route_decision_id,
+            worker_id=worker_id,
+            lane=lane,
+            authority_mode=authority_mode,
+        )
+        launch_result = self._run_supervised_codex_worker(payload, attempt_id)
+
+        now = datetime.now(timezone.utc)
+        workspace_isolation_plan = self._supervised_codex_workspace_isolation_plan(attempt_id, payload)
+        launch_evidence = self._supervised_codex_launch_evidence(payload, attempt_id, launch_result)
+        terminal_status = launch_result["status"]
+        attempt = ExecutionAttempt(
+            id=attempt_id,
+            work_item_id=item.id,
+            route_decision_id=route_decision_id,
+            worker_id=worker_id,
+            lane=lane,
+            authority_mode=authority_mode,
+            status=terminal_status,
+            requested_by_id=payload.actorId,
+            requested_by_label=payload.actorLabel or "Bob",
+            failure_reason=launch_result["summary"] if terminal_status != ExecutionAttemptStatus.COMPLETED.value else None,
+            workspace_isolation_plan_json=workspace_isolation_plan,
+            artifact_refs_json=[launch_evidence],
+            event_refs_json=[],
+            started_at=now,
+            completed_at=now,
+            heartbeat_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(attempt)
+        await session.flush()
+        started_event = await self._record_supervised_codex_launch_event(
+            session,
+            item,
+            attempt,
+            payload,
+            launch_evidence,
+            event_type="execution_attempt.supervised_codex_launch_started",
+            summary="Supervised Codex launch started with bounded authority evidence.",
+        )
+        completed_event = await self._record_supervised_codex_launch_event(
+            session,
+            item,
+            attempt,
+            payload,
+            launch_evidence,
+            event_type=f"execution_attempt.{terminal_status}",
+            summary=f"Supervised Codex launch reached terminal {terminal_status} state.",
+        )
+        attempt.event_refs_json = [
+            {"eventId": started_event.id, "eventType": started_event.event_type},
+            {"eventId": completed_event.id, "eventType": completed_event.event_type},
+        ]
+        await session.commit()
+        await session.refresh(attempt)
+        await session.refresh(item)
+        return self._to_execution_attempt_view(attempt)
+
+    def _validate_supervised_codex_launch_binding(
+        self,
+        payload: WorkItemSupervisedCodexLaunchRequest,
+        *,
+        route_decision_id: str,
+        worker_id: str,
+        lane: str,
+        authority_mode: str,
+    ) -> None:
+        if payload.dryRun:
+            return
+        required = {
+            "routeDecisionId": payload.routeDecisionId,
+            "workerId": payload.workerId,
+            "lane": payload.lane,
+            "authorityMode": payload.authorityMode,
+            "approvalTimestamp": payload.approvalTimestamp,
+            "expiresAt": payload.expiresAt,
+        }
+        missing = [name for name, value in required.items() if value in {None, ""}]
+        if missing:
+            raise ValueError(f"Supervised Codex real launch requires approval binding fields: {', '.join(missing)}.")
+        expected = {
+            "routeDecisionId": route_decision_id,
+            "workerId": worker_id,
+            "lane": lane,
+            "authorityMode": authority_mode,
+        }
+        actual = {
+            "routeDecisionId": payload.routeDecisionId,
+            "workerId": payload.workerId,
+            "lane": payload.lane,
+            "authorityMode": payload.authorityMode,
+        }
+        for key, expected_value in expected.items():
+            if actual[key] != expected_value:
+                raise ValueError(f"Supervised Codex approval binding {key} does not match current launch contract.")
+        now = datetime.now(timezone.utc)
+        if payload.approvalTimestamp and payload.approvalTimestamp > now + timedelta(minutes=1):
+            raise ValueError("Supervised Codex approval timestamp is in the future.")
+        if payload.expiresAt and payload.expiresAt <= now:
+            raise ValueError("Supervised Codex approval binding is stale.")
+
+    def _run_supervised_codex_worker(self, payload: WorkItemSupervisedCodexLaunchRequest, attempt_id: str) -> dict:
+        command_shape = "codex <bounded task packet> --cwd <isolated-worktree>"
+        if payload.dryRun:
+            return {
+                "status": ExecutionAttemptStatus.COMPLETED.value,
+                "commandShape": command_shape,
+                "workspaceOrBranch": "isolated_codex_worktree",
+                "summary": payload.outputSummary,
+                "exitCode": 0,
+                "durationMs": 0,
+                "processLaunchAttempted": False,
+            }
+
+        repo_root = Path(__file__).resolve().parents[5]
+        command = [
+            "node",
+            "./scripts/codex-workspace.mjs",
+            "start",
+            payload.outputSummary or payload.taskId,
+            "--mode",
+            "experiment",
+        ]
+        started = datetime.now(timezone.utc)
+        try:
+            result = subprocess.run(
+                command,
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+                env={"PATH": os.environ.get("PATH", "")},
+            )
+            duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+            status = ExecutionAttemptStatus.COMPLETED.value if result.returncode == 0 else ExecutionAttemptStatus.FAILED.value
+            return {
+                "status": status,
+                "commandShape": "node ./scripts/codex-workspace.mjs start <bounded task> --mode experiment",
+                "workspaceOrBranch": "repo_owned_codex_workspace",
+                "summary": f"Repo-owned Codex workspace launch exited with code {result.returncode}.",
+                "exitCode": result.returncode,
+                "durationMs": duration_ms,
+                "processLaunchAttempted": True,
+            }
+        except subprocess.TimeoutExpired:
+            duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+            return {
+                "status": ExecutionAttemptStatus.TIMED_OUT.value,
+                "commandShape": "node ./scripts/codex-workspace.mjs start <bounded task> --mode experiment",
+                "workspaceOrBranch": "repo_owned_codex_workspace",
+                "summary": "Repo-owned Codex workspace launch timed out before completion.",
+                "exitCode": None,
+                "durationMs": duration_ms,
+                "processLaunchAttempted": True,
+            }
+        except OSError as exc:
+            duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+            return {
+                "status": ExecutionAttemptStatus.FAILED.value,
+                "commandShape": "node ./scripts/codex-workspace.mjs start <bounded task> --mode experiment",
+                "workspaceOrBranch": "repo_owned_codex_workspace",
+                "summary": f"Repo-owned Codex workspace launch could not start: {exc.__class__.__name__}.",
+                "exitCode": None,
+                "durationMs": duration_ms,
+                "processLaunchAttempted": True,
+            }
+
+    async def record_execution_attempt_verification_evidence(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        attempt_id: str,
+        payload: WorkItemVerificationEvidenceRequest,
+    ) -> ExecutionAttemptView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        attempt = await session.get(ExecutionAttempt, attempt_id)
+        if not attempt or attempt.work_item_id != work_item_id:
+            return None
+        if attempt.status != ExecutionAttemptStatus.COMPLETED.value:
+            raise ValueError("Verification evidence can be recorded only for a completed execution attempt.")
+        if payload.status not in {"passed", "failed", "timed_out", "could_not_run", "not_recorded"}:
+            raise ValueError("Verification evidence status must be passed, failed, timed_out, could_not_run, or not_recorded.")
+        if not payload.commandShape.strip():
+            raise ValueError("Verification evidence requires a command shape.")
+        artifact_refs = list(attempt.artifact_refs_json or [])
+        if any(isinstance(ref, dict) and ref.get("artifactType") == "verification_result" and ref.get("commandId") == payload.commandId for ref in artifact_refs):
+            raise ValueError("Verification evidence commandId has already been recorded for this attempt.")
+        allowed_commands = {
+            ref.get("verificationCommand")
+            for ref in artifact_refs
+            if isinstance(ref, dict) and isinstance(ref.get("verificationCommand"), str)
+        }
+        if not allowed_commands:
+            raise ValueError("Verification command shape is not bound to this attempt.")
+        if payload.commandShape not in allowed_commands:
+            raise ValueError("Verification command shape does not match the approved attempt command.")
+
+        branch_ok, branch_output = self._git_output(["git", "branch", "--show-current"])
+        head_ok, head_output = self._git_output(["git", "rev-parse", "HEAD"])
+        run_result = self._run_execution_attempt_verification_command(payload.commandShape)
+        recorded_at = datetime.now(timezone.utc)
+        evidence = {
+            "artifactType": "verification_result",
+            "commandId": payload.commandId,
+            "label": payload.label,
+            "commandShape": payload.commandShape,
+            "status": run_result["status"],
+            "exitCode": run_result["exitCode"],
+            "durationMs": run_result["durationMs"],
+            "summary": run_result["summary"],
+            "artifactRef": payload.artifactRef,
+            "recoveryAction": payload.recoveryAction or run_result["recoveryAction"],
+            "worktreePath": self._verification_worktree_path(attempt),
+            "branch": branch_output if branch_ok and branch_output else "unknown",
+            "headRevision": head_output if head_ok and head_output else "unknown",
+            "recordedAt": recorded_at.isoformat(),
+            "retentionPolicy": "metadata_only_no_secrets_prompts_provider_payloads_or_source_copies",
+            "rawOutputRetained": False,
+            "secretRetentionAllowed": False,
+            "providerPayloadRetentionAllowed": False,
+        }
+        artifact_refs.append(evidence)
+        attempt.artifact_refs_json = artifact_refs
+        attempt.updated_at = recorded_at
+        if run_result["status"] in {"failed", "timed_out", "could_not_run"}:
+            attempt.failure_reason = run_result["summary"]
+        event = await self._record_verification_evidence_event(session, item, attempt, evidence)
+        event_refs = list(attempt.event_refs_json or [])
+        event_refs.append({"eventId": event.id, "eventType": event.event_type})
+        attempt.event_refs_json = event_refs
+        await session.commit()
+        await session.refresh(attempt)
+        await session.refresh(item)
+        return self._to_execution_attempt_view(attempt)
+
+    def _run_execution_attempt_verification_command(self, command_shape: str) -> dict:
+        allowed_commands = {
+            "pnpm.cmd run check": ["pnpm.cmd", "run", "check"],
+            "pnpm run check": ["pnpm", "run", "check"],
+            "pnpm.cmd run test:supervisor": ["pnpm.cmd", "run", "test:supervisor"],
+            "pnpm run test:supervisor": ["pnpm", "run", "test:supervisor"],
+        }
+        command = allowed_commands.get(command_shape)
+        if command is None:
+            raise ValueError("Verification command is not in the bounded execution allowlist.")
+
+        repo_root = Path(__file__).resolve().parents[5]
+        started = datetime.now(timezone.utc)
+        try:
+            result = subprocess.run(
+                command,
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=900,
+                check=False,
+                env={"PATH": os.environ.get("PATH", "")},
+            )
+            duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+            status = "passed" if result.returncode == 0 else "failed"
+            return {
+                "status": status,
+                "exitCode": result.returncode,
+                "durationMs": duration_ms,
+                "summary": f"Approved verification command exited with code {result.returncode}.",
+                "recoveryAction": "retain evidence for green-gate evaluation" if status == "passed" else "inspect, retry, resume, or rollback",
+            }
+        except subprocess.TimeoutExpired:
+            duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+            return {
+                "status": "timed_out",
+                "exitCode": None,
+                "durationMs": duration_ms,
+                "summary": "Approved verification command timed out before completion.",
+                "recoveryAction": "inspect timeout, retry, resume, or rollback",
+            }
+        except OSError as exc:
+            duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+            return {
+                "status": "could_not_run",
+                "exitCode": None,
+                "durationMs": duration_ms,
+                "summary": f"Approved verification command could not start: {exc.__class__.__name__}.",
+                "recoveryAction": "repair environment before retry",
+            }
+
     async def transition_execution_attempt(
         self,
         session: AsyncSession,
@@ -5246,6 +6322,241 @@ class SupervisorService:
         await session.refresh(attempt)
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)
+
+    def _path_allowed_for_supervised_codex_launch(self, path: str, allowed_paths: list[str], blocked_paths: list[str]) -> bool:
+        normalized = self._normalize_supervised_codex_scope_path(path)
+        if not normalized:
+            return False
+        for blocked in blocked_paths:
+            blocked_normalized = self._normalize_supervised_codex_scope_path(blocked, allow_glob=True)
+            if not blocked_normalized:
+                return False
+            if blocked_normalized.endswith("/**") and normalized.startswith(blocked_normalized[:-3]):
+                return False
+            if blocked_normalized.endswith("*") and normalized.startswith(blocked_normalized[:-1]):
+                return False
+            if normalized == blocked_normalized or normalized.startswith(f"{blocked_normalized}/"):
+                return False
+        for allowed in allowed_paths:
+            allowed_normalized = self._normalize_supervised_codex_scope_path(allowed, allow_glob=True)
+            if not allowed_normalized:
+                continue
+            if allowed_normalized.endswith("/**") and normalized.startswith(allowed_normalized[:-3]):
+                return True
+            if normalized == allowed_normalized:
+                return True
+        return False
+
+    def _normalize_supervised_codex_scope_path(self, path: str, *, allow_glob: bool = False) -> str | None:
+        normalized = path.replace("\\", "/").strip()
+        if not normalized:
+            return None
+        glob_suffix = ""
+        if allow_glob and normalized.endswith("/**"):
+            normalized = normalized[:-3]
+            glob_suffix = "/**"
+        elif allow_glob and normalized.endswith("*"):
+            normalized = normalized[:-1]
+            glob_suffix = "*"
+        if normalized.startswith("/") or normalized.startswith("//") or ":" in normalized.split("/", 1)[0]:
+            return None
+        parts = [part for part in normalized.split("/") if part not in {"", "."}]
+        if any(part == ".." for part in parts):
+            return None
+        return "/".join(parts) + glob_suffix
+
+    def _supervised_codex_workspace_isolation_plan(
+        self,
+        attempt_id: str,
+        payload: WorkItemSupervisedCodexLaunchRequest,
+    ) -> dict:
+        return {
+            "planId": f"workspace-plan-{attempt_id}",
+            "sourceSnapshotStrategy": "approved_epic_7_supervised_codex_launch_scope",
+            "branchStrategy": "isolated_codex_worktree_no_remote_delivery",
+            "readRoots": payload.allowedPaths,
+            "writeRoots": payload.allowedPaths,
+            "artifactRoot": f"_bmad-output/execution-attempts/{attempt_id}",
+            "forbiddenPaths": payload.blockedPaths,
+            "cleanupRule": "preserve_worktree_until_operator_inspection",
+            "rollbackRule": "inspect_retained_diff_then_revert_or_abandon_before_delivery",
+            "diffCaptureRule": "capture_file_inventory_and_diff_guard_status_before_delivery",
+            "writesAllowed": True,
+            "sourceMutationAllowed": True,
+            "commandsAllowed": True,
+            "networkAllowed": False,
+            "credentialAccessAllowed": False,
+            "redactionBoundary": [
+                "no raw prompts, completions, provider payloads, secrets, browser sessions, or credential material",
+            ],
+            "allowedCommandClasses": ["bounded_codex_worker", "approved_verification_command"],
+            "blockedCommandClasses": [
+                "git_remote_write",
+                "merge",
+                "cleanup",
+                "provider_call",
+                "claude_launch",
+                "subscription_agent_launch",
+                "issue_sync",
+                "secret_access",
+            ],
+            "providerEndpointPolicy": "deny_all_provider_endpoints",
+            "promptConstructionPolicy": "bounded_task_packet_metadata_only",
+            "boundaryRejectionReason": "",
+            "materializationMode": "isolated_worktree_required_for_real_launch",
+            "environmentPolicy": "deny_inheritance_allowlist_only",
+            "environmentAllowlist": ["PATH"],
+            "sessionBoundary": "forbid_shell_profiles_ssh_browser_tokens_subscription_sessions_and_credentials",
+            "outputPolicy": "metadata_summary_only_no_raw_stdout_or_stderr_retention",
+        }
+
+    def _supervised_codex_launch_evidence(
+        self,
+        payload: WorkItemSupervisedCodexLaunchRequest,
+        attempt_id: str,
+        launch_result: dict,
+    ) -> dict:
+        return {
+            "artifactType": "supervised_codex_launch_evidence",
+            "taskId": payload.taskId,
+            "attemptId": attempt_id,
+            "dryRun": payload.dryRun,
+            "commandShape": launch_result["commandShape"],
+            "workspaceOrBranch": launch_result["workspaceOrBranch"],
+            "inputScope": {
+                "allowedPaths": payload.allowedPaths,
+                "blockedPaths": payload.blockedPaths,
+            },
+            "outputSummary": launch_result["summary"],
+            "touchedFiles": payload.touchedFiles,
+            "verificationCommand": payload.verificationCommand,
+            "terminalState": launch_result["status"],
+            "exitCode": launch_result["exitCode"],
+            "durationMs": launch_result["durationMs"],
+            "processLaunchAttempted": launch_result["processLaunchAttempted"],
+            "recoveryPath": "inspect retained worktree evidence before retry, revert, or delivery",
+            "retentionPolicy": "metadata_only_no_raw_prompt_completion_stdout_or_stderr",
+            "prCreationAllowed": False,
+            "mergeAllowed": False,
+            "cleanupAllowed": False,
+            "claudeLaunchAllowed": False,
+            "providerExpansionAllowed": False,
+            "subscriptionAgentLaunchAllowed": False,
+            "issueSyncAllowed": False,
+            "secretAccessAllowed": False,
+        }
+
+    async def _record_supervised_codex_launch_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        payload: WorkItemSupervisedCodexLaunchRequest,
+        launch_evidence: dict,
+        *,
+        event_type: str,
+        summary: str,
+    ) -> WorkflowEvent:
+        return await self._record_event(
+            session,
+            item,
+            event_type,
+            summary,
+            {
+                "attemptId": attempt.id,
+                "workItemId": item.id,
+                "routeDecisionId": attempt.route_decision_id,
+                "workerId": attempt.worker_id,
+                "selectedLane": attempt.lane,
+                "authorityMode": attempt.authority_mode,
+                "status": attempt.status,
+                "taskId": payload.taskId,
+                "dryRun": payload.dryRun,
+                "commandShape": launch_evidence["commandShape"],
+                "workspaceOrBranch": launch_evidence["workspaceOrBranch"],
+                "inputScope": launch_evidence["inputScope"],
+                "outputSummary": launch_evidence["outputSummary"],
+                "touchedFiles": payload.touchedFiles,
+                "terminalState": launch_evidence["terminalState"],
+                "exitCode": launch_evidence["exitCode"],
+                "durationMs": launch_evidence["durationMs"],
+                "recoveryPath": launch_evidence["recoveryPath"],
+                "verificationCommand": payload.verificationCommand,
+                "processLaunchAllowed": True,
+                "processLaunchAttempted": launch_evidence["processLaunchAttempted"],
+                "sourceMutationAllowed": True,
+                "commandExecutionAllowed": True,
+                "providerCallsAllowed": False,
+                "networkAllowed": False,
+                "credentialAccessAllowed": False,
+                "prCreationAllowed": False,
+                "mergeAllowed": False,
+                "cleanupAllowed": False,
+                "claudeLaunchAllowed": False,
+                "providerExpansionAllowed": False,
+                "subscriptionAgentLaunchAllowed": False,
+                "issueSyncAllowed": False,
+                "secretAccessAllowed": False,
+            },
+            actor_type="operator",
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel or "Bob",
+        )
+
+    def _verification_worktree_path(self, attempt: ExecutionAttempt) -> str:
+        for ref in list(attempt.artifact_refs_json or []):
+            if isinstance(ref, dict) and isinstance(ref.get("workspaceOrBranch"), str):
+                return str(ref["workspaceOrBranch"])
+        workspace = attempt.workspace_isolation_plan_json if isinstance(attempt.workspace_isolation_plan_json, dict) else {}
+        artifact_root = workspace.get("artifactRoot")
+        return str(artifact_root) if isinstance(artifact_root, str) else "unknown"
+
+    async def _record_verification_evidence_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        evidence: dict,
+    ) -> WorkflowEvent:
+        return await self._record_event(
+            session,
+            item,
+            "execution_attempt.verification_recorded",
+            f"Verification evidence recorded with status {evidence['status']}.",
+            {
+                "attemptId": attempt.id,
+                "workItemId": item.id,
+                "routeDecisionId": attempt.route_decision_id,
+                "workerId": attempt.worker_id,
+                "selectedLane": attempt.lane,
+                "authorityMode": attempt.authority_mode,
+                "commandId": evidence["commandId"],
+                "commandShape": evidence["commandShape"],
+                "status": evidence["status"],
+                "exitCode": evidence["exitCode"],
+                "durationMs": evidence["durationMs"],
+                "summary": evidence["summary"],
+                "artifactRef": evidence["artifactRef"],
+                "recoveryAction": evidence["recoveryAction"],
+                "worktreePath": evidence["worktreePath"],
+                "branch": evidence["branch"],
+                "headRevision": evidence["headRevision"],
+                "rawOutputRetained": False,
+                "secretRetentionAllowed": False,
+                "providerPayloadRetentionAllowed": False,
+                "sourceCopiesRetained": False,
+                "prCreationAllowed": False,
+                "mergeAllowed": False,
+                "cleanupAllowed": False,
+                "ciWaitAllowed": False,
+                "issueSyncAllowed": False,
+                "claudeLaunchAllowed": False,
+                "providerExpansionAllowed": False,
+                "subscriptionAgentLaunchAllowed": False,
+                "secretAccessAllowed": False,
+            },
+            actor_type="supervisor",
+        )
 
     def _validate_execution_attempt_approval_binding(
         self,

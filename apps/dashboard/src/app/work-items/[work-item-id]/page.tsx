@@ -6,6 +6,7 @@ import { EscalationPanel } from "../../../components/escalation-panel";
 import { EvidenceOverviewPanel } from "../../../components/evidence-overview-panel";
 import { ExecutionAttemptEvidencePanel } from "../../../components/execution-attempt-evidence-panel";
 import { ExecutionRecipePanel } from "../../../components/execution-recipe-panel";
+import { GreenGateReadinessPanel } from "../../../components/green-gate-readiness-panel";
 import { LocalEvidencePanel } from "../../../components/local-evidence-panel";
 import { LocalWorktreePlanPanel } from "../../../components/local-worktree-plan-panel";
 import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
@@ -23,6 +24,7 @@ import {
   getRoutingPreview,
   getRuntimeEvidenceExport,
   getRuntimeEvidenceReviewReport,
+  getWorkItemTrustedDeliveryEligibilityReport,
   getWorkItem,
   getWorkItemEvents,
   getWorkItems,
@@ -35,7 +37,7 @@ export default async function WorkItemDetailPage({
   params: Promise<{ "work-item-id": string }>;
 }) {
   const { "work-item-id": workItemId } = await params;
-  const [item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport] =
+  const [item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport] =
     await Promise.all([
       getWorkItem(workItemId),
       getWorkItemEvents(workItemId),
@@ -44,6 +46,7 @@ export default async function WorkItemDetailPage({
       getExecutionAttempts(workItemId),
       getRuntimeEvidenceExport(workItemId),
       getRuntimeEvidenceReviewReport(),
+      getWorkItemTrustedDeliveryEligibilityReport(workItemId),
     ]);
   const recipeGateAudit = item.executionRecipe ? await getRecipeGateAudit(workItemId) : null;
   const localWorktreePlan = item.executionRecipe ? await getLocalWorktreePlan(workItemId) : null;
@@ -190,6 +193,7 @@ export default async function WorkItemDetailPage({
             runtimeEvidenceReviewItem={runtimeEvidenceReviewItem}
             events={events}
           />
+          <GreenGateReadinessPanel report={trustedDeliveryReport} attempts={executionAttempts} />
           <RoutingPreviewPanel preview={routingPreview} />
           <LocalEvidencePanel workItemId={item.id} />
           <ExecutionAttemptEvidencePanel attempts={executionAttempts} />
