@@ -496,29 +496,9 @@ def test_routing_preview_post_without_record_event_is_non_mutating(tmp_path, mon
 
     _reset_supervisor_modules()
 
-    from supervisor.api import main as api_main
+    from supervisor.api.main import app
 
-    def fake_git_output(args: list[str]) -> tuple[bool, str]:
-        command = tuple(args)
-        if command == ("git", "branch", "--show-current"):
-            return True, "codex/trusted-delivery"
-        if command == ("git", "rev-parse", "--short", "HEAD"):
-            return True, "abc1234"
-        if command == ("git", "status", "--porcelain=v1"):
-            return True, " M services/supervisor/src/supervisor/application/service.py"
-        if command == ("git", "rev-parse", "--verify", "main"):
-            return True, "main"
-        if command == ("git", "rev-list", "--count", "main..HEAD"):
-            return True, "1"
-        if command == ("git", "diff", "--stat", "main...HEAD"):
-            return True, "services/supervisor/src/supervisor/application/service.py | 1 +"
-        if command == ("git", "diff", "--name-status", "main...HEAD"):
-            return True, "M\tservices/supervisor/src/supervisor/application/service.py"
-        return False, "unexpected git command"
-
-    monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
-
-    with TestClient(api_main.app) as client:
+    with TestClient(app) as client:
         work_item_id = _create_routing_work_item(client)
         before_item = client.get(f"/work-items/{work_item_id}").json()["data"]
         before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
@@ -3174,9 +3154,29 @@ def test_trusted_delivery_eligibility_report_evaluates_local_evidence_without_mu
 
     _reset_supervisor_modules()
 
-    from supervisor.api.main import app
+    from supervisor.api import main as api_main
 
-    with TestClient(app) as client:
+    def fake_git_output(args: list[str]) -> tuple[bool, str]:
+        command = tuple(args)
+        if command == ("git", "branch", "--show-current"):
+            return True, "codex/trusted-delivery"
+        if command == ("git", "rev-parse", "--short", "HEAD"):
+            return True, "abc1234"
+        if command == ("git", "status", "--porcelain=v1"):
+            return True, " M services/supervisor/src/supervisor/application/service.py"
+        if command == ("git", "rev-parse", "--verify", "main"):
+            return True, "main"
+        if command == ("git", "rev-list", "--count", "main..HEAD"):
+            return True, "1"
+        if command == ("git", "diff", "--stat", "main...HEAD"):
+            return True, "services/supervisor/src/supervisor/application/service.py | 1 +"
+        if command == ("git", "diff", "--name-status", "main...HEAD"):
+            return True, "M\tservices/supervisor/src/supervisor/application/service.py"
+        return False, "unexpected git command"
+
+    monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
+
+    with TestClient(api_main.app) as client:
         work_item_id = _create_routing_work_item(client)
         before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
         response = client.get("/supervisor/trusted-delivery-eligibility-report")
