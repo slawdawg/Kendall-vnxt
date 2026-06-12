@@ -69,6 +69,12 @@
   requires them. Prefer targeted edits that keep diffs reviewable.
 - When adding durable agent behavior, update this `AGENTS.md` rather than
   relying only on a one-off chat reminder.
+- Use the matching BMAD-method skill for BMAD work instead of doing an
+  informal shortcut. Before creating or changing epics, stories, PRDs,
+  architecture notes, sprint plans, retrospectives, reviews, or BMAD-driven
+  implementation artifacts, load and follow the relevant `bmad-*` skill and
+  preserve its intended interactive checkpoints unless Bob explicitly asks for
+  a non-BMAD shortcut.
 - If command output is needed for diagnosis, prefer concise structured output
   over formatted tables. Use `Select-Object` for properties and only format for
   final human display.

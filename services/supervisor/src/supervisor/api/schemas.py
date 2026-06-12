@@ -253,6 +253,36 @@ class WorkItemExecutionAttemptTransitionRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkItemSupervisedCodexLaunchRequest(BaseModel):
+    taskId: str
+    dryRun: bool = True
+    allowedPaths: list[str]
+    blockedPaths: list[str]
+    verificationCommand: str
+    outputSummary: str
+    touchedFiles: list[str] = Field(default_factory=list)
+    routeDecisionId: str | None = None
+    workerId: str | None = None
+    lane: str | None = None
+    authorityMode: str | None = None
+    approvalTimestamp: datetime | None = None
+    expiresAt: datetime | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
+class WorkItemVerificationEvidenceRequest(BaseModel):
+    commandId: str
+    label: str
+    commandShape: str
+    status: str
+    exitCode: int | None = None
+    durationMs: int | None = None
+    summary: str
+    artifactRef: str | None = None
+    recoveryAction: str
+
+
 class WorkspaceIsolationPlanView(BaseModel):
     planId: str
     sourceSnapshotStrategy: str
@@ -1156,6 +1186,68 @@ class CodexImplementationApprovalRequirementView(BaseModel):
     evidence: list[str]
 
 
+class CodexLaunchApprovalBindingView(BaseModel):
+    workItemId: str
+    routeDecisionId: str
+    attemptId: str
+    workerId: str
+    lane: str
+    authorityMode: str
+    workspacePlanId: str
+    policyId: str
+    approvedScope: list[str]
+    expiresAt: datetime
+
+
+class CodexLaunchPermissionEnvelopeView(BaseModel):
+    allowedPaths: list[str]
+    blockedPaths: list[str]
+    allowedCommandShape: list[str]
+    verificationCommand: str
+    timeoutSeconds: int
+    budget: str
+    evidenceOutputs: list[str]
+    stopConditions: list[str]
+
+
+class CodexLaunchContractEvaluationView(BaseModel):
+    status: str
+    launchApproved: bool
+    processLaunchAttempted: bool
+    blockedReason: str | None = None
+    unsafeField: str | None = None
+    summary: str
+
+
+class CodexLaunchContractView(BaseModel):
+    contractId: str
+    targetWorkItem: str
+    routeDecision: str
+    attemptId: str
+    workerId: str
+    lane: str
+    authorityMode: str
+    workspacePlan: str
+    approvalBinding: CodexLaunchApprovalBindingView
+    permissionEnvelope: CodexLaunchPermissionEnvelopeView
+    evidenceToRetain: list[str]
+    evaluation: CodexLaunchContractEvaluationView
+
+
+class CodexLaunchContractFixtureView(BaseModel):
+    fixtureId: str
+    label: str
+    mutatedField: str
+    evaluation: CodexLaunchContractEvaluationView
+
+
+class CodexBlockedAuthorityView(BaseModel):
+    authorityId: str
+    label: str
+    status: str
+    summary: str
+
+
 class CodexImplementationApprovalReportView(BaseModel):
     reportId: str
     generatedAt: datetime
@@ -1171,6 +1263,9 @@ class CodexImplementationApprovalReportView(BaseModel):
     rollbackPlan: list[str]
     stopConditions: list[str]
     requirements: list[CodexImplementationApprovalRequirementView]
+    launchContract: CodexLaunchContractView
+    launchContractFixtures: list[CodexLaunchContractFixtureView]
+    blockedAuthorities: list[CodexBlockedAuthorityView]
     nextSafeActions: list[str]
     readOnly: bool = True
     processLaunchApproved: bool = False
@@ -1281,9 +1376,11 @@ class GitHubDeliveryAuthorityReportView(BaseModel):
 class TrustedDeliveryEligibilityCheckView(BaseModel):
     checkId: str
     label: str
+    gateFamily: str
     status: str
     summary: str
     evidence: list[str] = Field(default_factory=list)
+    blockedReason: str | None = None
 
 
 class TrustedDeliveryEligibilityStageEvaluationView(BaseModel):
@@ -1297,6 +1394,69 @@ class TrustedDeliveryEligibilityStageEvaluationView(BaseModel):
     nextAction: str
 
 
+class TrustedDeliveryDiffGuardFileView(BaseModel):
+    path: str
+    changeType: str
+    classification: str
+    reason: str
+
+
+class TrustedDeliveryDiffGuardView(BaseModel):
+    approvedFiles: list[str]
+    allowedGlobs: list[str]
+    forbiddenPaths: list[str]
+    generatedFileRules: list[str]
+    userOwnedDirtyFileRules: list[str]
+    status: str
+    blockedReason: str | None = None
+    changedFiles: list[TrustedDeliveryDiffGuardFileView]
+    blockedPaths: list[str]
+    recommendation: str
+
+
+class TrustedDeliveryDiffGuardFixtureView(BaseModel):
+    fixtureId: str
+    label: str
+    guard: TrustedDeliveryDiffGuardView
+
+
+class TrustedDeliveryVerificationEvidenceView(BaseModel):
+    commandId: str
+    label: str
+    commandShape: str
+    status: str
+    exitCode: int | None = None
+    durationMs: int | None = None
+    summary: str
+    artifactRef: str | None = None
+    recoveryAction: str
+    rawOutputRetained: bool = False
+
+
+class TrustedDeliveryVerificationEvidenceFixtureView(BaseModel):
+    fixtureId: str
+    label: str
+    evidence: TrustedDeliveryVerificationEvidenceView
+    greenGateContribution: str
+    blockedReason: str | None = None
+
+
+class TrustedDeliveryActionEligibilityView(BaseModel):
+    actionId: str
+    label: str
+    status: str
+    evidence: list[str]
+    blockedReasons: list[str]
+    nextAction: str
+    executionApproved: bool = False
+
+
+class TrustedDeliveryActionEligibilityFixtureView(BaseModel):
+    fixtureId: str
+    label: str
+    actions: list[TrustedDeliveryActionEligibilityView]
+
+
 class TrustedDeliveryEligibilityReportView(BaseModel):
     reportId: str
     generatedAt: datetime
@@ -1307,6 +1467,12 @@ class TrustedDeliveryEligibilityReportView(BaseModel):
     workingTreeStatus: str
     commitsAhead: int
     diffStat: str
+    diffGuard: TrustedDeliveryDiffGuardView
+    diffGuardFixtures: list[TrustedDeliveryDiffGuardFixtureView]
+    verificationEvidenceFixtures: list[TrustedDeliveryVerificationEvidenceFixtureView]
+    actionEligibility: list[TrustedDeliveryActionEligibilityView]
+    actionEligibilityFixtures: list[TrustedDeliveryActionEligibilityFixtureView]
+    unrelatedAuthoritiesBlocked: list[str]
     stages: list[TrustedDeliveryEligibilityStageEvaluationView]
     hardStops: list[str]
     nextSafeActions: list[str]

@@ -160,3 +160,17 @@ Stories under `1-*` and `2-*` establish the current safe foundation:
 ## Current Rule
 
 Generic continuation language does not approve blocked post-MVP authority stories. Use `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md` before moving any blocked story to ready.
+
+## Draft Epic 7 Story Map
+
+Epic 7 starts after the Epic 6 retrospective. Its theme is useful supervised execution: prove one bounded Codex worker doing useful work before subscription-agent launch or broad autonomy.
+
+| Story | Slice |
+| --- | --- |
+| `7-1-define-green-gate-delivery-readiness-contract.md` | Review first Epic 7 story defining the green-gate delivery readiness contract, negative fixtures, machine-checkable blocked reasons, and read-only authority boundary before mutating worker launch. |
+| `7-2-define-bounded-codex-worker-launch-contract.md` | Review Codex launch authority envelope with stale/mismatch rejection and no-launch enforcement. |
+| `7-3-block-out-of-scope-diffs-before-worker-mutation.md` | Review diff guard that blocks unexpected file changes before real worker mutation can become delivery-eligible. |
+| `7-4-run-first-supervised-codex-worker-launch.md` | Review first real bounded Codex launch story, gated by explicit approval and prior diff guard. |
+| `7-5-record-verification-results-and-recovery-evidence.md` | Review verification and recovery evidence story for supervised worker output. |
+| `7-6-show-green-gate-readiness-in-dev-console.md` | Review Dev Console readiness view consuming real persisted green-gate evidence. |
+| `7-7-compute-pr-merge-cleanup-eligibility-from-green-gate-evidence.md` | Review eligibility computation for PR, merge, and cleanup, reporting readiness without performing gated actions. |

@@ -219,6 +219,36 @@ export interface ExecutionAttemptTransitionRequest {
   actorLabel?: string | null;
 }
 
+export interface SupervisedCodexLaunchRequest {
+  taskId: string;
+  dryRun: boolean;
+  allowedPaths: string[];
+  blockedPaths: string[];
+  verificationCommand: string;
+  outputSummary: string;
+  touchedFiles: string[];
+  routeDecisionId?: string | null;
+  workerId?: string | null;
+  lane?: string | null;
+  authorityMode?: string | null;
+  approvalTimestamp?: string | null;
+  expiresAt?: string | null;
+  actorId?: string | null;
+  actorLabel?: string | null;
+}
+
+export interface VerificationEvidenceRecordRequest {
+  commandId: string;
+  label: string;
+  commandShape: string;
+  status: string;
+  exitCode?: number | null;
+  durationMs?: number | null;
+  summary: string;
+  artifactRef?: string | null;
+  recoveryAction: string;
+}
+
 export interface WorkspaceIsolationPlanView {
   planId: string;
   sourceSnapshotStrategy: string;
@@ -1047,6 +1077,68 @@ export interface CodexImplementationApprovalRequirementView {
   evidence: string[];
 }
 
+export interface CodexLaunchApprovalBindingView {
+  workItemId: string;
+  routeDecisionId: string;
+  attemptId: string;
+  workerId: string;
+  lane: string;
+  authorityMode: string;
+  workspacePlanId: string;
+  policyId: string;
+  approvedScope: string[];
+  expiresAt: string;
+}
+
+export interface CodexLaunchPermissionEnvelopeView {
+  allowedPaths: string[];
+  blockedPaths: string[];
+  allowedCommandShape: string[];
+  verificationCommand: string;
+  timeoutSeconds: number;
+  budget: string;
+  evidenceOutputs: string[];
+  stopConditions: string[];
+}
+
+export interface CodexLaunchContractEvaluationView {
+  status: string;
+  launchApproved: boolean;
+  processLaunchAttempted: boolean;
+  blockedReason?: string | null;
+  unsafeField?: string | null;
+  summary: string;
+}
+
+export interface CodexLaunchContractView {
+  contractId: string;
+  targetWorkItem: string;
+  routeDecision: string;
+  attemptId: string;
+  workerId: string;
+  lane: string;
+  authorityMode: string;
+  workspacePlan: string;
+  approvalBinding: CodexLaunchApprovalBindingView;
+  permissionEnvelope: CodexLaunchPermissionEnvelopeView;
+  evidenceToRetain: string[];
+  evaluation: CodexLaunchContractEvaluationView;
+}
+
+export interface CodexLaunchContractFixtureView {
+  fixtureId: string;
+  label: string;
+  mutatedField: string;
+  evaluation: CodexLaunchContractEvaluationView;
+}
+
+export interface CodexBlockedAuthorityView {
+  authorityId: string;
+  label: string;
+  status: string;
+  summary: string;
+}
+
 export interface CodexImplementationApprovalReportView {
   reportId: string;
   generatedAt: string;
@@ -1062,6 +1154,9 @@ export interface CodexImplementationApprovalReportView {
   rollbackPlan: string[];
   stopConditions: string[];
   requirements: CodexImplementationApprovalRequirementView[];
+  launchContract: CodexLaunchContractView;
+  launchContractFixtures: CodexLaunchContractFixtureView[];
+  blockedAuthorities: CodexBlockedAuthorityView[];
   nextSafeActions: string[];
   readOnly: boolean;
   processLaunchApproved: boolean;
@@ -1172,9 +1267,11 @@ export interface GitHubDeliveryAuthorityReportView {
 export interface TrustedDeliveryEligibilityCheckView {
   checkId: string;
   label: string;
+  gateFamily: string;
   status: string;
   summary: string;
   evidence: string[];
+  blockedReason?: string | null;
 }
 
 export interface TrustedDeliveryEligibilityStageEvaluationView {
@@ -1188,6 +1285,69 @@ export interface TrustedDeliveryEligibilityStageEvaluationView {
   nextAction: string;
 }
 
+export interface TrustedDeliveryDiffGuardFileView {
+  path: string;
+  changeType: string;
+  classification: string;
+  reason: string;
+}
+
+export interface TrustedDeliveryDiffGuardView {
+  approvedFiles: string[];
+  allowedGlobs: string[];
+  forbiddenPaths: string[];
+  generatedFileRules: string[];
+  userOwnedDirtyFileRules: string[];
+  status: string;
+  blockedReason?: string | null;
+  changedFiles: TrustedDeliveryDiffGuardFileView[];
+  blockedPaths: string[];
+  recommendation: string;
+}
+
+export interface TrustedDeliveryDiffGuardFixtureView {
+  fixtureId: string;
+  label: string;
+  guard: TrustedDeliveryDiffGuardView;
+}
+
+export interface TrustedDeliveryVerificationEvidenceView {
+  commandId: string;
+  label: string;
+  commandShape: string;
+  status: string;
+  exitCode?: number | null;
+  durationMs?: number | null;
+  summary: string;
+  artifactRef?: string | null;
+  recoveryAction: string;
+  rawOutputRetained: boolean;
+}
+
+export interface TrustedDeliveryVerificationEvidenceFixtureView {
+  fixtureId: string;
+  label: string;
+  evidence: TrustedDeliveryVerificationEvidenceView;
+  greenGateContribution: string;
+  blockedReason?: string | null;
+}
+
+export interface TrustedDeliveryActionEligibilityView {
+  actionId: string;
+  label: string;
+  status: string;
+  evidence: string[];
+  blockedReasons: string[];
+  nextAction: string;
+  executionApproved: boolean;
+}
+
+export interface TrustedDeliveryActionEligibilityFixtureView {
+  fixtureId: string;
+  label: string;
+  actions: TrustedDeliveryActionEligibilityView[];
+}
+
 export interface TrustedDeliveryEligibilityReportView {
   reportId: string;
   generatedAt: string;
@@ -1198,6 +1358,12 @@ export interface TrustedDeliveryEligibilityReportView {
   workingTreeStatus: string;
   commitsAhead: number;
   diffStat: string;
+  diffGuard: TrustedDeliveryDiffGuardView;
+  diffGuardFixtures: TrustedDeliveryDiffGuardFixtureView[];
+  verificationEvidenceFixtures: TrustedDeliveryVerificationEvidenceFixtureView[];
+  actionEligibility: TrustedDeliveryActionEligibilityView[];
+  actionEligibilityFixtures: TrustedDeliveryActionEligibilityFixtureView[];
+  unrelatedAuthoritiesBlocked: string[];
   stages: TrustedDeliveryEligibilityStageEvaluationView[];
   hardStops: string[];
   nextSafeActions: string[];

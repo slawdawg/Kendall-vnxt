@@ -246,6 +246,10 @@ export async function getTrustedDeliveryEligibilityReport(): Promise<TrustedDeli
   return requestJson<TrustedDeliveryEligibilityReportView>("/supervisor/trusted-delivery-eligibility-report");
 }
 
+export async function getWorkItemTrustedDeliveryEligibilityReport(workItemId: string): Promise<TrustedDeliveryEligibilityReportView> {
+  return requestJson<TrustedDeliveryEligibilityReportView>(`/work-items/${workItemId}/trusted-delivery-eligibility-report`);
+}
+
 export async function getGitHygieneReport(): Promise<GitHygieneReportView> {
   return requestJson<GitHygieneReportView>("/supervisor/git-hygiene-report");
 }
