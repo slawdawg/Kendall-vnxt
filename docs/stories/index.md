@@ -217,3 +217,4 @@ Epic 11 starts after the Epic 10 retrospective. Its theme is current-state recon
 | `11-1-reconcile-planning-status-after-epic-10-delivery.md` | Done reconciliation story for aligning story, PRD, architecture, sprint, and PR-state claims with current implementation evidence. |
 | `11-2-refresh-authority-readiness-matrix-from-current-evidence.md` | Done story for refreshing the authority readiness matrix with current delivery, cleanup, provider, process, premium, and scoring evidence without granting new authority. |
 | `11-3-create-next-lane-authority-decision-packet.md` | Done story for creating a decision-only packet comparing the next candidate authority lanes without executing or approving any lane. |
+| `11-4-show-reconciliation-and-next-lane-readiness-in-dev-console.md` | Done story for showing reconciliation state and next-lane readiness in the Dev Console without adding execution controls. |

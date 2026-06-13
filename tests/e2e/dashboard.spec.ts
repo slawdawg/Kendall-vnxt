@@ -525,6 +525,16 @@ test.describe("dashboard workflow coverage", () => {
     const authorityMatrixPanel = page.locator("section").filter({ hasText: "Execution authority matrix" }).first();
     await expect(authorityMatrixPanel.getByText("Authority readiness", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Execution authority matrix")).toBeVisible();
+    await expect(authorityMatrixPanel.getByRole("heading", { name: "Current-state reconciliation" })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("ci_green_external_review_blocked")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("Local story completion is recorded")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("not directly into main")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("Merged-to-main state remains false")).toBeVisible();
+    await expect(authorityMatrixPanel.getByRole("heading", { name: "Next-lane authority packet" })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("decision_only_no_authority_granted")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("Execution blocked")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("Do not treat the decision packet recommendation as approval.")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("local-provider-execution")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("subscription-agent-launch")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("adaptive-scoring")).toBeVisible();
