@@ -1600,6 +1600,8 @@ class DeliveryExecutionEvidencePayload(BaseModel):
     recordEvent: bool = False
     approvalId: str | None = None
     policyId: str | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
     expectedBranch: str | None = None
     expectedHeadRevision: str | None = None
     pullRequestUrl: str | None = None
@@ -1615,6 +1617,29 @@ class DeliveryExecutionEvidencePayload(BaseModel):
     summary: str | None = None
     artifactRefs: list[str] = Field(default_factory=list)
     recoveryPath: str | None = None
+
+
+class DeliveryApprovalLedgerEntryView(BaseModel):
+    approvalId: str
+    authorityFamily: str
+    policyId: str
+    actionId: Literal["pr", "merge"]
+    workItemId: str
+    targetBranch: str
+    baseBranch: str
+    headRevision: str
+    pullRequestUrl: str
+    pullRequestHeadRevision: str
+    ciStatus: str
+    reviewState: str
+    mergeStatus: str | None = None
+    retainedEvidence: list[str] = Field(default_factory=list)
+    approvedBy: str
+    approvedAt: str | None = None
+    expiresAt: str | None = None
+    reviewPoint: str | None = None
+    rollbackPlan: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
 
 
 class DeliveryExecutionEvidenceView(BaseModel):
@@ -1638,6 +1663,7 @@ class DeliveryExecutionEvidenceView(BaseModel):
     exitCode: int | None = None
     summary: str
     artifactRefs: list[str] = Field(default_factory=list)
+    approvalReference: str | None = None
     recoveryPath: str
     rawOutputRetained: bool = False
     cleanupAllowed: bool = False

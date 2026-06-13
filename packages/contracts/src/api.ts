@@ -1489,6 +1489,8 @@ export interface DeliveryExecutionEvidencePayload {
   recordEvent?: boolean;
   approvalId?: string | null;
   policyId?: string | null;
+  actorId?: string | null;
+  actorLabel?: string | null;
   expectedBranch?: string | null;
   expectedHeadRevision?: string | null;
   pullRequestUrl?: string | null;
@@ -1504,6 +1506,29 @@ export interface DeliveryExecutionEvidencePayload {
   summary?: string | null;
   artifactRefs?: string[];
   recoveryPath?: string | null;
+}
+
+export interface DeliveryApprovalLedgerEntryView {
+  approvalId: string;
+  authorityFamily: string;
+  policyId: string;
+  actionId: "pr" | "merge";
+  workItemId: string;
+  targetBranch: string;
+  baseBranch: string;
+  headRevision: string;
+  pullRequestUrl: string;
+  pullRequestHeadRevision: string;
+  ciStatus: string;
+  reviewState: string;
+  mergeStatus?: string | null;
+  retainedEvidence: string[];
+  approvedBy: string;
+  approvedAt?: string | null;
+  expiresAt?: string | null;
+  reviewPoint?: string | null;
+  rollbackPlan: string[];
+  stopLines: string[];
 }
 
 export interface DeliveryExecutionEvidenceView {
@@ -1527,6 +1552,7 @@ export interface DeliveryExecutionEvidenceView {
   exitCode?: number | null;
   summary: string;
   artifactRefs: string[];
+  approvalReference?: string | null;
   recoveryPath: string;
   rawOutputRetained: boolean;
   cleanupAllowed: boolean;
