@@ -61,8 +61,19 @@ for (const serviceText of [
   "local-provider-execution",
   "subscription-agent-launch",
   "premium-execution",
+  "adaptive-scoring",
   "worker-command-source-network-credentials",
   "remote-delivery-automation",
+  "github-delivery",
+  "cleanup-automation",
+  "evidence_ready_approval_required",
+  "rollbackPath",
+  "PR #103",
+  "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md",
+  "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md",
+  "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md",
+  "docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md",
+  "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md",
   "Authority readiness matrix entries are not execution-authority approvals.",
   "docs/stories/3-53-authority-readiness-matrix-report.md",
 ]) {
@@ -86,12 +97,21 @@ assertCondition(
 );
 
 for (const panelText of [
+  "AuthorityListSection",
   "AuthorityReadinessMatrixReportView",
   "Authority families",
   "Readiness ladder",
+  "isApprovalRequired",
+  "data-status-kind",
   "family.requiredApprovals",
+  "family.requiredEvidence",
   "family.blockedStories",
+  "family.relatedReports",
+  "family.relatedDocs",
   "family.dashboardAnchors",
+  "family.rollbackPath",
+  "Rollback path:",
+  "Missing required",
   "stopLines",
   "nextSafeActions",
 ]) {
@@ -103,8 +123,14 @@ for (const browserText of [
   "Execution authority matrix",
   "local-provider-execution",
   "subscription-agent-launch",
+  "adaptive-scoring",
   "worker-command-source-network-credentials",
   "remote-delivery-automation",
+  "github-delivery",
+  "cleanup-automation",
+  "data-status-kind",
+  "evidence_ready_approval_required",
+  "Rollback path:",
   "Authority readiness matrix entries are not execution-authority approvals.",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert ${browserText}`, failures);
@@ -115,10 +141,21 @@ for (const testText of [
   '"/supervisor/authority-readiness-matrix-report"',
   '"local-provider-execution"',
   '"subscription-agent-launch"',
+  '"adaptive-scoring"',
   '"remote-delivery-automation"',
+  '"github-delivery"',
+  '"cleanup-automation"',
+  '"rollbackPath"',
+  '["rollbackPath"].strip()',
+  '["requiredEvidence"]',
+  '"evidence_ready_approval_required"',
   "docs/stories/3-53-authority-readiness-matrix-report.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
+}
+
+for (const schemaText of ["field_validator", "Field(min_length=1)", "rollback_path_must_not_be_blank"]) {
+  assertCondition(schemaSource.includes(schemaText), `Supervisor schema must validate rollbackPath with ${schemaText}`, failures);
 }
 
 assertCondition(
@@ -144,9 +181,21 @@ assertCondition(
 
 const storyPath = "docs/stories/3-53-authority-readiness-matrix-report.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing authority readiness matrix story ${storyPath}`, failures);
+const refreshedStoryPath = "docs/stories/11-2-refresh-authority-readiness-matrix-from-current-evidence.md";
+assertCondition(existsSync(join(rootDir, refreshedStoryPath)), `Missing refreshed authority readiness story ${refreshedStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-53-authority-readiness-matrix-report.md"),
   "Story index must reference Story 3.53 authority readiness matrix report",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("11-2-refresh-authority-readiness-matrix-from-current-evidence.md"),
+  "Story index must reference Story 11.2 refreshed authority readiness matrix",
+  failures,
+);
+assertCondition(
+  reconciliation.includes("GitHub delivery") && reconciliation.includes("cleanup"),
+  "Implementation reconciliation must mention current delivery and cleanup evidence for authority readiness context",
   failures,
 );
 assertCondition(

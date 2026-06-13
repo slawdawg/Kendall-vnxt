@@ -5,26 +5,52 @@ function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-function AuthorityFamilyCard({ family }: { family: AuthorityReadinessFamilyView }) {
+function AuthorityListSection({ title, items }: { title: string; items: string[] }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+      <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{title}</p>
+      <div className="mt-2 space-y-1">
+        {items.length > 0 ? (
+          items.map((item) => (
+            <p key={item} className="break-all text-xs leading-5 text-[var(--muted)]">
+              {item}
+            </p>
+          ))
+        ) : (
+          <p className="text-xs leading-5 text-[var(--warn)]">Missing required {title.toLowerCase()}.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AuthorityFamilyCard({ family }: { family: AuthorityReadinessFamilyView }) {
+  const isApprovalRequired = family.status.includes("blocked") || family.status.includes("approval_required");
+  const statusKind = isApprovalRequired ? "blocked" : "review";
+
+  return (
+    <article
+      data-family-id={family.familyId}
+      data-status-kind={statusKind}
+      className={`rounded-[1rem] border bg-[var(--panel)] p-3 ${isApprovalRequired ? "border-[var(--warn)]/40" : "border-[var(--accent)]/40"}`}
+    >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{family.familyId}</p>
           <h5 className="mt-1 text-sm font-semibold">{family.label}</h5>
         </div>
-        <span className="w-fit rounded-full bg-[var(--surface)] px-3 py-1 font-mono text-[11px] text-[var(--muted)]">
+        <span className={`w-fit rounded-full bg-[var(--surface)] px-3 py-1 font-mono text-[11px] ${isApprovalRequired ? "text-[var(--warn)]" : "text-[var(--accent)]"}`}>
           {family.status}
         </span>
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{family.summary}</p>
 
-      <div className="mt-3 grid gap-2">
-        {family.requiredApprovals.map((approval) => (
-          <p key={approval} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
-            {approval}
-          </p>
-        ))}
+      <div className="mt-3">
+        <AuthorityListSection title="Required approvals" items={family.requiredApprovals} />
+      </div>
+
+      <div className="mt-3">
+        <AuthorityListSection title="Required evidence" items={family.requiredEvidence} />
       </div>
 
       {family.blockedStories.length > 0 ? (
@@ -39,6 +65,11 @@ function AuthorityFamilyCard({ family }: { family: AuthorityReadinessFamilyView 
           </div>
         </div>
       ) : null}
+
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <AuthorityListSection title="Related reports" items={family.relatedReports} />
+        <AuthorityListSection title="Related docs" items={family.relatedDocs} />
+      </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {family.dashboardAnchors.map((anchor) => (
@@ -56,6 +87,9 @@ function AuthorityFamilyCard({ family }: { family: AuthorityReadinessFamilyView 
         ))}
       </div>
 
+      <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        <span className="font-semibold text-[var(--foreground)]">Rollback path:</span> {family.rollbackPath}
+      </p>
       <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{family.nextAction}</p>
     </article>
   );

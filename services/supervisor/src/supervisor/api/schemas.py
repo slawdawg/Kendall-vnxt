@@ -1,7 +1,7 @@
 ﻿from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
 from supervisor.domain.types import (
     AuditMode,
@@ -867,7 +867,15 @@ class AuthorityReadinessFamilyView(BaseModel):
     relatedDocs: list[str] = Field(default_factory=list)
     dashboardAnchors: list[str] = Field(default_factory=list)
     stopLines: list[str] = Field(default_factory=list)
+    rollbackPath: str = Field(min_length=1)
     nextAction: str
+
+    @field_validator("rollbackPath")
+    @classmethod
+    def rollback_path_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("rollbackPath must not be blank")
+        return value
 
 
 class AuthorityReadinessMatrixReportView(BaseModel):

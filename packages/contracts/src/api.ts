@@ -815,6 +815,7 @@ export interface AuthorityReadinessFamilyView {
   relatedDocs: string[];
   dashboardAnchors: string[];
   stopLines: string[];
+  rollbackPath: string;
   nextAction: string;
 }
 
