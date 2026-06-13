@@ -259,3 +259,13 @@ Stories in this epic do not approve paid provider calls, credential/session acce
 | Story | Summary |
 | --- | --- |
 | `15-1-refresh-premium-execution-approval-packet.md` | Done story for refreshing the premium-execution approval packet with provider/account boundary, cost ceiling, data classification, audit evidence, retained evidence, abort policy, rollback path, and stop lines without making a paid call. |
+
+## Draft Epic 16 Story Map
+
+Epic 16 starts after the premium-execution approval packet. Its theme is subscription-agent process-launch approval readiness: refresh the deferred Story 5.5 direct-launch envelope from current Epic 8 evidence without launching a real process.
+
+Stories in this epic do not approve process launch, shell expansion, credential/session inheritance, provider calls, source mutation, generated patch application, issue sync, PR delivery, cleanup, or failed-check bypass.
+
+| Story | Summary |
+| --- | --- |
+| `16-1-refresh-subscription-agent-process-launch-approval-packet.md` | Done story for refreshing the subscription-agent process-launch approval packet with workspace, command, environment, lifecycle, output, retention, verification, rollback, and stop-line requirements without launching a process. |
