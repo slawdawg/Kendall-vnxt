@@ -1,10 +1,11 @@
-import asyncio
+﻿import asyncio
 import json
 import sqlite3
 import socket
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
@@ -36,6 +37,71 @@ def _freeze_subscription_launch_now(monkeypatch, value: datetime = STORY_8_5_APP
     from supervisor.application.service import SupervisorService
 
     monkeypatch.setattr(SupervisorService, "_subscription_launch_now", lambda self: value)
+
+
+def _delivery_approval_entry(
+    *,
+    approval_id: str,
+    work_item_id: str,
+    action_id: str,
+    plan: dict,
+    pull_request_url: str,
+    ci_status: str = "passed",
+    review_state: str = "approved",
+    merge_status: str | None = None,
+    artifact_refs: list[str] | None = None,
+    approved_by: str = "Bob",
+    approved_at: str = "2000-01-01T00:00:00+00:00",
+    expires_at: str | None = "2099-01-01T00:00:00+00:00",
+    rollback_plan: list[str] | None = None,
+    stop_lines: list[str] | None = None,
+) -> dict:
+    return {
+        "approvalId": approval_id,
+        "authorityFamily": "github_delivery",
+        "policyId": "low-risk-delivery-policy-v1",
+        "actionId": action_id,
+        "workItemId": work_item_id,
+        "targetBranch": plan["currentBranch"],
+        "baseBranch": plan["baseBranch"],
+        "headRevision": plan["headRevision"],
+        "pullRequestUrl": pull_request_url,
+        "pullRequestHeadRevision": plan["headRevision"],
+        "ciStatus": ci_status,
+        "reviewState": review_state,
+        "mergeStatus": merge_status,
+        "retainedEvidence": artifact_refs or [],
+        "approvedBy": approved_by,
+        "approvedAt": approved_at,
+        "expiresAt": expires_at,
+        "reviewPoint": None,
+        "rollbackPlan": rollback_plan
+        if rollback_plan is not None
+        else ["preserve retained delivery evidence and inspect before retry"],
+        "stopLines": stop_lines
+        if stop_lines is not None
+        else ["no provider expansion", "no issue sync", "no failed-check bypass", "no broad autonomy"],
+    }
+
+
+def _write_delivery_approval_ledger(db_path: str, work_item_id: str, entries: list[dict]) -> None:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("select metadata_json from work_items where id = ?", (work_item_id,)).fetchone()
+        metadata = json.loads(row[0]) if row and isinstance(row[0], str) and row[0] else {}
+        metadata["deliveryApprovalLedger"] = entries
+        conn.execute("update work_items set metadata_json = ? where id = ?", (json.dumps(metadata), work_item_id))
+        conn.commit()
+
+
+def _append_delivery_execution_metadata(db_path: str, work_item_id: str, entry: dict) -> None:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("select metadata_json from work_items where id = ?", (work_item_id,)).fetchone()
+        metadata = json.loads(row[0]) if row and isinstance(row[0], str) and row[0] else {}
+        entries = [item for item in metadata.get("deliveryExecutionEvidence", []) if isinstance(item, dict)]
+        entries.append(entry)
+        metadata["deliveryExecutionEvidence"] = entries
+        conn.execute("update work_items set metadata_json = ? where id = ?", (json.dumps(metadata), work_item_id))
+        conn.commit()
 
 
 def test_routing_preview_selects_utility_for_deterministic_checks() -> None:
@@ -1750,27 +1816,82 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     assert report["reportId"] == "authority-readiness-matrix-report-v1"
     assert report["readOnly"] is True
     assert report["executionAuthorityApproved"] is False
+    assert {finding["findingId"] for finding in report["currentStateFindings"]} == {
+        "planning-reconciliation-current",
+        "pr-103-review-gated",
+    }
+    pr_finding = next(finding for finding in report["currentStateFindings"] if finding["findingId"] == "pr-103-review-gated")
+    assert pr_finding["status"] == "ci_green_external_review_blocked"
+    assert any("mergeStateStatus=BLOCKED" in evidence for evidence in pr_finding["evidence"])
+    assert any("Local story completion is recorded" in evidence for evidence in pr_finding["evidence"])
+    assert any("merged into codex/epic-10-delivery-cleanup-plans, not directly into main" in evidence for evidence in pr_finding["evidence"])
+    assert any("Merged-to-main state remains false" in evidence for evidence in pr_finding["evidence"])
+    packet = report["nextLaneDecisionPacket"]
+    assert packet["packetId"] == "epic-11-next-lane-authority-decision-packet-2026-06-13"
+    assert packet["status"] == "decision_only_no_authority_granted"
+    assert packet["approvalRequired"] is True
+    assert packet["noAuthorityGranted"] is True
+    assert "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md" in packet["packetPath"]
+    assert any("Do not treat the decision packet recommendation as approval" in stop_line for stop_line in packet["stopLines"])
     assert {family["familyId"] for family in report["families"]} == {
         "local-provider-execution",
         "subscription-agent-launch",
         "premium-execution",
+        "adaptive-scoring",
         "worker-command-source-network-credentials",
         "remote-delivery-automation",
+        "github-delivery",
+        "cleanup-automation",
     }
+    for family in report["families"]:
+        assert family["rollbackPath"].strip()
+        assert family["requiredApprovals"]
+        assert family["requiredEvidence"]
+        assert family["relatedReports"]
+        assert family["relatedDocs"]
+        assert family["stopLines"]
     provider_family = next(family for family in report["families"] if family["familyId"] == "local-provider-execution")
     assert provider_family["status"] == "blocked_pending_explicit_approval"
     assert provider_family["blockedStories"] == [
         "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md"
     ]
     assert "GET /supervisor/disabled-provider-proofs" in provider_family["relatedReports"]
+    assert "no-call fixture evidence" in provider_family["rollbackPath"]
     launch_family = next(family for family in report["families"] if family["familyId"] == "subscription-agent-launch")
     assert "docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md" in launch_family["blockedStories"]
     assert "/controls#maintenance-action-plan-report" in launch_family["dashboardAnchors"]
+    scoring_family = next(family for family in report["families"] if family["familyId"] == "adaptive-scoring")
+    assert scoring_family["status"] == "blocked_pending_explicit_approval"
+    assert "GET /supervisor/development-runway-report" in scoring_family["relatedReports"]
+    assert any("Do not run adaptive scoring" in stop_line for stop_line in scoring_family["stopLines"])
     command_family = next(family for family in report["families"] if family["familyId"] == "worker-command-source-network-credentials")
     assert command_family["status"] == "blocked_by_default"
     assert any("Blocked command classes" in evidence for evidence in command_family["requiredEvidence"])
     remote_family = next(family for family in report["families"] if family["familyId"] == "remote-delivery-automation")
     assert "GET /supervisor/delivery-readiness-policy-report" in remote_family["relatedReports"]
+    delivery_family = next(family for family in report["families"] if family["familyId"] == "github-delivery")
+    assert delivery_family["status"] == "evidence_ready_approval_required"
+    assert "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md" in delivery_family["relatedDocs"]
+    assert "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md" in delivery_family["relatedDocs"]
+    assert "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md" in delivery_family["relatedDocs"]
+    assert "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md" in delivery_family["relatedDocs"]
+    assert any("cleanup plan" in evidence for evidence in delivery_family["requiredEvidence"])
+    assert any("PR #103" in evidence for evidence in delivery_family["requiredEvidence"])
+    assert "dry-run planning" in delivery_family["rollbackPath"]
+    cleanup_family = next(family for family in report["families"] if family["familyId"] == "cleanup-automation")
+    assert cleanup_family["status"] == "blocked_pending_explicit_approval"
+    assert "GET /supervisor/local-cleanup-readiness-report" in cleanup_family["relatedReports"]
+    assert "GET /supervisor/remote-cleanup-sync-readiness-report" in cleanup_family["relatedReports"]
+    assert "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md" in cleanup_family["relatedDocs"]
+    assert "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md" in cleanup_family["relatedDocs"]
+    assert "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md" in cleanup_family["relatedDocs"]
+    assert "docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md" in cleanup_family["relatedDocs"]
+    assert "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md" in cleanup_family["relatedDocs"]
+    assert any("Low-risk delivery dry-run plan" in evidence for evidence in cleanup_family["requiredEvidence"])
+    assert any("Delivery execution evidence" in evidence for evidence in cleanup_family["requiredEvidence"])
+    assert any("Trusted authority ledger" in evidence for evidence in cleanup_family["requiredEvidence"])
+    assert any("Do not remove worktrees" in stop_line for stop_line in cleanup_family["stopLines"])
+    assert "leave the target untouched" in cleanup_family["rollbackPath"]
     assert {step["stepId"] for step in report["readinessLadder"]} == {
         "explicit-authority-approval",
         "evidence-surface-alignment",
@@ -4629,6 +4750,1685 @@ def test_delivery_readiness_policy_report_documents_review_gate_without_mutation
     assert {item["itemId"] for item in report["waiverPolicy"]} == {"local-only-waiver", "checkpoint-form-only"}
     assert any("remote delivery automation" in stop_line for stop_line in report["stopLines"])
     assert any("delivery readiness checkpoint form" in stop_line for stop_line in report["stopLines"])
+
+
+def test_low_risk_delivery_plan_reports_dry_run_actions_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "low-risk-delivery-plan.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    def fail_remote_delivery_commands(item) -> list[dict]:
+        raise AssertionError("low-risk delivery plan must not execute remote delivery commands")
+
+    service._remote_delivery_commands = fail_remote_delivery_commands  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        response = client.get("/supervisor/low-risk-delivery-plan")
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    assert report["reportId"] == "low-risk-delivery-plan-report-v1"
+    assert report["readOnly"] is True
+    assert report["remoteMutationApproved"] is False
+    assert report["cleanupApproved"] is False
+    assert report["automaticDeliveryApproved"] is False
+    assert {action["actionId"] for action in report["actions"]} == {"pr", "merge", "cleanup"}
+    assert all(action["readOnly"] is True for action in report["actions"])
+    policy_by_action = {action["actionId"]: action["requiredPolicy"] for action in report["actions"]}
+    assert policy_by_action["pr"] == "low-risk-delivery-policy-v1"
+    assert policy_by_action["merge"] == "low-risk-delivery-policy-v1"
+    assert policy_by_action["cleanup"] == "low-risk-cleanup-policy-v1"
+    assert all("policy-missing" in action["blockedReasons"] for action in report["actions"])
+    assert all(action["status"] == "blocked" for action in report["actions"])
+    assert all(action["eligible"] is False for action in report["actions"])
+    assert all(action["allowedOperations"] == [] for action in report["actions"])
+    assert any("would block push and PR creation" in effect for action in report["actions"] for effect in action["dryRunEffects"])
+    cleanup_action = next(action for action in report["actions"] if action["actionId"] == "cleanup")
+    assert any("would block worktree removal" in effect for effect in cleanup_action["dryRunEffects"])
+    assert any("would block local branch deletion" in effect for effect in cleanup_action["dryRunEffects"])
+    assert any("no push, PR mutation, merge, branch deletion" in report["summary"] for _ in [report])
+    assert any("provider calls" in stop for stop in report["hardStops"])
+
+
+def test_work_item_low_risk_delivery_plan_is_report_only(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "work-item-low-risk-delivery-plan.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app, service
+
+    def fail_remote_delivery_commands(item) -> list[dict]:
+        raise AssertionError("work-item delivery plan must not execute remote delivery commands")
+
+    service._remote_delivery_commands = fail_remote_delivery_commands  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Low-risk delivery plan fixture",
+                "requestedOutcome": "Preview PR, merge, and cleanup plan.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+    report = response.json()["data"]
+    assert report["workItemId"] == work_item_id
+    assert report["readOnly"] is True
+    assert report["prRef"] is None
+    pr_action = next(action for action in report["actions"] if action["actionId"] == "pr")
+    merge_action = next(action for action in report["actions"] if action["actionId"] == "merge")
+    cleanup_action = next(action for action in report["actions"] if action["actionId"] == "cleanup")
+    assert pr_action["status"] == "blocked"
+    assert pr_action["eligible"] is False
+    assert pr_action["allowedOperations"] == []
+    assert "policy-missing" in pr_action["blockedReasons"]
+    assert merge_action["status"] == "blocked"
+    assert cleanup_action["status"] == "blocked"
+    assert any("would block merge" in effect for effect in merge_action["dryRunEffects"])
+    assert any("would block worktree removal" in effect for effect in cleanup_action["dryRunEffects"])
+    assert any("would block local branch deletion" in effect for effect in cleanup_action["dryRunEffects"])
+
+
+def test_work_item_low_risk_delivery_plan_blocks_stale_pr_head(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "work-item-low-risk-delivery-plan-stale-head.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Stale PR head fixture",
+                "requestedOutcome": "Preview stale PR head blocking.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/999",
+                    "pullRequestStatus": "open",
+                    "pullRequestHeadRevision": "stale-head",
+                    "ciStatus": "passed",
+                    "mergeStatus": "ready",
+                    "deliveryWaived": True,
+                    "deliveryWaiverReason": "fixture review accepted",
+                },
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        response = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan")
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    merge_action = next(action for action in report["actions"] if action["actionId"] == "merge")
+    assert merge_action["status"] == "blocked"
+    assert merge_action["eligible"] is False
+    assert "stale-pr-head" in merge_action["blockedReasons"]
+    assert "policy-missing" in merge_action["blockedReasons"]
+    assert merge_action["allowedOperations"] == []
+
+
+def test_low_risk_delivery_plan_blocks_green_stage_when_policy_is_missing(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "low-risk-delivery-plan-green-stage-policy-missing.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import service
+    from supervisor.api.schemas import TrustedDeliveryEligibilityCheckView, TrustedDeliveryEligibilityStageEvaluationView
+
+    stage = TrustedDeliveryEligibilityStageEvaluationView(
+        stageId="push-pr-auto-eligible",
+        label="Push and PR",
+        status="eligible",
+        eligible=True,
+        checks=[
+            TrustedDeliveryEligibilityCheckView(
+                checkId="local-check-result",
+                label="Local check result",
+                gateFamily="local_verification",
+                status="passed",
+                summary="Local check passed.",
+                evidence=["status=passed", "exitCode=0"],
+            )
+        ],
+        allowedOperations=["push named branch", "open or update one PR"],
+        blockedOperations=["merge", "cleanup"],
+        nextAction="Request exact approval before execution.",
+    )
+    action = service._low_risk_delivery_plan_action(  # type: ignore[attr-defined]
+        stage,
+        action_id="pr",
+        label="PR delivery",
+        binding_blockers=[],
+        delivery_evidence={},
+        required_approval="Exact approval required.",
+        dry_run_ready=["would push branch codex/story-10-1", "would open or update exactly one pull request"],
+        dry_run_blocked=["would block push and PR creation until all PR delivery gates are green"],
+    )
+
+    assert action.status == "blocked"
+    assert action.eligible is False
+    assert action.allowedOperations == []
+    assert "policy-missing" in action.blockedReasons
+    assert "push named branch" in action.blockedOperations
+    assert "would push branch codex/story-10-1" in action.dryRunEffects
+
+
+def test_low_risk_delivery_plan_requires_pr_url_for_merge_binding(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "low-risk-delivery-plan-missing-pr-url.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import service
+    from supervisor.api.schemas import TrustedDeliveryEligibilityCheckView, TrustedDeliveryEligibilityStageEvaluationView
+
+    stage = TrustedDeliveryEligibilityStageEvaluationView(
+        stageId="merge-auto-eligible",
+        label="Merge",
+        status="eligible",
+        eligible=True,
+        checks=[
+            TrustedDeliveryEligibilityCheckView(
+                checkId="merge-state",
+                label="Merge state",
+                gateFamily="merge_state",
+                status="passed",
+                summary="Merge checks passed.",
+                evidence=["mergeStatus=ready", "ciStatus=passed", "reviewState=approved"],
+            )
+        ],
+        allowedOperations=["merge approved eligible PR"],
+        blockedOperations=["cleanup", "force push"],
+        nextAction="Request exact approval before execution.",
+    )
+    blockers = service._low_risk_delivery_binding_blockers(  # type: ignore[attr-defined]
+        SimpleNamespace(currentBranch="codex/story-10-2", headRevision="fixture-head"),
+        {
+            "executionBranch": "codex/story-10-2",
+            "pullRequestHeadRevision": "fixture-head",
+            "ciStatus": "passed",
+            "reviewState": "approved",
+            "mergeStatus": "ready",
+        },
+        action_id="merge",
+    )
+    action = service._low_risk_delivery_plan_action(  # type: ignore[attr-defined]
+        stage,
+        action_id="merge",
+        label="Merge",
+        binding_blockers=blockers,
+        delivery_evidence={"pullRequestHeadRevision": "fixture-head"},
+        required_approval="Exact approval required.",
+        dry_run_ready=["would merge the approved PR"],
+        dry_run_blocked=["would block merge until PR evidence is current"],
+    )
+
+    assert "pull-request-url-missing" in blockers
+    assert action.status == "blocked"
+    assert action.eligible is False
+    assert "pull-request-url-missing" in action.blockedReasons
+    assert "policy-missing" in action.blockedReasons
+    assert action.allowedOperations == []
+    assert action.dryRunEffects == ["would block merge until PR evidence is current"]
+
+
+def test_delivery_execution_evidence_without_policy_is_report_only(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-report-only.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Report-only delivery evidence fixture",
+                "requestedOutcome": "Request delivery evidence without policy.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-not-policy",
+                "commandShape": "gh pr create --fill",
+                "expectedBranch": "codex/story-10-2",
+                "expectedHeadRevision": "fixture-head",
+                "baseBranch": "main",
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/998",
+                "pullRequestHeadRevision": "fixture-head",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "mergeStatus": "merged",
+                "terminalStatus": "completed",
+                "summary": "Synthetic metadata-only PR evidence.",
+                "artifactRefs": ["delivery-plan://dry-run"],
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "report_only_readiness"
+    assert evidence["status"] == "blocked"
+    assert evidence["eventRecorded"] is False
+    assert "policy-missing" in evidence["blockedReasons"]
+    assert evidence["remoteMutationPerformed"] is False
+    assert evidence["cleanupAllowed"] is False
+    assert evidence["rawOutputRetained"] is False
+
+
+def test_delivery_execution_evidence_records_stale_rejection_without_delivery_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-stale.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Stale delivery evidence fixture",
+                "requestedOutcome": "Reject stale delivery evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "merge",
+                "recordEvent": True,
+                "approvalId": "approval-stale-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": "codex/story-10-2",
+                "expectedHeadRevision": "stale-head",
+                "baseBranch": "main",
+                "pullRequestHeadRevision": "newer-head",
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/999",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "mergeStatus": "ready",
+                "mergeResult": "squash_merge_ready",
+                "commandShape": "gh pr merge 999 --squash --delete-branch",
+                "terminalStatus": "completed",
+                "summary": "Synthetic metadata-only stale merge evidence.",
+                "artifactRefs": ["delivery-plan://stale"],
+                "recoveryPath": "inspect retained stale merge metadata before retry",
+            },
+        )
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["status"] == "rejected"
+    assert evidence["eventRecorded"] is True
+    assert "branch-head-mismatch" in evidence["blockedReasons"]
+    assert "stale-pr-head" in evidence["blockedReasons"]
+    assert "merge-not-recorded" in evidence["blockedReasons"]
+    event = next(event for event in events if event["eventType"] == "delivery_execution.rejected")
+    assert event["payload"]["remoteMutationPerformed"] is False
+    assert event["payload"]["cleanupAllowed"] is False
+    assert event["payload"]["rawOutputRetained"] is False
+
+
+def test_delivery_execution_evidence_rejects_missing_binding_fields(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-missing-binding.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Missing binding delivery evidence fixture",
+                "requestedOutcome": "Reject incomplete approved delivery evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-missing-binding-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "mergeStatus": "ready",
+                "artifactRefs": ["delivery-evidence://missing-binding"],
+            },
+        )
+        updated = client.get(f"/work-items/{work_item_id}").json()["data"]
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["status"] == "rejected"
+    assert evidence["eventRecorded"] is True
+    assert "commandShape-missing" in evidence["blockedReasons"]
+    assert "expectedHeadRevision-missing" in evidence["blockedReasons"]
+    assert "pull-request-url-missing" in evidence["blockedReasons"]
+    assert "pr-head-evidence-missing" in evidence["blockedReasons"]
+    assert "deliveryExecutionEvidence" not in updated["metadata"]
+
+
+def test_delivery_execution_evidence_rejects_retention_boundary_payload(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-retention-boundary.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Retention boundary delivery evidence fixture",
+                "requestedOutcome": "Reject raw delivery evidence retention.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-1004"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-pr-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1004",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-retention-boundary-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1001",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "mergeStatus": "ready",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "summary": "Raw prompt from provider should never be retained.",
+                "artifactRefs": ["delivery-evidence://pr-1001"],
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        updated = client.get(f"/work-items/{work_item_id}").json()["data"]
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["status"] == "rejected"
+    assert evidence["eventRecorded"] is True
+    assert "summary-retention-boundary" in evidence["blockedReasons"]
+    event = next(event for event in events if event["eventType"] == "delivery_execution.rejected")
+    assert event["payload"]["rawOutputRetained"] is False
+    assert "Raw prompt" not in event["payload"]["summary"]
+    assert event["payload"]["summary"] == "[redacted retention-boundary]"
+    assert "deliveryExecutionEvidence" not in updated["metadata"]
+
+
+def test_delivery_execution_evidence_exact_policy_without_approval_is_report_only(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-policy-only.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Policy-only delivery evidence fixture",
+                "requestedOutcome": "Keep policy-only delivery evidence report-only.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1003",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "summary": "Synthetic metadata-only policy evidence.",
+                "artifactRefs": ["delivery-evidence://policy-only"],
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "report_only_readiness"
+    assert evidence["eventRecorded"] is False
+    assert "policy-missing" in evidence["blockedReasons"]
+
+
+def test_delivery_execution_evidence_rejects_unknown_approval_id_without_approved_metadata(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-unknown-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Unknown approval fixture",
+                "requestedOutcome": "Reject arbitrary delivery approval ids.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-1004"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-pr-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1004",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "arbitrary-approval-id",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1006",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": ["delivery-evidence://pr-1006"],
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+        updated = client.get(f"/work-items/{work_item_id}").json()["data"]
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["status"] == "rejected"
+    assert evidence["eventRecorded"] is True
+    assert "approval-id-unknown" in evidence["blockedReasons"]
+    assert evidence["approvalReference"] is None
+    assert evidence["externalMutationRecorded"] is False
+    assert "deliveryExecutionEvidence" not in updated["metadata"]
+    event = next(event for event in events if event["eventType"] == "delivery_execution.rejected")
+    assert event["payload"]["approvalReference"] is None
+
+
+def test_delivery_execution_evidence_rejects_expired_approval_ledger_entry(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-expired-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Expired approval fixture",
+                "requestedOutcome": "Reject expired delivery approval ids.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-expired"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-expired-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1007",
+                    artifact_refs=artifact_refs,
+                    expires_at="2000-01-01T00:00:00+00:00",
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-expired-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1007",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert "approval-expired" in evidence["blockedReasons"]
+    assert evidence["approvalReference"] is None
+
+
+def test_delivery_execution_evidence_rejects_ambiguous_approval_ledger_id(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-ambiguous-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Ambiguous approval fixture",
+                "requestedOutcome": "Reject duplicate approval ledger ids.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-ambiguous"]
+        approval_entry = _delivery_approval_entry(
+            approval_id="approval-ambiguous-fixture",
+            work_item_id=work_item_id,
+            action_id="pr",
+            plan=plan,
+            pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1008",
+            artifact_refs=artifact_refs,
+        )
+        _write_delivery_approval_ledger(db_path, work_item_id, [approval_entry, dict(approval_entry)])
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-ambiguous-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1008",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["approvalReference"] is None
+    assert "approval-id-ambiguous" in evidence["blockedReasons"]
+
+
+def test_delivery_execution_evidence_rejects_retained_evidence_mismatch(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-retained-evidence-mismatch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Retained evidence mismatch fixture",
+                "requestedOutcome": "Reject approval replay with missing retained evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-retained-evidence-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1009",
+                    artifact_refs=["delivery-evidence://pr-1009", "delivery-evidence://review-1009"],
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-retained-evidence-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1009",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": ["delivery-evidence://pr-1009"],
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["approvalReference"] is None
+    assert "approval-retained-evidence-mismatch" in evidence["blockedReasons"]
+
+
+def test_delivery_execution_evidence_rejects_operator_mismatch(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-operator-mismatch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Operator mismatch fixture",
+                "requestedOutcome": "Reject approval used by a different operator.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-operator-mismatch"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-operator-mismatch-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1010",
+                    artifact_refs=artifact_refs,
+                    approved_by="Alice",
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-operator-mismatch-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1010",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["approvalReference"] is None
+    assert "approval-operator-mismatch" in evidence["blockedReasons"]
+
+
+def test_delivery_execution_evidence_rejects_trusted_current_pr_state_mismatch(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-current-pr-state-mismatch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Trusted current PR mismatch fixture",
+                "requestedOutcome": "Reject stale payload replay against current delivery evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-current-state"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-current-state-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1011",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
+        _append_delivery_execution_metadata(
+            db_path,
+            work_item_id,
+            {
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1012",
+                "pullRequestHeadRevision": plan["headRevision"],
+                "ciStatus": "passed",
+                "reviewState": "approved",
+            },
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-current-state-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1011",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["approvalReference"] is None
+    assert "approval-pr-url-mismatch" in evidence["blockedReasons"]
+
+
+def test_delivery_execution_evidence_records_pr_without_merge_status(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-pr-no-merge-status.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Approved PR evidence fixture",
+                "requestedOutcome": "Record approved PR evidence without merge readiness.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-1004"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-pr-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1004",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-pr-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1004",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence recorded.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before merge",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "approved_pr_action_recorded"
+    assert evidence["blockedReasons"] == []
+    assert evidence["externalMutationRecorded"] is True
+    assert evidence["remoteMutationPerformed"] is False
+    assert evidence["approvalReference"] == "approval-pr-fixture"
+
+
+def test_delivery_execution_evidence_rejects_completed_nonzero_exit_code(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-nonzero-completed.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Nonzero completed delivery evidence fixture",
+                "requestedOutcome": "Reject completed delivery evidence with nonzero exit code.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-nonzero"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-nonzero-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1005",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-nonzero-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1005",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 1,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert "exit-code-nonzero" in evidence["blockedReasons"]
+
+
+def test_delivery_execution_evidence_records_failed_action_metadata_only(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-failed.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Failed delivery evidence fixture",
+                "requestedOutcome": "Record failed delivery evidence without mutation.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-1002"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-failed-pr-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1002",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-failed-pr-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1002",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "mergeStatus": "ready",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "failed",
+                "exitCode": 1,
+                "summary": "Synthetic metadata-only failed PR evidence recorded.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained failed PR metadata before retry",
+            },
+        )
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        updated = client.get(f"/work-items/{work_item_id}").json()["data"]
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_failed"
+    assert evidence["status"] == "failed"
+    assert evidence["eventRecorded"] is True
+    assert evidence["blockedReasons"] == []
+    assert evidence["remoteMutationPerformed"] is False
+    event = next(event for event in events if event["eventType"] == "delivery_execution.failed")
+    assert event["payload"]["mode"] == "delivery_action_failed"
+    metadata = updated["metadata"]
+    assert metadata["deliveryExecutionEvidence"][-1]["status"] == "failed"
+
+
+def test_delivery_execution_evidence_records_approved_merge_metadata_only(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-approved.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Approved delivery evidence fixture",
+                "requestedOutcome": "Record approved delivery evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://merge-1000"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-merge-fixture",
+                    work_item_id=work_item_id,
+                    action_id="merge",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1000",
+                    merge_status="merged",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "merge",
+                "recordEvent": True,
+                "approvalId": "approval-merge-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1000",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "mergeStatus": "merged",
+                "mergeResult": "squash_merge_ready",
+                "commandShape": "gh pr merge 1000 --squash --delete-branch",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only merge evidence recorded.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained merge metadata before cleanup",
+            },
+        )
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        updated = client.get(f"/work-items/{work_item_id}").json()["data"]
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "approved_merge_action_recorded"
+    assert evidence["status"] == "recorded"
+    assert evidence["eventRecorded"] is True
+    assert evidence["blockedReasons"] == []
+    assert evidence["remoteMutationPerformed"] is False
+    assert evidence["cleanupAllowed"] is False
+    assert evidence["rawOutputRetained"] is False
+    assert evidence["externalMutationRecorded"] is True
+    assert evidence["artifactRefs"] == ["delivery-evidence://merge-1000"]
+    assert evidence["approvalReference"] == "approval-merge-fixture"
+    event = next(event for event in events if event["eventType"] == "delivery_execution.recorded")
+    assert event["payload"]["commandShape"] == "gh pr merge 1000 --squash --delete-branch"
+    assert "rawOutput" not in event["payload"]
+    metadata = updated["metadata"]
+    assert metadata["pullRequestHeadRevision"] == plan["headRevision"]
+    assert metadata["deliveryExecutionEvidence"][-1]["mode"] == "approved_merge_action_recorded"
+
+
+def test_cleanup_plan_classifies_filesystem_residue_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-residue.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    target_path = (tmp_path / "worktrees" / "codex-story-10-3").as_posix()
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup residue fixture",
+                "requestedOutcome": "Plan cleanup for a residue-only target.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupTargetPath": target_path,
+                    "cleanupTargetExists": True,
+                    "cleanupTargetGitRegistered": False,
+                    "cleanupTargetInsideApprovedRoot": True,
+                    "cleanupResidue": [
+                        {"kind": ".pytest_cache", "path": f"{target_path}/.pytest_cache"},
+                        {"kind": ".mypy_cache", "path": f"{target_path}/.mypy_cache"},
+                        {"kind": ".ruff_cache", "path": f"{target_path}/.ruff_cache"},
+                        {"kind": "temp-test-output", "path": f"{target_path}/tmp/test-output"},
+                        {"kind": ".venv", "path": f"{target_path}/.venv"},
+                    ],
+                    "deliveryExecutionEvidence": [
+                        {
+                            "mode": "approved_merge_action_recorded",
+                            "status": "recorded",
+                            "mergeStatus": "merged",
+                            "artifactRefs": ["delivery-evidence://merge-1003"],
+                            "recoveryPath": "inspect retained merge evidence before cleanup",
+                        }
+                    ],
+                },
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get(f"/work-items/{work_item_id}/cleanup-plan")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+    plan = response.json()["data"]
+    assert plan["readOnly"] is True
+    assert plan["cleanupAllowed"] is False
+    assert plan["remoteMutationApproved"] is False
+    assert plan["branchDeletionApproved"] is False
+    assert plan["gitWorktreeState"] == "not_registered"
+    assert plan["filesystemState"] == "residue_only"
+    assert plan["retainedEvidence"] == ["delivery-evidence://merge-1003"]
+    assert [item["kind"] for item in plan["residue"]] == [".pytest_cache", ".mypy_cache", ".ruff_cache", "temp-test-output", ".venv"]
+    assert plan["sourceFileState"] == "none"
+    assert plan["sourceFiles"] == []
+    assert all(item["insideApprovedTarget"] is True for item in plan["residue"])
+    assert "policy-missing" in plan["blockedReasons"]
+    assert "git worktree removal would be skipped because target is filesystem residue" in plan["dryRunEffects"]
+
+
+def test_cleanup_plan_blocks_missing_retained_evidence(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-missing-evidence.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup missing evidence fixture",
+                "requestedOutcome": "Block cleanup without retained evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupTargetPath": (tmp_path / "missing-evidence").as_posix(),
+                    "cleanupTargetExists": True,
+                    "cleanupTargetGitRegistered": True,
+                    "cleanupTargetInsideApprovedRoot": True,
+                },
+            },
+        )
+        response = client.get(f"/work-items/{created.json()['data']['id']}/cleanup-plan")
+
+    assert response.status_code == 200
+    plan = response.json()["data"]
+    assert plan["status"] == "blocked"
+    assert "retained-evidence-missing" in plan["blockedReasons"]
+    assert "Record or preserve metadata-only delivery evidence before cleanup." in plan["nextSafeActions"]
+
+
+def test_cleanup_plan_blocks_unsafe_path_crossing(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-unsafe-path.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup unsafe path fixture",
+                "requestedOutcome": "Block cleanup outside approved target.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupTargetPath": "C:/Users/slaw_dawg/Kendall_Nxt",
+                    "cleanupTargetExists": True,
+                    "cleanupTargetGitRegistered": True,
+                    "cleanupTargetInsideApprovedRoot": False,
+                    "cleanupBlockedPaths": ["C:/Users/slaw_dawg/Kendall_Nxt"],
+                    "deliveryExecutionEvidence": [
+                        {
+                            "mode": "approved_merge_action_recorded",
+                            "status": "recorded",
+                            "mergeStatus": "merged",
+                            "artifactRefs": ["delivery-evidence://merge-unsafe"],
+                        }
+                    ],
+                },
+            },
+        )
+        response = client.get(f"/work-items/{created.json()['data']['id']}/cleanup-plan")
+
+    assert response.status_code == 200
+    plan = response.json()["data"]
+    assert plan["filesystemState"] == "unsafe_outside_target"
+    assert "cleanup-target-outside-approved-root" in plan["blockedReasons"]
+    assert "blocked-path-present" in plan["blockedReasons"]
+    assert plan["cleanupAllowed"] is False
+
+
+def test_cleanup_plan_blocks_missing_approved_root_proof(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-missing-approved-root.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup missing approved-root proof fixture",
+                "requestedOutcome": "Block cleanup when approved-root proof is missing.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupPolicyId": "low-risk-cleanup-policy-v1",
+                    "cleanupTargetPath": (tmp_path / "missing-approved-root").as_posix(),
+                    "cleanupTargetExists": True,
+                    "cleanupTargetGitRegistered": True,
+                    "deliveryExecutionEvidence": [
+                        {
+                            "mode": "approved_merge_action_recorded",
+                            "status": "recorded",
+                            "mergeStatus": "merged",
+                            "artifactRefs": ["delivery-evidence://merge-missing-approved-root"],
+                        }
+                    ],
+                },
+            },
+        )
+        response = client.get(f"/work-items/{created.json()['data']['id']}/cleanup-plan")
+
+    assert response.status_code == 200
+    plan = response.json()["data"]
+    assert plan["status"] == "blocked"
+    assert plan["cleanupAllowed"] is False
+    assert "cleanup-target-approved-root-missing" in plan["blockedReasons"]
+    assert "cleanup-target-outside-approved-root" not in plan["blockedReasons"]
+
+
+def test_cleanup_plan_blocks_failed_delivery_evidence(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-failed-delivery.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup failed delivery fixture",
+                "requestedOutcome": "Block cleanup after failed delivery evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupTargetPath": (tmp_path / "failed-delivery").as_posix(),
+                    "cleanupTargetExists": True,
+                    "cleanupTargetGitRegistered": True,
+                    "cleanupTargetInsideApprovedRoot": True,
+                    "deliveryExecutionEvidence": [
+                        {
+                            "mode": "delivery_action_failed",
+                            "status": "failed",
+                            "artifactRefs": ["delivery-evidence://failed-pr"],
+                        }
+                    ],
+                },
+            },
+        )
+        response = client.get(f"/work-items/{created.json()['data']['id']}/cleanup-plan")
+
+    assert response.status_code == 200
+    plan = response.json()["data"]
+    assert "delivery-evidence-failed" in plan["blockedReasons"]
+    assert plan["cleanupAllowed"] is False
+    assert any("failed delivery" in action for action in plan["nextSafeActions"])
+
+
+def test_cleanup_plan_reports_source_files_and_ambiguous_target_action(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-source-ambiguous.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup source ambiguous fixture",
+                "requestedOutcome": "Report source files and target ambiguity.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupTargetGitRegistered": True,
+                    "cleanupTargetInsideApprovedRoot": True,
+                    "cleanupSourceFiles": ["services/supervisor/src/changed.py"],
+                    "deliveryExecutionEvidence": [
+                        {
+                            "mode": "approved_merge_action_recorded",
+                            "status": "recorded",
+                            "mergeStatus": "merged",
+                            "artifactRefs": ["delivery-evidence://merge-source"],
+                        }
+                    ],
+                },
+            },
+        )
+        response = client.get(f"/work-items/{created.json()['data']['id']}/cleanup-plan")
+
+    assert response.status_code == 200
+    plan = response.json()["data"]
+    assert plan["sourceFileState"] == "present"
+    assert plan["sourceFiles"] == ["services/supervisor/src/changed.py"]
+    assert "source-files-present" in plan["blockedReasons"]
+    assert "cleanup-target-ambiguous" in plan["blockedReasons"]
+    assert "Identify one exact disposable cleanup target path before approval." in plan["nextSafeActions"]
+    assert "Separate unexpected source files from residue before cleanup." in plan["nextSafeActions"]
+
+
+def test_cleanup_plan_blocks_stale_delivery_evidence(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-stale-delivery.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup stale delivery fixture",
+                "requestedOutcome": "Block cleanup after stale delivery evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupTargetPath": (tmp_path / "stale-delivery").as_posix(),
+                    "cleanupTargetExists": True,
+                    "cleanupTargetGitRegistered": True,
+                    "cleanupTargetInsideApprovedRoot": True,
+                    "deliveryExecutionEvidence": [
+                        {
+                            "mode": "delivery_action_rejected_stale",
+                            "status": "rejected",
+                            "artifactRefs": ["delivery-evidence://stale-pr"],
+                        }
+                    ],
+                },
+            },
+        )
+        response = client.get(f"/work-items/{created.json()['data']['id']}/cleanup-plan")
+
+    assert response.status_code == 200
+    plan = response.json()["data"]
+    assert "delivery-evidence-stale" in plan["blockedReasons"]
+    assert "delivery-evidence-not-merged" in plan["blockedReasons"]
+    assert "Refresh delivery evidence so cleanup binds to current branch, PR, and retained artifacts." in plan["nextSafeActions"]
+
+
+def test_cleanup_plan_blocks_pr_only_delivery_evidence(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-pr-only-delivery.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup PR-only delivery fixture",
+                "requestedOutcome": "Block cleanup before merge delivery evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupPolicyId": "low-risk-cleanup-policy-v1",
+                    "cleanupTargetPath": (tmp_path / "pr-only-delivery").as_posix(),
+                    "cleanupTargetExists": True,
+                    "cleanupTargetGitRegistered": True,
+                    "cleanupTargetInsideApprovedRoot": True,
+                    "deliveryExecutionEvidence": [
+                        {
+                            "mode": "approved_pr_action_recorded",
+                            "status": "recorded",
+                            "artifactRefs": ["delivery-evidence://pr-only"],
+                        }
+                    ],
+                },
+            },
+        )
+        response = client.get(f"/work-items/{created.json()['data']['id']}/cleanup-plan")
+
+    assert response.status_code == 200
+    plan = response.json()["data"]
+    assert plan["status"] == "blocked"
+    assert "delivery-evidence-not-merged" in plan["blockedReasons"]
+    assert plan["cleanupAllowed"] is False
+
+
+def test_cleanup_plan_blocks_residue_path_outside_target(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-unsafe-residue.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    target_path = (tmp_path / "worktrees" / "codex-story-10-3").as_posix()
+    outside_path = (tmp_path / "outside" / ".venv").as_posix()
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup unsafe residue fixture",
+                "requestedOutcome": "Block cleanup when residue crosses target path.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupPolicyId": "low-risk-cleanup-policy-v1",
+                    "cleanupTargetPath": target_path,
+                    "cleanupTargetExists": True,
+                    "cleanupTargetGitRegistered": False,
+                    "cleanupTargetInsideApprovedRoot": True,
+                    "cleanupResidue": [{"kind": ".venv", "path": outside_path}],
+                    "deliveryExecutionEvidence": [
+                        {
+                            "mode": "approved_merge_action_recorded",
+                            "status": "recorded",
+                            "mergeStatus": "merged",
+                            "artifactRefs": ["delivery-evidence://merge-unsafe-residue"],
+                        }
+                    ],
+                },
+            },
+        )
+        response = client.get(f"/work-items/{created.json()['data']['id']}/cleanup-plan")
+
+    assert response.status_code == 200
+    plan = response.json()["data"]
+    assert "unsafe-residue-path" in plan["blockedReasons"]
+    assert plan["residue"][0]["insideApprovedTarget"] is False
+    assert plan["residue"][0]["safeToRemoveAfterApproval"] is False
 
 
 def test_execution_attempt_rejects_local_readonly_without_provider_calls(tmp_path, monkeypatch) -> None:

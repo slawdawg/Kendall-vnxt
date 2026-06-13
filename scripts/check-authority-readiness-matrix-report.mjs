@@ -49,6 +49,11 @@ for (const typeName of ["AuthorityReadinessFamilyView", "AuthorityReadinessMatri
   assertCondition(schemaSource.includes(`class ${typeName}`), `Supervisor schemas must include ${typeName}`, failures);
 }
 
+for (const typeName of ["CurrentStateReconciliationFindingView", "NextLaneDecisionPacketView"]) {
+  assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
+  assertCondition(schemaSource.includes(`class ${typeName}`), `Supervisor schemas must include ${typeName}`, failures);
+}
+
 assertCondition(
   apiSource.includes('"/supervisor/authority-readiness-matrix-report"'),
   "FastAPI routes must expose /supervisor/authority-readiness-matrix-report",
@@ -58,11 +63,35 @@ assertCondition(
 for (const serviceText of [
   "get_authority_readiness_matrix_report",
   "authority-readiness-matrix-report-v1",
+  "currentStateFindings",
+  "nextLaneDecisionPacket",
+  "planning-reconciliation-current",
+  "pr-103-review-gated",
+  "ci_green_external_review_blocked",
+  "Local story completion is recorded",
+  "not directly into main",
+  "Merged-to-main state remains false",
+  "decision_only_no_authority_granted",
+  "epic-11-next-lane-authority-decision-packet-2026-06-13",
+  "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+  "current-state reconciliation",
+  "next-lane decision packet",
   "local-provider-execution",
   "subscription-agent-launch",
   "premium-execution",
+  "adaptive-scoring",
   "worker-command-source-network-credentials",
   "remote-delivery-automation",
+  "github-delivery",
+  "cleanup-automation",
+  "evidence_ready_approval_required",
+  "rollbackPath",
+  "PR #103",
+  "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md",
+  "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md",
+  "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md",
+  "docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md",
+  "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md",
   "Authority readiness matrix entries are not execution-authority approvals.",
   "docs/stories/3-53-authority-readiness-matrix-report.md",
 ]) {
@@ -86,12 +115,27 @@ assertCondition(
 );
 
 for (const panelText of [
+  "AuthorityListSection",
   "AuthorityReadinessMatrixReportView",
+  "Current-state reconciliation",
+  "Next-lane authority packet",
+  "report.currentStateFindings",
+  "report.nextLaneDecisionPacket",
+  "FALLBACK_NEXT_LANE_DECISION_PACKET",
+  "Execution blocked",
   "Authority families",
   "Readiness ladder",
+  "isApprovalRequired",
+  "data-status-kind",
   "family.requiredApprovals",
+  "family.requiredEvidence",
   "family.blockedStories",
+  "family.relatedReports",
+  "family.relatedDocs",
   "family.dashboardAnchors",
+  "family.rollbackPath",
+  "Rollback path:",
+  "Missing required",
   "stopLines",
   "nextSafeActions",
 ]) {
@@ -101,10 +145,25 @@ for (const panelText of [
 for (const browserText of [
   "Authority readiness",
   "Execution authority matrix",
+  "Current-state reconciliation",
+  "Next-lane authority packet",
+  "decision_only_no_authority_granted",
+  "ci_green_external_review_blocked",
+  "Local story completion is recorded",
+  "not directly into main",
+  "Merged-to-main state remains false",
+  "Execution blocked",
+  "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
   "local-provider-execution",
   "subscription-agent-launch",
+  "adaptive-scoring",
   "worker-command-source-network-credentials",
   "remote-delivery-automation",
+  "github-delivery",
+  "cleanup-automation",
+  "data-status-kind",
+  "evidence_ready_approval_required",
+  "Rollback path:",
   "Authority readiness matrix entries are not execution-authority approvals.",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert ${browserText}`, failures);
@@ -113,12 +172,30 @@ for (const browserText of [
 for (const testText of [
   '"authority-readiness-matrix-report-v1"',
   '"/supervisor/authority-readiness-matrix-report"',
+  '"currentStateFindings"',
+  '"nextLaneDecisionPacket"',
+  '"planning-reconciliation-current"',
+  '"pr-103-review-gated"',
+  '"decision_only_no_authority_granted"',
+  '"Local story completion is recorded"',
+  '"Merged-to-main state remains false"',
   '"local-provider-execution"',
   '"subscription-agent-launch"',
+  '"adaptive-scoring"',
   '"remote-delivery-automation"',
+  '"github-delivery"',
+  '"cleanup-automation"',
+  '"rollbackPath"',
+  '["rollbackPath"].strip()',
+  '["requiredEvidence"]',
+  '"evidence_ready_approval_required"',
   "docs/stories/3-53-authority-readiness-matrix-report.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
+}
+
+for (const schemaText of ["field_validator", "Field(min_length=1)", "rollback_path_must_not_be_blank"]) {
+  assertCondition(schemaSource.includes(schemaText), `Supervisor schema must validate rollbackPath with ${schemaText}`, failures);
 }
 
 assertCondition(
@@ -144,9 +221,21 @@ assertCondition(
 
 const storyPath = "docs/stories/3-53-authority-readiness-matrix-report.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing authority readiness matrix story ${storyPath}`, failures);
+const refreshedStoryPath = "docs/stories/11-2-refresh-authority-readiness-matrix-from-current-evidence.md";
+assertCondition(existsSync(join(rootDir, refreshedStoryPath)), `Missing refreshed authority readiness story ${refreshedStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-53-authority-readiness-matrix-report.md"),
   "Story index must reference Story 3.53 authority readiness matrix report",
+  failures,
+);
+assertCondition(
+  storyIndex.includes("11-2-refresh-authority-readiness-matrix-from-current-evidence.md"),
+  "Story index must reference Story 11.2 refreshed authority readiness matrix",
+  failures,
+);
+assertCondition(
+  reconciliation.includes("GitHub delivery") && reconciliation.includes("cleanup"),
+  "Implementation reconciliation must mention current delivery and cleanup evidence for authority readiness context",
   failures,
 );
 assertCondition(

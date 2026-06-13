@@ -4,13 +4,21 @@ import os
 import shutil
 import subprocess
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@dataclass(frozen=True)
+class DeliveryApprovalValidation:
+    approved: bool
+    blockers: list[str]
+    approval_reference: str | None = None
+
 
 from supervisor.api.schemas import (
     AuditEventView,
@@ -28,10 +36,15 @@ from supervisor.api.schemas import (
     CodexImplementationApprovalRequirementView,
     CodexReadinessCheckView,
     CodexReadinessReportView,
+    CleanupPlanResidueView,
+    CleanupPlanView,
+    CurrentStateReconciliationFindingView,
     DashboardE2EReportView,
     DashboardE2ERunnerView,
     DeliveryReadinessPolicyItemView,
     DeliveryReadinessPolicyReportView,
+    DeliveryExecutionEvidencePayload,
+    DeliveryExecutionEvidenceView,
     DevelopmentRunwayReportView,
     DevelopmentRunwayReadinessCheckView,
     DevelopmentRunwaySliceView,
@@ -62,6 +75,8 @@ from supervisor.api.schemas import (
     LocalEvidencePacketView,
     LocalCleanupPolicyItemView,
     LocalCleanupReadinessReportView,
+    LowRiskDeliveryPlanActionView,
+    LowRiskDeliveryPlanReportView,
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
     LocalWorktreePlanView,
@@ -72,6 +87,7 @@ from supervisor.api.schemas import (
     MaintenanceReadinessTrackView,
     MvpProofTrialReportView,
     MvpProofTrialStepView,
+    NextLaneDecisionPacketView,
     OperatorViewCreate,
     OperatorViewResponse,
     PremiumApprovalEvidenceView,
@@ -1198,6 +1214,7 @@ class SupervisorService:
                     "Do not construct prompts for a local model from work-item evidence.",
                     "Do not read provider credentials or model server secrets.",
                 ],
+                rollbackPath="Keep provider execution disabled and revert to no-call fixture evidence if any provider gate, endpoint, model, prompt, or retention requirement is missing.",
                 nextAction="Keep provider execution blocked until explicit approval names the provider authority and scope.",
             ),
             AuthorityReadinessFamilyView(
@@ -1232,6 +1249,7 @@ class SupervisorService:
                     "Do not allocate supervised runtime sessions.",
                     "Do not attach OS process IDs or live process supervisors to execution attempts.",
                 ],
+                rollbackPath="Keep the disabled dry-run adapter path and stop at metadata-only lifecycle evidence if launch approval, workspace isolation, or rollback evidence is stale.",
                 nextAction="Keep launch stories blocked until explicit approval names process launch authority and scope.",
             ),
             AuthorityReadinessFamilyView(
@@ -1263,7 +1281,46 @@ class SupervisorService:
                     "Do not run premium provider calls.",
                     "Do not treat approval request artifacts as approval to execute.",
                 ],
+                rollbackPath="Keep premiumExecutionAllowed false and revert to approval-request artifacts only if provider, cost, data, or audit policy is incomplete.",
                 nextAction="Leave premium execution deferred until a premium-specific policy and approval exist.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="adaptive-scoring",
+                label="Adaptive scoring",
+                status="blocked_pending_explicit_approval",
+                summary="Adaptive scoring remains disabled until a scoring policy names approved inputs, outputs, retention, operator review, rollback, and stop lines.",
+                blockedStories=[],
+                requiredApprovals=[
+                    "Explicit operator approval naming the scoring authority, score inputs, output use, review path, and rollback plan.",
+                    "Approved scoring policy before scores can influence priority, launch, delivery, cleanup, or authority decisions.",
+                ],
+                requiredEvidence=[
+                    "Current readiness and backlog reports remain read-only evidence surfaces.",
+                    "No score is allowed to promote, execute, merge, clean up, or bypass a failed check.",
+                    "Future scoring evidence must preserve metadata only and avoid raw prompts, completions, provider payloads, secrets, or unbounded source copies.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/verification-readiness-report",
+                ],
+                relatedDocs=[
+                    "docs/stories/3-54-development-runway-safe-slices.md",
+                    "docs/stories/3-59-development-runway-readiness-checks.md",
+                    "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                    "/controls#verification-readiness-report",
+                ],
+                stopLines=[
+                    "Do not run adaptive scoring.",
+                    "Do not let scores change work priority, authority state, or delivery/cleanup eligibility.",
+                    "Do not retain raw scoring inputs beyond metadata-only evidence.",
+                ],
+                rollbackPath="Keep deterministic review-only ordering and remove any scoring-derived recommendation if the scoring policy, evidence, or approval binding is incomplete.",
+                nextAction="Prepare a separate scoring decision packet before any adaptive scoring implementation starts.",
             ),
             AuthorityReadinessFamilyView(
                 familyId="worker-command-source-network-credentials",
@@ -1296,6 +1353,7 @@ class SupervisorService:
                     "Do not grant worker source mutation, network access, or credential access.",
                     "Do not weaken runtime evidence export exclusions to include secrets.",
                 ],
+                rollbackPath="Keep worker authority denied by default and revert to read-only metadata/export evidence if any command, source, network, or credential boundary is unclear.",
                 nextAction="Keep worker authority disabled while improving read-only evidence and review surfaces.",
             ),
             AuthorityReadinessFamilyView(
@@ -1333,7 +1391,97 @@ class SupervisorService:
                     "Do not persist plaintext GitHub tokens.",
                     "Do not treat delivery readiness records as approval to deploy.",
                 ],
+                rollbackPath="Keep managed workers blocked from remote delivery and fall back to human or connector-backed GitHub work if approval, CI, review, or credential evidence is missing.",
                 nextAction="Keep remote delivery policy visible while human/connector-backed PR work remains separate from worker automation.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="github-delivery",
+                label="GitHub delivery",
+                status="evidence_ready_approval_required",
+                summary="Epic 10 delivery evidence supports human/connector-backed PR and merge review flows, while worker-run remote delivery automation remains separately blocked.",
+                blockedStories=[],
+                requiredApprovals=[
+                    "Exact delivery approval naming PR, merge, branch, base, evidence, rollback path, stop lines, and review point before any remote mutation.",
+                    "Trusted approval-ledger entry for delivery execution; authority-looking identifiers alone are rejected.",
+                ],
+                requiredEvidence=[
+                    "Low-risk delivery dry-run plan from Story 10.1.",
+                    "Safe cleanup plan from Story 10.3 remains linked because delivery closeout and cleanup readiness are evaluated together.",
+                    "Delivery execution evidence from Story 10.2 for approved PR and merge actions.",
+                    "Trusted authority ledger validation from Story 10.5.",
+                    "PR #103 current state must be re-checked before claiming merge to main.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/delivery-readiness-policy-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /work-items/{id}/delivery-execution-evidence",
+                ],
+                relatedDocs=[
+                    "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md",
+                    "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md",
+                    "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md",
+                    "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md",
+                    "docs/github-connector-workflow.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#delivery-readiness-policy-report",
+                    "/controls#github-workflow-policy-report",
+                    "/work-items",
+                ],
+                stopLines=[
+                    "Do not treat readiness as approval to push, create PRs, wait CI, merge, deploy, or delete branches.",
+                    "Do not execute remote delivery from managed workers.",
+                    "Do not claim PR #103 is merged to main without current GitHub evidence.",
+                ],
+                rollbackPath="Stop before remote mutation when PR state, CI, review, approval-ledger, or branch evidence is stale; preserve delivery evidence and return to dry-run planning.",
+                nextAction="Use the current delivery packet and GitHub state to drive human/connector-backed PR work only.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="cleanup-automation",
+                label="Cleanup automation",
+                status="blocked_pending_explicit_approval",
+                summary="Cleanup planning evidence is available, but local deletion, branch deletion, worktree removal, and remote cleanup remain blocked until a target-specific approval is accepted.",
+                blockedStories=[],
+                requiredApprovals=[
+                    "Exact cleanup approval naming target path or branch, classification, retained evidence, blocked paths, rollback path, and expiry.",
+                    "Separate approval for destructive local cleanup, branch deletion, worktree deletion, or remote cleanup/sync.",
+                ],
+                requiredEvidence=[
+                    "Low-risk delivery dry-run plan from Story 10.1 defines PR, merge, and cleanup planning as one report-only workflow.",
+                    "Delivery execution evidence from Story 10.2 keeps cleanup downstream of approved PR and merge evidence.",
+                    "Safe cleanup plan from Story 10.3 with evidence preservation and worktree residue classification.",
+                    "Delivery and cleanup Dev Console plan visibility from Story 10.4.",
+                    "Trusted authority ledger validation from Story 10.5 is required before cleanup execution approval can be accepted.",
+                    "Cleanup target must be classified as Git worktree, filesystem residue, source checkout, or blocked path before action.",
+                    "PR #103 delivery state must be re-checked before cleanup readiness is used.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/local-cleanup-readiness-report",
+                    "GET /supervisor/remote-cleanup-sync-readiness-report",
+                    "GET /work-items/{id}/cleanup-plan",
+                    "GET /supervisor/delivery-readiness-policy-report",
+                ],
+                relatedDocs=[
+                    "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md",
+                    "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md",
+                    "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md",
+                    "docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md",
+                    "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md",
+                    "docs/stories/6-21-local-cleanup-readiness.md",
+                    "docs/stories/6-22-remote-cleanup-sync-readiness.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#local-cleanup-readiness-report",
+                    "/controls#remote-cleanup-sync-readiness-report",
+                    "/work-items",
+                ],
+                stopLines=[
+                    "Do not remove worktrees, branches, source checkouts, or filesystem residue from this report.",
+                    "Do not clean up before retained evidence and target classification are verified.",
+                    "Do not treat cleanup auto-eligibility as approval for deletion.",
+                ],
+                rollbackPath="Preserve retained evidence and leave the target untouched if classification, approval, Git registration, or approved-root evidence is missing or ambiguous.",
+                nextAction="Use cleanup readiness to prepare a target-specific approval packet; do not delete anything from readiness alone.",
             ),
         ]
 
@@ -1341,6 +1489,64 @@ class SupervisorService:
             reportId="authority-readiness-matrix-report-v1",
             generatedAt=datetime.now(timezone.utc),
             summary="Read-only matrix of execution-authority families, approval evidence, blocked stories, related reports, and stop lines before any real worker execution can be enabled.",
+            currentStateFindings=[
+                CurrentStateReconciliationFindingView(
+                    findingId="planning-reconciliation-current",
+                    label="Planning reconciliation",
+                    status="current_from_story_11_1",
+                    summary="Story, PRD, architecture, sprint, and PR-state claims were reconciled from current implementation evidence before selecting the next authority lane.",
+                    evidence=[
+                        "Story 11.1 is done.",
+                        "Stale blocked/deferred wording was corrected only where implementation, verification, approval, PR, or merge evidence existed.",
+                        "Artifacts still blocked or deferred name the missing approval, policy, evidence, or readiness gate.",
+                    ],
+                    relatedDocs=[
+                        "docs/stories/11-1-reconcile-planning-status-after-epic-10-delivery.md",
+                        "docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md",
+                        "docs/prds/index.md",
+                    ],
+                    nextAction="Use refreshed evidence, not stale planning labels, before selecting the next authority lane.",
+                ),
+                CurrentStateReconciliationFindingView(
+                    findingId="pr-103-review-gated",
+                    label="PR #103 delivery state",
+                    status="ci_green_external_review_blocked",
+                    summary="PR #103 has green CI after stacked Story 11.3 delivery, local Story 11.3 completion is recorded, but it remains externally review-gated and is not merged to main.",
+                    evidence=[
+                        "PR #103 head is codex/epic-10-delivery-cleanup-plans and base is main.",
+                        "GitHub CI check passed after Story 11.3 merged into the PR branch on 2026-06-13.",
+                        "GitHub still reports mergeStateStatus=BLOCKED with latest review COMMENTED only.",
+                        "Local story completion is recorded for Stories 11.1, 11.2, and 11.3; Story 11.4 remains local until its PR merges into the stacked branch.",
+                        "Stacked Story 11.2 and Story 11.3 branches merged into codex/epic-10-delivery-cleanup-plans, not directly into main.",
+                        "Merged-to-main state remains false until PR #103 is approved and merged.",
+                    ],
+                    relatedDocs=[
+                        "docs/stories/11-3-create-next-lane-authority-decision-packet.md",
+                        "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+                    ],
+                    nextAction="Re-check GitHub before claiming merged-to-main state or using PR state for cleanup decisions.",
+                ),
+            ],
+            nextLaneDecisionPacket=NextLaneDecisionPacketView(
+                packetId="epic-11-next-lane-authority-decision-packet-2026-06-13",
+                status="decision_only_no_authority_granted",
+                recommendation="Adaptive scoring decision preparation is only a lane for Bob to consider approving; no lane is selected or authorized.",
+                packetPath="docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+                approvalRequired=True,
+                noAuthorityGranted=True,
+                requiredFreshnessCheck="PR, CI, review, and lane-readiness state must be re-checked on the same day as successor-story approval.",
+                relatedDocs=[
+                    "docs/stories/11-3-create-next-lane-authority-decision-packet.md",
+                    "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+                    "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
+                ],
+                stopLines=[
+                    "Do not treat the decision packet recommendation as approval.",
+                    "Do not compute adaptive scores, call providers, launch processes, perform premium execution, mutate GitHub, or clean up from this packet.",
+                    "Any successor story must match the selected packet lane's exact authority family, operation, target, evidence, stop lines, retained evidence, rollback path, and expiry or review point.",
+                ],
+                nextAction="Prepare an exact approval packet only after Bob selects one lane to consider.",
+            ),
             families=families,
             readinessLadder=[
                 ProviderEnablementPolicyStepView(
@@ -1588,9 +1794,20 @@ class SupervisorService:
                 label="Authority readiness matrix report",
                 endpoint="GET /supervisor/authority-readiness-matrix-report",
                 status="active",
-                summary="Maps execution-authority families to blocked stories, approval evidence, related reports, dashboard anchors, and stop lines.",
-                evidenceScope=["authority families", "blocked stories", "required approvals", "authority stop lines"],
-                relatedDocs=["docs/stories/3-53-authority-readiness-matrix-report.md"],
+                summary="Maps execution-authority families, current-state reconciliation, next-lane decision-packet readiness, approval evidence, dashboard anchors, and stop lines.",
+                evidenceScope=[
+                    "authority families",
+                    "current-state reconciliation",
+                    "next-lane decision packet",
+                    "blocked stories",
+                    "required approvals",
+                    "authority stop lines",
+                ],
+                relatedDocs=[
+                    "docs/stories/3-53-authority-readiness-matrix-report.md",
+                    "docs/stories/11-4-show-reconciliation-and-next-lane-readiness-in-dev-console.md",
+                    "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+                ],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="dashboard-e2e-report-v1",
@@ -3842,6 +4059,229 @@ class SupervisorService:
             cleanupAutoEligible=stage_by_id["cleanup-auto-eligible"].eligible,
         )
 
+    async def get_low_risk_delivery_plan_report(
+        self,
+        session: AsyncSession | None = None,
+        *,
+        work_item_id: str | None = None,
+    ) -> LowRiskDeliveryPlanReportView:
+        eligibility = await self.get_trusted_delivery_eligibility_report(session, work_item_id=work_item_id)
+        delivery_evidence = await self._work_item_delivery_evidence(session, work_item_id)
+        stage_by_id = {stage.stageId: stage for stage in eligibility.stages}
+        actions = [
+            self._low_risk_delivery_plan_action(
+                self._low_risk_delivery_stage(stage_by_id, "push-pr-auto-eligible", "PR delivery"),
+                action_id="pr",
+                label="PR delivery",
+                binding_blockers=self._low_risk_delivery_binding_blockers(eligibility, delivery_evidence, action_id="pr"),
+                delivery_evidence=delivery_evidence,
+                required_approval="Exact approval or policy naming branch, PR target, local verification, retained evidence, and allowed GitHub operations.",
+                required_policy="low-risk-delivery-policy-v1",
+                dry_run_ready=[
+                    f"would push branch {eligibility.currentBranch}",
+                    "would open or update exactly one pull request",
+                    "would retain pull request URL, head revision, and command summary metadata",
+                ],
+                dry_run_blocked=["would block push and PR creation until all PR delivery gates are green"],
+            ),
+            self._low_risk_delivery_plan_action(
+                self._low_risk_delivery_stage(stage_by_id, "merge-auto-eligible", "Merge"),
+                action_id="merge",
+                label="Merge",
+                binding_blockers=self._low_risk_delivery_binding_blockers(eligibility, delivery_evidence, action_id="merge"),
+                delivery_evidence=delivery_evidence,
+                required_approval="Exact approval or policy naming PR, expected head, green CI, review state, merge state, and merge method.",
+                required_policy="low-risk-delivery-policy-v1",
+                dry_run_ready=[
+                    f"would merge {delivery_evidence.get('pullRequestUrl') or 'the approved PR'} at head {delivery_evidence.get('pullRequestHeadRevision') or '<PR head evidence required>'} after rechecking CI and mergeability",
+                    "would retain merge result, PR URL, head revision, and terminal status metadata",
+                ],
+                dry_run_blocked=["would block merge until PR, CI, review, mergeability, and approval evidence are current"],
+            ),
+            self._low_risk_delivery_plan_action(
+                self._low_risk_delivery_stage(stage_by_id, "cleanup-auto-eligible", "Cleanup"),
+                action_id="cleanup",
+                label="Cleanup",
+                binding_blockers=self._low_risk_delivery_binding_blockers(eligibility, delivery_evidence, action_id="cleanup"),
+                delivery_evidence=delivery_evidence,
+                required_approval="Exact approval or policy naming merged branch, retained evidence, worktree target, and cleanup boundary.",
+                required_policy="low-risk-cleanup-policy-v1",
+                dry_run_ready=[
+                    f"would remove Git worktree target {delivery_evidence.get('cleanupTarget') or '<exact worktree target required>'}",
+                    f"would delete local branch {delivery_evidence.get('executionBranch') or '<exact branch target required>'}",
+                    "would preserve retained evidence before branch or worktree cleanup",
+                    "would leave unrelated worktrees, main checkout, caches outside target, and evidence artifacts untouched",
+                ],
+                dry_run_blocked=[
+                    "would block worktree removal until merge evidence, retained evidence, and an exact cleanup target are present",
+                    "would block local branch deletion until merged branch identity is retained",
+                ],
+            ),
+        ]
+        return LowRiskDeliveryPlanReportView(
+            reportId="low-risk-delivery-plan-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only dry-run plan for low-risk delivery. It composes green-gate evidence into PR, merge, "
+                "and cleanup actions, names missing proof, and performs no push, PR mutation, merge, branch deletion, "
+                "worktree deletion, issue sync, provider call, credential access, or failed-check bypass."
+            ),
+            workItemId=work_item_id,
+            currentBranch=eligibility.currentBranch,
+            baseBranch=eligibility.baseBranch,
+            headRevision=eligibility.headRevision,
+            workingTreeStatus=eligibility.workingTreeStatus,
+            prRef=delivery_evidence.get("pullRequestUrl") if isinstance(delivery_evidence.get("pullRequestUrl"), str) else None,
+            actions=actions,
+            hardStops=[
+                *eligibility.hardStops,
+                "policy approval is missing or stale",
+                "dry-run plan target does not match current branch, PR, head, evidence, or cleanup target",
+                "operation would require remote mutation, destructive cleanup, issue sync, provider calls, credential access, failed-check bypass, or broad autonomy outside the named policy",
+            ],
+            nextSafeActions=[
+                "Review the dry-run plan before requesting delivery or cleanup approval.",
+                "Record fresh verification, CI, review, merge, and retained-evidence metadata before execution is considered.",
+                "Keep the plan report-only until exact approval or a low-risk delivery policy names the action scope.",
+            ],
+            readOnly=True,
+            remoteMutationApproved=False,
+            cleanupApproved=False,
+            automaticDeliveryApproved=False,
+        )
+
+    def _low_risk_delivery_stage(
+        self,
+        stage_by_id: dict[str, TrustedDeliveryEligibilityStageEvaluationView],
+        stage_id: str,
+        label: str,
+    ) -> TrustedDeliveryEligibilityStageEvaluationView:
+        stage = stage_by_id.get(stage_id)
+        if stage:
+            return stage
+        return TrustedDeliveryEligibilityStageEvaluationView(
+            stageId=stage_id,
+            label=label,
+            status="blocked",
+            eligible=False,
+            checks=[],
+            allowedOperations=[],
+            blockedOperations=["stage evidence missing"],
+            nextAction=f"Regenerate trusted delivery eligibility so {label} evidence is available.",
+        )
+
+    def _low_risk_delivery_plan_action(
+        self,
+        stage: TrustedDeliveryEligibilityStageEvaluationView,
+        *,
+        action_id: str,
+        label: str,
+        binding_blockers: list[str],
+        delivery_evidence: dict,
+        required_approval: str,
+        required_policy: str = "low-risk-delivery-policy-v1",
+        dry_run_ready: list[str],
+        dry_run_blocked: list[str],
+    ) -> LowRiskDeliveryPlanActionView:
+        blocked_reasons = [
+            check.blockedReason
+            for check in stage.checks
+            if check.blockedReason
+        ]
+        blocked_reasons.extend(binding_blockers)
+        policy_missing = True
+        if not stage.eligible:
+            blocked_reasons = blocked_reasons or [f"{action_id}-evidence-missing"]
+        if policy_missing:
+            blocked_reasons.append("policy-missing")
+        evidence = []
+        for check in stage.checks:
+            evidence.extend(check.evidence)
+        execution_eligible = stage.eligible and not binding_blockers and not policy_missing
+        status = self._low_risk_delivery_action_status(
+            action_id=action_id,
+            execution_eligible=execution_eligible,
+            delivery_evidence=delivery_evidence,
+        )
+        return LowRiskDeliveryPlanActionView(
+            actionId=action_id,
+            label=label,
+            status=status,
+            eligible=execution_eligible,
+            dryRunEffects=dry_run_ready if stage.eligible and not binding_blockers else dry_run_blocked,
+            evidence=evidence,
+            blockedReasons=list(dict.fromkeys(blocked_reasons)),
+            nextSafeAction=self._low_risk_delivery_next_safe_action(action_id, list(dict.fromkeys(blocked_reasons))),
+            requiredApproval=required_approval,
+            requiredPolicy=required_policy,
+            allowedOperations=[],
+            blockedOperations=list(dict.fromkeys([*stage.allowedOperations, *stage.blockedOperations, "live execution until policy approval is present"])),
+            readOnly=True,
+        )
+
+    def _low_risk_delivery_action_status(
+        self,
+        *,
+        action_id: str,
+        execution_eligible: bool,
+        delivery_evidence: dict,
+    ) -> str:
+        if delivery_evidence.get("actionId") == action_id:
+            evidence_status = delivery_evidence.get("status")
+            if evidence_status == "failed":
+                return "failed"
+            if evidence_status == "recorded":
+                return "executed"
+            if evidence_status == "rejected":
+                return "blocked"
+        return "eligible" if execution_eligible else "blocked"
+
+    def _low_risk_delivery_next_safe_action(self, action_id: str, blocked_reasons: list[str]) -> str:
+        if "policy-missing" in blocked_reasons:
+            policy = "low-risk cleanup policy" if action_id == "cleanup" else "low-risk delivery policy"
+            return f"Request exact {policy} approval before any {action_id} execution."
+        if "delivery-target-mismatch" in blocked_reasons or "branch-head-mismatch" in blocked_reasons or "stale-pr-head" in blocked_reasons:
+            return "Refresh branch, head revision, and PR evidence before requesting approval."
+        if "cleanup-target-ambiguous" in blocked_reasons or "cleanup-branch-target-missing" in blocked_reasons:
+            return "Record one exact cleanup target and branch before requesting cleanup approval."
+        if "pr-head-evidence-missing" in blocked_reasons or "pull-request-url-missing" in blocked_reasons:
+            return "Record PR URL and PR head revision before merge or cleanup approval."
+        if blocked_reasons:
+            return f"Resolve {blocked_reasons[0]} before requesting {action_id} approval."
+        return f"Review retained evidence and request exact {action_id} approval before execution."
+
+    def _low_risk_delivery_binding_blockers(
+        self,
+        eligibility: TrustedDeliveryEligibilityReportView,
+        delivery_evidence: dict,
+        *,
+        action_id: str,
+    ) -> list[str]:
+        blockers: list[str] = []
+        execution_branch = delivery_evidence.get("executionBranch")
+        if isinstance(execution_branch, str) and execution_branch and execution_branch != eligibility.currentBranch:
+            blockers.append("delivery-target-mismatch")
+
+        if action_id in {"merge", "cleanup"}:
+            pull_request_url = delivery_evidence.get("pullRequestUrl")
+            pull_request_head = delivery_evidence.get("pullRequestHeadRevision")
+            if isinstance(pull_request_url, str) and pull_request_url:
+                if not isinstance(pull_request_head, str) or not pull_request_head:
+                    blockers.append("pr-head-evidence-missing")
+                elif pull_request_head != eligibility.headRevision:
+                    blockers.append("stale-pr-head")
+            else:
+                blockers.append("pull-request-url-missing")
+
+        if action_id == "cleanup":
+            cleanup_target = delivery_evidence.get("cleanupTarget")
+            if not isinstance(cleanup_target, str) or not cleanup_target:
+                blockers.append("cleanup-target-ambiguous")
+            if not isinstance(execution_branch, str) or not execution_branch:
+                blockers.append("cleanup-branch-target-missing")
+
+        return blockers
+
     async def _latest_work_item_verification_evidence(
         self,
         session: AsyncSession | None,
@@ -3896,11 +4336,611 @@ class SupervisorService:
             return {}
         metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
         cleanup_evidence = metadata.get("cleanupEvidence") if isinstance(metadata.get("cleanupEvidence"), dict) else {}
+        cleanup_target = cleanup_evidence.get("target")
+        if not isinstance(cleanup_target, str) or not cleanup_target:
+            cleanup_target = metadata.get("cleanupTargetPath")
+        delivery_entries = [entry for entry in metadata.get("deliveryExecutionEvidence", []) if isinstance(entry, dict)]
+        latest_delivery_evidence = delivery_entries[-1] if delivery_entries else {}
         return {
             **self._recipe_delivery_gate_payload(item, recipe),
+            **latest_delivery_evidence,
+            "hasDeliveryExecutionEvidence": bool(latest_delivery_evidence),
             "cleanupDryRunStatus": cleanup_evidence.get("dryRunStatus"),
-            "cleanupTarget": cleanup_evidence.get("target"),
+            "cleanupTarget": cleanup_target,
         }
+
+    async def get_cleanup_plan(self, session: AsyncSession, work_item_id: str) -> CleanupPlanView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        branch_target = self._metadata_text(metadata, "executionBranch") or self._metadata_text(metadata, "branchTarget") or "unknown"
+        cleanup_target_path = self._metadata_text(metadata, "cleanupTargetPath")
+        target_exists = metadata.get("cleanupTargetExists")
+        target_registered = metadata.get("cleanupTargetGitRegistered")
+        inside_approved_root = metadata.get("cleanupTargetInsideApprovedRoot")
+        blocked_paths = [path for path in metadata.get("cleanupBlockedPaths", []) if isinstance(path, str) and path]
+        source_files = [path for path in metadata.get("cleanupSourceFiles", []) if isinstance(path, str) and path]
+        delivery_entries = [entry for entry in metadata.get("deliveryExecutionEvidence", []) if isinstance(entry, dict)]
+        delivery_evidence = delivery_entries[-1] if delivery_entries else {}
+        retained_evidence = [ref for ref in delivery_evidence.get("artifactRefs", []) if isinstance(ref, str) and ref]
+        retained_evidence.extend(ref for ref in metadata.get("retainedEvidence", []) if isinstance(ref, str) and ref)
+        retained_evidence = list(dict.fromkeys(retained_evidence))
+
+        residue = self._cleanup_plan_residue(metadata, cleanup_target_path)
+        git_worktree_state = self._cleanup_git_worktree_state(target_registered)
+        filesystem_state = self._cleanup_filesystem_state(
+            target_exists=target_exists,
+            target_registered=target_registered,
+            inside_approved_root=inside_approved_root,
+            source_files=source_files,
+            residue=residue,
+        )
+        blocked_reasons = self._cleanup_plan_blockers(
+            metadata=metadata,
+            cleanup_target_path=cleanup_target_path,
+            inside_approved_root=inside_approved_root,
+            blocked_paths=blocked_paths,
+            source_files=source_files,
+            delivery_evidence=delivery_evidence,
+            retained_evidence=retained_evidence,
+            residue=residue,
+            git_worktree_state=git_worktree_state,
+        )
+        dry_run_effects = self._cleanup_plan_dry_run_effects(
+            cleanup_target_path=cleanup_target_path,
+            git_worktree_state=git_worktree_state,
+            filesystem_state=filesystem_state,
+            residue=residue,
+            retained_evidence=retained_evidence,
+            blocked_reasons=blocked_reasons,
+        )
+        return CleanupPlanView(
+            planId=f"cleanup-plan-{item.id}",
+            generatedAt=datetime.now(timezone.utc),
+            workItemId=item.id,
+            status="cleaned_up" if metadata.get("cleanupCompleted") is True else ("blocked" if blocked_reasons else "eligible"),
+            branchTarget=branch_target,
+            cleanupTargetPath=cleanup_target_path,
+            gitWorktreeState=git_worktree_state,
+            filesystemState=filesystem_state,
+            sourceFileState="present" if source_files else "none",
+            sourceFiles=source_files,
+            retainedEvidence=retained_evidence,
+            residue=residue,
+            blockedPaths=blocked_paths,
+            dryRunEffects=dry_run_effects,
+            blockedReasons=list(dict.fromkeys(blocked_reasons)),
+            requiredApproval="Exact cleanup approval naming the branch, worktree or residue path, retained evidence, and stop lines.",
+            requiredPolicy="low-risk-cleanup-policy-v1",
+            recoveryPath=self._metadata_text(metadata, "cleanupRecoveryPath") or "inspect retained delivery evidence and cleanup target classification before retry",
+            nextSafeActions=self._cleanup_plan_next_safe_actions(blocked_reasons),
+            readOnly=True,
+            cleanupAllowed=False,
+            branchDeletionApproved=False,
+            worktreeRemovalApproved=False,
+            evidenceDeletionApproved=False,
+            remoteMutationApproved=False,
+        )
+
+    def _metadata_text(self, metadata: dict, key: str) -> str | None:
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+        return None
+
+    def _cleanup_plan_residue(self, metadata: dict, cleanup_target_path: str | None) -> list[CleanupPlanResidueView]:
+        residue: list[CleanupPlanResidueView] = []
+        for entry in metadata.get("cleanupResidue", []):
+            if not isinstance(entry, dict):
+                continue
+            kind = entry.get("kind")
+            path = entry.get("path")
+            if not isinstance(kind, str) or not kind or not isinstance(path, str) or not path:
+                continue
+            inside = self._path_inside_target(path, cleanup_target_path)
+            residue.append(
+                CleanupPlanResidueView(
+                    kind=kind,
+                    path=path,
+                    insideApprovedTarget=inside,
+                    safeToRemoveAfterApproval=inside,
+                )
+            )
+        return residue
+
+    def _path_inside_target(self, path: str, cleanup_target_path: str | None) -> bool:
+        if not cleanup_target_path:
+            return False
+        try:
+            candidate = Path(path).resolve()
+            target = Path(cleanup_target_path).resolve()
+            candidate.relative_to(target)
+            return True
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+    def _cleanup_git_worktree_state(self, target_registered: object) -> str:
+        if target_registered is True:
+            return "registered"
+        if target_registered is False:
+            return "not_registered"
+        return "unknown"
+
+    def _cleanup_filesystem_state(
+        self,
+        *,
+        target_exists: object,
+        target_registered: object,
+        inside_approved_root: object,
+        source_files: list[str],
+        residue: list[CleanupPlanResidueView],
+    ) -> str:
+        if inside_approved_root is False:
+            return "unsafe_outside_target"
+        if target_exists is False:
+            return "missing"
+        if target_exists is True and target_registered is False and residue and not source_files:
+            return "residue_only"
+        if target_exists is True:
+            return "exists"
+        return "unknown"
+
+    def _cleanup_plan_blockers(
+        self,
+        *,
+        metadata: dict,
+        cleanup_target_path: str | None,
+        inside_approved_root: object,
+        blocked_paths: list[str],
+        source_files: list[str],
+        delivery_evidence: dict,
+        retained_evidence: list[str],
+        residue: list[CleanupPlanResidueView],
+        git_worktree_state: str,
+    ) -> list[str]:
+        blockers: list[str] = []
+        if metadata.get("cleanupPolicyId") != "low-risk-cleanup-policy-v1":
+            blockers.append("policy-missing")
+        if not cleanup_target_path:
+            blockers.append("cleanup-target-ambiguous")
+        if inside_approved_root is False:
+            blockers.append("cleanup-target-outside-approved-root")
+        elif cleanup_target_path and inside_approved_root is not True:
+            blockers.append("cleanup-target-approved-root-missing")
+        if blocked_paths:
+            blockers.append("blocked-path-present")
+        if source_files:
+            blockers.append("source-files-present")
+        if not retained_evidence:
+            blockers.append("retained-evidence-missing")
+        if not delivery_evidence:
+            blockers.append("delivery-evidence-missing")
+        if git_worktree_state == "unknown":
+            blockers.append("git-worktree-state-unknown")
+        if any(not item.insideApprovedTarget for item in residue):
+            blockers.append("unsafe-residue-path")
+        delivery_mode = delivery_evidence.get("mode")
+        delivery_status = delivery_evidence.get("status")
+        if delivery_mode == "delivery_action_rejected_stale" or delivery_status == "rejected":
+            blockers.append("delivery-evidence-stale")
+        if delivery_mode == "delivery_action_failed" or delivery_status == "failed":
+            blockers.append("delivery-evidence-failed")
+        if delivery_evidence and (
+            delivery_mode != "approved_merge_action_recorded"
+            or delivery_status != "recorded"
+            or delivery_evidence.get("mergeStatus") != "merged"
+        ):
+            blockers.append("delivery-evidence-not-merged")
+        return blockers
+
+    def _cleanup_plan_dry_run_effects(
+        self,
+        *,
+        cleanup_target_path: str | None,
+        git_worktree_state: str,
+        filesystem_state: str,
+        residue: list[CleanupPlanResidueView],
+        retained_evidence: list[str],
+        blocked_reasons: list[str],
+    ) -> list[str]:
+        effects = [
+            "would preserve retained delivery evidence before any cleanup",
+            "would not delete files, branches, worktrees, remote branches, issues, or evidence in this story",
+        ]
+        if cleanup_target_path:
+            effects.append(f"would inspect cleanup target {cleanup_target_path}")
+        if git_worktree_state == "registered":
+            effects.append("would require explicit Git worktree removal approval before deletion")
+        elif git_worktree_state == "not_registered":
+            effects.append("git worktree removal would be skipped because target is filesystem residue")
+        if filesystem_state == "residue_only":
+            effects.append("would classify cache, virtualenv, and temp residue separately from source files")
+        for item in residue:
+            effects.append(f"would classify {item.kind} residue at {item.path}")
+        if retained_evidence:
+            effects.append(f"would retain evidence refs: {', '.join(retained_evidence)}")
+        if blocked_reasons:
+            effects.append(f"would block cleanup until resolved: {', '.join(list(dict.fromkeys(blocked_reasons)))}")
+        return effects
+
+    def _cleanup_plan_next_safe_actions(self, blocked_reasons: list[str]) -> list[str]:
+        actions = []
+        if "retained-evidence-missing" in blocked_reasons:
+            actions.append("Record or preserve metadata-only delivery evidence before cleanup.")
+        if "delivery-evidence-failed" in blocked_reasons:
+            actions.append("Inspect failed delivery evidence and recover or retry before cleanup.")
+        if "delivery-evidence-stale" in blocked_reasons:
+            actions.append("Refresh delivery evidence so cleanup binds to current branch, PR, and retained artifacts.")
+        if "delivery-evidence-missing" in blocked_reasons or "delivery-evidence-not-merged" in blocked_reasons:
+            actions.append("Record approved merge delivery evidence before cleanup.")
+        if "cleanup-target-ambiguous" in blocked_reasons:
+            actions.append("Identify one exact disposable cleanup target path before approval.")
+        if "git-worktree-state-unknown" in blocked_reasons:
+            actions.append("Verify Git worktree registration state before cleanup.")
+        if "source-files-present" in blocked_reasons:
+            actions.append("Separate unexpected source files from residue before cleanup.")
+        if "unsafe-residue-path" in blocked_reasons:
+            actions.append("Move or narrow residue to the approved cleanup target before approval.")
+        if "cleanup-target-outside-approved-root" in blocked_reasons or "blocked-path-present" in blocked_reasons:
+            actions.append("Narrow cleanup to one approved disposable worktree or residue path.")
+        if "policy-missing" in blocked_reasons:
+            actions.append("Request exact cleanup approval or low-risk cleanup policy evidence before execution.")
+        if not actions:
+            actions.append("Review the dry-run cleanup plan and request exact cleanup approval before deletion.")
+        return actions
+
+    async def record_delivery_execution_evidence(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: DeliveryExecutionEvidencePayload,
+    ) -> DeliveryExecutionEvidenceView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        plan = await self.get_low_risk_delivery_plan_report(session, work_item_id=work_item_id)
+        current_delivery_evidence = await self._work_item_delivery_evidence(session, work_item_id)
+        approval_validation = self._validate_delivery_execution_approval(item, plan, current_delivery_evidence, payload)
+        approval_present = approval_validation.approved
+        blocked_reasons = list(self._delivery_execution_evidence_blockers(plan, payload))
+        blocked_reasons.extend(approval_validation.blockers)
+
+        mode = "report_only_readiness"
+        status = "blocked"
+        if approval_present and blocked_reasons:
+            mode = "delivery_action_rejected_stale"
+            status = "rejected"
+        elif approval_present:
+            terminal_status = payload.terminalStatus or "completed"
+            failed_terminal = terminal_status in {"failed", "timed_out", "cancelled"}
+            mode = "delivery_action_failed" if failed_terminal else ("approved_pr_action_recorded" if payload.actionId == "pr" else "approved_merge_action_recorded")
+            status = "failed" if failed_terminal else "recorded"
+        elif payload.policyId == "low-risk-delivery-policy-v1" and payload.approvalId:
+            mode = "delivery_action_rejected_stale"
+            status = "rejected"
+
+        evidence = self._delivery_execution_evidence_view(
+            item=item,
+            plan=plan,
+            payload=payload,
+            mode=mode,
+            status=status,
+            event_recorded=False,
+            blocked_reasons=blocked_reasons,
+            approval_reference=approval_validation.approval_reference,
+        )
+
+        if not payload.recordEvent or (not approval_present and mode == "report_only_readiness"):
+            return evidence
+
+        if blocked_reasons:
+            await self._record_event(
+                session,
+                item,
+                "delivery_execution.rejected",
+                f"Delivery execution evidence rejected for {payload.actionId}.",
+                self._sanitized_delivery_execution_event_payload(evidence),
+                actor_type="operator",
+            )
+            await session.commit()
+            return evidence.model_copy(update={"eventRecorded": True})
+
+        metadata = dict(item.metadata_json) if isinstance(item.metadata_json, dict) else {}
+        entries = [entry for entry in metadata.get("deliveryExecutionEvidence", []) if isinstance(entry, dict)]
+        entries.append(evidence.model_dump(mode="json") | {"recordedAt": datetime.now(timezone.utc).isoformat()})
+        metadata["deliveryExecutionEvidence"] = entries
+        if payload.pullRequestUrl:
+            metadata["pullRequestUrl"] = payload.pullRequestUrl
+        if payload.pullRequestHeadRevision:
+            metadata["pullRequestHeadRevision"] = payload.pullRequestHeadRevision
+        if payload.ciStatus:
+            metadata["ciStatus"] = payload.ciStatus
+        if payload.mergeStatus:
+            metadata["mergeStatus"] = payload.mergeStatus
+        item.metadata_json = metadata
+        item.updated_at = datetime.now(timezone.utc)
+        item.last_event_at = item.updated_at
+        event_type = "delivery_execution.failed" if status == "failed" else "delivery_execution.recorded"
+        await self._record_event(
+            session,
+            item,
+            event_type,
+            f"Delivery execution evidence recorded for {payload.actionId}.",
+            evidence.model_dump(mode="json"),
+            actor_type="operator",
+        )
+        await session.commit()
+        await session.refresh(item)
+        await self._publish_item(item)
+        return evidence.model_copy(update={"eventRecorded": True})
+
+    def _delivery_execution_evidence_blockers(
+        self,
+        plan: LowRiskDeliveryPlanReportView,
+        payload: DeliveryExecutionEvidencePayload,
+    ) -> list[str]:
+        blockers: list[str] = []
+        required_text_fields = [
+            ("commandShape", "commandShape-missing", payload.commandShape),
+            ("expectedBranch", "expectedBranch-missing", payload.expectedBranch),
+            ("expectedHeadRevision", "expectedHeadRevision-missing", payload.expectedHeadRevision),
+            ("baseBranch", "baseBranch-missing", payload.baseBranch),
+            ("terminalStatus", "terminalStatus-missing", payload.terminalStatus),
+            ("summary", "summary-missing", payload.summary),
+            ("recoveryPath", "recoveryPath-missing", payload.recoveryPath),
+        ]
+        for _field_name, blocker_name, value in required_text_fields:
+            if not isinstance(value, str) or not value.strip():
+                blockers.append(blocker_name)
+        for field_name, value in {
+            "commandShape": payload.commandShape,
+            "summary": payload.summary,
+            "recoveryPath": payload.recoveryPath,
+            "pullRequestUrl": payload.pullRequestUrl,
+            "mergeResult": payload.mergeResult,
+        }.items():
+            blocker = self._delivery_execution_metadata_boundary_blocker(field_name, value)
+            if blocker:
+                blockers.append(blocker)
+        for index, artifact_ref in enumerate(payload.artifactRefs):
+            blocker = self._delivery_execution_metadata_boundary_blocker(f"artifactRefs[{index}]", artifact_ref)
+            if blocker:
+                blockers.append(blocker)
+        if payload.expectedBranch and payload.expectedBranch != plan.currentBranch:
+            blockers.append("delivery-target-mismatch")
+        if payload.baseBranch and payload.baseBranch != plan.baseBranch:
+            blockers.append("base-branch-mismatch")
+        if payload.expectedHeadRevision and payload.expectedHeadRevision != plan.headRevision:
+            blockers.append("branch-head-mismatch")
+        if not payload.pullRequestUrl:
+            blockers.append("pull-request-url-missing")
+        if not payload.pullRequestHeadRevision:
+            blockers.append("pr-head-evidence-missing")
+        if payload.pullRequestHeadRevision and payload.expectedHeadRevision and payload.pullRequestHeadRevision != payload.expectedHeadRevision:
+            blockers.append("stale-pr-head")
+        if payload.ciStatus in {"failed", "cancelled", "timed_out"}:
+            blockers.append("ci-failed")
+        elif payload.ciStatus not in {"passed", "waived"}:
+            blockers.append("ci-evidence-missing")
+        if payload.reviewState not in {"approved", "resolved", "waived"}:
+            blockers.append("review-missing")
+        if payload.actionId == "merge" and payload.mergeStatus != "merged":
+            blockers.append("merge-not-recorded")
+        if payload.actionId == "merge" and not payload.mergeResult:
+            blockers.append("merge-result-missing")
+        terminal_statuses = {"completed", "failed", "timed_out", "cancelled"}
+        if payload.terminalStatus and payload.terminalStatus not in terminal_statuses:
+            blockers.append("terminal-status-invalid")
+        if payload.terminalStatus == "completed" and payload.exitCode not in (0, None):
+            blockers.append("exit-code-nonzero")
+        if payload.terminalStatus in {"failed", "timed_out", "cancelled"} and payload.exitCode == 0:
+            blockers.append("exit-code-conflicts-terminal-status")
+        if not payload.artifactRefs:
+            blockers.append("retained-evidence-missing")
+        return list(dict.fromkeys(blockers))
+
+    def _validate_delivery_execution_approval(
+        self,
+        item: WorkItem,
+        plan: LowRiskDeliveryPlanReportView,
+        current_delivery_evidence: dict,
+        payload: DeliveryExecutionEvidencePayload,
+    ) -> DeliveryApprovalValidation:
+        if payload.policyId != "low-risk-delivery-policy-v1":
+            return DeliveryApprovalValidation(False, ["policy-missing"])
+        if not payload.approvalId:
+            return DeliveryApprovalValidation(False, ["policy-missing", "approval-ledger-missing"])
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        ledger_entries = [entry for entry in metadata.get("deliveryApprovalLedger", []) if isinstance(entry, dict)]
+        if not ledger_entries:
+            return DeliveryApprovalValidation(False, ["approval-ledger-missing"])
+
+        matches = [entry for entry in ledger_entries if entry.get("approvalId") == payload.approvalId]
+        if not matches:
+            return DeliveryApprovalValidation(False, ["approval-id-unknown"])
+        if len(matches) != 1:
+            return DeliveryApprovalValidation(False, ["approval-id-ambiguous"])
+        approval = matches[0]
+
+        blockers: list[str] = []
+        has_current_delivery_evidence = current_delivery_evidence.get("hasDeliveryExecutionEvidence") is True
+        trusted_pull_request_url = (
+            current_delivery_evidence.get("pullRequestUrl")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("pullRequestUrl"), str)
+            else payload.pullRequestUrl
+        )
+        trusted_pull_request_head = (
+            current_delivery_evidence.get("pullRequestHeadRevision")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("pullRequestHeadRevision"), str)
+            else payload.pullRequestHeadRevision
+        )
+        trusted_ci_status = (
+            current_delivery_evidence.get("ciStatus")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("ciStatus"), str)
+            else payload.ciStatus
+        )
+        trusted_review_state = (
+            current_delivery_evidence.get("reviewState")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("reviewState"), str)
+            else payload.reviewState
+        )
+        trusted_merge_status = (
+            current_delivery_evidence.get("mergeStatus")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("mergeStatus"), str)
+            else payload.mergeStatus
+        )
+        expected_text_fields = [
+            ("authorityFamily", "github_delivery", "approval-authority-family-mismatch"),
+            ("policyId", payload.policyId, "approval-policy-mismatch"),
+            ("actionId", payload.actionId, "approval-action-mismatch"),
+            ("workItemId", item.id, "approval-work-item-mismatch"),
+            ("targetBranch", plan.currentBranch, "approval-branch-mismatch"),
+            ("baseBranch", plan.baseBranch, "approval-base-branch-mismatch"),
+            ("headRevision", plan.headRevision, "approval-head-mismatch"),
+            ("pullRequestUrl", trusted_pull_request_url, "approval-pr-url-mismatch"),
+            ("pullRequestHeadRevision", trusted_pull_request_head, "approval-pr-head-mismatch"),
+            ("ciStatus", trusted_ci_status, "approval-ci-state-mismatch"),
+            ("reviewState", trusted_review_state, "approval-review-state-mismatch"),
+        ]
+        for field_name, expected, blocker in expected_text_fields:
+            if not isinstance(expected, str) or not expected.strip() or approval.get(field_name) != expected:
+                blockers.append(blocker)
+
+        if payload.actionId == "merge":
+            if approval.get("mergeStatus") != trusted_merge_status or trusted_merge_status != "merged":
+                blockers.append("approval-merge-state-mismatch")
+
+        retained_evidence = [ref for ref in approval.get("retainedEvidence", []) if isinstance(ref, str) and ref]
+        if set(payload.artifactRefs) != set(retained_evidence):
+            blockers.append("approval-retained-evidence-mismatch")
+
+        approved_by = approval.get("approvedBy")
+        actor_identity = payload.actorLabel or payload.actorId
+        if not isinstance(approved_by, str) or not approved_by.strip():
+            blockers.append("approval-operator-missing")
+        elif actor_identity != approved_by:
+            blockers.append("approval-operator-mismatch")
+
+        approved_at = approval.get("approvedAt")
+        parsed_approved_at: datetime | None = None
+        if not isinstance(approved_at, str) or not approved_at.strip():
+            blockers.append("approval-approved-at-missing")
+        else:
+            try:
+                parsed_approved_at = datetime.fromisoformat(approved_at.replace("Z", "+00:00"))
+                if parsed_approved_at.tzinfo is None:
+                    parsed_approved_at = parsed_approved_at.replace(tzinfo=timezone.utc)
+                if parsed_approved_at > datetime.now(timezone.utc):
+                    blockers.append("approval-approved-at-future")
+            except ValueError:
+                blockers.append("approval-approved-at-invalid")
+        expires_at = approval.get("expiresAt")
+        if isinstance(expires_at, str) and expires_at.strip():
+            try:
+                parsed_expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if parsed_expiry.tzinfo is None:
+                    parsed_expiry = parsed_expiry.replace(tzinfo=timezone.utc)
+                if parsed_expiry < datetime.now(timezone.utc):
+                    blockers.append("approval-expired")
+                if parsed_approved_at and parsed_approved_at > parsed_expiry:
+                    blockers.append("approval-approved-after-expiry")
+            except ValueError:
+                blockers.append("approval-expiry-invalid")
+        else:
+            blockers.append("approval-expiry-or-review-point-missing")
+
+        rollback_plan = [item for item in approval.get("rollbackPlan", []) if isinstance(item, str) and item]
+        if not rollback_plan:
+            blockers.append("approval-rollback-missing")
+        stop_lines = [item for item in approval.get("stopLines", []) if isinstance(item, str) and item]
+        if not stop_lines:
+            blockers.append("approval-stop-lines-missing")
+
+        unique_blockers = list(dict.fromkeys(blockers))
+        return DeliveryApprovalValidation(
+            approved=not unique_blockers,
+            blockers=unique_blockers,
+            approval_reference=payload.approvalId if not unique_blockers else None,
+        )
+
+    def _delivery_execution_metadata_boundary_blocker(self, field_name: str, value: str | None) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        if len(value) > 512:
+            return f"{field_name}-too-large"
+        lowered = value.lower()
+        forbidden_markers = [
+            "rawoutput",
+            "raw output",
+            "stdout:",
+            "stderr:",
+            "secret",
+            "token",
+            "password",
+            "raw prompt",
+            "raw completion",
+            "provider payload",
+            "source copy",
+            "-----begin",
+        ]
+        if any(marker in lowered for marker in forbidden_markers):
+            return f"{field_name}-retention-boundary"
+        return None
+
+    def _delivery_execution_evidence_view(
+        self,
+        *,
+        item: WorkItem,
+        plan: LowRiskDeliveryPlanReportView,
+        payload: DeliveryExecutionEvidencePayload,
+        mode: str,
+        status: str,
+        event_recorded: bool,
+        blocked_reasons: list[str],
+        approval_reference: str | None,
+    ) -> DeliveryExecutionEvidenceView:
+        return DeliveryExecutionEvidenceView(
+            evidenceId=f"delivery-execution-{item.id}-{payload.actionId}",
+            mode=mode,
+            actionId=payload.actionId,
+            status=status,
+            eventRecorded=event_recorded,
+            blockedReasons=list(dict.fromkeys(blocked_reasons)),
+            commandShape=payload.commandShape,
+            targetBranch=payload.expectedBranch or plan.currentBranch,
+            pullRequestUrl=payload.pullRequestUrl,
+            expectedHeadRevision=payload.expectedHeadRevision or plan.headRevision,
+            pullRequestHeadRevision=payload.pullRequestHeadRevision,
+            baseBranch=payload.baseBranch or plan.baseBranch,
+            ciStatus=payload.ciStatus,
+            reviewState=payload.reviewState,
+            mergeStatus=payload.mergeStatus,
+            mergeResult=payload.mergeResult,
+            terminalStatus=payload.terminalStatus,
+            exitCode=payload.exitCode,
+            summary=payload.summary or "Delivery execution evidence is metadata-only and report-bound.",
+            artifactRefs=list(payload.artifactRefs),
+            approvalReference=approval_reference,
+            recoveryPath=payload.recoveryPath or "inspect retained delivery evidence before retry, merge, or cleanup",
+            rawOutputRetained=False,
+            cleanupAllowed=False,
+            externalMutationRecorded=(status == "recorded"),
+            remoteMutationPerformed=False,
+        )
+
+    def _sanitized_delivery_execution_event_payload(self, evidence: DeliveryExecutionEvidenceView) -> dict:
+        payload = evidence.model_dump(mode="json")
+        blocked_reasons = list(payload.get("blockedReasons") or [])
+        if any(reason.endswith("-retention-boundary") or reason.endswith("-too-large") for reason in blocked_reasons):
+            for field_name in ["commandShape", "summary", "pullRequestUrl", "mergeResult", "recoveryPath"]:
+                if field_name in payload:
+                    payload[field_name] = "[redacted retention-boundary]"
+            if payload.get("artifactRefs"):
+                payload["artifactRefs"] = ["[redacted retention-boundary]"]
+        return payload
 
     def _trusted_delivery_diff_guard(
         self,
@@ -11495,6 +12535,7 @@ class SupervisorService:
             "executionBranch": metadata.get("executionBranch") if isinstance(metadata.get("executionBranch"), str) else None,
             "pullRequestStatus": metadata.get("pullRequestStatus") if isinstance(metadata.get("pullRequestStatus"), str) else "not_recorded",
             "pullRequestUrl": metadata.get("pullRequestUrl") if isinstance(metadata.get("pullRequestUrl"), str) else None,
+            "pullRequestHeadRevision": metadata.get("pullRequestHeadRevision") if isinstance(metadata.get("pullRequestHeadRevision"), str) else None,
             "ciStatus": metadata.get("ciStatus") if isinstance(metadata.get("ciStatus"), str) else "not_recorded",
             "mergeStatus": metadata.get("mergeStatus") if isinstance(metadata.get("mergeStatus"), str) else "not_recorded",
             "deliveryWaived": metadata.get("deliveryWaived") is True,
