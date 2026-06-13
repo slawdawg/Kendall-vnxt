@@ -239,3 +239,13 @@ Stories in this epic do not approve scoring execution, provider-backed scoring, 
 | Story | Summary |
 | --- | --- |
 | `13-1-define-adaptive-scoring-decision-support-contract.md` | Done story for defining the adaptive-scoring approval packet, allowed metadata inputs, deterministic formula requirements, output-use policy, approval binding, rollback/removal path, and stop lines without computing or applying a score. |
+
+## Draft Epic 14 Story Map
+
+Epic 14 starts after the adaptive-scoring contract packet. Its theme is local provider execution approval readiness: refresh the existing Story 4.4 Ollama endpoint/model boundary into an exact approval packet before any future provider call.
+
+Stories in this epic do not approve provider calls, endpoint/model discovery, broader provider expansion, raw provider-output retention, credential access, source mutation, launch, delivery, cleanup, or failed-check bypass.
+
+| Story | Summary |
+| --- | --- |
+| `14-1-refresh-local-provider-execution-approval-packet.md` | Done story for refreshing the local-provider execution approval packet for the approved Ollama endpoint `http://192.168.1.128:11434/v1/chat/completions`, model `qwen3:14b`, metadata-only retention, rollback, and stop lines without calling a provider. |
