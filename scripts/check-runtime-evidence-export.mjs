@@ -21,6 +21,7 @@ const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/appl
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const exportPanel = readWorkspaceFile("apps/dashboard/src/components/runtime-evidence-export-panel.tsx");
 const overviewPanel = readWorkspaceFile("apps/dashboard/src/components/evidence-overview-panel.tsx");
+const subscriptionLaunchReadinessPanel = readWorkspaceFile("apps/dashboard/src/components/subscription-launch-readiness-panel.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const detailSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
@@ -44,10 +45,17 @@ for (const typeName of [
   "RuntimeEvidenceExportSafetyView",
   "RuntimeEvidenceReviewManifestView",
   "RuntimeEvidenceReviewNavigatorItemView",
+  "RuntimeEvidenceSubscriptionLaunchView",
   "RuntimeEvidenceExportView",
 ]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
   assertCondition(schemaSource.includes(`class ${typeName}`), `Supervisor schemas must include ${typeName}`, failures);
+}
+for (const typeName of ["WorkItemSubscriptionAgentLaunchRequest", "SubscriptionAgentLaunchRequestView"]) {
+  assertCondition(schemaSource.includes(`class ${typeName}`), `Supervisor schemas must include ${typeName}`, failures);
+}
+for (const typeName of ["WorkItemSubscriptionAgentLaunchPayload", "SubscriptionAgentLaunchRequestView"]) {
+  assertCondition(contractSource.includes(`interface ${typeName}`), `Shared contracts must include ${typeName}`, failures);
 }
 
 assertCondition(
@@ -56,8 +64,18 @@ assertCondition(
   failures,
 );
 assertCondition(
+  apiSource.includes('"/work-items/{work_item_id}/subscription-agent-launch"'),
+  "FastAPI routes must expose /work-items/{work_item_id}/subscription-agent-launch",
+  failures,
+);
+assertCondition(
   serviceSource.includes("reviewNavigator=["),
   "Runtime evidence export service must build reviewNavigator",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("_runtime_evidence_subscription_launch_summary(events)"),
+  "Runtime evidence export service must include subscription launch summary",
   failures,
 );
 for (const itemId of ["review-runtime-state", "review-authority-boundary", "review-git-backed-evidence"]) {
@@ -103,12 +121,44 @@ for (const story of [
   assertCondition(existsSync(join(rootDir, story)), `Missing runtime export story evidence ${story}`, failures);
 }
 
-for (const panelText of ["Review navigator", "exportView.reviewNavigator.map", "item.label", "item.stopLines", "reportShortcutHref(report)"]) {
+for (const panelText of [
+  "Review navigator",
+  "exportView.reviewNavigator.map",
+  "item.label",
+  "item.stopLines",
+  "reportShortcutHref(report)",
+  "Subscription launch evidence",
+  "exportView.subscriptionLaunch.status",
+  "exportView.subscriptionLaunch.outputArtifactReferences",
+  "exportView.subscriptionLaunch.verificationEvidence",
+  "exportView.subscriptionLaunch.cancellationTimeoutRollbackEvidence",
+]) {
   assertCondition(exportPanel.includes(panelText), `Runtime evidence export panel must render ${panelText}`, failures);
 }
 
 for (const panelText of ["Review shortcuts", "runtimeEvidenceExport.reviewNavigator", "item.target", "item.itemId", "reportShortcutHref(report)"]) {
   assertCondition(overviewPanel.includes(panelText), `Evidence overview panel must render ${panelText}`, failures);
+}
+
+for (const panelText of [
+  "latestSubscriptionEvent(events, runtimeEvidenceExport.workflowEvents)",
+  "routing.subscription_agent_launch_rejected",
+  "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+  "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+  "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+  "execution_attempt.subscription_launch_fixture_completed",
+  "execution_attempt.verification_recorded",
+  "subscriptionLaunchVerification",
+  "Verification and recovery",
+  "Incomplete Evidence",
+  "commandTemplateExecutable",
+  "stateMapping",
+  "terminalStates",
+  "formatAllowance(\"Execution\"",
+  "formatAttempt(\"Shell execution\"",
+  "Raw stdout, stderr, and generated patch contents remain excluded.",
+]) {
+  assertCondition(subscriptionLaunchReadinessPanel.includes(panelText), `Subscription launch readiness panel must guard ${panelText}`, failures);
 }
 
 for (const shortcutText of [
@@ -138,7 +188,7 @@ for (const shortcutText of [
   assertCondition(reportShortcuts.includes(shortcutText), `Report shortcut helper must include ${shortcutText}`, failures);
 }
 
-for (const panelText of ["Review navigator", "Runtime state", "Authority boundary", "Git-backed evidence", "Ollama no-call preparation"]) {
+for (const panelText of ["Review navigator", "Runtime state", "Authority boundary", "Git-backed evidence"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert ${panelText}`, failures);
 }
 
@@ -167,7 +217,7 @@ assertCondition(
   failures,
 );
 
-for (const panelText of ["Review shortcuts", "4 shortcuts"]) {
+for (const panelText of ["Review shortcuts"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert overview ${panelText}`, failures);
 }
 

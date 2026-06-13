@@ -247,6 +247,9 @@ export interface VerificationEvidenceRecordRequest {
   summary: string;
   artifactRef?: string | null;
   recoveryAction: string;
+  rollbackStatus?: string | null;
+  rollbackReason?: string | null;
+  nextSafeAction?: string | null;
 }
 
 export interface WorkspaceIsolationPlanView {
@@ -421,8 +424,79 @@ export interface SubscriptionAgentLaunchStubView {
   workspaceContract: Record<string, unknown>;
   outputContract: Record<string, unknown>;
   lifecycleEvidence: Record<string, unknown>;
+  readinessEvidence?: Record<string, unknown>;
   processLaunchAllowed: boolean;
   executionAllowed: boolean;
+}
+
+export interface WorkItemSubscriptionAgentLaunchPayload {
+  stepId?: string | null;
+  taskKind?: string | null;
+  requestedAgent?: string | null;
+  recordEvent?: boolean;
+  workItemId?: string | null;
+  attemptId?: string | null;
+  executionAttemptId?: string | null;
+  routeDecisionId?: string | null;
+  workerId?: string | null;
+  lane?: string | null;
+  authorityMode?: string | null;
+  workspacePlanId?: string | null;
+  launchPolicyId?: string | null;
+  targetId?: string | null;
+  commandTemplateId?: string | null;
+  commandTemplateExecutionStatus?: string | null;
+  approvalActor?: string | null;
+  approvalTimestamp?: string | null;
+  approvalExpiry?: string | null;
+  permissionEnvelope?: string | null;
+  environmentAllowlist?: string[];
+  blockedCredentialSessionPaths?: string[];
+  artifactLimits?: Record<string, unknown>;
+  redactionPolicy?: string | null;
+  truncationPolicy?: string | null;
+  outputPolicy?: string | null;
+  startupTimeoutSeconds?: number | null;
+  runTimeoutSeconds?: number | null;
+  cancellationTimeoutSeconds?: number | null;
+  heartbeatPolicy?: string | null;
+  childProcessTreeTrackingPolicy?: string | null;
+  orphanDetectionPolicy?: string | null;
+  terminalStateReconciliationPolicy?: string | null;
+  idempotentCleanupPolicy?: string | null;
+  dashboardControls?: string | null;
+  rollbackPolicy?: string | null;
+  verificationCommand?: string | null;
+  allowedOutputMode?: string | null;
+}
+
+export interface SubscriptionAgentLaunchRequestView {
+  launchRequestId: string;
+  workItemId: string;
+  status: string;
+  readinessStatus: string;
+  approvalAccepted: boolean;
+  processLaunchAllowed: boolean;
+  executionAllowed: boolean;
+  commandExecutionAllowed: boolean;
+  sourceMutationAllowed: boolean;
+  providerCallsAllowed: boolean;
+  networkAllowed: boolean;
+  credentialAccessAllowed: boolean;
+  processLaunchAttempted: boolean;
+  shellExecutionAttempted: boolean;
+  credentialAccessAttempted: boolean;
+  externalSendAttempted: boolean;
+  missingEnvelopeFields: string[];
+  rejectedEnvelopeFields: Record<string, unknown>;
+  staleEnvelopeFields: string[];
+  blockedReasonIds: string[];
+  nextSafeAction: string;
+  approvalBinding: Record<string, unknown>;
+  workspaceContract: Record<string, unknown>;
+  outputArtifactSummary: Record<string, unknown>;
+  lifecycleEvidence: Record<string, unknown>;
+  safetyFlags: Record<string, boolean>;
 }
 
 export interface LocalEvidencePacketItemView {
@@ -1672,6 +1746,22 @@ export interface RuntimeEvidenceReviewNavigatorItemView {
   stopLines: string[];
 }
 
+export interface RuntimeEvidenceSubscriptionLaunchView {
+  status: string;
+  readinessStatus: string;
+  latestEventType?: string | null;
+  latestEventAt?: string | null;
+  approvalBinding: Record<string, unknown>;
+  lifecycleSummary: Record<string, unknown>;
+  workspaceSummary: Record<string, unknown>;
+  outputArtifactReferences: Record<string, unknown>[];
+  verificationEvidence: Record<string, unknown>;
+  safetyFlags: Record<string, boolean>;
+  cancellationTimeoutRollbackEvidence: Record<string, unknown>;
+  relatedReports: string[];
+  rawOutputStored: boolean;
+}
+
 export interface RuntimeEvidenceExportView {
   exportId: string;
   format: "application/json";
@@ -1684,6 +1774,7 @@ export interface RuntimeEvidenceExportView {
   safety: RuntimeEvidenceExportSafetyView;
   reviewManifest: RuntimeEvidenceReviewManifestView;
   reviewNavigator: RuntimeEvidenceReviewNavigatorItemView[];
+  subscriptionLaunch: RuntimeEvidenceSubscriptionLaunchView;
 }
 
 export interface OperatorProfile {

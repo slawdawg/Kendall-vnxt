@@ -1,7 +1,7 @@
 ﻿from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 from supervisor.domain.types import (
     AuditMode,
@@ -213,6 +213,49 @@ class WorkItemSubscriptionAgentLaunchStubRequest(BaseModel):
     recordEvent: bool = False
 
 
+class WorkItemSubscriptionAgentLaunchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stepId: str | None = None
+    taskKind: str | None = None
+    requestedAgent: str | None = None
+    recordEvent: bool = False
+    workItemId: str | None = None
+    attemptId: str | None = None
+    executionAttemptId: str | None = None
+    routeDecisionId: str | None = None
+    workerId: str | None = None
+    lane: str | None = None
+    authorityMode: str | None = None
+    workspacePlanId: str | None = None
+    launchPolicyId: str | None = None
+    targetId: str | None = None
+    commandTemplateId: str | None = None
+    commandTemplateExecutionStatus: str | None = None
+    approvalActor: str | None = None
+    approvalTimestamp: datetime | None = None
+    approvalExpiry: datetime | None = None
+    permissionEnvelope: str | None = None
+    environmentAllowlist: list[str] = Field(default_factory=list)
+    blockedCredentialSessionPaths: list[str] = Field(default_factory=list)
+    artifactLimits: dict[str, Any] = Field(default_factory=dict)
+    redactionPolicy: str | None = None
+    truncationPolicy: str | None = None
+    outputPolicy: str | None = None
+    startupTimeoutSeconds: PositiveInt | None = None
+    runTimeoutSeconds: PositiveInt | None = None
+    cancellationTimeoutSeconds: PositiveInt | None = None
+    heartbeatPolicy: str | None = None
+    childProcessTreeTrackingPolicy: str | None = None
+    orphanDetectionPolicy: str | None = None
+    terminalStateReconciliationPolicy: str | None = None
+    idempotentCleanupPolicy: str | None = None
+    dashboardControls: str | None = None
+    rollbackPolicy: str | None = None
+    verificationCommand: str | None = None
+    allowedOutputMode: str | None = None
+
+
 class WorkItemLocalEvidenceExplanationRequest(BaseModel):
     stepId: str | None = None
     taskKind: str | None = None
@@ -281,6 +324,9 @@ class WorkItemVerificationEvidenceRequest(BaseModel):
     summary: str
     artifactRef: str | None = None
     recoveryAction: str
+    rollbackStatus: str | None = None
+    rollbackReason: str | None = None
+    nextSafeAction: str | None = None
 
 
 class WorkspaceIsolationPlanView(BaseModel):
@@ -478,8 +524,38 @@ class SubscriptionAgentLaunchStubView(BaseModel):
     workspaceContract: dict[str, Any] = Field(default_factory=dict)
     outputContract: dict[str, Any] = Field(default_factory=dict)
     lifecycleEvidence: dict[str, Any] = Field(default_factory=dict)
+    readinessEvidence: dict[str, Any] = Field(default_factory=dict)
     processLaunchAllowed: bool = False
     executionAllowed: bool = False
+
+
+class SubscriptionAgentLaunchRequestView(BaseModel):
+    launchRequestId: str
+    workItemId: str
+    status: str
+    readinessStatus: str
+    approvalAccepted: bool = False
+    processLaunchAllowed: bool = False
+    executionAllowed: bool = False
+    commandExecutionAllowed: bool = False
+    sourceMutationAllowed: bool = False
+    providerCallsAllowed: bool = False
+    networkAllowed: bool = False
+    credentialAccessAllowed: bool = False
+    processLaunchAttempted: bool = False
+    shellExecutionAttempted: bool = False
+    credentialAccessAttempted: bool = False
+    externalSendAttempted: bool = False
+    missingEnvelopeFields: list[str] = Field(default_factory=list)
+    rejectedEnvelopeFields: dict[str, Any] = Field(default_factory=dict)
+    staleEnvelopeFields: list[str] = Field(default_factory=list)
+    blockedReasonIds: list[str] = Field(default_factory=list)
+    nextSafeAction: str
+    approvalBinding: dict[str, Any] = Field(default_factory=dict)
+    workspaceContract: dict[str, Any] = Field(default_factory=dict)
+    outputArtifactSummary: dict[str, Any] = Field(default_factory=dict)
+    lifecycleEvidence: dict[str, Any] = Field(default_factory=dict)
+    safetyFlags: dict[str, bool] = Field(default_factory=dict)
 
 
 class LocalEvidencePacketItemView(BaseModel):
@@ -1758,6 +1834,22 @@ class RuntimeEvidenceReviewNavigatorItemView(BaseModel):
     stopLines: list[str] = Field(default_factory=list)
 
 
+class RuntimeEvidenceSubscriptionLaunchView(BaseModel):
+    status: str = "not_recorded"
+    readinessStatus: str = "missing_evidence"
+    latestEventType: str | None = None
+    latestEventAt: datetime | None = None
+    approvalBinding: dict[str, Any] = Field(default_factory=dict)
+    lifecycleSummary: dict[str, Any] = Field(default_factory=dict)
+    workspaceSummary: dict[str, Any] = Field(default_factory=dict)
+    outputArtifactReferences: list[dict[str, Any]] = Field(default_factory=list)
+    verificationEvidence: dict[str, Any] = Field(default_factory=dict)
+    safetyFlags: dict[str, bool] = Field(default_factory=dict)
+    cancellationTimeoutRollbackEvidence: dict[str, Any] = Field(default_factory=dict)
+    relatedReports: list[str] = Field(default_factory=list)
+    rawOutputStored: bool = False
+
+
 class RuntimeEvidenceExportView(BaseModel):
     exportId: str
     format: str
@@ -1770,6 +1862,7 @@ class RuntimeEvidenceExportView(BaseModel):
     safety: RuntimeEvidenceExportSafetyView
     reviewManifest: RuntimeEvidenceReviewManifestView
     reviewNavigator: list[RuntimeEvidenceReviewNavigatorItemView] = Field(default_factory=list)
+    subscriptionLaunch: RuntimeEvidenceSubscriptionLaunchView = Field(default_factory=RuntimeEvidenceSubscriptionLaunchView)
 
 
 class WorkItemAssignmentRequest(BaseModel):

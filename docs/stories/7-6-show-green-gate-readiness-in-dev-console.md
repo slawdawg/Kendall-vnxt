@@ -5,7 +5,7 @@ baseline_commit: fcd1351e926af2370a92e812ca41bf236ee458f4
 # Story 7.6: Show Green-Gate Readiness In The Dev Console
 
 Date: 2026-06-11
-Status: review
+Status: done
 
 ## Story
 

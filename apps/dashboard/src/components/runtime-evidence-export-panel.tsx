@@ -16,6 +16,19 @@ function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
 }
 
+function formatUnknown(value: unknown, fallback = "not recorded"): string {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return fallback;
+}
+
 export function RuntimeEvidenceExportPanel({ exportView }: { exportView: RuntimeEvidenceExportView }) {
   const safetyEntries: Array<[string, boolean]> = [
     ["Process launch", exportView.safety.processLaunchAllowed],
@@ -71,6 +84,73 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
             </span>
           ))}
         </div>
+      </div>
+
+      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <h4 className="text-base font-semibold">Subscription launch evidence</h4>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            ["Status", exportView.subscriptionLaunch.status],
+            ["Readiness", exportView.subscriptionLaunch.readinessStatus],
+            ["Latest event", exportView.subscriptionLaunch.latestEventType ?? "not recorded"],
+            ["Raw output stored", exportView.subscriptionLaunch.rawOutputStored ? "true" : "false"],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
+              <p className="mt-1 break-words text-xs font-semibold">{value}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 grid gap-3 xl:grid-cols-3">
+          <div className="space-y-2">
+            {Object.entries(exportView.subscriptionLaunch.safetyFlags).map(([label, value]) => (
+              <p key={label} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+                {label}: {value ? "true" : "false"}
+              </p>
+            ))}
+          </div>
+          <div className="space-y-2">
+            {exportView.subscriptionLaunch.outputArtifactReferences.length > 0 ? (
+              exportView.subscriptionLaunch.outputArtifactReferences.map((artifact, index) => (
+                <p key={`${formatUnknown(artifact.artifactId, "artifact")}-${index}`} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+                  {formatUnknown(artifact.artifactKind, "artifact_reference")}
+                </p>
+              ))
+            ) : (
+              <p className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">No subscription launch artifacts recorded.</p>
+            )}
+          </div>
+          <div className="space-y-2">
+            {([
+              ["terminalStates", Array.isArray(exportView.subscriptionLaunch.lifecycleSummary.terminalStates) ? exportView.subscriptionLaunch.lifecycleSummary.terminalStates.join(", ") : undefined],
+              ["rollbackPolicy", exportView.subscriptionLaunch.cancellationTimeoutRollbackEvidence.rollbackPolicy],
+              ["idempotentCleanupPolicy", exportView.subscriptionLaunch.cancellationTimeoutRollbackEvidence.idempotentCleanupPolicy],
+            ] as Array<[string, unknown]>).map(([label, value]) => (
+              <p key={label} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+                {label}: {formatUnknown(value)}
+              </p>
+            ))}
+          </div>
+        </div>
+        {Object.keys(exportView.subscriptionLaunch.verificationEvidence).length > 0 ? (
+          <div className="mt-3 rounded-[0.85rem] border bg-[var(--panel)] p-3">
+            <h5 className="text-sm font-semibold">Verification and recovery</h5>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {([
+                ["status", exportView.subscriptionLaunch.verificationEvidence.status],
+                ["blockedReason", exportView.subscriptionLaunch.verificationEvidence.blockedReason],
+                ["rollbackStatus", exportView.subscriptionLaunch.verificationEvidence.rollbackStatus],
+                ["rollbackReason", exportView.subscriptionLaunch.verificationEvidence.rollbackReason],
+                ["recoveryPath", exportView.subscriptionLaunch.verificationEvidence.recoveryPath],
+                ["nextSafeAction", exportView.subscriptionLaunch.verificationEvidence.nextSafeAction],
+              ] as Array<[string, unknown]>).map(([label, value]) => (
+                <p key={label} className="break-words rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+                  {label}: {formatUnknown(value)}
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">

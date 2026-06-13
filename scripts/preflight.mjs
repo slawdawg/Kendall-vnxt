@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -70,6 +70,39 @@ function commandExists(command, args = ["--version"]) {
   return result.status === 0;
 }
 
+function findGoogleFontImports(directory) {
+  if (!existsSync(directory)) {
+    return [];
+  }
+
+  const matches = [];
+  const entries = readdirSync(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === ".next" || entry.name === "node_modules") {
+        continue;
+      }
+      matches.push(...findGoogleFontImports(entryPath));
+      continue;
+    }
+
+    if (!entry.isFile() || !/\.[cm]?[jt]sx?$/.test(entry.name)) {
+      continue;
+    }
+
+    if (statSync(entryPath).size > 1_000_000) {
+      continue;
+    }
+
+    if (readFileSync(entryPath, "utf8").includes("next/font/google")) {
+      matches.push(entryPath);
+    }
+  }
+
+  return matches;
+}
+
 function verifyJsWorkspace() {
   const currentNodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
   if (!supportedNodeMajors.has(currentNodeMajor)) {
@@ -91,6 +124,14 @@ function verifyJsWorkspace() {
 
   if (!existsSync(join(rootDir, "node_modules", ".pnpm"))) {
     recordFailure("JavaScript workspace dependencies are missing. Run `pnpm install` or `pnpm run setup`.");
+    return;
+  }
+
+  const googleFontImports = findGoogleFontImports(join(rootDir, "apps", "dashboard", "src"));
+  if (googleFontImports.length > 0) {
+    recordFailure(
+      `Dashboard source imports \`next/font/google\`, which makes sandboxed builds depend on fetching Google Fonts: ${googleFontImports.join(", ")}`,
+    );
     return;
   }
 

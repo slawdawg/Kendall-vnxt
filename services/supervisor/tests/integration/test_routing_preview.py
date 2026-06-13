@@ -7,6 +7,11 @@ from fastapi.testclient import TestClient
 import pytest
 
 
+STORY_8_5_APPROVAL_TIMESTAMP = datetime.fromisoformat("2026-06-12T16:20:33.2776334-05:00").astimezone(timezone.utc)
+STORY_8_5_APPROVAL_EXPIRY = datetime.fromisoformat("2026-06-12T16:50:33.2776334-05:00").astimezone(timezone.utc)
+STORY_8_5_APPROVAL_VALID_NOW = datetime.fromisoformat("2026-06-12T16:30:00-05:00").astimezone(timezone.utc)
+
+
 def _reset_supervisor_modules() -> None:
     for module_name in list(sys.modules):
         if module_name == "supervisor" or module_name.startswith("supervisor."):
@@ -22,6 +27,12 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     from supervisor.api.main import app
 
     return TestClient(app)
+
+
+def _freeze_subscription_launch_now(monkeypatch, value: datetime = STORY_8_5_APPROVAL_VALID_NOW) -> None:
+    from supervisor.application.service import SupervisorService
+
+    monkeypatch.setattr(SupervisorService, "_subscription_launch_now", lambda self: value)
 
 
 def test_routing_preview_selects_utility_for_deterministic_checks() -> None:
@@ -2286,16 +2297,69 @@ def test_subscription_agent_launch_stub_generation_is_non_mutating(tmp_path, mon
     assert stub["approvalBinding"]["workItemId"] == work_item_id
     assert stub["approvalBinding"]["targetId"] == "codex.subscription.disabled"
     assert stub["approvalBinding"]["workspacePlanId"] == stub["workspaceContract"]["workspacePlanId"]
+    assert stub["approvalBinding"]["launchPolicyId"] == "epic-8-first-subscription-launch-policy-v1"
+    assert stub["approvalBinding"]["truncationPolicy"] == "truncate_to_approved_artifact_limits"
+    assert stub["approvalBinding"]["startupTimeoutSeconds"] == 10
+    assert stub["approvalBinding"]["runTimeoutSeconds"] == 30
+    assert stub["approvalBinding"]["cancellationTimeoutSeconds"] == 5
+    assert "permissionEnvelope" in stub["approvalBinding"]["staleTrackedFields"]
+    assert "heartbeatPolicy" in stub["approvalBinding"]["staleTrackedFields"]
+    assert stub["approvalBinding"]["staleApprovalConsequence"] == "block_launch_and_require_new_exact_approval"
+    assert stub["readinessEvidence"]["status"] == "blocked_pending_exact_launch_approval"
+    assert stub["readinessEvidence"]["launchPolicyId"] == "epic-8-first-subscription-launch-policy-v1"
+    assert set(stub["readinessEvidence"]["blockedReasonIds"]) == {
+        "launch_policy_not_approved",
+        "missing_approval_actor",
+        "missing_approval_timestamp",
+        "missing_approval_expiry",
+        "permission_envelope_not_approved",
+        "command_template_not_executable",
+        "real_process_launch_not_approved",
+    }
+    assert stub["readinessEvidence"]["missingEnvelopeFields"] == [
+        "approvalActor",
+        "approvalTimestamp",
+        "approvalExpiry",
+    ]
+    assert stub["readinessEvidence"]["rejectedEnvelopeFields"] == {
+        "permissionEnvelope": "not_approved_for_real_launch",
+        "commandTemplateExecutionStatus": "not_executable_by_kendall",
+        "processLaunchPermission": "not_approved",
+    }
+    assert stub["readinessEvidence"]["staleEnvelopeFields"] == []
+    assert stub["readinessEvidence"]["commandTemplateId"] == "codex-subscription-cli-template-disabled-v1"
+    assert stub["readinessEvidence"]["commandTemplateExecutable"] is False
+    assert stub["approvalBinding"]["verificationCommand"] == "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch"
     assert stub["workspaceContract"]["materializationMode"] == "artifact_only_no_workspace_created"
     assert stub["workspaceContract"]["environmentPolicy"] == "deny_inheritance_allowlist_only"
     assert ".ssh" in stub["workspaceContract"]["forbiddenPaths"]
     assert stub["workspaceContract"]["commandsAllowed"] is False
     assert stub["workspaceContract"]["credentialAccessAllowed"] is False
     assert stub["outputContract"]["rawOutputStored"] is False
+    assert stub["outputContract"]["artifactReferenceOnly"] is True
+    assert stub["outputContract"]["boundedByteCounts"] == {"stdout": 0, "stderr": 0, "generatedFiles": 2}
+    assert {artifact["artifactKind"] for artifact in stub["outputContract"]["artifactReferences"]} == {
+        "simulated_output_summary",
+        "simulated_generated_patch",
+    }
+    assert all(artifact["operatorReviewRequired"] is True for artifact in stub["outputContract"]["artifactReferences"])
+    assert stub["outputContract"]["artifactReferences"][0]["rawPayloadStored"] is False
+    assert stub["outputContract"]["artifactReferences"][1]["applied"] is False
+    assert stub["outputContract"]["generatedPatchHandling"] == "artifact_only_operator_review_required"
     assert stub["lifecycleEvidence"]["processLaunchAttempted"] is False
     assert stub["lifecycleEvidence"]["shellExecutionAttempted"] is False
     assert stub["lifecycleEvidence"]["credentialAccessAttempted"] is False
+    assert stub["lifecycleEvidence"]["commandTemplateExecutable"] is False
+    assert stub["lifecycleEvidence"]["dryRunMode"] == "disabled_metadata_only"
     assert "timed_out -> terminal_timed_out_without_process" in stub["lifecycleEvidence"]["stateMapping"]
+    assert "completed -> terminal_completed_without_process" in stub["lifecycleEvidence"]["stateMapping"]
+    assert "rejected -> terminal_rejected_without_process" in stub["lifecycleEvidence"]["stateMapping"]
+    assert stub["lifecycleEvidence"]["heartbeatPolicy"] == "heartbeat_metadata_only_no_process_polling"
+    assert stub["lifecycleEvidence"]["childProcessTreeTrackingPolicy"] == "no_child_process_tree_created_tracking_metadata_only"
+    assert stub["lifecycleEvidence"]["orphanDetectionPolicy"] == "orphan_detection_records_no_process_tree_to_scan"
+    assert stub["lifecycleEvidence"]["terminalStateReconciliationPolicy"] == "terminal_reconciliation_metadata_only_without_process_status"
+    assert stub["lifecycleEvidence"]["idempotentCleanupPolicy"] == "cleanup_is_metadata_only_and_idempotent_without_deletion"
+    assert stub["lifecycleEvidence"]["rollbackPolicy"] == "rollback_records_global_disable_without_resource_deletion"
     assert before_item == after_item
     assert before_events == after_events
 
@@ -2330,12 +2394,726 @@ def test_subscription_agent_launch_stub_can_record_workflow_event(tmp_path, monk
     assert event["payload"]["requestedAgent"] == "claude"
     assert event["payload"]["targetId"] == "claude.subscription.disabled"
     assert event["payload"]["workspacePlanId"].startswith("subscription-workspace-plan-route-")
+    assert event["payload"]["commandTemplateExecutable"] is False
     assert event["payload"]["processLaunchAttempted"] is False
     assert event["payload"]["shellExecutionAttempted"] is False
     assert event["payload"]["credentialAccessAttempted"] is False
     assert event["payload"]["externalSendAttempted"] is False
     assert event["payload"]["processLaunchAllowed"] is False
     assert event["payload"]["executionAllowed"] is False
+    assert event["payload"]["readinessStatus"] == "blocked_pending_exact_launch_approval"
+    assert set(event["payload"]["blockedReasonIds"]) == {
+        "launch_policy_not_approved",
+        "missing_approval_actor",
+        "missing_approval_timestamp",
+        "missing_approval_expiry",
+        "permission_envelope_not_approved",
+        "command_template_not_executable",
+        "real_process_launch_not_approved",
+    }
+    assert event["payload"]["missingEnvelopeFields"] == [
+        "approvalActor",
+        "approvalTimestamp",
+        "approvalExpiry",
+    ]
+    assert event["payload"]["rejectedEnvelopeFields"]["permissionEnvelope"] == "not_approved_for_real_launch"
+    assert event["payload"]["staleEnvelopeFields"] == []
+    assert "planned -> disabled_precheck_recorded" in event["payload"]["stateMapping"]
+    assert "running -> simulated_running_rejected_without_spawn" in event["payload"]["stateMapping"]
+    assert set(event["payload"]["terminalStates"]) == {"cancelled", "timed_out", "failed", "completed", "rejected"}
+    assert event["payload"]["lifecyclePolicyResults"]["heartbeatPolicy"] == "heartbeat_metadata_only_no_process_polling"
+    assert event["payload"]["lifecyclePolicyResults"]["childProcessTreeTrackingPolicy"] == "no_child_process_tree_created_tracking_metadata_only"
+    assert event["payload"]["lifecyclePolicyResults"]["orphanDetectionPolicy"] == "orphan_detection_records_no_process_tree_to_scan"
+    assert event["payload"]["lifecyclePolicyResults"]["terminalStateReconciliationPolicy"] == "terminal_reconciliation_metadata_only_without_process_status"
+    assert event["payload"]["lifecyclePolicyResults"]["idempotentCleanupPolicy"] == "cleanup_is_metadata_only_and_idempotent_without_deletion"
+    assert event["payload"]["lifecyclePolicyResults"]["rollbackPolicy"] == "rollback_records_global_disable_without_resource_deletion"
+    assert event["payload"]["outputArtifactSummary"]["artifactReferenceOnly"] is True
+    assert event["payload"]["outputArtifactSummary"]["workflowEventRawOutputAllowed"] is False
+    assert event["payload"]["outputArtifactSummary"]["rawOutputStored"] is False
+    assert {artifact["artifactKind"] for artifact in event["payload"]["outputArtifactSummary"]["artifactReferences"]} == {
+        "simulated_output_summary",
+        "simulated_generated_patch",
+    }
+    assert "rawStdout" not in event["payload"]
+    assert "rawStderr" not in event["payload"]
+    assert "generatedPatch" not in event["payload"]
+
+
+def test_subscription_agent_launch_request_rejects_missing_exact_approval_before_process_start(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-missing-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        )
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["status"] == "rejected_missing_exact_approval"
+    assert launch["approvalAccepted"] is False
+    assert launch["processLaunchAllowed"] is False
+    assert launch["executionAllowed"] is False
+    assert launch["processLaunchAttempted"] is False
+    assert launch["shellExecutionAttempted"] is False
+    assert launch["credentialAccessAttempted"] is False
+    assert "approvalActor" in launch["missingEnvelopeFields"]
+    assert "approvalTimestamp" in launch["missingEnvelopeFields"]
+    assert "approvalExpiry" in launch["missingEnvelopeFields"]
+    assert "permissionEnvelope" in launch["missingEnvelopeFields"]
+    assert "real_process_launch_not_approved" in launch["blockedReasonIds"]
+    assert launch["nextSafeAction"] == "Fill approvalActor before exact launch approval can be requested."
+    assert launch["approvalBinding"]["approvalActor"] is None
+    assert launch["approvalBinding"]["approvalTimestamp"] is None
+    assert launch["approvalBinding"]["approvalExpiry"] is None
+    assert launch["approvalBinding"]["permissionEnvelope"] is None
+
+    event = events[0]
+    assert event["eventType"] == "routing.subscription_agent_launch_rejected"
+    assert event["payload"]["status"] == "rejected_missing_exact_approval"
+    assert event["payload"]["approvalBinding"]["approvalActor"] is None
+    assert event["payload"]["approvalBinding"]["approvalTimestamp"] is None
+    assert event["payload"]["approvalBinding"]["approvalExpiry"] is None
+    assert event["payload"]["approvalBinding"]["permissionEnvelope"] is None
+    assert event["payload"]["processLaunchAttempted"] is False
+    assert event["payload"]["shellExecutionAttempted"] is False
+    assert event["payload"]["credentialAccessAttempted"] is False
+    assert "rawStdout" not in event["payload"]
+    assert "rawStderr" not in event["payload"]
+    assert "generatedPatch" not in event["payload"]
+
+
+def _approved_subscription_launch_binding(stub: dict, **overrides: object) -> dict:
+    allowed_fields = {
+        "workItemId",
+        "attemptId",
+        "executionAttemptId",
+        "routeDecisionId",
+        "workerId",
+        "lane",
+        "authorityMode",
+        "workspacePlanId",
+        "launchPolicyId",
+        "targetId",
+        "commandTemplateId",
+        "commandTemplateExecutionStatus",
+        "approvalActor",
+        "approvalTimestamp",
+        "approvalExpiry",
+        "permissionEnvelope",
+        "environmentAllowlist",
+        "blockedCredentialSessionPaths",
+        "artifactLimits",
+        "redactionPolicy",
+        "truncationPolicy",
+        "outputPolicy",
+        "startupTimeoutSeconds",
+        "runTimeoutSeconds",
+        "cancellationTimeoutSeconds",
+        "heartbeatPolicy",
+        "childProcessTreeTrackingPolicy",
+        "orphanDetectionPolicy",
+        "terminalStateReconciliationPolicy",
+        "idempotentCleanupPolicy",
+        "dashboardControls",
+        "rollbackPolicy",
+        "verificationCommand",
+        "allowedOutputMode",
+    }
+    approval = {key: value for key, value in stub["approvalBinding"].items() if key in allowed_fields}
+    approval.update(
+        {
+            "executionAttemptId": approval["attemptId"],
+            "approvalActor": "Bob",
+            "approvalTimestamp": STORY_8_5_APPROVAL_TIMESTAMP.isoformat(),
+            "approvalExpiry": STORY_8_5_APPROVAL_EXPIRY.isoformat(),
+            "permissionEnvelope": "approved_for_one_artifact_only_subscription_launch",
+            "commandTemplateExecutionStatus": "executable_by_kendall",
+            "artifactLimits": {
+                "rawOutputBytes": 0,
+                "artifactReferenceOnly": True,
+                "sourceMutationAllowed": False,
+            },
+            "outputPolicy": "artifact_references_only_no_raw_output",
+            "redactionPolicy": "required",
+            "truncationPolicy": "truncate_to_approved_artifact_limits",
+            "startupTimeoutSeconds": 10,
+            "runTimeoutSeconds": 30,
+            "cancellationTimeoutSeconds": 5,
+            "dashboardControls": "approval_bound_disabled_until_all_gates_green",
+            "verificationCommand": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+            "allowedOutputMode": "artifact-only",
+        }
+    )
+    approval.update(overrides)
+    return approval
+
+
+def test_subscription_agent_launch_request_rejects_disabled_target_without_mutating_stub_contract(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-disabled-target.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    _freeze_subscription_launch_now(monkeypatch)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "claude"},
+        )
+        stub = stub_response.json()["data"]
+        approval = _approved_subscription_launch_binding(stub)
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={
+                "taskKind": "architecture_review",
+                "requestedAgent": "claude",
+                "recordEvent": True,
+                **approval,
+            },
+        )
+        stub_after = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "claude"},
+        ).json()["data"]
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["status"] == "rejected_target_not_enabled"
+    assert launch["approvalAccepted"] is False
+    assert launch["processLaunchAttempted"] is False
+    assert launch["processLaunchAllowed"] is False
+    assert launch["executionAllowed"] is False
+    assert launch["rejectedEnvelopeFields"]["targetStatus"] == "subscription_agent_target_not_enabled"
+    assert launch["rejectedEnvelopeFields"]["processLaunchPermission"] == "not_approved"
+    assert launch["outputArtifactSummary"]["artifactReferenceOnly"] is True
+    assert launch["outputArtifactSummary"]["rawOutputStored"] is False
+    assert stub_after["processLaunchAllowed"] is False
+    assert stub_after["disabledReason"] == "subscription_agent_process_launch_not_enabled"
+
+
+def test_subscription_agent_launch_request_rejects_expired_and_mismatched_exact_approval(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-expired-stale.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    approval_timestamp = datetime.now(timezone.utc) - timedelta(minutes=45)
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_launch_binding(
+            stub,
+            approvalTimestamp=approval_timestamp.isoformat(),
+            approvalExpiry=(approval_timestamp + timedelta(minutes=30)).isoformat(),
+            outputPolicy="raw_output_allowed",
+            artifactLimits={"notes": "raw stdout should not be retained here", "rawStdout": "do not retain this", "sourceMutationAllowed": True},
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["status"] == "rejected_stale_exact_approval"
+    assert "approvalExpiry" in launch["staleEnvelopeFields"]
+    assert "outputPolicy" in launch["staleEnvelopeFields"]
+    assert "artifactLimits" in launch["staleEnvelopeFields"]
+    assert launch["approvalBinding"]["artifactLimits"]["rawOutputBytes"] == 0
+    assert launch["approvalBinding"]["submittedEnvelopeFields"]["artifactLimits"] == {
+        "sourceMutationAllowed": True,
+        "redactedUnknownKeys": True,
+    }
+    assert launch["rejectedEnvelopeFields"]["approvalExpiry"] == "expired"
+    assert events[0]["payload"]["approvalBinding"]["submittedEnvelopeFields"]["artifactLimits"] == {
+        "sourceMutationAllowed": True,
+        "redactedUnknownKeys": True,
+    }
+
+
+def test_subscription_agent_launch_request_rejects_unknown_requested_agent(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-unknown-agent.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    _freeze_subscription_launch_now(monkeypatch)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_launch_binding(stub)
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "not-a-target", "recordEvent": True, **approval},
+        )
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["status"] == "rejected_target_not_enabled"
+    assert launch["rejectedEnvelopeFields"]["requestedAgent"] == "unsupported_subscription_launch_target"
+    assert "subscription_agent_target_unsupported" in launch["blockedReasonIds"]
+
+
+def test_subscription_agent_launch_request_accepts_exact_artifact_only_fixture_path(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-accepted-fixture.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    _freeze_subscription_launch_now(monkeypatch)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_launch_binding(stub)
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["status"] == "accepted_artifact_only_fixture_completed"
+    assert launch["readinessStatus"] == "subscription_launch_fixture_completed"
+    assert launch["approvalAccepted"] is True
+    assert launch["processLaunchAllowed"] is True
+    assert launch["executionAllowed"] is True
+    assert launch["commandExecutionAllowed"] is False
+    assert launch["sourceMutationAllowed"] is False
+    assert launch["providerCallsAllowed"] is False
+    assert launch["networkAllowed"] is False
+    assert launch["credentialAccessAllowed"] is False
+    assert launch["processLaunchAttempted"] is True
+    assert launch["shellExecutionAttempted"] is False
+    assert launch["credentialAccessAttempted"] is False
+    assert launch["externalSendAttempted"] is False
+    assert launch["missingEnvelopeFields"] == []
+    assert launch["rejectedEnvelopeFields"] == {}
+    assert launch["staleEnvelopeFields"] == []
+    assert launch["blockedReasonIds"] == []
+    assert launch["outputArtifactSummary"]["artifactReferenceOnly"] is True
+    assert launch["outputArtifactSummary"]["rawOutputStored"] is False
+    assert {artifact["artifactKind"] for artifact in launch["outputArtifactSummary"]["artifactReferences"]} == {
+        "fixture_output_summary",
+        "fixture_generated_patch_reference",
+    }
+
+    attempt = attempts[0]
+    assert attempt["attemptId"] == approval["executionAttemptId"]
+    assert attempt["status"] == "completed"
+    assert attempt["completedAt"] is not None
+    assert attempt["workerId"] == "subscription.agent.disabled"
+    assert attempt["lane"] == "subscription_agent"
+    assert attempt["authorityMode"] == "operator_approval_required"
+    assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
+    assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is False
+    assert attempt["workspaceIsolationPlan"]["networkAllowed"] is False
+    assert attempt["workspaceIsolationPlan"]["credentialAccessAllowed"] is False
+    assert ".env" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
+    assert ".ssh" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
+    assert "AppData/Roaming/Claude" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
+    assert "AppData/Roaming/Codex" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
+    assert attempt["workspaceIsolationPlan"]["sessionBoundary"] == "forbid_shell_profiles_ssh_browser_tokens_and_subscription_sessions"
+
+    launch_events = [event for event in events if event["eventType"].startswith("execution_attempt.subscription_launch_fixture")]
+    expected_launch_event_types = [
+        "execution_attempt.subscription_launch_fixture_started",
+        "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+        "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+        "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+        "execution_attempt.subscription_launch_fixture_completed",
+    ]
+    assert {event["eventType"] for event in launch_events} == set(expected_launch_event_types)
+    for event in launch_events:
+        assert event["payload"]["processLaunchAttempted"] is True
+        assert event["payload"]["shellExecutionAttempted"] is False
+        assert event["payload"]["commandExecutionAllowed"] is False
+        assert event["payload"]["credentialAccessAttempted"] is False
+        assert event["payload"]["sourceMutationAllowed"] is False
+        assert event["payload"]["rawOutputStored"] is False
+        assert event["payload"]["timeoutPolicy"] == "timeout_records_terminal_evidence_without_process_signal"
+        assert event["payload"]["cancellationPolicy"] == "cancellation_records_terminal_evidence_without_os_signal"
+        assert event["payload"]["cleanupPolicy"] == "no_process_no_workspace_materialized_cleanup_metadata_only"
+        assert event["payload"]["stateMapping"] == [
+            "planned -> disabled_precheck_recorded",
+            "approved -> approval_binding_recorded_without_launch",
+            "starting -> simulated_start_rejected_without_spawn",
+            "running -> simulated_running_rejected_without_spawn",
+            "cancel_requested -> cancellation_recorded_without_signal",
+            "cancelled -> terminal_cancelled_without_process",
+            "timed_out -> terminal_timed_out_without_process",
+            "failed -> terminal_failure_without_process",
+            "completed -> terminal_completed_without_process",
+            "rejected -> terminal_rejected_without_process",
+        ]
+        assert event["payload"]["terminalStates"] == ["cancelled", "timed_out", "failed", "completed", "rejected"]
+        assert event["payload"]["lifecyclePolicyResults"]["heartbeatPolicy"] == "heartbeat_metadata_only_no_process_polling"
+        assert event["payload"]["lifecyclePolicyResults"]["orphanDetectionPolicy"] == "orphan_detection_records_no_process_tree_to_scan"
+        assert event["payload"]["lifecyclePolicyResults"]["terminalStateReconciliationPolicy"] == "terminal_reconciliation_metadata_only_without_process_status"
+        assert event["payload"]["lifecyclePolicyResults"]["idempotentCleanupPolicy"] == "cleanup_is_metadata_only_and_idempotent_without_deletion"
+        assert event["payload"]["lifecyclePolicyResults"]["rollbackPolicy"] == "rollback_records_global_disable_without_resource_deletion"
+        assert ".ssh" in event["payload"]["workspaceContract"]["forbiddenPaths"]
+        assert "AppData/Local/Google/Chrome/User Data" in event["payload"]["workspaceContract"]["forbiddenPaths"]
+        assert "rawStdout" not in event["payload"]
+        assert "rawStderr" not in event["payload"]
+        assert "generatedPatch" not in event["payload"]
+    assert {event_ref["eventId"] for event_ref in attempt["eventRefs"]} == {event["id"] for event in launch_events}
+
+
+def test_subscription_agent_launch_request_rejects_future_dated_approval(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-future-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    approval_timestamp = datetime.now(timezone.utc) + timedelta(minutes=10)
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_launch_binding(
+            stub,
+            approvalTimestamp=approval_timestamp.isoformat(),
+            approvalExpiry=(approval_timestamp + timedelta(minutes=30)).isoformat(),
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["status"] == "rejected_stale_exact_approval"
+    assert "approvalTimestamp" in launch["staleEnvelopeFields"]
+    assert launch["rejectedEnvelopeFields"]["approvalTimestamp"] == "future_effective_time"
+    assert launch["processLaunchAttempted"] is False
+
+
+def test_subscription_agent_launch_request_rejects_second_fixture_attempt_for_work_item(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-one-fixture.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    _freeze_subscription_launch_now(monkeypatch)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        first_approval = _approved_subscription_launch_binding(stub)
+        first_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **first_approval},
+        )
+        second_attempt_id = f"{first_approval['executionAttemptId']}-replay"
+        second_approval = _approved_subscription_launch_binding(
+            stub,
+            attemptId=second_attempt_id,
+            executionAttemptId=second_attempt_id,
+            workspacePlanId=f"subscription-workspace-plan-{second_attempt_id}",
+        )
+        second_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **second_approval},
+        )
+        third_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **first_approval},
+        )
+        attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    second_launch = second_response.json()["data"]
+    assert second_launch["status"] == "rejected_stale_exact_approval"
+    assert "executionAttemptId" in second_launch["staleEnvelopeFields"]
+    assert "workspacePlanId" in second_launch["staleEnvelopeFields"]
+    assert second_launch["processLaunchAttempted"] is False
+    assert third_response.status_code == 409
+    assert third_response.json()["detail"]["error"]["code"] == "invalid_subscription_agent_launch"
+    assert len(attempts) == 1
+ 
+ 
+def test_runtime_evidence_export_includes_subscription_launch_summary_without_raw_output(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "runtime-export-subscription-launch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    _freeze_subscription_launch_now(monkeypatch)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_launch_binding(stub)
+        launch_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
+
+    assert launch_response.status_code == 200
+    assert export_response.status_code == 200
+    export = export_response.json()["data"]
+    launch_export = export["subscriptionLaunch"]
+    assert launch_export["status"] == "accepted_artifact_only_fixture_completed"
+    assert launch_export["readinessStatus"] == "subscription_launch_fixture_completed"
+    assert launch_export["latestEventType"] == "execution_attempt.subscription_launch_fixture_completed"
+    assert launch_export["approvalBinding"]["permissionEnvelope"] == "approved_for_one_artifact_only_subscription_launch"
+    assert launch_export["workspaceSummary"]["commandsAllowed"] is False
+    assert launch_export["workspaceSummary"]["credentialAccessAllowed"] is False
+    assert launch_export["outputArtifactReferences"][0]["artifactKind"] == "fixture_output_summary"
+    assert launch_export["outputArtifactReferences"][1]["artifactKind"] == "fixture_generated_patch_reference"
+    assert launch_export["verificationEvidence"]["status"] == "not_recorded"
+    assert launch_export["verificationEvidence"]["commandShape"] == "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch"
+    assert launch_export["verificationEvidence"]["blockedReason"] == "subscription-launch-verification-missing"
+    assert launch_export["verificationEvidence"]["deliveryEligible"] is False
+    assert launch_export["rawOutputStored"] is False
+    assert launch_export["safetyFlags"]["sourceMutationAllowed"] is False
+    assert launch_export["safetyFlags"]["networkAllowed"] is False
+    assert launch_export["lifecycleSummary"]["terminalStates"] == ["cancelled", "timed_out", "failed", "completed", "rejected"]
+    assert "rollbackPolicy" in launch_export["cancellationTimeoutRollbackEvidence"]
+    assert "rawStdout" not in str(launch_export)
+    assert "rawStderr" not in str(launch_export)
+    assert "generatedPatch'" not in str(launch_export)
+    assert "GET /work-items/{id}/runtime-evidence-export" in launch_export["relatedReports"]
+
+
+def test_subscription_agent_launch_verification_records_recovery_and_rollback_metadata(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-launch-verification-recovery.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api import main as api_main
+    _freeze_subscription_launch_now(monkeypatch)
+
+    def fake_git_output(args: list[str]) -> tuple[bool, str]:
+        command = tuple(args)
+        if command == ("git", "branch", "--show-current"):
+            return True, "main"
+        if command == ("git", "rev-parse", "HEAD"):
+            return True, "abc1234"
+        return False, "unexpected git command"
+
+    monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
+
+    def fake_verification_command(command_shape: str) -> dict:
+        assert command_shape == "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch"
+        return {
+            "status": "failed",
+            "exitCode": 1,
+            "durationMs": 42000,
+            "summary": "Approved subscription launch verification command exited with code 1.",
+            "recoveryAction": "inspect retained subscription launch artifacts before retry or rollback",
+        }
+
+    monkeypatch.setattr(api_main.service, "_run_execution_attempt_verification_command", fake_verification_command)
+
+    with TestClient(api_main.app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_launch_binding(stub)
+        launch_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+        attempt_id = attempts[0]["attemptId"]
+        response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt_id}/verification-evidence",
+            json={
+                "commandId": "subscription-launch-fixture-check",
+                "label": "Subscription launch fixture verification",
+                "commandShape": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "status": "failed",
+                "exitCode": 1,
+                "durationMs": 42000,
+                "summary": "Do not retain raw output from this check.",
+                "artifactRef": "_bmad-output/subscription-launch/verification-summary.json",
+                "recoveryAction": "inspect retained subscription launch artifacts before retry or rollback",
+                "rollbackStatus": "triggered",
+                "rollbackReason": "verification_failed",
+                "nextSafeAction": "Keep subscription-agent launch disabled until Bob reviews retained artifacts.",
+            },
+        )
+        export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
+        replay_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt_id}/verification-evidence",
+            json={
+                "commandId": "subscription-launch-fixture-check",
+                "label": "Subscription launch fixture verification",
+                "commandShape": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "status": "failed",
+                "summary": "Duplicate rollback evidence must not be accepted.",
+                "recoveryAction": "inspect retained subscription launch artifacts before retry or rollback",
+                "rollbackStatus": "triggered",
+                "rollbackReason": "verification_failed",
+                "nextSafeAction": "Keep subscription-agent launch disabled until Bob reviews retained artifacts.",
+            },
+        )
+        replay_different_command_response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt_id}/verification-evidence",
+            json={
+                "commandId": "subscription-launch-fixture-check-retry",
+                "label": "Subscription launch fixture verification retry",
+                "commandShape": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "status": "failed",
+                "summary": "Duplicate rollback evidence with a new command id must not be accepted.",
+                "recoveryAction": "inspect retained subscription launch artifacts before retry or rollback",
+                "rollbackStatus": "triggered",
+                "rollbackReason": "verification_failed",
+                "nextSafeAction": "Keep subscription-agent launch disabled until Bob reviews retained artifacts.",
+            },
+        )
+        rollback_blocked_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+
+    assert launch_response.status_code == 200
+    assert response.status_code == 200
+    updated_attempt = response.json()["data"]
+    evidence = next(ref for ref in updated_attempt["artifactRefs"] if ref.get("artifactType") == "verification_result")
+    assert evidence["status"] == "failed"
+    assert evidence["subscriptionLaunchVerification"]["status"] == "failed"
+    assert evidence["subscriptionLaunchVerification"]["recoveryPath"] == "inspect retained subscription launch artifacts before retry or rollback"
+    assert evidence["subscriptionLaunchVerification"]["rollbackStatus"] == "triggered"
+    assert evidence["subscriptionLaunchVerification"]["rollbackReason"] == "verification_failed"
+    assert evidence["subscriptionLaunchVerification"]["blockedReason"] == "subscription-launch-verification-failed"
+    assert evidence["subscriptionLaunchVerification"]["nextSafeAction"] == "Keep subscription-agent launch disabled until Bob reviews retained artifacts."
+    assert evidence["rawOutputRetained"] is False
+    assert "rawStdout" not in str(evidence)
+    assert "rawStderr" not in str(evidence)
+    assert export_response.status_code == 200
+    launch_export = export_response.json()["data"]["subscriptionLaunch"]
+    assert launch_export["verificationEvidence"]["status"] == "failed"
+    assert launch_export["verificationEvidence"]["recoveryPath"] == "inspect retained subscription launch artifacts before retry or rollback"
+    assert launch_export["verificationEvidence"]["rollbackStatus"] == "triggered"
+    assert launch_export["verificationEvidence"]["blockedReason"] == "subscription-launch-verification-failed"
+    assert launch_export["verificationEvidence"]["nextSafeAction"] == "Keep subscription-agent launch disabled until Bob reviews retained artifacts."
+    assert launch_export["readinessStatus"] == "subscription_launch_rollback_triggered"
+    assert {artifact["artifactKind"] for artifact in launch_export["outputArtifactReferences"]} == {
+        "fixture_output_summary",
+        "fixture_generated_patch_reference",
+        "verification_result",
+    }
+    assert replay_response.status_code == 409
+    assert replay_different_command_response.status_code == 409
+    assert rollback_blocked_response.status_code == 200
+    blocked_launch = rollback_blocked_response.json()["data"]
+    assert blocked_launch["status"] == "rejected_rollback_triggered"
+    assert blocked_launch["rejectedEnvelopeFields"]["rollbackStatus"] == "verification_failed"
+    assert "subscription_launch_rollback_triggered" in blocked_launch["blockedReasonIds"]
+
+
+def test_subscription_agent_launch_stale_verification_is_metadata_only_and_blocks_delivery(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-launch-stale-verification.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api import main as api_main
+    _freeze_subscription_launch_now(monkeypatch)
+
+    def fake_verification_command(command_shape: str) -> dict:
+        raise AssertionError("stale verification evidence must not execute a command")
+
+    monkeypatch.setattr(api_main.service, "_run_execution_attempt_verification_command", fake_verification_command)
+
+    with TestClient(api_main.app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_launch_binding(stub)
+        launch_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+        attempt_id = attempts[0]["attemptId"]
+        response = client.post(
+            f"/work-items/{work_item_id}/execution-attempts/{attempt_id}/verification-evidence",
+            json={
+                "commandId": "subscription-launch-stale-check",
+                "label": "Subscription launch stale verification",
+                "commandShape": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "status": "stale",
+                "summary": "Prior subscription launch verification is stale.",
+                "artifactRef": "_bmad-output/subscription-launch/stale-verification-summary.json",
+                "recoveryAction": "record a fresh approved verification command result",
+                "rollbackStatus": "available_not_triggered",
+                "rollbackReason": "verification_stale",
+                "nextSafeAction": "Record fresh subscription-agent launch verification evidence before delivery.",
+            },
+        )
+        export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
+
+    assert launch_response.status_code == 200
+    assert response.status_code == 200
+    evidence = next(ref for ref in response.json()["data"]["artifactRefs"] if ref.get("commandId") == "subscription-launch-stale-check")
+    assert evidence["status"] == "stale"
+    assert evidence["subscriptionLaunchVerification"]["blockedReason"] == "subscription-launch-verification-stale"
+    assert evidence["subscriptionLaunchVerification"]["deliveryEligible"] is False
+    launch_export = export_response.json()["data"]["subscriptionLaunch"]
+    assert launch_export["verificationEvidence"]["status"] == "stale"
+    assert launch_export["verificationEvidence"]["blockedReason"] == "subscription-launch-verification-stale"
+    assert launch_export["verificationEvidence"]["nextSafeAction"] == "Record fresh subscription-agent launch verification evidence before delivery."
 
 
 def test_subscription_agent_launch_stub_rejects_non_handoff_route(tmp_path, monkeypatch) -> None:
@@ -4374,6 +5152,7 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
             },
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
+        runtime_export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
         readiness_response = client.get(f"/work-items/{work_item_id}/trusted-delivery-eligibility-report")
         second_launch_response = client.post(
             f"/work-items/{work_item_id}/supervised-codex-launch",
@@ -4408,6 +5187,8 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
     assert event["payload"]["mergeAllowed"] is False
     assert event["payload"]["cleanupAllowed"] is False
     assert event["payload"]["rawOutputRetained"] is False
+    assert "subscriptionLaunchVerification" not in event["payload"]
+    assert runtime_export_response.json()["data"]["subscriptionLaunch"]["latestEventType"] is None
     assert readiness_response.status_code == 200
     readiness = readiness_response.json()["data"]
     push_stage = next(stage for stage in readiness["stages"] if stage["stageId"] == "push-pr-auto-eligible")
