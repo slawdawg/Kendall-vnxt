@@ -4,13 +4,21 @@ import os
 import shutil
 import subprocess
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@dataclass(frozen=True)
+class DeliveryApprovalValidation:
+    approved: bool
+    blockers: list[str]
+    approval_reference: str | None = None
+
 
 from supervisor.api.schemas import (
     AuditEventView,
@@ -4131,6 +4139,7 @@ class SupervisorService:
         return {
             **self._recipe_delivery_gate_payload(item, recipe),
             **latest_delivery_evidence,
+            "hasDeliveryExecutionEvidence": bool(latest_delivery_evidence),
             "cleanupDryRunStatus": cleanup_evidence.get("dryRunStatus"),
             "cleanupTarget": cleanup_target,
         }
@@ -4385,10 +4394,11 @@ class SupervisorService:
         if not item:
             return None
         plan = await self.get_low_risk_delivery_plan_report(session, work_item_id=work_item_id)
-        approval_present = payload.policyId == "low-risk-delivery-policy-v1" and bool(payload.approvalId)
+        current_delivery_evidence = await self._work_item_delivery_evidence(session, work_item_id)
+        approval_validation = self._validate_delivery_execution_approval(item, plan, current_delivery_evidence, payload)
+        approval_present = approval_validation.approved
         blocked_reasons = list(self._delivery_execution_evidence_blockers(plan, payload))
-        if not approval_present:
-            blocked_reasons.append("policy-missing")
+        blocked_reasons.extend(approval_validation.blockers)
 
         mode = "report_only_readiness"
         status = "blocked"
@@ -4400,6 +4410,9 @@ class SupervisorService:
             failed_terminal = terminal_status in {"failed", "timed_out", "cancelled"}
             mode = "delivery_action_failed" if failed_terminal else ("approved_pr_action_recorded" if payload.actionId == "pr" else "approved_merge_action_recorded")
             status = "failed" if failed_terminal else "recorded"
+        elif payload.policyId == "low-risk-delivery-policy-v1" and payload.approvalId:
+            mode = "delivery_action_rejected_stale"
+            status = "rejected"
 
         evidence = self._delivery_execution_evidence_view(
             item=item,
@@ -4409,9 +4422,10 @@ class SupervisorService:
             status=status,
             event_recorded=False,
             blocked_reasons=blocked_reasons,
+            approval_reference=approval_validation.approval_reference,
         )
 
-        if not payload.recordEvent or not approval_present:
+        if not payload.recordEvent or (not approval_present and mode == "report_only_readiness"):
             return evidence
 
         if blocked_reasons:
@@ -4520,6 +4534,131 @@ class SupervisorService:
             blockers.append("retained-evidence-missing")
         return list(dict.fromkeys(blockers))
 
+    def _validate_delivery_execution_approval(
+        self,
+        item: WorkItem,
+        plan: LowRiskDeliveryPlanReportView,
+        current_delivery_evidence: dict,
+        payload: DeliveryExecutionEvidencePayload,
+    ) -> DeliveryApprovalValidation:
+        if payload.policyId != "low-risk-delivery-policy-v1":
+            return DeliveryApprovalValidation(False, ["policy-missing"])
+        if not payload.approvalId:
+            return DeliveryApprovalValidation(False, ["policy-missing", "approval-ledger-missing"])
+
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        ledger_entries = [entry for entry in metadata.get("deliveryApprovalLedger", []) if isinstance(entry, dict)]
+        if not ledger_entries:
+            return DeliveryApprovalValidation(False, ["approval-ledger-missing"])
+
+        matches = [entry for entry in ledger_entries if entry.get("approvalId") == payload.approvalId]
+        if not matches:
+            return DeliveryApprovalValidation(False, ["approval-id-unknown"])
+        if len(matches) != 1:
+            return DeliveryApprovalValidation(False, ["approval-id-ambiguous"])
+        approval = matches[0]
+
+        blockers: list[str] = []
+        has_current_delivery_evidence = current_delivery_evidence.get("hasDeliveryExecutionEvidence") is True
+        trusted_pull_request_url = (
+            current_delivery_evidence.get("pullRequestUrl")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("pullRequestUrl"), str)
+            else payload.pullRequestUrl
+        )
+        trusted_pull_request_head = (
+            current_delivery_evidence.get("pullRequestHeadRevision")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("pullRequestHeadRevision"), str)
+            else payload.pullRequestHeadRevision
+        )
+        trusted_ci_status = (
+            current_delivery_evidence.get("ciStatus")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("ciStatus"), str)
+            else payload.ciStatus
+        )
+        trusted_review_state = (
+            current_delivery_evidence.get("reviewState")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("reviewState"), str)
+            else payload.reviewState
+        )
+        trusted_merge_status = (
+            current_delivery_evidence.get("mergeStatus")
+            if has_current_delivery_evidence and isinstance(current_delivery_evidence.get("mergeStatus"), str)
+            else payload.mergeStatus
+        )
+        expected_text_fields = [
+            ("authorityFamily", "github_delivery", "approval-authority-family-mismatch"),
+            ("policyId", payload.policyId, "approval-policy-mismatch"),
+            ("actionId", payload.actionId, "approval-action-mismatch"),
+            ("workItemId", item.id, "approval-work-item-mismatch"),
+            ("targetBranch", plan.currentBranch, "approval-branch-mismatch"),
+            ("baseBranch", plan.baseBranch, "approval-base-branch-mismatch"),
+            ("headRevision", plan.headRevision, "approval-head-mismatch"),
+            ("pullRequestUrl", trusted_pull_request_url, "approval-pr-url-mismatch"),
+            ("pullRequestHeadRevision", trusted_pull_request_head, "approval-pr-head-mismatch"),
+            ("ciStatus", trusted_ci_status, "approval-ci-state-mismatch"),
+            ("reviewState", trusted_review_state, "approval-review-state-mismatch"),
+        ]
+        for field_name, expected, blocker in expected_text_fields:
+            if not isinstance(expected, str) or not expected.strip() or approval.get(field_name) != expected:
+                blockers.append(blocker)
+
+        if payload.actionId == "merge":
+            if approval.get("mergeStatus") != trusted_merge_status or trusted_merge_status != "merged":
+                blockers.append("approval-merge-state-mismatch")
+
+        retained_evidence = [ref for ref in approval.get("retainedEvidence", []) if isinstance(ref, str) and ref]
+        if set(payload.artifactRefs) != set(retained_evidence):
+            blockers.append("approval-retained-evidence-mismatch")
+
+        approved_by = approval.get("approvedBy")
+        actor_identity = payload.actorLabel or payload.actorId
+        if not isinstance(approved_by, str) or not approved_by.strip():
+            blockers.append("approval-operator-missing")
+        elif actor_identity != approved_by:
+            blockers.append("approval-operator-mismatch")
+
+        approved_at = approval.get("approvedAt")
+        parsed_approved_at: datetime | None = None
+        if not isinstance(approved_at, str) or not approved_at.strip():
+            blockers.append("approval-approved-at-missing")
+        else:
+            try:
+                parsed_approved_at = datetime.fromisoformat(approved_at.replace("Z", "+00:00"))
+                if parsed_approved_at.tzinfo is None:
+                    parsed_approved_at = parsed_approved_at.replace(tzinfo=timezone.utc)
+                if parsed_approved_at > datetime.now(timezone.utc):
+                    blockers.append("approval-approved-at-future")
+            except ValueError:
+                blockers.append("approval-approved-at-invalid")
+        expires_at = approval.get("expiresAt")
+        if isinstance(expires_at, str) and expires_at.strip():
+            try:
+                parsed_expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if parsed_expiry.tzinfo is None:
+                    parsed_expiry = parsed_expiry.replace(tzinfo=timezone.utc)
+                if parsed_expiry < datetime.now(timezone.utc):
+                    blockers.append("approval-expired")
+                if parsed_approved_at and parsed_approved_at > parsed_expiry:
+                    blockers.append("approval-approved-after-expiry")
+            except ValueError:
+                blockers.append("approval-expiry-invalid")
+        else:
+            blockers.append("approval-expiry-or-review-point-missing")
+
+        rollback_plan = [item for item in approval.get("rollbackPlan", []) if isinstance(item, str) and item]
+        if not rollback_plan:
+            blockers.append("approval-rollback-missing")
+        stop_lines = [item for item in approval.get("stopLines", []) if isinstance(item, str) and item]
+        if not stop_lines:
+            blockers.append("approval-stop-lines-missing")
+
+        unique_blockers = list(dict.fromkeys(blockers))
+        return DeliveryApprovalValidation(
+            approved=not unique_blockers,
+            blockers=unique_blockers,
+            approval_reference=payload.approvalId if not unique_blockers else None,
+        )
+
     def _delivery_execution_metadata_boundary_blocker(self, field_name: str, value: str | None) -> str | None:
         if not isinstance(value, str) or not value:
             return None
@@ -4554,6 +4693,7 @@ class SupervisorService:
         status: str,
         event_recorded: bool,
         blocked_reasons: list[str],
+        approval_reference: str | None,
     ) -> DeliveryExecutionEvidenceView:
         return DeliveryExecutionEvidenceView(
             evidenceId=f"delivery-execution-{item.id}-{payload.actionId}",
@@ -4576,6 +4716,7 @@ class SupervisorService:
             exitCode=payload.exitCode,
             summary=payload.summary or "Delivery execution evidence is metadata-only and report-bound.",
             artifactRefs=list(payload.artifactRefs),
+            approvalReference=approval_reference,
             recoveryPath=payload.recoveryPath or "inspect retained delivery evidence before retry, merge, or cleanup",
             rawOutputRetained=False,
             cleanupAllowed=False,

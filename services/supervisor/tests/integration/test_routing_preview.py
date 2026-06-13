@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import sqlite3
 import socket
@@ -36,6 +36,71 @@ def _freeze_subscription_launch_now(monkeypatch, value: datetime = STORY_8_5_APP
     from supervisor.application.service import SupervisorService
 
     monkeypatch.setattr(SupervisorService, "_subscription_launch_now", lambda self: value)
+
+
+def _delivery_approval_entry(
+    *,
+    approval_id: str,
+    work_item_id: str,
+    action_id: str,
+    plan: dict,
+    pull_request_url: str,
+    ci_status: str = "passed",
+    review_state: str = "approved",
+    merge_status: str | None = None,
+    artifact_refs: list[str] | None = None,
+    approved_by: str = "Bob",
+    approved_at: str = "2000-01-01T00:00:00+00:00",
+    expires_at: str | None = "2099-01-01T00:00:00+00:00",
+    rollback_plan: list[str] | None = None,
+    stop_lines: list[str] | None = None,
+) -> dict:
+    return {
+        "approvalId": approval_id,
+        "authorityFamily": "github_delivery",
+        "policyId": "low-risk-delivery-policy-v1",
+        "actionId": action_id,
+        "workItemId": work_item_id,
+        "targetBranch": plan["currentBranch"],
+        "baseBranch": plan["baseBranch"],
+        "headRevision": plan["headRevision"],
+        "pullRequestUrl": pull_request_url,
+        "pullRequestHeadRevision": plan["headRevision"],
+        "ciStatus": ci_status,
+        "reviewState": review_state,
+        "mergeStatus": merge_status,
+        "retainedEvidence": artifact_refs or [],
+        "approvedBy": approved_by,
+        "approvedAt": approved_at,
+        "expiresAt": expires_at,
+        "reviewPoint": None,
+        "rollbackPlan": rollback_plan
+        if rollback_plan is not None
+        else ["preserve retained delivery evidence and inspect before retry"],
+        "stopLines": stop_lines
+        if stop_lines is not None
+        else ["no provider expansion", "no issue sync", "no failed-check bypass", "no broad autonomy"],
+    }
+
+
+def _write_delivery_approval_ledger(db_path: str, work_item_id: str, entries: list[dict]) -> None:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("select metadata_json from work_items where id = ?", (work_item_id,)).fetchone()
+        metadata = json.loads(row[0]) if row and isinstance(row[0], str) and row[0] else {}
+        metadata["deliveryApprovalLedger"] = entries
+        conn.execute("update work_items set metadata_json = ? where id = ?", (json.dumps(metadata), work_item_id))
+        conn.commit()
+
+
+def _append_delivery_execution_metadata(db_path: str, work_item_id: str, entry: dict) -> None:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("select metadata_json from work_items where id = ?", (work_item_id,)).fetchone()
+        metadata = json.loads(row[0]) if row and isinstance(row[0], str) and row[0] else {}
+        entries = [item for item in metadata.get("deliveryExecutionEvidence", []) if isinstance(item, dict)]
+        entries.append(entry)
+        metadata["deliveryExecutionEvidence"] = entries
+        conn.execute("update work_items set metadata_json = ? where id = ?", (json.dumps(metadata), work_item_id))
+        conn.commit()
 
 
 def test_routing_preview_selects_utility_for_deterministic_checks() -> None:
@@ -4898,6 +4963,7 @@ def test_delivery_execution_evidence_records_stale_rejection_without_delivery_mu
                 "recordEvent": True,
                 "approvalId": "approval-stale-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
                 "expectedBranch": "codex/story-10-2",
                 "expectedHeadRevision": "stale-head",
                 "baseBranch": "main",
@@ -4958,6 +5024,7 @@ def test_delivery_execution_evidence_rejects_missing_binding_fields(tmp_path, mo
                 "recordEvent": True,
                 "approvalId": "approval-missing-binding-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
                 "ciStatus": "passed",
                 "reviewState": "approved",
                 "mergeStatus": "ready",
@@ -5000,6 +5067,21 @@ def test_delivery_execution_evidence_rejects_retention_boundary_payload(tmp_path
         )
         work_item_id = created.json()["data"]["id"]
         plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-1004"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-pr-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1004",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
         response = client.post(
             f"/work-items/{work_item_id}/delivery-execution-evidence",
             json={
@@ -5007,6 +5089,7 @@ def test_delivery_execution_evidence_rejects_retention_boundary_payload(tmp_path
                 "recordEvent": True,
                 "approvalId": "approval-retention-boundary-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -5067,6 +5150,7 @@ def test_delivery_execution_evidence_exact_policy_without_approval_is_report_onl
                 "actionId": "pr",
                 "recordEvent": True,
                 "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -5091,6 +5175,428 @@ def test_delivery_execution_evidence_exact_policy_without_approval_is_report_onl
     assert "policy-missing" in evidence["blockedReasons"]
 
 
+def test_delivery_execution_evidence_rejects_unknown_approval_id_without_approved_metadata(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-unknown-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Unknown approval fixture",
+                "requestedOutcome": "Reject arbitrary delivery approval ids.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-1004"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-pr-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1004",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "arbitrary-approval-id",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1006",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": ["delivery-evidence://pr-1006"],
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+        updated = client.get(f"/work-items/{work_item_id}").json()["data"]
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["status"] == "rejected"
+    assert evidence["eventRecorded"] is True
+    assert "approval-id-unknown" in evidence["blockedReasons"]
+    assert evidence["approvalReference"] is None
+    assert evidence["externalMutationRecorded"] is False
+    assert "deliveryExecutionEvidence" not in updated["metadata"]
+    event = next(event for event in events if event["eventType"] == "delivery_execution.rejected")
+    assert event["payload"]["approvalReference"] is None
+
+
+def test_delivery_execution_evidence_rejects_expired_approval_ledger_entry(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-expired-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Expired approval fixture",
+                "requestedOutcome": "Reject expired delivery approval ids.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-expired"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-expired-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1007",
+                    artifact_refs=artifact_refs,
+                    expires_at="2000-01-01T00:00:00+00:00",
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-expired-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1007",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert "approval-expired" in evidence["blockedReasons"]
+    assert evidence["approvalReference"] is None
+
+
+def test_delivery_execution_evidence_rejects_ambiguous_approval_ledger_id(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-ambiguous-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Ambiguous approval fixture",
+                "requestedOutcome": "Reject duplicate approval ledger ids.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-ambiguous"]
+        approval_entry = _delivery_approval_entry(
+            approval_id="approval-ambiguous-fixture",
+            work_item_id=work_item_id,
+            action_id="pr",
+            plan=plan,
+            pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1008",
+            artifact_refs=artifact_refs,
+        )
+        _write_delivery_approval_ledger(db_path, work_item_id, [approval_entry, dict(approval_entry)])
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-ambiguous-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1008",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["approvalReference"] is None
+    assert "approval-id-ambiguous" in evidence["blockedReasons"]
+
+
+def test_delivery_execution_evidence_rejects_retained_evidence_mismatch(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-retained-evidence-mismatch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Retained evidence mismatch fixture",
+                "requestedOutcome": "Reject approval replay with missing retained evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-retained-evidence-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1009",
+                    artifact_refs=["delivery-evidence://pr-1009", "delivery-evidence://review-1009"],
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-retained-evidence-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1009",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": ["delivery-evidence://pr-1009"],
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["approvalReference"] is None
+    assert "approval-retained-evidence-mismatch" in evidence["blockedReasons"]
+
+
+def test_delivery_execution_evidence_rejects_operator_mismatch(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-operator-mismatch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Operator mismatch fixture",
+                "requestedOutcome": "Reject approval used by a different operator.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-operator-mismatch"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-operator-mismatch-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1010",
+                    artifact_refs=artifact_refs,
+                    approved_by="Alice",
+                )
+            ],
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-operator-mismatch-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1010",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["approvalReference"] is None
+    assert "approval-operator-mismatch" in evidence["blockedReasons"]
+
+
+def test_delivery_execution_evidence_rejects_trusted_current_pr_state_mismatch(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "delivery-execution-evidence-current-pr-state-mismatch.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Trusted current PR mismatch fixture",
+                "requestedOutcome": "Reject stale payload replay against current delivery evidence.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {"executionRecipeId": "dashboard-test-coverage"},
+            },
+        )
+        work_item_id = created.json()["data"]["id"]
+        plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-current-state"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-current-state-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1011",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
+        _append_delivery_execution_metadata(
+            db_path,
+            work_item_id,
+            {
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1012",
+                "pullRequestHeadRevision": plan["headRevision"],
+                "ciStatus": "passed",
+                "reviewState": "approved",
+            },
+        )
+        response = client.post(
+            f"/work-items/{work_item_id}/delivery-execution-evidence",
+            json={
+                "actionId": "pr",
+                "recordEvent": True,
+                "approvalId": "approval-current-state-fixture",
+                "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
+                "expectedBranch": plan["currentBranch"],
+                "expectedHeadRevision": plan["headRevision"],
+                "baseBranch": plan["baseBranch"],
+                "pullRequestHeadRevision": plan["headRevision"],
+                "pullRequestUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/1011",
+                "ciStatus": "passed",
+                "reviewState": "approved",
+                "commandShape": "gh pr create --fill",
+                "terminalStatus": "completed",
+                "exitCode": 0,
+                "summary": "Synthetic metadata-only PR evidence rejected.",
+                "artifactRefs": artifact_refs,
+                "recoveryPath": "inspect retained PR metadata before retry",
+            },
+        )
+
+    assert response.status_code == 200
+    evidence = response.json()["data"]
+    assert evidence["mode"] == "delivery_action_rejected_stale"
+    assert evidence["approvalReference"] is None
+    assert "approval-pr-url-mismatch" in evidence["blockedReasons"]
+
+
 def test_delivery_execution_evidence_records_pr_without_merge_status(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "delivery-execution-evidence-pr-no-merge-status.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -5113,6 +5619,21 @@ def test_delivery_execution_evidence_records_pr_without_merge_status(tmp_path, m
         )
         work_item_id = created.json()["data"]["id"]
         plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-1004"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-pr-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1004",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
         response = client.post(
             f"/work-items/{work_item_id}/delivery-execution-evidence",
             json={
@@ -5120,6 +5641,7 @@ def test_delivery_execution_evidence_records_pr_without_merge_status(tmp_path, m
                 "recordEvent": True,
                 "approvalId": "approval-pr-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -5131,7 +5653,7 @@ def test_delivery_execution_evidence_records_pr_without_merge_status(tmp_path, m
                 "terminalStatus": "completed",
                 "exitCode": 0,
                 "summary": "Synthetic metadata-only PR evidence recorded.",
-                "artifactRefs": ["delivery-evidence://pr-1004"],
+                "artifactRefs": artifact_refs,
                 "recoveryPath": "inspect retained PR metadata before merge",
             },
         )
@@ -5142,6 +5664,7 @@ def test_delivery_execution_evidence_records_pr_without_merge_status(tmp_path, m
     assert evidence["blockedReasons"] == []
     assert evidence["externalMutationRecorded"] is True
     assert evidence["remoteMutationPerformed"] is False
+    assert evidence["approvalReference"] == "approval-pr-fixture"
 
 
 def test_delivery_execution_evidence_rejects_completed_nonzero_exit_code(tmp_path, monkeypatch) -> None:
@@ -5166,6 +5689,21 @@ def test_delivery_execution_evidence_rejects_completed_nonzero_exit_code(tmp_pat
         )
         work_item_id = created.json()["data"]["id"]
         plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-nonzero"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-nonzero-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1005",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
         response = client.post(
             f"/work-items/{work_item_id}/delivery-execution-evidence",
             json={
@@ -5173,6 +5711,7 @@ def test_delivery_execution_evidence_rejects_completed_nonzero_exit_code(tmp_pat
                 "recordEvent": True,
                 "approvalId": "approval-nonzero-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -5184,7 +5723,7 @@ def test_delivery_execution_evidence_rejects_completed_nonzero_exit_code(tmp_pat
                 "terminalStatus": "completed",
                 "exitCode": 1,
                 "summary": "Synthetic metadata-only PR evidence rejected.",
-                "artifactRefs": ["delivery-evidence://pr-nonzero"],
+                "artifactRefs": artifact_refs,
                 "recoveryPath": "inspect retained PR metadata before retry",
             },
         )
@@ -5217,6 +5756,21 @@ def test_delivery_execution_evidence_records_failed_action_metadata_only(tmp_pat
         )
         work_item_id = created.json()["data"]["id"]
         plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://pr-1002"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-failed-pr-fixture",
+                    work_item_id=work_item_id,
+                    action_id="pr",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1002",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
         response = client.post(
             f"/work-items/{work_item_id}/delivery-execution-evidence",
             json={
@@ -5224,6 +5778,7 @@ def test_delivery_execution_evidence_records_failed_action_metadata_only(tmp_pat
                 "recordEvent": True,
                 "approvalId": "approval-failed-pr-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -5236,7 +5791,7 @@ def test_delivery_execution_evidence_records_failed_action_metadata_only(tmp_pat
                 "terminalStatus": "failed",
                 "exitCode": 1,
                 "summary": "Synthetic metadata-only failed PR evidence recorded.",
-                "artifactRefs": ["delivery-evidence://pr-1002"],
+                "artifactRefs": artifact_refs,
                 "recoveryPath": "inspect retained failed PR metadata before retry",
             },
         )
@@ -5278,6 +5833,22 @@ def test_delivery_execution_evidence_records_approved_merge_metadata_only(tmp_pa
         )
         work_item_id = created.json()["data"]["id"]
         plan = client.get(f"/work-items/{work_item_id}/low-risk-delivery-plan").json()["data"]
+        artifact_refs = ["delivery-evidence://merge-1000"]
+        _write_delivery_approval_ledger(
+            db_path,
+            work_item_id,
+            [
+                _delivery_approval_entry(
+                    approval_id="approval-merge-fixture",
+                    work_item_id=work_item_id,
+                    action_id="merge",
+                    plan=plan,
+                    pull_request_url="https://github.com/slawdawg/Kendall-vnxt/pull/1000",
+                    merge_status="merged",
+                    artifact_refs=artifact_refs,
+                )
+            ],
+        )
         response = client.post(
             f"/work-items/{work_item_id}/delivery-execution-evidence",
             json={
@@ -5285,6 +5856,7 @@ def test_delivery_execution_evidence_records_approved_merge_metadata_only(tmp_pa
                 "recordEvent": True,
                 "approvalId": "approval-merge-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
+                "actorLabel": "Bob",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "pullRequestHeadRevision": plan["headRevision"],
@@ -5298,7 +5870,7 @@ def test_delivery_execution_evidence_records_approved_merge_metadata_only(tmp_pa
                 "terminalStatus": "completed",
                 "exitCode": 0,
                 "summary": "Synthetic metadata-only merge evidence recorded.",
-                "artifactRefs": ["delivery-evidence://merge-1000"],
+                "artifactRefs": artifact_refs,
                 "recoveryPath": "inspect retained merge metadata before cleanup",
             },
         )
@@ -5316,6 +5888,7 @@ def test_delivery_execution_evidence_records_approved_merge_metadata_only(tmp_pa
     assert evidence["rawOutputRetained"] is False
     assert evidence["externalMutationRecorded"] is True
     assert evidence["artifactRefs"] == ["delivery-evidence://merge-1000"]
+    assert evidence["approvalReference"] == "approval-merge-fixture"
     event = next(event for event in events if event["eventType"] == "delivery_execution.recorded")
     assert event["payload"]["commandShape"] == "gh pr merge 1000 --squash --delete-branch"
     assert "rawOutput" not in event["payload"]
