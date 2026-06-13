@@ -228,3 +228,4 @@ Stories in this epic do not approve push, PR mutation, merge, deploy, branch del
 | Story | Summary |
 | --- | --- |
 | `12-1-refresh-github-delivery-approval-packet-from-current-pr-evidence.md` | Done story for refreshing the PR #103 GitHub delivery approval packet from current PR, CI, review, mergeability, retained-evidence, rollback, and stop-line evidence without performing delivery. |
+| `12-2-record-post-merge-delivery-and-cleanup-evidence.md` | Done story for recording PR #103 merge evidence, remote branch cleanup, remote-tracking prune, registered worktree state, and preserved cleanup stop lines after delivery. |
