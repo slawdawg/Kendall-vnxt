@@ -249,3 +249,13 @@ Stories in this epic do not approve provider calls, endpoint/model discovery, br
 | Story | Summary |
 | --- | --- |
 | `14-1-refresh-local-provider-execution-approval-packet.md` | Done story for refreshing the local-provider execution approval packet for the approved Ollama endpoint `http://192.168.1.128:11434/v1/chat/completions`, model `qwen3:14b`, metadata-only retention, rollback, and stop lines without calling a provider. |
+
+## Draft Epic 15 Story Map
+
+Epic 15 starts after the local-provider approval packet. Its theme is premium execution approval readiness: define the cost, provider/account, data, audit, retained-evidence, abort, rollback, and stop-line requirements before any paid provider call.
+
+Stories in this epic do not approve paid provider calls, credential/session access, raw prompt/completion/provider payload retention, budget-incurring behavior, source mutation, launch, delivery, cleanup, or failed-check bypass.
+
+| Story | Summary |
+| --- | --- |
+| `15-1-refresh-premium-execution-approval-packet.md` | Done story for refreshing the premium-execution approval packet with provider/account boundary, cost ceiling, data classification, audit evidence, retained evidence, abort policy, rollback path, and stop lines without making a paid call. |
