@@ -1449,6 +1449,126 @@ export interface TrustedDeliveryEligibilityReportView {
   cleanupAutoEligible: boolean;
 }
 
+export interface LowRiskDeliveryPlanActionView {
+  actionId: string;
+  label: string;
+  status: string;
+  eligible: boolean;
+  dryRunEffects: string[];
+  evidence: string[];
+  blockedReasons: string[];
+  nextSafeAction: string;
+  requiredApproval: string;
+  requiredPolicy: string;
+  allowedOperations: string[];
+  blockedOperations: string[];
+  readOnly: boolean;
+}
+
+export interface LowRiskDeliveryPlanReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  workItemId?: string | null;
+  currentBranch: string;
+  baseBranch: string;
+  headRevision: string;
+  workingTreeStatus: string;
+  prRef?: string | null;
+  actions: LowRiskDeliveryPlanActionView[];
+  hardStops: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  remoteMutationApproved: boolean;
+  cleanupApproved: boolean;
+  automaticDeliveryApproved: boolean;
+}
+
+export interface DeliveryExecutionEvidencePayload {
+  actionId: "pr" | "merge";
+  recordEvent?: boolean;
+  approvalId?: string | null;
+  policyId?: string | null;
+  expectedBranch?: string | null;
+  expectedHeadRevision?: string | null;
+  pullRequestUrl?: string | null;
+  pullRequestHeadRevision?: string | null;
+  baseBranch?: string | null;
+  ciStatus?: string | null;
+  reviewState?: string | null;
+  mergeStatus?: string | null;
+  mergeResult?: string | null;
+  commandShape?: string | null;
+  terminalStatus?: string | null;
+  exitCode?: number | null;
+  summary?: string | null;
+  artifactRefs?: string[];
+  recoveryPath?: string | null;
+}
+
+export interface DeliveryExecutionEvidenceView {
+  evidenceId: string;
+  mode: string;
+  actionId: string;
+  status: string;
+  eventRecorded: boolean;
+  blockedReasons: string[];
+  commandShape?: string | null;
+  targetBranch?: string | null;
+  pullRequestUrl?: string | null;
+  expectedHeadRevision?: string | null;
+  pullRequestHeadRevision?: string | null;
+  baseBranch?: string | null;
+  ciStatus?: string | null;
+  reviewState?: string | null;
+  mergeStatus?: string | null;
+  mergeResult?: string | null;
+  terminalStatus?: string | null;
+  exitCode?: number | null;
+  summary: string;
+  artifactRefs: string[];
+  recoveryPath: string;
+  rawOutputRetained: boolean;
+  cleanupAllowed: boolean;
+  externalMutationRecorded: boolean;
+  remoteMutationPerformed: boolean;
+}
+
+export interface CleanupPlanResidueView {
+  kind: string;
+  path: string;
+  insideApprovedTarget: boolean;
+  safeToRemoveAfterApproval: boolean;
+}
+
+export interface CleanupPlanView {
+  planId: string;
+  generatedAt: string;
+  workItemId: string;
+  status: string;
+  branchTarget: string;
+  cleanupTargetPath?: string | null;
+  gitWorktreeState: string;
+  filesystemState: string;
+  sourceFileState: string;
+  sourceFiles: string[];
+  retainedEvidence: string[];
+  residue: CleanupPlanResidueView[];
+  blockedPaths: string[];
+  dryRunEffects: string[];
+  blockedReasons: string[];
+  requiredApproval: string;
+  requiredPolicy: string;
+  recoveryPath: string;
+  nextSafeActions: string[];
+  readOnly: boolean;
+  cleanupAllowed: boolean;
+  branchDeletionApproved: boolean;
+  worktreeRemovalApproved: boolean;
+  evidenceDeletionApproved: boolean;
+  remoteMutationApproved: boolean;
+}
+
 export interface LocalCleanupPolicyItemView {
   itemId: string;
   label: string;

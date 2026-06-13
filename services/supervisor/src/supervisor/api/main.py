@@ -21,6 +21,7 @@ from supervisor.api.schemas import (
     WorkItemBranchPreparationRequest,
     WorkItemCreate,
     WorkItemDeliveryReadinessRequest,
+    DeliveryExecutionEvidencePayload,
     WorkItemExecutionAttemptCreateRequest,
     WorkItemExecutionAttemptTransitionRequest,
     WorkItemEscalationRequest,
@@ -694,6 +695,48 @@ async def get_work_item_trusted_delivery_eligibility_report(
     if not work_item:
         raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
     return ApiEnvelope(data=await service.get_trusted_delivery_eligibility_report(session, work_item_id=work_item_id))
+
+
+@app.get("/supervisor/low-risk-delivery-plan", response_model=ApiEnvelope)
+async def get_low_risk_delivery_plan():
+    return ApiEnvelope(data=await service.get_low_risk_delivery_plan_report())
+
+
+@app.get("/work-items/{work_item_id}/low-risk-delivery-plan", response_model=ApiEnvelope)
+async def get_work_item_low_risk_delivery_plan(
+    work_item_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=await service.get_low_risk_delivery_plan_report(session, work_item_id=work_item_id))
+
+
+@app.get("/work-items/{work_item_id}/cleanup-plan", response_model=ApiEnvelope)
+async def get_work_item_cleanup_plan(
+    work_item_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    plan = await service.get_cleanup_plan(session, work_item_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=plan)
+
+
+@app.post("/work-items/{work_item_id}/delivery-execution-evidence", response_model=ApiEnvelope)
+async def record_work_item_delivery_execution_evidence(
+    work_item_id: str,
+    payload: DeliveryExecutionEvidencePayload,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        evidence = await service.record_delivery_execution_evidence(session, work_item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=error_response(str(exc), "invalid_delivery_execution_evidence").model_dump())
+    if evidence is None:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    return ApiEnvelope(data=evidence)
 
 
 @app.get("/supervisor/local-cleanup-readiness-report", response_model=ApiEnvelope)

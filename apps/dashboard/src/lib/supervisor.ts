@@ -19,10 +19,12 @@ import type {
   GitHubDeliveryAuthorityReportView,
   GitHubWorkflowPolicyReportView,
   GitHygieneReportView,
+  CleanupPlanView,
   LocalCleanupReadinessReportView,
   LocalEvidenceExplanationPayload,
   LocalEvidenceExplanationView,
   LocalWorktreePlanView,
+  LowRiskDeliveryPlanReportView,
   ManagedRecipePolicyReportView,
   MaintenanceActionPlanReportView,
   MaintenanceReadinessReportView,
@@ -149,6 +151,14 @@ export async function getRuntimeEvidenceExport(workItemId: string): Promise<Runt
 
 export async function getLocalWorktreePlan(workItemId: string): Promise<LocalWorktreePlanView> {
   return requestJson<LocalWorktreePlanView>(`/work-items/${workItemId}/local-worktree-plan`);
+}
+
+export async function getWorkItemLowRiskDeliveryPlan(workItemId: string): Promise<LowRiskDeliveryPlanReportView> {
+  return requestJson<LowRiskDeliveryPlanReportView>(`/work-items/${workItemId}/low-risk-delivery-plan`);
+}
+
+export async function getWorkItemCleanupPlan(workItemId: string): Promise<CleanupPlanView> {
+  return requestJson<CleanupPlanView>(`/work-items/${workItemId}/cleanup-plan`);
 }
 
 export async function getExecutionRecipes(): Promise<WorkItemExecutionRecipeView[]> {

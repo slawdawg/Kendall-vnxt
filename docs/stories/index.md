@@ -197,3 +197,12 @@ Stories 8.1 through 8.6 currently have accepted story files. Story 8.6 is ready 
 | `9-1-harden-static-drift-checks.md` | Done hardening story for runtime-evidence static drift checks with deterministic fixtures, structured or behavioral assertions, actionable failure output, and no authority expansion. |
 | `9-2-clarify-subscription-launch-recordevent-mutation-semantics.md` | Done contract story for explicit, idempotent subscription launch `recordEvent` mutation semantics without launch retry or authority expansion. |
 | `9-3-restore-provider-raw-output-ui-regression-coverage.md` | Done UI/report regression story for provider raw-output exclusion using deterministic local fixtures, API sanitization, and DOM/text-state assertions. |
+
+## Draft Epic 10 Story Map
+
+| Story | Summary |
+| --- | --- |
+| `10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md` | Done contract story for policy-bound low-risk delivery dry-run planning across PR, merge, and cleanup actions without remote mutation or destructive cleanup. |
+| `10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md` | Done evidence story for approved PR and merge actions with metadata-only delivery results, stale-state rejection, exact policy identity, and retention-boundary enforcement. |
+| `10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md` | Done cleanup planning story for preserving evidence, distinguishing Git worktrees from filesystem residue, source files, and blocked paths, and blocking ambiguous deletion. |
+| `10-4-show-delivery-and-cleanup-plans-in-dev-console.md` | Ready-for-dev dashboard story for showing PR, merge, and cleanup plan states, dry-run effects, blocked reasons, retained evidence, and cleanup residue classification. |

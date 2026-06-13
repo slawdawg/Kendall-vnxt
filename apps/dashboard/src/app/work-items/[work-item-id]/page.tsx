@@ -1,6 +1,7 @@
 import { AssignmentPanel } from "../../../components/assignment-panel";
 import { AttentionBadge } from "../../../components/attention-badge";
 import { BranchPreparationPanel } from "../../../components/branch-preparation-panel";
+import { DeliveryCleanupPlanPanel } from "../../../components/delivery-cleanup-plan-panel";
 import { DeliveryReadinessPanel } from "../../../components/delivery-readiness-panel";
 import { EscalationPanel } from "../../../components/escalation-panel";
 import { EvidenceOverviewPanel } from "../../../components/evidence-overview-panel";
@@ -20,11 +21,13 @@ import { WorkItemRetryHistory } from "../../../components/work-item-retry-histor
 import { buildNavStats } from "../../../lib/nav-stats";
 import {
   getExecutionAttempts,
+  getWorkItemCleanupPlan,
   getLocalWorktreePlan,
   getRecipeGateAudit,
   getRoutingPreview,
   getRuntimeEvidenceExport,
   getRuntimeEvidenceReviewReport,
+  getWorkItemLowRiskDeliveryPlan,
   getWorkItemTrustedDeliveryEligibilityReport,
   getWorkItem,
   getWorkItemEvents,
@@ -38,17 +41,29 @@ export default async function WorkItemDetailPage({
   params: Promise<{ "work-item-id": string }>;
 }) {
   const { "work-item-id": workItemId } = await params;
-  const [item, events, items, routingPreview, executionAttempts, runtimeEvidenceExport, runtimeEvidenceReviewReport, trustedDeliveryReport] =
-    await Promise.all([
-      getWorkItem(workItemId),
-      getWorkItemEvents(workItemId),
-      getWorkItems(),
-      getRoutingPreview(workItemId),
-      getExecutionAttempts(workItemId),
-      getRuntimeEvidenceExport(workItemId),
-      getRuntimeEvidenceReviewReport(),
-      getWorkItemTrustedDeliveryEligibilityReport(workItemId),
-    ]);
+  const [
+    item,
+    events,
+    items,
+    routingPreview,
+    executionAttempts,
+    runtimeEvidenceExport,
+    runtimeEvidenceReviewReport,
+    trustedDeliveryReport,
+    lowRiskDeliveryPlan,
+    cleanupPlan,
+  ] = await Promise.all([
+    getWorkItem(workItemId),
+    getWorkItemEvents(workItemId),
+    getWorkItems(),
+    getRoutingPreview(workItemId),
+    getExecutionAttempts(workItemId),
+    getRuntimeEvidenceExport(workItemId),
+    getRuntimeEvidenceReviewReport(),
+    getWorkItemTrustedDeliveryEligibilityReport(workItemId),
+    getWorkItemLowRiskDeliveryPlan(workItemId),
+    getWorkItemCleanupPlan(workItemId),
+  ]);
   const recipeGateAudit = item.executionRecipe ? await getRecipeGateAudit(workItemId) : null;
   const localWorktreePlan = item.executionRecipe ? await getLocalWorktreePlan(workItemId) : null;
   const metadata = item.metadata ?? {};
@@ -157,6 +172,12 @@ export default async function WorkItemDetailPage({
               Launch readiness
             </a>
             <a
+              href="#delivery-cleanup-plan"
+              className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Delivery plans
+            </a>
+            <a
               href="#execution-attempts"
               className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
@@ -201,6 +222,7 @@ export default async function WorkItemDetailPage({
             events={events}
           />
           <GreenGateReadinessPanel report={trustedDeliveryReport} attempts={executionAttempts} />
+          <DeliveryCleanupPlanPanel deliveryPlan={lowRiskDeliveryPlan} cleanupPlan={cleanupPlan} />
           <SubscriptionLaunchReadinessPanel events={events} runtimeEvidenceExport={runtimeEvidenceExport} />
           <RoutingPreviewPanel preview={routingPreview} />
           <LocalEvidencePanel workItemId={item.id} />

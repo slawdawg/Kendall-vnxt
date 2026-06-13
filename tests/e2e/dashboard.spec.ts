@@ -1419,6 +1419,23 @@ test.describe("dashboard workflow coverage", () => {
     await expect(deliveryPanel.getByText("Needs evidence", { exact: true })).toBeVisible();
     await expect(deliveryPanel.getByRole("button", { name: "Record readiness" })).toBeVisible();
 
+    await page.getByRole("link", { name: "Delivery plans", exact: true }).click();
+    const deliveryCleanupPlan = page.locator("#delivery-cleanup-plan");
+    await expect(deliveryCleanupPlan.getByRole("heading", { name: "PR, merge, and cleanup dry-run plan" })).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("PR readiness")).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("Merge readiness")).toBeVisible();
+    await expect(deliveryCleanupPlan.getByRole("heading", { name: "Cleanup readiness" })).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("Blocked reasons").first()).toBeVisible();
+    await expect(deliveryCleanupPlan.getByRole("heading", { name: "Retained evidence", exact: true })).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("Dry-run effects").first()).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("Cleanup target").first()).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("Git worktree state").first()).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("Filesystem state").first()).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("Residue").first()).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("requires exact approval")).toBeVisible();
+    await expect(deliveryCleanupPlan.getByText("does not push, merge, delete worktrees, delete branches, sync issues, call providers, or bypass failed checks")).toBeVisible();
+    await expect(deliveryCleanupPlan.getByRole("button")).toHaveCount(0);
+
     const gateAudit = page.locator("#recipe-gate-audit");
     await expect(gateAudit.getByText("Supervisor policy ledger")).toBeVisible();
     await expect(gateAudit.getByText("Next managed action")).toBeVisible();

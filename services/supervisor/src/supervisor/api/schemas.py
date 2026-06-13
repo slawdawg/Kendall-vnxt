@@ -1,5 +1,5 @@
 ﻿from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
@@ -1558,6 +1558,126 @@ class TrustedDeliveryEligibilityReportView(BaseModel):
     pushPrAutoEligible: bool = False
     mergeAutoEligible: bool = False
     cleanupAutoEligible: bool = False
+
+
+class LowRiskDeliveryPlanActionView(BaseModel):
+    actionId: str
+    label: str
+    status: str
+    eligible: bool
+    dryRunEffects: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    blockedReasons: list[str] = Field(default_factory=list)
+    nextSafeAction: str
+    requiredApproval: str
+    requiredPolicy: str
+    allowedOperations: list[str] = Field(default_factory=list)
+    blockedOperations: list[str] = Field(default_factory=list)
+    readOnly: bool = True
+
+
+class LowRiskDeliveryPlanReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    workItemId: str | None = None
+    currentBranch: str
+    baseBranch: str
+    headRevision: str
+    workingTreeStatus: str
+    prRef: str | None = None
+    actions: list[LowRiskDeliveryPlanActionView]
+    hardStops: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    remoteMutationApproved: bool = False
+    cleanupApproved: bool = False
+    automaticDeliveryApproved: bool = False
+
+
+class DeliveryExecutionEvidencePayload(BaseModel):
+    actionId: Literal["pr", "merge"]
+    recordEvent: bool = False
+    approvalId: str | None = None
+    policyId: str | None = None
+    expectedBranch: str | None = None
+    expectedHeadRevision: str | None = None
+    pullRequestUrl: str | None = None
+    pullRequestHeadRevision: str | None = None
+    baseBranch: str | None = None
+    ciStatus: str | None = None
+    reviewState: str | None = None
+    mergeStatus: str | None = None
+    mergeResult: str | None = None
+    commandShape: str | None = None
+    terminalStatus: str | None = None
+    exitCode: int | None = None
+    summary: str | None = None
+    artifactRefs: list[str] = Field(default_factory=list)
+    recoveryPath: str | None = None
+
+
+class DeliveryExecutionEvidenceView(BaseModel):
+    evidenceId: str
+    mode: str
+    actionId: str
+    status: str
+    eventRecorded: bool
+    blockedReasons: list[str] = Field(default_factory=list)
+    commandShape: str | None = None
+    targetBranch: str | None = None
+    pullRequestUrl: str | None = None
+    expectedHeadRevision: str | None = None
+    pullRequestHeadRevision: str | None = None
+    baseBranch: str | None = None
+    ciStatus: str | None = None
+    reviewState: str | None = None
+    mergeStatus: str | None = None
+    mergeResult: str | None = None
+    terminalStatus: str | None = None
+    exitCode: int | None = None
+    summary: str
+    artifactRefs: list[str] = Field(default_factory=list)
+    recoveryPath: str
+    rawOutputRetained: bool = False
+    cleanupAllowed: bool = False
+    externalMutationRecorded: bool = False
+    remoteMutationPerformed: bool = False
+
+
+class CleanupPlanResidueView(BaseModel):
+    kind: str
+    path: str
+    insideApprovedTarget: bool
+    safeToRemoveAfterApproval: bool
+
+
+class CleanupPlanView(BaseModel):
+    planId: str
+    generatedAt: datetime
+    workItemId: str
+    status: str
+    branchTarget: str
+    cleanupTargetPath: str | None = None
+    gitWorktreeState: str
+    filesystemState: str
+    sourceFileState: str
+    sourceFiles: list[str] = Field(default_factory=list)
+    retainedEvidence: list[str] = Field(default_factory=list)
+    residue: list[CleanupPlanResidueView] = Field(default_factory=list)
+    blockedPaths: list[str] = Field(default_factory=list)
+    dryRunEffects: list[str] = Field(default_factory=list)
+    blockedReasons: list[str] = Field(default_factory=list)
+    requiredApproval: str
+    requiredPolicy: str
+    recoveryPath: str
+    nextSafeActions: list[str] = Field(default_factory=list)
+    readOnly: bool = True
+    cleanupAllowed: bool = False
+    branchDeletionApproved: bool = False
+    worktreeRemovalApproved: bool = False
+    evidenceDeletionApproved: bool = False
+    remoteMutationApproved: bool = False
 
 
 class LocalCleanupPolicyItemView(BaseModel):
