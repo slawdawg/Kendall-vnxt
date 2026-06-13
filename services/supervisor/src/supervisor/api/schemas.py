@@ -556,6 +556,7 @@ class SubscriptionAgentLaunchRequestView(BaseModel):
     outputArtifactSummary: dict[str, Any] = Field(default_factory=dict)
     lifecycleEvidence: dict[str, Any] = Field(default_factory=dict)
     safetyFlags: dict[str, bool] = Field(default_factory=dict)
+    mutationContract: dict[str, Any] = Field(default_factory=dict)
 
 
 class LocalEvidencePacketItemView(BaseModel):

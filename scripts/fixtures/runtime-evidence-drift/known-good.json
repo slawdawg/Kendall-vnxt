@@ -1,0 +1,37 @@
+{
+  "fixtureId": "runtime-evidence-drift-known-good",
+  "evidenceSurface": "runtime-evidence-export",
+  "reportRoute": "/work-items/{work_item_id}/runtime-evidence-export",
+  "structuredFields": [
+    "RuntimeEvidenceExportBoundaryView",
+    "RuntimeEvidenceExportSafetyView",
+    "RuntimeEvidenceSubscriptionLaunchView",
+    "RuntimeEvidenceExportView"
+  ],
+  "safetyBoundary": {
+    "providerExpansion": "blocked",
+    "credentialSessionAccess": "blocked",
+    "sourceMutation": "blocked",
+    "launchRetryAutomation": "blocked",
+    "prMergeCleanupAutomation": "blocked",
+    "failedCheckBypass": "blocked",
+    "broadAutonomy": "blocked"
+  },
+  "retainedEvidence": {
+    "artifactReferences": "allowed",
+    "boundedSummaries": "allowed",
+    "rawPrompts": "excluded",
+    "rawCompletions": "excluded",
+    "reasoningTraces": "excluded",
+    "providerPayloads": "excluded",
+    "secrets": "excluded",
+    "rawStdout": "excluded",
+    "rawStderr": "excluded",
+    "generatedPatchContent": "excluded",
+    "sourceSnapshots": "excluded"
+  },
+  "verification": {
+    "command": "pnpm.cmd run check:runtime-export",
+    "fixtureFamily": "static-report-schema-drift"
+  }
+}

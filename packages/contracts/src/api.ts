@@ -497,6 +497,7 @@ export interface SubscriptionAgentLaunchRequestView {
   outputArtifactSummary: Record<string, unknown>;
   lifecycleEvidence: Record<string, unknown>;
   safetyFlags: Record<string, boolean>;
+  mutationContract: Record<string, unknown>;
 }
 
 export interface LocalEvidencePacketItemView {

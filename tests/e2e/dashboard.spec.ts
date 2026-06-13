@@ -291,6 +291,88 @@ function seedSubscriptionLaunchVerificationEvent(workItemId: string) {
   });
 }
 
+type ProviderRawOutputUiFixtureCase = {
+  caseId: string;
+  title: string;
+  status: string;
+  readinessStatus: string;
+  artifactKind: string;
+  blockedReason: string;
+  recoveryPath: string;
+  nextSafeAction: string;
+  rawSentinels: string[];
+};
+
+async function loadProviderRawOutputUiFixtures() {
+  const fixturePath = path.join(process.cwd(), "tests", "fixtures", "provider-raw-output-ui", "cases.json");
+  const fixtureSource = await fs.readFile(fixturePath, "utf8");
+  const fixtures = JSON.parse(fixtureSource) as ProviderRawOutputUiFixtureCase[];
+  for (const fixture of fixtures) {
+    expect(fixture.rawSentinels, `${fixture.caseId} must define exactly five raw-output sentinels`).toHaveLength(5);
+    for (const sentinel of fixture.rawSentinels) {
+      expect(typeof sentinel, `${fixture.caseId} sentinel must be a string`).toBe("string");
+      expect(sentinel, `${fixture.caseId} sentinel must be non-empty`).not.toHaveLength(0);
+    }
+  }
+  return fixtures;
+}
+
+function seedProviderRawOutputUiFixtureEvent(workItemId: string, fixture: ProviderRawOutputUiFixtureCase) {
+  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+  expect(dbPath).toBeTruthy();
+  const [rawPrompt, rawCompletion, providerPayload, secretValue, sourceCopy] = fixture.rawSentinels;
+  const payload = {
+    status: fixture.status,
+    readinessStatus: fixture.readinessStatus,
+    subscriptionLaunchVerification: {
+      attemptId: `provider-raw-output-${fixture.caseId}`,
+      routeDecisionId: `route-provider-raw-output-${fixture.caseId}`,
+      status: fixture.status,
+      commandId: `provider-raw-output-${fixture.caseId}`,
+      commandShape: "synthetic local-only provider raw-output UI fixture",
+      summary: `Bounded provider output summary for ${fixture.caseId}.`,
+      artifactRef: `_bmad-output/provider-raw-output-ui/${fixture.caseId}.json`,
+      recoveryPath: fixture.recoveryPath,
+      rollbackStatus: "not_triggered",
+      rollbackReason: null,
+      blockedReason: fixture.blockedReason,
+      deliveryEligible: false,
+      nextSafeAction: fixture.nextSafeAction,
+      rawOutputRetained: false,
+      rawPrompt,
+      rawCompletion,
+      providerPayload,
+      secretValue,
+      sourceCopy,
+    },
+    outputArtifactSummary: {
+      artifactReferences: [
+        {
+          artifactKind: fixture.artifactKind,
+          path: `_bmad-output/provider-raw-output-ui/${fixture.caseId}.json`,
+          rawPayloadStored: false,
+          operatorReviewRequired: true,
+        },
+      ],
+      rawOutputStored: false,
+    },
+  };
+  const script = [
+    "import json, sqlite3, sys, uuid",
+    "from datetime import datetime, timezone",
+    "db_path, work_item_id, payload_json = sys.argv[1:4]",
+    "conn = sqlite3.connect(db_path)",
+    "conn.execute(\"insert into workflow_events (id, work_item_id, event_type, actor_type, actor_id, actor_label, correlation_id, summary, payload, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\", (str(uuid.uuid4()), work_item_id, 'execution_attempt.verification_recorded', 'supervisor', None, None, str(uuid.uuid4()), 'Provider raw-output UI regression fixture recorded with bounded metadata.', payload_json, datetime.now(timezone.utc).isoformat()))",
+    "conn.commit()",
+    "conn.close()",
+  ].join("; ");
+  const pythonPath =
+    process.platform === "win32" ? "services/supervisor/.venv/Scripts/python.exe" : "services/supervisor/.venv/bin/python";
+  execFileSync(pythonPath, ["-c", script, dbPath!, workItemId, JSON.stringify(payload)], {
+    cwd: process.cwd(),
+  });
+}
+
 function gitOutput(args: string[]) {
   return execFileSync("git", args, { cwd: process.cwd(), encoding: "utf8" }).trim();
 }
@@ -435,6 +517,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:mobile", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:managed", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:managed:mobile", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:provider-raw-output", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("Passing verification does not approve local provider/model calls.")).toBeVisible();
     await expect(page.locator("#verification-readiness-report")).toBeVisible();
@@ -458,6 +541,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(dashboardE2EPanel.getByText("pnpm run test:e2e:dashboard:mobile", { exact: true })).toBeVisible();
     await expect(dashboardE2EPanel.getByText("pnpm run test:e2e:dashboard:managed", { exact: true })).toBeVisible();
     await expect(dashboardE2EPanel.getByText("pnpm run test:e2e:dashboard:managed:mobile", { exact: true })).toBeVisible();
+    await expect(dashboardE2EPanel.getByText("pnpm run test:e2e:dashboard:provider-raw-output", { exact: true })).toBeVisible();
     await expect(dashboardE2EPanel.getByText("pnpm run check:e2e-report", { exact: true })).toBeVisible();
     await expect(dashboardE2EPanel.getByText("Browser verification does not approve local provider/model calls.")).toBeVisible();
 
@@ -1259,6 +1343,61 @@ test.describe("dashboard workflow coverage", () => {
     await expect(exportPanel.getByText("nextSafeAction: Keep subscription-agent launch disabled until Bob reviews retained artifacts.")).toBeVisible();
     await expect(exportPanel.getByText("rawStdout")).toHaveCount(0);
     await expect(exportPanel.getByText("rawStderr")).toHaveCount(0);
+  });
+
+  test("hides synthetic provider raw output while showing bounded metadata", async ({ page, request }) => {
+    test.setTimeout(90_000);
+    const fixtures = await loadProviderRawOutputUiFixtures();
+    expect(fixtures.map((fixture) => fixture.caseId)).toEqual([
+      "provider-success",
+      "provider-failure",
+      "provider-empty",
+      "provider-oversized",
+    ]);
+
+    for (const fixture of fixtures) {
+      const workItemId = await createWorkItem(request, {
+        title: fixture.title,
+        requestedOutcome: `Verify ${fixture.caseId} renders metadata-only provider evidence.`,
+        source: "operator-dashboard:improvement",
+        riskLevel: "medium",
+        metadata: {
+          executionRecipeId: "dashboard-test-coverage",
+          intakeTemplateId: "operator-test-coverage",
+          providerRawOutputUiCase: fixture.caseId,
+        },
+      });
+      seedProviderRawOutputUiFixtureEvent(workItemId, fixture);
+
+      const exportResponse = await request.get(`${supervisorUrl}/work-items/${workItemId}/runtime-evidence-export`);
+      expect(exportResponse.ok()).toBeTruthy();
+      const exportJson = JSON.stringify(await exportResponse.json());
+      for (const sentinel of fixture.rawSentinels) {
+        expect(exportJson, `Runtime export API retained ${fixture.caseId} raw-output sentinel ${sentinel}`).not.toContain(sentinel);
+      }
+
+      await page.goto(`/work-items/${workItemId}#runtime-evidence-export`);
+
+      const exportPanel = page.locator("#runtime-evidence-export");
+      await expect(exportPanel).toBeInViewport();
+      await expect(exportPanel.getByRole("heading", { name: "Subscription launch evidence" })).toBeVisible();
+      await expect(exportPanel.getByText(fixture.status, { exact: true })).toBeVisible();
+      await expect(exportPanel.getByText(fixture.readinessStatus, { exact: true })).toBeVisible();
+      await expect(exportPanel.getByText(fixture.artifactKind, { exact: true })).toBeVisible();
+      await expect(exportPanel.getByText(`blockedReason: ${fixture.blockedReason}`, { exact: true })).toBeVisible();
+      await expect(exportPanel.getByText(`recoveryPath: ${fixture.recoveryPath}`, { exact: true })).toBeVisible();
+      await expect(exportPanel.getByText(`nextSafeAction: ${fixture.nextSafeAction}`, { exact: true })).toBeVisible();
+      await expect(exportPanel.getByText("Raw output stored")).toBeVisible();
+
+      const bodyText = await page.locator("body").innerText();
+      const bodyTextContent = await page.locator("body").evaluate((body) => body.textContent ?? "");
+      const htmlContent = await page.content();
+      for (const sentinel of fixture.rawSentinels) {
+        expect(bodyText, `Runtime export DOM rendered ${fixture.caseId} raw-output sentinel ${sentinel}`).not.toContain(sentinel);
+        expect(bodyTextContent, `Runtime export textContent retained ${fixture.caseId} raw-output sentinel ${sentinel}`).not.toContain(sentinel);
+        expect(htmlContent, `Runtime export page HTML retained ${fixture.caseId} raw-output sentinel ${sentinel}`).not.toContain(sentinel);
+      }
+    }
   });
 
   test("shows delivery readiness controls for managed recipe work", async ({ page, request }) => {

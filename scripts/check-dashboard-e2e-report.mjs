@@ -28,6 +28,7 @@ const expectedPackageScripts = [
   ["test:e2e:dashboard:mobile", "node ./scripts/run-mobile-e2e.mjs"],
   ["test:e2e:dashboard:managed", "node ./scripts/run-managed-recipe-e2e.mjs"],
   ["test:e2e:dashboard:managed:mobile", "node ./scripts/run-managed-mobile-recipe-e2e.mjs"],
+  ["test:e2e:dashboard:provider-raw-output", "node ./scripts/run-provider-raw-output-ui-e2e.mjs"],
 ];
 
 const expectedRunners = [
@@ -60,6 +61,12 @@ const expectedRunners = [
     command: "pnpm run test:e2e:dashboard:managed:mobile",
     runnerScript: "scripts/run-managed-mobile-recipe-e2e.mjs",
     story: "docs/stories/3-25-managed-recipe-e2e-runners.md",
+  },
+  {
+    runnerId: "dashboard-provider-raw-output-e2e",
+    command: "pnpm run test:e2e:dashboard:provider-raw-output",
+    runnerScript: "scripts/run-provider-raw-output-ui-e2e.mjs",
+    story: "docs/stories/9-3-restore-provider-raw-output-ui-regression-coverage.md",
   },
   {
     runnerId: "dashboard-full-e2e",

@@ -1,6 +1,9 @@
 import asyncio
+import json
+import sqlite3
 import socket
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -1341,6 +1344,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "dashboard-mobile-e2e",
         "dashboard-managed-recipe-e2e",
         "dashboard-managed-mobile-recipe-e2e",
+        "dashboard-provider-raw-output-e2e",
         "dashboard-e2e",
         "github-doctor-remote",
         "bootstrap-run-check",
@@ -1358,6 +1362,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "check-development-runway" in static_group["commandIds"]
     dashboard_group = next(group for group in report["commandGroups"] if group["groupId"] == "dashboard-browser-build")
     assert "dashboard-controls-e2e" in dashboard_group["commandIds"]
+    assert "dashboard-provider-raw-output-e2e" in dashboard_group["commandIds"]
     assert "dashboard-build" in dashboard_group["commandIds"]
     full_gate = next(group for group in report["commandGroups"] if group["groupId"] == "full-local-gate")
     assert full_gate["commandIds"] == ["full-check"]
@@ -1467,6 +1472,7 @@ def test_dashboard_e2e_report_lists_focused_runners_without_mutation(tmp_path, m
         "dashboard-mobile-e2e",
         "dashboard-managed-recipe-e2e",
         "dashboard-managed-mobile-recipe-e2e",
+        "dashboard-provider-raw-output-e2e",
         "dashboard-full-e2e",
     }
     runner_by_id = {runner["runnerId"]: runner for runner in report["runners"]}
@@ -1475,14 +1481,18 @@ def test_dashboard_e2e_report_lists_focused_runners_without_mutation(tmp_path, m
     assert runner_by_id["dashboard-mobile-e2e"]["ownsServerLifecycle"] is True
     assert runner_by_id["dashboard-managed-recipe-e2e"]["ownsServerLifecycle"] is True
     assert runner_by_id["dashboard-managed-mobile-recipe-e2e"]["ownsServerLifecycle"] is True
+    assert runner_by_id["dashboard-provider-raw-output-e2e"]["ownsServerLifecycle"] is True
     assert runner_by_id["dashboard-full-e2e"]["ownsServerLifecycle"] is False
     assert runner_by_id["dashboard-controls-e2e"]["command"] == "pnpm run test:e2e:dashboard:controls"
     assert runner_by_id["dashboard-detail-e2e"]["command"] == "pnpm run test:e2e:dashboard:detail"
     assert runner_by_id["dashboard-mobile-e2e"]["command"] == "pnpm run test:e2e:dashboard:mobile"
     assert runner_by_id["dashboard-managed-recipe-e2e"]["command"] == "pnpm run test:e2e:dashboard:managed"
     assert runner_by_id["dashboard-managed-mobile-recipe-e2e"]["command"] == "pnpm run test:e2e:dashboard:managed:mobile"
+    assert runner_by_id["dashboard-provider-raw-output-e2e"]["command"] == "pnpm run test:e2e:dashboard:provider-raw-output"
     assert "scripts/dashboard-e2e-runner.mjs" in " ".join(runner_by_id["dashboard-controls-e2e"]["evidence"])
     assert "scripts/dashboard-e2e-runner.mjs" in " ".join(runner_by_id["dashboard-detail-e2e"]["evidence"])
+    assert runner_by_id["dashboard-provider-raw-output-e2e"]["label"] == "Provider raw-output UI regression slice"
+    assert "provider raw-output UI" in " ".join(runner_by_id["dashboard-provider-raw-output-e2e"]["evidence"])
     assert {command["commandId"] for command in report["setupCommands"]} == {
         "setup-e2e",
         "dashboard-build",
@@ -2452,7 +2462,7 @@ def test_subscription_agent_launch_request_rejects_missing_exact_approval_before
         work_item_id = _create_routing_work_item(client)
         response = client.post(
             f"/work-items/{work_item_id}/subscription-agent-launch",
-            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True},
         )
         events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
 
@@ -2489,6 +2499,97 @@ def test_subscription_agent_launch_request_rejects_missing_exact_approval_before
     assert "rawStdout" not in event["payload"]
     assert "rawStderr" not in event["payload"]
     assert "generatedPatch" not in event["payload"]
+
+
+def test_subscription_agent_launch_request_default_record_event_is_read_only(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-read-only-evaluation.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        before_attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        )
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        after_attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["status"] == "rejected_missing_exact_approval"
+    assert launch["approvalAccepted"] is False
+    assert launch["processLaunchAttempted"] is False
+    assert launch["mutationContract"]["recordEvent"] is False
+    assert launch["mutationContract"]["mode"] == "read_only_evaluation"
+    assert before_events == after_events
+    assert before_attempts == after_attempts
+
+
+def test_subscription_agent_launch_request_record_event_true_persists_rejection_once(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-rejection-idempotent.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        payload = {"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True}
+        first_response = client.post(f"/work-items/{work_item_id}/subscription-agent-launch", json=payload)
+        second_response = client.post(f"/work-items/{work_item_id}/subscription-agent-launch", json=payload)
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json()["data"] == second_response.json()["data"]
+    assert first_response.json()["data"]["mutationContract"]["mode"] == "mutating"
+    assert first_response.json()["data"]["mutationContract"]["replayBehavior"] == "same rejection fingerprint is a stable no-op"
+    rejection_events = [event for event in events if event["eventType"] == "routing.subscription_agent_launch_rejected"]
+    assert len(rejection_events) == 1
+    assert rejection_events[0]["payload"]["mutationContract"]["eventIdentity"]["rejection"] == first_response.json()["data"]["launchRequestId"]
+    assert attempts == []
+
+
+def test_subscription_agent_launch_request_records_changed_rejection_fingerprint(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-rejection-changed-fingerprint.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    _freeze_subscription_launch_now(monkeypatch)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        first_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True},
+        )
+        second_response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "not-a-target", "recordEvent": True},
+        )
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json()["data"]["launchRequestId"] == second_response.json()["data"]["launchRequestId"]
+    assert second_response.json()["data"]["rejectedEnvelopeFields"]["requestedAgent"] == "unsupported_subscription_launch_target"
+    rejection_events = [event for event in events if event["eventType"] == "routing.subscription_agent_launch_rejected"]
+    assert len(rejection_events) == 2
+    assert rejection_events[0]["payload"]["rejectedEnvelopeFields"]["requestedAgent"] == "unsupported_subscription_launch_target"
+    assert "requestedAgent" not in rejection_events[1]["payload"]["rejectedEnvelopeFields"]
 
 
 def _approved_subscription_launch_binding(stub: dict, **overrides: object) -> dict:
@@ -2724,6 +2825,9 @@ def test_subscription_agent_launch_request_accepts_exact_artifact_only_fixture_p
     assert launch["rejectedEnvelopeFields"] == {}
     assert launch["staleEnvelopeFields"] == []
     assert launch["blockedReasonIds"] == []
+    assert launch["mutationContract"]["mode"] == "mutating"
+    assert launch["mutationContract"]["eventIdentity"]["acceptedFixtureAttempt"] == approval["executionAttemptId"]
+    assert launch["mutationContract"]["replayBehavior"] == "same accepted fixture attempt id is a stable no-op"
     assert launch["outputArtifactSummary"]["artifactReferenceOnly"] is True
     assert launch["outputArtifactSummary"]["rawOutputStored"] is False
     assert {artifact["artifactKind"] for artifact in launch["outputArtifactSummary"]["artifactReferences"]} == {
@@ -2827,6 +2931,45 @@ def test_subscription_agent_launch_request_rejects_future_dated_approval(tmp_pat
     assert launch["processLaunchAttempted"] is False
 
 
+def test_subscription_agent_launch_request_read_only_accepted_fixture_is_evaluation_ready(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-launch-read-only-accepted-fixture.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    _freeze_subscription_launch_now(monkeypatch)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_launch_binding(stub)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", **approval},
+        )
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert launch["status"] == "accepted_artifact_only_fixture_evaluation_ready"
+    assert launch["readinessStatus"] == "subscription_launch_fixture_evaluation_ready"
+    assert launch["approvalAccepted"] is True
+    assert launch["processLaunchAllowed"] is False
+    assert launch["executionAllowed"] is False
+    assert launch["processLaunchAttempted"] is False
+    assert launch["mutationContract"]["recordEvent"] is False
+    assert launch["mutationContract"]["mode"] == "read_only_evaluation"
+    assert before_events == after_events
+    assert attempts == []
+
+
 def test_subscription_agent_launch_request_rejects_second_fixture_attempt_for_work_item(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "subscription-agent-launch-one-fixture.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -2872,8 +3015,11 @@ def test_subscription_agent_launch_request_rejects_second_fixture_attempt_for_wo
     assert "executionAttemptId" in second_launch["staleEnvelopeFields"]
     assert "workspacePlanId" in second_launch["staleEnvelopeFields"]
     assert second_launch["processLaunchAttempted"] is False
-    assert third_response.status_code == 409
-    assert third_response.json()["detail"]["error"]["code"] == "invalid_subscription_agent_launch"
+    assert third_response.status_code == 200
+    third_launch = third_response.json()["data"]
+    assert third_launch["status"] == "accepted_artifact_only_fixture_completed"
+    assert third_launch["approvalAccepted"] is True
+    assert third_launch["processLaunchAttempted"] is True
     assert len(attempts) == 1
  
  
@@ -2925,6 +3071,97 @@ def test_runtime_evidence_export_includes_subscription_launch_summary_without_ra
     assert "rawStderr" not in str(launch_export)
     assert "generatedPatch'" not in str(launch_export)
     assert "GET /work-items/{id}/runtime-evidence-export" in launch_export["relatedReports"]
+
+
+def test_runtime_evidence_export_redacts_unknown_subscription_verification_raw_fields(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "runtime-evidence-export-redacted-verification.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    raw_sentinels = [
+        "RAW_PROMPT_API_SENTINEL_DO_NOT_RETAIN",
+        "RAW_COMPLETION_API_SENTINEL_DO_NOT_RETAIN",
+        "PROVIDER_PAYLOAD_API_SENTINEL_DO_NOT_RETAIN",
+        "SECRET_API_SENTINEL_DO_NOT_RETAIN",
+        "SOURCE_COPY_API_SENTINEL_DO_NOT_RETAIN",
+    ]
+    payload = {
+        "status": "provider_success_metadata_only",
+        "readinessStatus": "provider_output_redacted",
+        "subscriptionLaunchVerification": {
+            "attemptId": "provider-raw-output-api",
+            "routeDecisionId": "route-provider-raw-output-api",
+            "status": "provider_success_metadata_only",
+            "commandId": "provider-raw-output-api",
+            "commandShape": "synthetic local-only provider raw-output API fixture",
+            "summary": "Bounded provider output summary.",
+            "artifactRef": "_bmad-output/provider-raw-output-ui/provider-api.json",
+            "recoveryPath": "Review bounded provider success summary artifact.",
+            "rollbackStatus": "not_triggered",
+            "rollbackReason": None,
+            "blockedReason": "provider_raw_output_excluded",
+            "deliveryEligible": False,
+            "nextSafeAction": "Keep raw provider output excluded from dashboard evidence.",
+            "rawOutputRetained": False,
+            "rawPrompt": raw_sentinels[0],
+            "rawCompletion": raw_sentinels[1],
+            "providerPayload": raw_sentinels[2],
+            "secretValue": raw_sentinels[3],
+            "sourceCopy": raw_sentinels[4],
+        },
+        "outputArtifactSummary": {
+            "artifactReferences": [
+                {
+                    "artifactKind": "provider_success_summary",
+                    "path": "_bmad-output/provider-raw-output-ui/provider-api.json",
+                    "rawPayloadStored": False,
+                    "operatorReviewRequired": True,
+                },
+            ],
+            "rawOutputStored": False,
+        },
+    }
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "insert into workflow_events (id, work_item_id, event_type, actor_type, actor_id, actor_label, correlation_id, summary, payload, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                work_item_id,
+                "execution_attempt.verification_recorded",
+                "supervisor",
+                None,
+                None,
+                str(uuid.uuid4()),
+                "Provider raw-output API regression fixture recorded with bounded metadata.",
+                json.dumps(payload),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
+
+    assert export_response.status_code == 200
+    export = export_response.json()["data"]["subscriptionLaunch"]
+    verification = export["verificationEvidence"]
+    assert verification["status"] == "provider_success_metadata_only"
+    assert verification["blockedReason"] == "provider_raw_output_excluded"
+    assert verification["nextSafeAction"] == "Keep raw provider output excluded from dashboard evidence."
+    assert "rawPrompt" not in verification
+    assert "rawCompletion" not in verification
+    assert "providerPayload" not in verification
+    assert "secretValue" not in verification
+    assert "sourceCopy" not in verification
+    export_text = json.dumps(export_response.json())
+    for sentinel in raw_sentinels:
+        assert sentinel not in export_text
 
 
 def test_subscription_agent_launch_verification_records_recovery_and_rollback_metadata(tmp_path, monkeypatch) -> None:
