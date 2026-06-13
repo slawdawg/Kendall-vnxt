@@ -1,0 +1,57 @@
+{
+  "fixtureId": "runtime-evidence-drift-known-bad",
+  "evidenceSurface": "runtime-evidence-export",
+  "reportRoute": "/work-items/{work_item_id}/wrong-runtime-export",
+  "structuredFields": [],
+  "safetyBoundary": {
+    "providerExpansion": "allowed",
+    "credentialSessionAccess": "allowed",
+    "sourceMutation": "allowed",
+    "launchRetryAutomation": "allowed",
+    "prMergeCleanupAutomation": "allowed",
+    "failedCheckBypass": "allowed",
+    "broadAutonomy": "allowed"
+  },
+  "retainedEvidence": {
+    "artifactReferences": "allowed",
+    "boundedSummaries": "allowed",
+    "rawPrompts": "retained",
+    "rawCompletions": "retained",
+    "reasoningTraces": "retained",
+    "providerPayloads": "retained",
+    "secrets": "retained",
+    "rawStdout": "retained",
+    "rawStderr": "retained",
+    "generatedPatchContent": "retained",
+    "sourceSnapshots": "retained"
+  },
+  "verification": {
+    "command": "pnpm.cmd run wrong-check",
+    "fixtureFamily": "dashboard-rendering-raw-output"
+  },
+  "expectedFailures": [
+    "structured-field:RuntimeEvidenceExportBoundaryView",
+    "structured-field:RuntimeEvidenceExportSafetyView",
+    "structured-field:RuntimeEvidenceSubscriptionLaunchView",
+    "structured-field:RuntimeEvidenceExportView",
+    "safety-boundary:providerExpansion",
+    "safety-boundary:credentialSessionAccess",
+    "safety-boundary:sourceMutation",
+    "safety-boundary:launchRetryAutomation",
+    "safety-boundary:prMergeCleanupAutomation",
+    "safety-boundary:failedCheckBypass",
+    "safety-boundary:broadAutonomy",
+    "retained-evidence:rawPrompts",
+    "retained-evidence:rawCompletions",
+    "retained-evidence:reasoningTraces",
+    "retained-evidence:providerPayloads",
+    "retained-evidence:secrets",
+    "retained-evidence:rawStdout",
+    "retained-evidence:rawStderr",
+    "retained-evidence:generatedPatchContent",
+    "retained-evidence:sourceSnapshots",
+    "report-route:runtime-evidence-export",
+    "verification-command:check-runtime-export",
+    "fixture-family:static-report-schema-drift"
+  ]
+}

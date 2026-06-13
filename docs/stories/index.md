@@ -189,3 +189,11 @@ Stories 8.1 through 8.6 currently have accepted story files. Story 8.6 is ready 
 | `8-4-show-subscription-launch-readiness-in-dev-console.md` | Ready-for-dev Dev Console readiness story for subscription launch blocked states, dry-run evidence, missing approvals, and execution-prohibited display. |
 | `8-5-execute-one-explicitly-approved-artifact-only-subscription-agent-launch.md` | Done exact-approval artifact-only fixture launch story with retained metadata evidence and no broad authority expansion. |
 | `8-6-record-verification-recovery-and-rollback-evidence.md` | Ready-for-dev evidence story for subscription-launch verification, recovery path, rollback state, retained artifact references, and next safe action. |
+
+## Draft Epic 9 Story Map
+
+| Story | Summary |
+| --- | --- |
+| `9-1-harden-static-drift-checks.md` | Done hardening story for runtime-evidence static drift checks with deterministic fixtures, structured or behavioral assertions, actionable failure output, and no authority expansion. |
+| `9-2-clarify-subscription-launch-recordevent-mutation-semantics.md` | Done contract story for explicit, idempotent subscription launch `recordEvent` mutation semantics without launch retry or authority expansion. |
+| `9-3-restore-provider-raw-output-ui-regression-coverage.md` | Done UI/report regression story for provider raw-output exclusion using deterministic local fixtures, API sanitization, and DOM/text-state assertions. |

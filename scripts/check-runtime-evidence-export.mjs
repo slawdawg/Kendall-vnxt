@@ -14,6 +14,249 @@ function assertCondition(condition, message, failures) {
   }
 }
 
+function readJsonWorkspaceFile(path, failures) {
+  try {
+    return JSON.parse(readWorkspaceFile(path));
+  } catch (error) {
+    failures.push(`${path} must contain parseable runtime-evidence-export JSON fixture: ${error.message}`);
+    return null;
+  }
+}
+
+function collectRuntimeEvidenceDriftRuleFailures(fixture) {
+  const ruleFailures = [];
+  const requiredStructuredFields = [
+    "RuntimeEvidenceExportBoundaryView",
+    "RuntimeEvidenceExportSafetyView",
+    "RuntimeEvidenceSubscriptionLaunchView",
+    "RuntimeEvidenceExportView",
+  ];
+  const requiredBlockedAuthority = [
+    "providerExpansion",
+    "credentialSessionAccess",
+    "sourceMutation",
+    "launchRetryAutomation",
+    "prMergeCleanupAutomation",
+    "failedCheckBypass",
+    "broadAutonomy",
+  ];
+  const requiredExcludedEvidence = [
+    "rawPrompts",
+    "rawCompletions",
+    "reasoningTraces",
+    "providerPayloads",
+    "secrets",
+    "rawStdout",
+    "rawStderr",
+    "generatedPatchContent",
+    "sourceSnapshots",
+  ];
+
+  for (const field of requiredStructuredFields) {
+    if (!fixture.structuredFields?.includes(field)) {
+      ruleFailures.push(`structured-field:${field}`);
+    }
+  }
+  for (const authority of requiredBlockedAuthority) {
+    if (fixture.safetyBoundary?.[authority] !== "blocked") {
+      ruleFailures.push(`safety-boundary:${authority}`);
+    }
+  }
+  for (const evidence of requiredExcludedEvidence) {
+    if (fixture.retainedEvidence?.[evidence] !== "excluded") {
+      ruleFailures.push(`retained-evidence:${evidence}`);
+    }
+  }
+  if (fixture.reportRoute !== "/work-items/{work_item_id}/runtime-evidence-export") {
+    ruleFailures.push("report-route:runtime-evidence-export");
+  }
+  if (fixture.verification?.command !== "pnpm.cmd run check:runtime-export") {
+    ruleFailures.push("verification-command:check-runtime-export");
+  }
+  if (fixture.verification?.fixtureFamily !== "static-report-schema-drift") {
+    ruleFailures.push("fixture-family:static-report-schema-drift");
+  }
+
+  return ruleFailures;
+}
+
+function describeRuntimeEvidenceDriftRule(ruleId, fixture) {
+  const evidenceSurface = fixture.evidenceSurface ?? "unknown evidence surface";
+  const [ruleType, ruleName] = ruleId.split(":");
+  if (ruleType === "structured-field") {
+    return `${evidenceSurface} must include structured field ${ruleName}`;
+  }
+  if (ruleType === "safety-boundary") {
+    return `${evidenceSurface} safety boundary ${ruleName} must be blocked`;
+  }
+  if (ruleType === "retained-evidence") {
+    return `${evidenceSurface} retained evidence ${ruleName} must be excluded`;
+  }
+  if (ruleType === "report-route") {
+    return `${evidenceSurface} report route must be /work-items/{work_item_id}/runtime-evidence-export`;
+  }
+  if (ruleType === "verification-command") {
+    return `${evidenceSurface} verification command must be pnpm.cmd run check:runtime-export`;
+  }
+  if (ruleType === "fixture-family") {
+    return `${evidenceSurface} fixture family must be static-report-schema-drift`;
+  }
+  return `${evidenceSurface} must satisfy ${ruleId}`;
+}
+
+function extractPythonClassBody(source, className) {
+  const classStart = source.indexOf(`class ${className}(BaseModel):`);
+  if (classStart < 0) {
+    return "";
+  }
+  const nextClassStart = source.indexOf("\n\nclass ", classStart + 1);
+  return source.slice(classStart, nextClassStart < 0 ? undefined : nextClassStart);
+}
+
+function assertSourceIncludes(source, expectedText, message, failures) {
+  assertCondition(source.includes(expectedText), message, failures);
+}
+
+function validateRuntimeEvidenceLiveSourceSurfaces(failures) {
+  const safetySchema = extractPythonClassBody(schemaSource, "RuntimeEvidenceExportSafetyView");
+  const boundarySchema = extractPythonClassBody(schemaSource, "RuntimeEvidenceExportBoundaryView");
+  const subscriptionLaunchSchema = extractPythonClassBody(schemaSource, "RuntimeEvidenceSubscriptionLaunchView");
+  const exportSchema = extractPythonClassBody(schemaSource, "RuntimeEvidenceExportView");
+
+  const safetyDefaults = [
+    "exportOnly: bool = True",
+    "processLaunchAllowed: bool = False",
+    "providerCallsAllowed: bool = False",
+    "modelCallsAllowed: bool = False",
+    "premiumExecutionAllowed: bool = False",
+    "commandExecutionAllowed: bool = False",
+    "sourceMutationAllowed: bool = False",
+    "networkAllowed: bool = False",
+    "credentialAccessAllowed: bool = False",
+  ];
+  for (const defaultField of safetyDefaults) {
+    assertSourceIncludes(
+      safetySchema,
+      defaultField,
+      `runtime-evidence-export safety schema must preserve default invariant ${defaultField}`,
+      failures,
+    );
+  }
+
+  for (const boundaryField of ["localRuntimeState", "gitBackedEvidence", "relatedSupervisorReports", "excludedState"]) {
+    assertSourceIncludes(
+      boundarySchema,
+      boundaryField,
+      `runtime-evidence-export boundary schema must include field ${boundaryField}`,
+      failures,
+    );
+  }
+  for (const subscriptionField of [
+    "approvalBinding",
+    "lifecycleSummary",
+    "workspaceSummary",
+    "outputArtifactReferences",
+    "verificationEvidence",
+    "safetyFlags",
+    "cancellationTimeoutRollbackEvidence",
+    "rawOutputStored: bool = False",
+  ]) {
+    assertSourceIncludes(
+      subscriptionLaunchSchema,
+      subscriptionField,
+      `runtime-evidence-export subscription launch schema must include ${subscriptionField}`,
+      failures,
+    );
+  }
+  for (const exportField of [
+    "boundary: RuntimeEvidenceExportBoundaryView",
+    "safety: RuntimeEvidenceExportSafetyView",
+    "subscriptionLaunch: RuntimeEvidenceSubscriptionLaunchView",
+  ]) {
+    assertSourceIncludes(exportSchema, exportField, `runtime-evidence-export schema must compose ${exportField}`, failures);
+  }
+
+  const runtimeExportStart = serviceSource.indexOf("RuntimeEvidenceExportView(");
+  const runtimeExportEnd = serviceSource.indexOf("def _runtime_evidence_subscription_launch_summary", runtimeExportStart);
+  const runtimeExportSource = serviceSource.slice(runtimeExportStart, runtimeExportEnd < 0 ? undefined : runtimeExportEnd);
+  for (const excludedStateText of [
+    "environment variables and credential stores",
+    "provider HTTP request/response bodies",
+    "model prompts or completions from external providers",
+    "raw Ollama prompts, completions, reasoning fields, and provider payloads",
+    "raw subscription-agent stdout and stderr",
+    "subscription-agent inherited environment values",
+    "filesystem snapshots outside recorded artifact references",
+    "background process output not recorded as workflow events",
+  ]) {
+    assertSourceIncludes(
+      runtimeExportSource,
+      excludedStateText,
+      `runtime-evidence-export service excludedState must preserve ${excludedStateText}`,
+      failures,
+    );
+  }
+  assertSourceIncludes(
+    runtimeExportSource,
+    "safety=RuntimeEvidenceExportSafetyView()",
+    "runtime-evidence-export service must use the fail-closed RuntimeEvidenceExportSafetyView defaults",
+    failures,
+  );
+  assertSourceIncludes(
+    runtimeExportSource,
+    "subscriptionLaunch=self._runtime_evidence_subscription_launch_summary(events)",
+    "runtime-evidence-export service must compose subscription launch summary from workflow events",
+    failures,
+  );
+}
+
+function validateRuntimeEvidenceDriftFixtures(failures) {
+  const goodFixturePath = "scripts/fixtures/runtime-evidence-drift/known-good.json";
+  const badFixturePath = "scripts/fixtures/runtime-evidence-drift/known-bad.json";
+  const goodFixture = readJsonWorkspaceFile(goodFixturePath, failures);
+  const badFixture = readJsonWorkspaceFile(badFixturePath, failures);
+  if (!goodFixture || !badFixture) {
+    return;
+  }
+
+  const goodFailures = collectRuntimeEvidenceDriftRuleFailures(goodFixture);
+  assertCondition(
+    goodFailures.length === 0,
+    `${goodFixturePath} must satisfy runtime evidence drift rules for ${goodFixture.evidenceSurface}; violated: ${goodFailures
+      .map((failure) => describeRuntimeEvidenceDriftRule(failure, goodFixture))
+      .join(", ")}`,
+    failures,
+  );
+
+  const badFailures = collectRuntimeEvidenceDriftRuleFailures(badFixture);
+  const expectedFailures = badFixture.expectedFailures ?? [];
+  assertCondition(
+    expectedFailures.length > 0,
+    `${badFixturePath} must name expected runtime evidence drift failures`,
+    failures,
+  );
+  for (const expectedFailure of expectedFailures) {
+    assertCondition(
+      badFailures.includes(expectedFailure),
+      `${badFixturePath} must fail runtime evidence drift rule ${expectedFailure}: ${describeRuntimeEvidenceDriftRule(
+        expectedFailure,
+        badFixture,
+      )}`,
+      failures,
+    );
+  }
+  for (const actualFailure of badFailures) {
+    assertCondition(
+      expectedFailures.includes(actualFailure),
+      `${badFixturePath} produced unexpected runtime evidence drift rule failure ${actualFailure}: ${describeRuntimeEvidenceDriftRule(
+        actualFailure,
+        badFixture,
+      )}`,
+      failures,
+    );
+  }
+}
+
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const contractSource = readWorkspaceFile("packages/contracts/src/api.ts");
 const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/schemas.py");
@@ -28,6 +271,9 @@ const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration
 const storyIndex = readWorkspaceFile("docs/stories/index.md");
 
 const failures = [];
+
+validateRuntimeEvidenceDriftFixtures(failures);
+validateRuntimeEvidenceLiveSourceSurfaces(failures);
 
 assertCondition(
   packageJson.scripts?.["check:runtime-export"] === "node ./scripts/check-runtime-evidence-export.mjs",
@@ -57,6 +303,16 @@ for (const typeName of ["WorkItemSubscriptionAgentLaunchRequest", "SubscriptionA
 for (const typeName of ["WorkItemSubscriptionAgentLaunchPayload", "SubscriptionAgentLaunchRequestView"]) {
   assertCondition(contractSource.includes(`interface ${typeName}`), `Shared contracts must include ${typeName}`, failures);
 }
+assertCondition(
+  contractSource.includes("mutationContract: Record<string, unknown>;"),
+  "Shared contracts must expose SubscriptionAgentLaunchRequestView.mutationContract",
+  failures,
+);
+assertCondition(
+  schemaSource.includes("mutationContract: dict[str, Any] = Field(default_factory=dict)"),
+  "Supervisor schemas must expose SubscriptionAgentLaunchRequestView.mutationContract",
+  failures,
+);
 
 assertCondition(
   apiSource.includes('"/work-items/{work_item_id}/runtime-evidence-export"'),
@@ -76,6 +332,41 @@ assertCondition(
 assertCondition(
   serviceSource.includes("_runtime_evidence_subscription_launch_summary(events)"),
   "Runtime evidence export service must include subscription launch summary",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("recordEvent=false is an evaluation-only path"),
+  "Subscription launch request evaluation must document recordEvent=false as read-only",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("if not record_event:"),
+  "Subscription launch request evaluation must keep recordEvent=false from mutating events or attempts",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("_subscription_agent_launch_existing_rejection_event("),
+  "Subscription launch request evaluation must deduplicate repeated rejection events by launch request identity",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("_subscription_agent_launch_rejection_fingerprint("),
+  "Subscription launch request evaluation must include rejection fingerprint in idempotency checks",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("_subscription_agent_launch_attempt_matches_request("),
+  "Subscription launch accepted fixture replay must verify existing attempt identity before treating it as idempotent",
+  failures,
+);
+assertCondition(
+  serviceSource.includes('"mode": "mutating" if record_event else "read_only_evaluation"'),
+  "Subscription launch mutation contract must expose read-only versus mutating mode",
+  failures,
+);
+assertCondition(
+  serviceSource.includes("accepted_artifact_only_fixture_evaluation_ready"),
+  "Subscription launch read-only accepted fixture evaluation must not report completed mutation status",
   failures,
 );
 for (const itemId of ["review-runtime-state", "review-authority-boundary", "review-git-backed-evidence"]) {

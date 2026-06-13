@@ -950,6 +950,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="dashboard-provider-raw-output-e2e",
+                label="Dashboard provider raw-output browser slice",
+                command="pnpm run test:e2e:dashboard:provider-raw-output",
+                status="optional_when_browser_stack_ready",
+                requiredFor=["provider-adjacent evidence display changes", "raw-output UI regression checks"],
+                evidence=[
+                    "Runs a focused Playwright slice with synthetic local-only provider raw-output fixtures.",
+                    "Asserts bounded metadata is visible while raw prompts, completions, provider payloads, secrets, and source copies stay out of DOM text.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="dashboard-e2e",
                 label="Dashboard browser coverage",
                 command="pnpm run test:e2e:dashboard",
@@ -1033,6 +1044,7 @@ class SupervisorService:
                     "dashboard-mobile-e2e",
                     "dashboard-managed-recipe-e2e",
                     "dashboard-managed-mobile-recipe-e2e",
+                    "dashboard-provider-raw-output-e2e",
                     "dashboard-e2e",
                     "dashboard-build",
                 ],
@@ -1476,6 +1488,19 @@ class SupervisorService:
                     "scripts/dashboard-e2e-runner.mjs owns supervisor and dashboard server lifecycle.",
                     "tests/e2e/supervisor-managed-mobile-recipe.spec.ts covers the mobile coverage intake template.",
                     "Uses repo-local database, uv cache, temp, and Playwright browser cache paths.",
+                ],
+            ),
+            DashboardE2ERunnerView(
+                runnerId="dashboard-provider-raw-output-e2e",
+                label="Provider raw-output UI regression slice",
+                command="pnpm run test:e2e:dashboard:provider-raw-output",
+                target="Work-item runtime evidence UI and report surfaces that must not render raw provider output.",
+                status="active",
+                evidence=[
+                    "scripts/run-provider-raw-output-ui-e2e.mjs declares the provider raw-output UI slice.",
+                    "tests/fixtures/provider-raw-output-ui/cases.json provides synthetic success, failure, empty, and oversized raw-output fixtures.",
+                    "tests/e2e/dashboard.spec.ts asserts bounded metadata appears and raw provider sentinels do not appear in DOM text.",
+                    "Uses the shared focused dashboard e2e lifecycle helper with repo-local cache defaults.",
                 ],
             ),
             DashboardE2ERunnerView(
@@ -5364,7 +5389,10 @@ class SupervisorService:
             return None
 
         attempts = await self.list_execution_attempts(session, work_item_id)
-        events = [self.to_event_view(event) for event in await self.list_work_item_events(session, work_item_id)]
+        events = [
+            self._runtime_evidence_export_event_view(self.to_event_view(event))
+            for event in await self.list_work_item_events(session, work_item_id)
+        ]
         related_reports = [
             "GET /supervisor/execution-configuration-checks",
             "GET /supervisor/threat-boundary",
@@ -5765,7 +5793,13 @@ class SupervisorService:
             "shellExecutionAttempted": bool(payload.get("shellExecutionAttempted", False)),
             "externalSendAttempted": bool(payload.get("externalSendAttempted", False)),
         }
-        verification_evidence = self._safe_dict(verification_event.payload.get("subscriptionLaunchVerification")) if verification_event else {}
+        verification_evidence = (
+            self._runtime_evidence_subscription_launch_verification_evidence(
+                self._safe_dict(verification_event.payload.get("subscriptionLaunchVerification"))
+            )
+            if verification_event
+            else {}
+        )
         if not verification_evidence and latest_event.eventType == "execution_attempt.subscription_launch_fixture_completed":
             approval_binding = self._safe_dict(payload.get("approvalBinding"))
             verification_evidence = {
@@ -5803,6 +5837,57 @@ class SupervisorService:
 
     def _safe_dict(self, value: object) -> dict[str, object]:
         return value if isinstance(value, dict) else {}
+
+    def _runtime_evidence_export_event_view(self, event: WorkflowEventView) -> WorkflowEventView:
+        return event.model_copy(update={"payload": self._runtime_evidence_export_safe_payload(event.payload)})
+
+    def _runtime_evidence_export_safe_payload(self, value: object) -> object:
+        sensitive_keys = {
+            "rawPrompt",
+            "rawCompletion",
+            "providerPayload",
+            "secretValue",
+            "sourceCopy",
+            "rawStdout",
+            "rawStderr",
+            "generatedPatch",
+        }
+        if isinstance(value, dict):
+            safe: dict[str, object] = {}
+            redacted = False
+            for key, child_value in value.items():
+                if key in sensitive_keys:
+                    redacted = True
+                    continue
+                safe[key] = self._runtime_evidence_export_safe_payload(child_value)
+            if redacted:
+                safe["redactedUnknownKeys"] = True
+            return safe
+        if isinstance(value, list):
+            return [self._runtime_evidence_export_safe_payload(item) for item in value]
+        return value
+
+    def _runtime_evidence_subscription_launch_verification_evidence(
+        self,
+        evidence: dict[str, object],
+    ) -> dict[str, object]:
+        allowed_keys = {
+            "attemptId",
+            "routeDecisionId",
+            "status",
+            "commandId",
+            "commandShape",
+            "summary",
+            "artifactRef",
+            "recoveryPath",
+            "rollbackStatus",
+            "rollbackReason",
+            "blockedReason",
+            "deliveryEligible",
+            "nextSafeAction",
+            "rawOutputRetained",
+        }
+        return {key: value for key, value in evidence.items() if key in allowed_keys}
 
     async def get_execution_readiness_report(self, session: AsyncSession) -> ExecutionReadinessReportView:
         configuration = self.get_execution_configuration_checks()
@@ -7571,8 +7656,12 @@ class SupervisorService:
             status = "rejected_rollback_triggered"
             readiness_status = "subscription_launch_rollback_triggered"
         elif accepted_fixture_path:
-            status = "accepted_artifact_only_fixture_completed"
-            readiness_status = "subscription_launch_fixture_completed"
+            if payload.recordEvent:
+                status = "accepted_artifact_only_fixture_completed"
+                readiness_status = "subscription_launch_fixture_completed"
+            else:
+                status = "accepted_artifact_only_fixture_evaluation_ready"
+                readiness_status = "subscription_launch_fixture_evaluation_ready"
         elif rejected_fields.get("targetStatus"):
             status = "rejected_target_not_enabled"
             readiness_status = "subscription_launch_approval_rejected"
@@ -7603,20 +7692,22 @@ class SupervisorService:
         if accepted_fixture_path:
             output_artifact_summary["artifactReferences"] = self._subscription_agent_launch_fixture_artifacts(attempt_id)
             output_artifact_summary["boundedByteCounts"] = {"stdout": 0, "stderr": 0, "generatedFiles": 2}
+        record_event = bool(payload.recordEvent)
+        mutation_attempted = bool(accepted_fixture_path and record_event)
         launch_request = SubscriptionAgentLaunchRequestView(
             launchRequestId=f"subscription-agent-launch-request-{preview.decision.decisionId}",
             workItemId=item.id,
             status=status,
             readinessStatus=readiness_status,
             approvalAccepted=accepted_fixture_path,
-            processLaunchAllowed=accepted_fixture_path,
-            executionAllowed=accepted_fixture_path,
+            processLaunchAllowed=mutation_attempted,
+            executionAllowed=mutation_attempted,
             commandExecutionAllowed=False,
             sourceMutationAllowed=False,
             providerCallsAllowed=False,
             networkAllowed=False,
             credentialAccessAllowed=False,
-            processLaunchAttempted=accepted_fixture_path,
+            processLaunchAttempted=mutation_attempted,
             shellExecutionAttempted=False,
             credentialAccessAttempted=False,
             externalSendAttempted=False,
@@ -7648,8 +7739,26 @@ class SupervisorService:
                 "networkAllowed": False,
                 "broadAutonomyAllowed": False,
             },
+            mutationContract=self._subscription_agent_launch_mutation_contract(
+                record_event=record_event,
+                accepted_fixture_path=accepted_fixture_path,
+                launch_request_id=f"subscription-agent-launch-request-{preview.decision.decisionId}",
+                attempt_id=attempt_id,
+            ),
         )
+        # recordEvent=false is an evaluation-only path; only true mutates event or attempt state.
+        if not record_event:
+            return launch_request
         if accepted_fixture_path:
+            existing_attempt = await session.get(ExecutionAttempt, attempt_id)
+            if existing_attempt:
+                if not self._subscription_agent_launch_attempt_matches_request(
+                    existing_attempt,
+                    launch_request,
+                    preview=preview,
+                ):
+                    raise ValueError(f"Subscription-agent launch attempt {attempt_id} exists with different evidence.")
+                return launch_request
             await self._record_subscription_agent_launch_fixture_attempt(
                 session,
                 item,
@@ -7660,10 +7769,135 @@ class SupervisorService:
             await session.commit()
             await session.refresh(item)
         else:
+            existing_rejection = await self._subscription_agent_launch_existing_rejection_event(
+                session,
+                item.id,
+                launch_request,
+            )
+            if existing_rejection:
+                return launch_request
             await self._record_subscription_agent_launch_rejection_event(session, item, launch_request)
             await session.commit()
             await session.refresh(item)
         return launch_request
+
+    async def _subscription_agent_launch_existing_rejection_event(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        launch_request: SubscriptionAgentLaunchRequestView,
+    ) -> WorkflowEvent | None:
+        expected_fingerprint = self._subscription_agent_launch_rejection_fingerprint(launch_request)
+        result = await session.execute(
+            select(WorkflowEvent)
+            .where(
+                WorkflowEvent.work_item_id == work_item_id,
+                WorkflowEvent.event_type == "routing.subscription_agent_launch_rejected",
+            )
+            .order_by(WorkflowEvent.created_at.desc())
+        )
+        for event in result.scalars():
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            if (
+                payload.get("launchRequestId") == launch_request.launchRequestId
+                and self._subscription_agent_launch_rejection_fingerprint_from_payload(payload) == expected_fingerprint
+            ):
+                return event
+        return None
+
+    def _subscription_agent_launch_mutation_contract(
+        self,
+        *,
+        record_event: bool,
+        accepted_fixture_path: bool,
+        launch_request_id: str,
+        attempt_id: str,
+    ) -> dict[str, object]:
+        return {
+            "recordEvent": record_event,
+            "mode": "mutating" if record_event else "read_only_evaluation",
+            "launchRequestId": launch_request_id,
+            "eventIdentity": {
+                "rejection": launch_request_id,
+                "acceptedFixtureAttempt": attempt_id,
+            },
+            "immutableFields": [
+                "workItemId",
+                "routeDecisionId",
+                "workerId",
+                "lane",
+                "authorityMode",
+                "workspacePlanId",
+                "launchPolicyId",
+                "targetId",
+                "commandTemplateId",
+                "approvalTimestamp",
+                "approvalExpiry",
+                "permissionEnvelope",
+            ],
+            "mutableFields": [],
+            "derivedStateRecomputed": [
+                "status",
+                "readinessStatus",
+                "blockedReasonIds",
+                "nextSafeAction",
+                "approvalBinding",
+                "outputArtifactSummary",
+                "safetyFlags",
+            ],
+            "replayBehavior": (
+                "same accepted fixture attempt id is a stable no-op"
+                if accepted_fixture_path
+                else "same rejection fingerprint is a stable no-op"
+            ),
+            "ordering": "workflow event createdAt order; accepted fixture lifecycle eventRefs preserve explicit event order",
+            "failureBehavior": "ambiguous, stale, mismatched, partial, or out-of-order mutation fails closed without readiness advancement",
+            "authorityBoundary": "metadata_only_no_provider_credential_source_mutation_retry_pr_merge_cleanup_or_failed_check_bypass",
+        }
+
+    def _subscription_agent_launch_attempt_matches_request(
+        self,
+        attempt: ExecutionAttempt,
+        launch_request: SubscriptionAgentLaunchRequestView,
+        *,
+        preview: RoutingPreviewView,
+    ) -> bool:
+        return (
+            attempt.work_item_id == launch_request.workItemId
+            and attempt.route_decision_id == preview.decision.decisionId
+            and attempt.worker_id == str(launch_request.approvalBinding.get("workerId"))
+            and attempt.lane == str(launch_request.approvalBinding.get("lane"))
+            and attempt.authority_mode == str(launch_request.approvalBinding.get("authorityMode"))
+            and attempt.status == ExecutionAttemptStatus.COMPLETED.value
+            and bool(attempt.event_refs_json)
+            and bool(attempt.artifact_refs_json)
+        )
+
+    def _subscription_agent_launch_rejection_fingerprint(
+        self,
+        launch_request: SubscriptionAgentLaunchRequestView,
+    ) -> dict[str, object]:
+        return {
+            "status": launch_request.status,
+            "readinessStatus": launch_request.readinessStatus,
+            "missingEnvelopeFields": list(launch_request.missingEnvelopeFields),
+            "rejectedEnvelopeFields": dict(launch_request.rejectedEnvelopeFields),
+            "staleEnvelopeFields": list(launch_request.staleEnvelopeFields),
+            "blockedReasonIds": list(launch_request.blockedReasonIds),
+        }
+
+    def _subscription_agent_launch_rejection_fingerprint_from_payload(
+        self,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "status": payload.get("status"),
+            "readinessStatus": payload.get("readinessStatus"),
+            "missingEnvelopeFields": list(payload.get("missingEnvelopeFields") or []),
+            "rejectedEnvelopeFields": dict(payload.get("rejectedEnvelopeFields") or {}),
+            "staleEnvelopeFields": list(payload.get("staleEnvelopeFields") or []),
+            "blockedReasonIds": list(payload.get("blockedReasonIds") or []),
+        }
 
     async def _subscription_launch_rollback_reason(self, session: AsyncSession, work_item_id: str) -> str | None:
         result = await session.execute(
@@ -7894,6 +8128,7 @@ class SupervisorService:
                 "credentialAccessAttempted": False,
                 "externalSendAttempted": False,
                 "safetyFlags": launch_request.safetyFlags,
+                "mutationContract": launch_request.mutationContract,
             },
         )
 
@@ -8127,6 +8362,7 @@ class SupervisorService:
                 "credentialAccessAttempted": launch_request.credentialAccessAttempted,
                 "externalSendAttempted": launch_request.externalSendAttempted,
                 "safetyFlags": launch_request.safetyFlags,
+                "mutationContract": launch_request.mutationContract,
             },
         )
 

@@ -1,0 +1,70 @@
+[
+  {
+    "caseId": "provider-success",
+    "title": "Provider raw output success fixture",
+    "status": "provider_success_metadata_only",
+    "readinessStatus": "provider_output_redacted",
+    "artifactKind": "provider_success_summary",
+    "blockedReason": "provider_raw_output_excluded",
+    "recoveryPath": "Review bounded provider success summary artifact.",
+    "nextSafeAction": "Keep raw provider output excluded from dashboard evidence.",
+    "rawSentinels": [
+      "RAW_PROMPT_SUCCESS_SENTINEL_DO_NOT_RENDER",
+      "RAW_COMPLETION_SUCCESS_SENTINEL_DO_NOT_RENDER",
+      "PROVIDER_PAYLOAD_SUCCESS_SENTINEL_DO_NOT_RENDER",
+      "SECRET_SUCCESS_SENTINEL_DO_NOT_RENDER",
+      "SOURCE_COPY_SUCCESS_SENTINEL_DO_NOT_RENDER"
+    ]
+  },
+  {
+    "caseId": "provider-failure",
+    "title": "Provider raw output failure fixture",
+    "status": "provider_failure_metadata_only",
+    "readinessStatus": "provider_failure_redacted",
+    "artifactKind": "provider_failure_summary",
+    "blockedReason": "provider_failure_raw_output_excluded",
+    "recoveryPath": "Inspect bounded failure metadata before retry planning.",
+    "nextSafeAction": "Preserve failure evidence as metadata only.",
+    "rawSentinels": [
+      "RAW_PROMPT_FAILURE_SENTINEL_DO_NOT_RENDER",
+      "RAW_COMPLETION_FAILURE_SENTINEL_DO_NOT_RENDER",
+      "PROVIDER_PAYLOAD_FAILURE_SENTINEL_DO_NOT_RENDER",
+      "SECRET_FAILURE_SENTINEL_DO_NOT_RENDER",
+      "SOURCE_COPY_FAILURE_SENTINEL_DO_NOT_RENDER"
+    ]
+  },
+  {
+    "caseId": "provider-empty",
+    "title": "Provider raw output empty fixture",
+    "status": "provider_empty_metadata_only",
+    "readinessStatus": "provider_empty_output_redacted",
+    "artifactKind": "provider_empty_output_summary",
+    "blockedReason": "provider_empty_raw_output_excluded",
+    "recoveryPath": "Review empty-output metadata without provider payload retention.",
+    "nextSafeAction": "Treat empty provider output as metadata-only evidence.",
+    "rawSentinels": [
+      "RAW_PROMPT_EMPTY_SENTINEL_DO_NOT_RENDER",
+      "RAW_COMPLETION_EMPTY_SENTINEL_DO_NOT_RENDER",
+      "PROVIDER_PAYLOAD_EMPTY_SENTINEL_DO_NOT_RENDER",
+      "SECRET_EMPTY_SENTINEL_DO_NOT_RENDER",
+      "SOURCE_COPY_EMPTY_SENTINEL_DO_NOT_RENDER"
+    ]
+  },
+  {
+    "caseId": "provider-oversized",
+    "title": "Provider raw output oversized fixture",
+    "status": "provider_oversized_metadata_only",
+    "readinessStatus": "provider_oversized_output_truncated",
+    "artifactKind": "provider_oversized_output_summary",
+    "blockedReason": "provider_oversized_raw_output_excluded",
+    "recoveryPath": "Review truncation metadata and artifact reference only.",
+    "nextSafeAction": "Do not display oversized provider output in dashboard evidence.",
+    "rawSentinels": [
+      "RAW_PROMPT_OVERSIZED_SENTINEL_DO_NOT_RENDER",
+      "RAW_COMPLETION_OVERSIZED_SENTINEL_DO_NOT_RENDER",
+      "PROVIDER_PAYLOAD_OVERSIZED_SENTINEL_DO_NOT_RENDER",
+      "SECRET_OVERSIZED_SENTINEL_DO_NOT_RENDER",
+      "SOURCE_COPY_OVERSIZED_SENTINEL_DO_NOT_RENDER"
+    ]
+  }
+]
