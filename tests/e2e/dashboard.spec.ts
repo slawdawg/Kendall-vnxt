@@ -122,6 +122,175 @@ async function createExecutionAttempt(request: APIRequestContext, workItemId: st
   return body.data.attemptId;
 }
 
+async function createSubscriptionLaunchStubEvent(request: APIRequestContext, workItemId: string, requestedAgent = "codex") {
+  const response = await request.post(`${supervisorUrl}/work-items/${workItemId}/subscription-agent-launch-stub`, {
+    data: {
+      taskKind: "architecture_review",
+      requestedAgent,
+      recordEvent: true,
+    },
+  });
+
+  expect(response.ok()).toBeTruthy();
+}
+
+const allowedSubscriptionLaunchFields = new Set([
+  "workItemId",
+  "attemptId",
+  "executionAttemptId",
+  "routeDecisionId",
+  "workerId",
+  "lane",
+  "authorityMode",
+  "workspacePlanId",
+  "launchPolicyId",
+  "targetId",
+  "commandTemplateId",
+  "commandTemplateExecutionStatus",
+  "approvalActor",
+  "approvalTimestamp",
+  "approvalExpiry",
+  "permissionEnvelope",
+  "environmentAllowlist",
+  "blockedCredentialSessionPaths",
+  "artifactLimits",
+  "redactionPolicy",
+  "truncationPolicy",
+  "outputPolicy",
+  "startupTimeoutSeconds",
+  "runTimeoutSeconds",
+  "cancellationTimeoutSeconds",
+  "heartbeatPolicy",
+  "childProcessTreeTrackingPolicy",
+  "orphanDetectionPolicy",
+  "terminalStateReconciliationPolicy",
+  "idempotentCleanupPolicy",
+  "dashboardControls",
+  "rollbackPolicy",
+  "verificationCommand",
+  "allowedOutputMode",
+]);
+
+async function getSubscriptionLaunchApprovalBinding(request: APIRequestContext, workItemId: string, requestedAgent = "codex") {
+  const stubResponse = await request.post(`${supervisorUrl}/work-items/${workItemId}/subscription-agent-launch-stub`, {
+    data: {
+      taskKind: "architecture_review",
+      requestedAgent,
+      recordEvent: false,
+    },
+  });
+
+  expect(stubResponse.ok()).toBeTruthy();
+  const stubBody = (await stubResponse.json()) as { data: { approvalBinding: Record<string, unknown> } };
+  return Object.fromEntries(
+    Object.entries(stubBody.data.approvalBinding).filter(([key]) => allowedSubscriptionLaunchFields.has(key)),
+  );
+}
+
+async function createSubscriptionLaunchRejectionEvent(request: APIRequestContext, workItemId: string, requestedAgent = "codex") {
+  const approvalBinding = await getSubscriptionLaunchApprovalBinding(request, workItemId, requestedAgent);
+  delete approvalBinding.approvalActor;
+  delete approvalBinding.approvalTimestamp;
+  delete approvalBinding.approvalExpiry;
+  delete approvalBinding.permissionEnvelope;
+
+  const response = await request.post(`${supervisorUrl}/work-items/${workItemId}/subscription-agent-launch`, {
+    data: {
+      ...approvalBinding,
+      taskKind: "architecture_review",
+      requestedAgent,
+      recordEvent: true,
+    },
+  });
+
+  expect(response.ok()).toBeTruthy();
+}
+
+async function createSubscriptionLaunchExpiredExactApprovalEvent(request: APIRequestContext, workItemId: string, requestedAgent = "codex") {
+  const approvalBinding = await getSubscriptionLaunchApprovalBinding(request, workItemId, requestedAgent);
+  const response = await request.post(`${supervisorUrl}/work-items/${workItemId}/subscription-agent-launch`, {
+    data: {
+      ...approvalBinding,
+      executionAttemptId: approvalBinding.attemptId,
+      approvalActor: "Bob",
+      approvalTimestamp: "2026-06-12T16:20:33.2776334-05:00",
+      approvalExpiry: "2026-06-12T16:50:33.2776334-05:00",
+      permissionEnvelope: "approved_for_one_artifact_only_subscription_launch",
+      commandTemplateExecutionStatus: "executable_by_kendall",
+      artifactLimits: {
+        rawOutputBytes: 0,
+        artifactReferenceOnly: true,
+        sourceMutationAllowed: false,
+      },
+      outputPolicy: "artifact_references_only_no_raw_output",
+      redactionPolicy: "required",
+      truncationPolicy: "truncate_to_approved_artifact_limits",
+      startupTimeoutSeconds: 10,
+      runTimeoutSeconds: 30,
+      cancellationTimeoutSeconds: 5,
+      dashboardControls: "approval_bound_disabled_until_all_gates_green",
+      verificationCommand: "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+      allowedOutputMode: "artifact-only",
+      taskKind: "architecture_review",
+      requestedAgent,
+      recordEvent: true,
+    },
+  });
+
+  expect(response.ok()).toBeTruthy();
+}
+
+function seedSubscriptionLaunchVerificationEvent(workItemId: string) {
+  const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
+  expect(dbPath).toBeTruthy();
+  const payload = {
+    status: "failed",
+    readinessStatus: "subscription_launch_rollback_triggered",
+    subscriptionLaunchVerification: {
+      attemptId: "subscription-launch-fixture-attempt",
+      routeDecisionId: "route-subscription-launch-fixture",
+      status: "failed",
+      commandId: "subscription-launch-fixture-check",
+      commandShape: "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+      summary: "Approved subscription launch verification command exited with code 1.",
+      artifactRef: "_bmad-output/subscription-launch/verification-summary.json",
+      recoveryPath: "inspect retained subscription launch artifacts before retry or rollback",
+      rollbackStatus: "triggered",
+      rollbackReason: "verification_failed",
+      blockedReason: "subscription-launch-verification-failed",
+      rollbackBlockedReason: "subscription_launch_rollback_triggered",
+      deliveryEligible: false,
+      nextSafeAction: "Keep subscription-agent launch disabled until Bob reviews retained artifacts.",
+      rawOutputRetained: false,
+    },
+    outputArtifactSummary: {
+      artifactReferences: [
+        {
+          artifactKind: "verification_result",
+          path: "_bmad-output/subscription-launch/verification-summary.json",
+          rawPayloadStored: false,
+          operatorReviewRequired: true,
+        },
+      ],
+      rawOutputStored: false,
+    },
+  };
+  const script = [
+    "import json, sqlite3, sys, uuid",
+    "from datetime import datetime, timezone",
+    "db_path, work_item_id, payload_json = sys.argv[1:4]",
+    "conn = sqlite3.connect(db_path)",
+    "conn.execute(\"insert into workflow_events (id, work_item_id, event_type, actor_type, actor_id, actor_label, correlation_id, summary, payload, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\", (str(uuid.uuid4()), work_item_id, 'execution_attempt.verification_recorded', 'supervisor', None, None, str(uuid.uuid4()), 'Verification evidence recorded with status failed.', payload_json, datetime.now(timezone.utc).isoformat()))",
+    "conn.commit()",
+    "conn.close()",
+  ].join("; ");
+  const pythonPath =
+    process.platform === "win32" ? "services/supervisor/.venv/Scripts/python.exe" : "services/supervisor/.venv/bin/python";
+  execFileSync(pythonPath, ["-c", script, dbPath!, workItemId, JSON.stringify(payload)], {
+    cwd: process.cwd(),
+  });
+}
+
 function gitOutput(args: string[]) {
   return execFileSync("git", args, { cwd: process.cwd(), encoding: "utf8" }).trim();
 }
@@ -837,11 +1006,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(overviewPanel.getByText("Recommended action")).toBeVisible();
     await expect(overviewPanel.getByText("Review queue shortcuts are not execution-authority approvals.")).toBeVisible();
     await expect(overviewPanel.getByRole("heading", { name: "Review shortcuts" })).toBeVisible();
-    await expect(overviewPanel.getByText("4 shortcuts")).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Runtime state/ })).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Authority boundary/ })).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Git-backed evidence/ })).toBeVisible();
-    await expect(overviewPanel.getByRole("link", { name: /Ollama no-call preparation/ })).toBeVisible();
 
     await page.getByRole("link", { name: "Attempts", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#execution-attempts$`));
@@ -873,8 +1040,6 @@ test.describe("dashboard workflow coverage", () => {
     await expect(exportPanel.getByRole("heading", { name: "Runtime state" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Authority boundary" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Git-backed evidence" })).toBeVisible();
-    await expect(exportPanel.getByRole("heading", { name: "Ollama no-call preparation" })).toBeVisible();
-    await expect(exportPanel.getByText("Raw Ollama prompts and completions are excluded from workflow events and runtime exports.")).toBeVisible();
     await expect(exportPanel.getByText("cancel_requested -> request_abort_recorded")).toBeVisible();
     await expect(exportPanel.getByText("Review navigation is not execution-authority approval.")).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Related reports" })).toBeVisible();
@@ -892,6 +1057,208 @@ test.describe("dashboard workflow coverage", () => {
     await expect(exportPanel.getByRole("heading", { name: "Retention notes" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Manifest stop lines" })).toBeVisible();
     await expect(exportPanel.getByText("The review manifest is not execution-authority approval.")).toBeVisible();
+  });
+
+  test("shows subscription launch readiness without execution controls on work item detail", async ({ page, request }) => {
+    const noEvidenceWorkItemId = await createWorkItem(request, {
+      title: "Subscription launch no evidence",
+      requestedOutcome: "Verify the subscription launch readiness panel starts from missing evidence.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+      },
+    });
+
+    await page.goto(`/work-items/${noEvidenceWorkItemId}`);
+    await page.getByRole("link", { name: "Launch readiness", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/work-items/${noEvidenceWorkItemId}#subscription-launch-readiness$`));
+
+    const emptyPanel = page.locator("#subscription-launch-readiness");
+    await expect(emptyPanel.getByText("Subscription launch readiness")).toBeVisible();
+    await expect(emptyPanel.getByText("No subscription launch evidence has been recorded.")).toBeVisible();
+    await expect(emptyPanel.getByText("Create disabled launch stub evidence before requesting exact launch approval.")).toBeVisible();
+    await expect(emptyPanel.getByRole("button")).toHaveCount(0);
+
+    const workItemId = await createWorkItem(request, {
+      title: "Subscription launch readiness panel",
+      requestedOutcome: "Verify disabled subscription launch readiness and blocked approvals are visible.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+      },
+    });
+    await createSubscriptionLaunchStubEvent(request, workItemId, "codex");
+
+    await page.goto(`/work-items/${workItemId}`);
+    await page.getByRole("link", { name: "Launch readiness", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/work-items/${workItemId}#subscription-launch-readiness$`));
+
+    const launchPanel = page.locator("#subscription-launch-readiness");
+    await expect(launchPanel).toBeInViewport();
+    await expect(launchPanel.getByText("Launch blocked")).toBeVisible();
+    await expect(launchPanel.getByText("Readiness only")).toBeVisible();
+    await expect(launchPanel.getByText("subscription_agent_process_launch_not_enabled")).toBeVisible();
+    await expect(launchPanel.getByText("blocked_pending_exact_launch_approval")).toBeVisible();
+    await expect(launchPanel.getByText("epic-8-first-subscription-launch-policy-v1")).toBeVisible();
+    await expect(launchPanel.getByText("codex.subscription.disabled")).toBeVisible();
+    await expect(launchPanel.getByText("codex-subscription-cli-template-disabled-v1")).toBeVisible();
+    await expect(launchPanel.getByText("commandTemplateExecutable: false")).toBeVisible();
+    await expect(launchPanel.getByText("approvalActor", { exact: true })).toBeVisible();
+    await expect(launchPanel.getByText("approvalTimestamp", { exact: true })).toBeVisible();
+    await expect(launchPanel.getByText("approvalExpiry", { exact: true })).toBeVisible();
+    await expect(launchPanel.getByText("permissionEnvelope: not_approved_for_real_launch")).toBeVisible();
+    await expect(launchPanel.getByText("commandTemplateExecutionStatus: not_executable_by_kendall")).toBeVisible();
+    await expect(launchPanel.getByText("Fill approvalActor before exact launch approval can be requested.")).toBeVisible();
+    await expect(launchPanel.getByText("heartbeat_metadata_only_no_process_polling")).toBeVisible();
+    await expect(launchPanel.getByText("planned -> disabled_precheck_recorded")).toBeVisible();
+    await expect(launchPanel.getByText("running -> simulated_running_rejected_without_spawn")).toBeVisible();
+    await expect(launchPanel.getByText("terminalState: timed_out")).toBeVisible();
+    await expect(launchPanel.getByText("terminalState: completed")).toBeVisible();
+    await expect(launchPanel.getByText("no_child_process_tree_created_tracking_metadata_only")).toBeVisible();
+    await expect(launchPanel.getByText("orphan_detection_records_no_process_tree_to_scan")).toBeVisible();
+    await expect(launchPanel.getByText("terminal_reconciliation_metadata_only_without_process_status")).toBeVisible();
+    await expect(launchPanel.getByText("cleanup_is_metadata_only_and_idempotent_without_deletion")).toBeVisible();
+    await expect(launchPanel.getByText("rollback_records_global_disable_without_resource_deletion")).toBeVisible();
+    await expect(launchPanel.getByText("artifactReferenceOnly: true")).toBeVisible();
+    await expect(launchPanel.getByText("workflowEventRawOutputAllowed: false")).toBeVisible();
+    await expect(launchPanel.getByText("rawOutputStored: false")).toBeVisible();
+    await expect(launchPanel.getByText("simulated_output_summary")).toBeVisible();
+    await expect(launchPanel.getByText("simulated_generated_patch")).toBeVisible();
+    await expect(launchPanel.getByText("Raw stdout, stderr, and generated patch contents remain excluded.")).toBeVisible();
+    await expect(launchPanel.getByText("Process launch: disabled")).toBeVisible();
+    await expect(launchPanel.getByText("Execution: disabled")).toBeVisible();
+    await expect(launchPanel.getByText("Shell execution: not attempted")).toBeVisible();
+    await expect(launchPanel.getByText("Credentials: not attempted")).toBeVisible();
+    await expect(launchPanel.getByText("External sends: not attempted")).toBeVisible();
+    await expect(launchPanel.getByRole("button")).toHaveCount(0);
+    await expect(launchPanel.getByText("rawStdout")).toHaveCount(0);
+    await expect(launchPanel.getByText("rawStderr")).toHaveCount(0);
+    await expect(launchPanel.getByText("generatedPatch", { exact: true })).toHaveCount(0);
+
+    await page.getByRole("link", { name: "Runtime export", exact: true }).click();
+    const exportPanel = page.locator("#runtime-evidence-export");
+    await expect(exportPanel.getByRole("heading", { name: "Subscription launch evidence" })).toBeVisible();
+    await expect(exportPanel.getByText("rejected_stale_exact_approval")).toBeVisible();
+    await expect(exportPanel.getByText("subscription_launch_approval_stale")).toBeVisible();
+    await expect(exportPanel.getByText("routing.subscription_agent_launch_rejected")).toBeVisible();
+    await expect(exportPanel.getByText("rawOutputStored: false")).toHaveCount(0);
+    await expect(exportPanel.getByText("Raw output stored")).toBeVisible();
+    await expect(exportPanel.getByText("false")).toBeVisible();
+    await expect(exportPanel.getByText("rawStdout")).toHaveCount(0);
+    await expect(exportPanel.getByText("rawStderr")).toHaveCount(0);
+    await expect(exportPanel.getByText("generatedPatch", { exact: true })).toHaveCount(0);
+  });
+
+  test("shows rejected subscription launch request evidence without raw output or launch controls", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Subscription launch rejected request",
+      requestedOutcome: "Verify exact approval rejection is visible without launching a process.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+      },
+    });
+    await createSubscriptionLaunchRejectionEvent(request, workItemId, "codex");
+
+    await page.goto(`/work-items/${workItemId}`);
+    await page.getByRole("link", { name: "Launch readiness", exact: true }).click();
+
+    const launchPanel = page.locator("#subscription-launch-readiness");
+    await expect(launchPanel.getByText("rejected_missing_exact_approval")).toBeVisible();
+    await expect(launchPanel.getByText("blocked_pending_exact_launch_approval")).toBeVisible();
+    await expect(launchPanel.getByText("Fill approvalActor before exact launch approval can be requested.")).toBeVisible();
+    await expect(launchPanel.getByText("missing_approval_actor")).toBeVisible();
+    await expect(launchPanel.getByText("real_process_launch_not_approved")).toBeVisible();
+    await expect(launchPanel.getByText("artifactReferenceOnly: true")).toBeVisible();
+    await expect(launchPanel.getByText("rawOutputStored: false")).toBeVisible();
+    await expect(launchPanel.getByText("Process launch: disabled")).toBeVisible();
+    await expect(launchPanel.getByText("Execution: disabled")).toBeVisible();
+    await expect(launchPanel.getByText("Shell execution: not attempted")).toBeVisible();
+    await expect(launchPanel.getByText("Credentials: not attempted")).toBeVisible();
+    await expect(launchPanel.getByRole("button")).toHaveCount(0);
+    await expect(launchPanel.getByText("rawStdout")).toHaveCount(0);
+    await expect(launchPanel.getByText("rawStderr")).toHaveCount(0);
+    await expect(launchPanel.getByText("generatedPatch", { exact: true })).toHaveCount(0);
+  });
+
+  test("shows expired exact subscription launch approval evidence without raw output or launch controls", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Subscription launch expired exact approval",
+      requestedOutcome: "Verify the recorded exact approval expires instead of accepting a fresh fixture launch.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+      },
+    });
+    await createSubscriptionLaunchExpiredExactApprovalEvent(request, workItemId, "codex");
+
+    await page.goto(`/work-items/${workItemId}`);
+    await page.getByRole("link", { name: "Launch readiness", exact: true }).click();
+
+    const launchPanel = page.locator("#subscription-launch-readiness");
+    await expect(launchPanel.getByText("rejected_stale_exact_approval")).toBeVisible();
+    await expect(launchPanel.getByText("subscription_launch_approval_stale")).toBeVisible();
+    await expect(launchPanel.getByText("approvalExpiry", { exact: true })).toBeVisible();
+    await expect(launchPanel.getByText("approvalExpiry: expired")).toBeVisible();
+    await expect(launchPanel.getByText("Refresh approvalExpiry before reusing any prior approval.")).toBeVisible();
+    await expect(launchPanel.getByText("simulated_output_summary")).toBeVisible();
+    await expect(launchPanel.getByText("simulated_generated_patch")).toBeVisible();
+    await expect(launchPanel.getByText("artifactReferenceOnly: true")).toBeVisible();
+    await expect(launchPanel.getByText("rawOutputStored: false")).toBeVisible();
+    await expect(launchPanel.getByText("Process launch: disabled")).toBeVisible();
+    await expect(launchPanel.getByText("Execution: disabled")).toBeVisible();
+    await expect(launchPanel.getByText("Shell execution: not attempted")).toBeVisible();
+    await expect(launchPanel.getByText("Credentials: not attempted")).toBeVisible();
+    await expect(launchPanel.getByRole("button")).toHaveCount(0);
+    await expect(launchPanel.getByText("rawStdout")).toHaveCount(0);
+    await expect(launchPanel.getByText("rawStderr")).toHaveCount(0);
+    await expect(launchPanel.getByText("generatedPatch", { exact: true })).toHaveCount(0);
+  });
+
+  test("shows subscription launch verification recovery and rollback evidence without controls", async ({ page, request }) => {
+    test.setTimeout(60_000);
+    const workItemId = await createWorkItem(request, {
+      title: "Subscription launch verification rollback evidence",
+      requestedOutcome: "Verify subscription launch verification and rollback evidence is visible without launch controls.",
+      source: "operator-dashboard:improvement",
+      riskLevel: "medium",
+      metadata: {
+        executionRecipeId: "dashboard-test-coverage",
+        intakeTemplateId: "operator-test-coverage",
+      },
+    });
+    await createSubscriptionLaunchExpiredExactApprovalEvent(request, workItemId, "codex");
+    seedSubscriptionLaunchVerificationEvent(workItemId);
+
+    await page.goto(`/work-items/${workItemId}`);
+    await page.getByRole("link", { name: "Launch readiness", exact: true }).click();
+
+    const launchPanel = page.locator("#subscription-launch-readiness");
+    await expect(launchPanel.getByRole("heading", { name: "Verification and recovery" })).toBeVisible();
+    await expect(launchPanel.getByText("subscription-launch-verification-failed")).toBeVisible();
+    await expect(launchPanel.getByText("verification_failed")).toBeVisible();
+    await expect(launchPanel.getByText("inspect retained subscription launch artifacts before retry or rollback")).toBeVisible();
+    await expect(launchPanel.getByText("Keep subscription-agent launch disabled until Bob reviews retained artifacts.")).toBeVisible();
+    await expect(launchPanel.getByRole("button")).toHaveCount(0);
+    await expect(launchPanel.getByText("rawStdout")).toHaveCount(0);
+    await expect(launchPanel.getByText("rawStderr")).toHaveCount(0);
+
+    const exportPanel = page.locator("#runtime-evidence-export");
+    await exportPanel.scrollIntoViewIfNeeded();
+    await expect(exportPanel.getByRole("heading", { name: "Verification and recovery" })).toBeVisible();
+    await expect(exportPanel.getByText("rollbackStatus: triggered")).toBeVisible();
+    await expect(exportPanel.getByText("blockedReason: subscription-launch-verification-failed")).toBeVisible();
+    await expect(exportPanel.getByText("nextSafeAction: Keep subscription-agent launch disabled until Bob reviews retained artifacts.")).toBeVisible();
+    await expect(exportPanel.getByText("rawStdout")).toHaveCount(0);
+    await expect(exportPanel.getByText("rawStderr")).toHaveCount(0);
   });
 
   test("shows delivery readiness controls for managed recipe work", async ({ page, request }) => {

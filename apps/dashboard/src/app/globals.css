@@ -14,13 +14,15 @@
   --accent-2: #f09a61;
   --muted: #9fb0ab;
   --warn: #ff8d6a;
+  --font-display: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-code: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-display);
-  --font-mono: var(--font-mono);
+  --font-mono: var(--font-code);
 }
 
 body {

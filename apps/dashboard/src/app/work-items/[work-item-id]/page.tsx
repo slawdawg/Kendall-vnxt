@@ -13,6 +13,7 @@ import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-pane
 import { RoutingPreviewPanel } from "../../../components/routing-preview-panel";
 import { RuntimeEvidenceExportPanel } from "../../../components/runtime-evidence-export-panel";
 import { Shell } from "../../../components/shell";
+import { SubscriptionLaunchReadinessPanel } from "../../../components/subscription-launch-readiness-panel";
 import { WorkItemActions } from "../../../components/work-item-actions";
 import { WorkItemHistory } from "../../../components/work-item-history";
 import { WorkItemRetryHistory } from "../../../components/work-item-retry-history";
@@ -150,6 +151,12 @@ export default async function WorkItemDetailPage({
               Local check
             </a>
             <a
+              href="#subscription-launch-readiness"
+              className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Launch readiness
+            </a>
+            <a
               href="#execution-attempts"
               className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
@@ -194,6 +201,7 @@ export default async function WorkItemDetailPage({
             events={events}
           />
           <GreenGateReadinessPanel report={trustedDeliveryReport} attempts={executionAttempts} />
+          <SubscriptionLaunchReadinessPanel events={events} runtimeEvidenceExport={runtimeEvidenceExport} />
           <RoutingPreviewPanel preview={routingPreview} />
           <LocalEvidencePanel workItemId={item.id} />
           <ExecutionAttemptEvidencePanel attempts={executionAttempts} />

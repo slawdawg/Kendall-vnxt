@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supervisor.api.schemas import (
@@ -84,6 +85,7 @@ from supervisor.api.schemas import (
     RuntimeEvidenceReviewReportView,
     RuntimeEvidenceReviewWorkItemView,
     RuntimeEvidenceExportSafetyView,
+    RuntimeEvidenceSubscriptionLaunchView,
     RuntimeEvidenceExportView,
     SafeDevelopmentBacklogItemView,
     SafeDevelopmentBacklogReportView,
@@ -92,6 +94,7 @@ from supervisor.api.schemas import (
     RoutingOverrideView,
     RoutingPreviewView,
     RoutingProfileView,
+    SubscriptionAgentLaunchRequestView,
     SubscriptionAgentLaunchStubView,
     SubscriptionHandoffEvidenceView,
     SubscriptionHandoffPackageView,
@@ -125,6 +128,7 @@ from supervisor.api.schemas import (
     WorkItemRoutingPreviewRequest,
     WorkItemRoutingOverrideRequest,
     WorkItemSupervisedCodexLaunchRequest,
+    WorkItemSubscriptionAgentLaunchRequest,
     WorkItemSubscriptionAgentLaunchStubRequest,
     WorkItemSubscriptionHandoffRequest,
     WorkItemVerificationEvidenceRequest,
@@ -258,6 +262,47 @@ class SupervisorService:
         TaskKind.SIMPLE_PATCH_DRAFT.value,
         TaskKind.SUBSCRIPTION_HANDOFF_PACKAGE.value,
     }
+    _SUBSCRIPTION_AGENT_LAUNCH_REQUIRED_FIELDS = (
+        "workItemId",
+        "executionAttemptId",
+        "routeDecisionId",
+        "workerId",
+        "lane",
+        "authorityMode",
+        "workspacePlanId",
+        "launchPolicyId",
+        "targetId",
+        "commandTemplateId",
+        "commandTemplateExecutionStatus",
+        "approvalActor",
+        "approvalTimestamp",
+        "approvalExpiry",
+        "permissionEnvelope",
+        "environmentAllowlist",
+        "blockedCredentialSessionPaths",
+        "artifactLimits",
+        "redactionPolicy",
+        "truncationPolicy",
+        "outputPolicy",
+        "startupTimeoutSeconds",
+        "runTimeoutSeconds",
+        "cancellationTimeoutSeconds",
+        "heartbeatPolicy",
+        "childProcessTreeTrackingPolicy",
+        "orphanDetectionPolicy",
+        "terminalStateReconciliationPolicy",
+        "idempotentCleanupPolicy",
+        "dashboardControls",
+        "rollbackPolicy",
+        "verificationCommand",
+        "allowedOutputMode",
+    )
+    _STORY_8_5_ACCEPTED_APPROVAL_TIMESTAMP = datetime.fromisoformat(
+        "2026-06-12T16:20:33.2776334-05:00"
+    ).astimezone(timezone.utc)
+    _STORY_8_5_ACCEPTED_APPROVAL_EXPIRY = datetime.fromisoformat(
+        "2026-06-12T16:50:33.2776334-05:00"
+    ).astimezone(timezone.utc)
 
     def __init__(self, settings: Settings, bus: EventBus) -> None:
         self.settings = settings
@@ -5461,6 +5506,7 @@ class SupervisorService:
                 ],
             ),
             safety=RuntimeEvidenceExportSafetyView(),
+            subscriptionLaunch=self._runtime_evidence_subscription_launch_summary(events),
             reviewManifest=RuntimeEvidenceReviewManifestView(
                 manifestId=f"runtime-evidence-review-manifest-{work_item_id}",
                 summary="Review manifest for export contents, evidence counts, retention boundaries, and authority stop lines.",
@@ -5618,6 +5664,145 @@ class SupervisorService:
                 ),
             ],
         )
+
+    def _runtime_evidence_subscription_launch_summary(
+        self,
+        events: list[WorkflowEventView],
+    ) -> RuntimeEvidenceSubscriptionLaunchView:
+        subscription_event_types = {
+            "routing.subscription_agent_launch_stub_created",
+            "routing.subscription_agent_launch_rejected",
+            "execution_attempt.subscription_launch_fixture_started",
+            "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+            "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+            "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+            "execution_attempt.subscription_launch_fixture_completed",
+            "execution_attempt.verification_recorded",
+        }
+        priority_by_type = {
+            "execution_attempt.verification_recorded": 7,
+            "execution_attempt.subscription_launch_fixture_completed": 6,
+            "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded": 5,
+            "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded": 4,
+            "execution_attempt.subscription_launch_fixture_timeout_policy_recorded": 3,
+            "routing.subscription_agent_launch_rejected": 2,
+            "execution_attempt.subscription_launch_fixture_started": 1,
+            "routing.subscription_agent_launch_stub_created": 0,
+        }
+        subscription_events = [
+            event
+            for event in events
+            if event.eventType in subscription_event_types
+            and (
+                event.eventType != "execution_attempt.verification_recorded"
+                or bool(self._safe_dict(event.payload.get("subscriptionLaunchVerification")))
+            )
+        ]
+        if not subscription_events:
+            return RuntimeEvidenceSubscriptionLaunchView(
+                relatedReports=[
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/execution-readiness-report",
+                    "GET /supervisor/threat-boundary",
+                ],
+            )
+        latest_event = sorted(
+            subscription_events,
+            key=lambda event: (priority_by_type.get(event.eventType, -1), event.createdAt),
+            reverse=True,
+        )[0]
+        lifecycle_events = [event for event in subscription_events if event.eventType != "execution_attempt.verification_recorded"]
+        lifecycle_event = (
+            sorted(
+                lifecycle_events,
+                key=lambda event: (priority_by_type.get(event.eventType, -1), event.createdAt),
+                reverse=True,
+            )[0]
+            if lifecycle_events
+            else latest_event
+        )
+        verification_events = [event for event in subscription_events if event.eventType == "execution_attempt.verification_recorded"]
+        verification_event = sorted(verification_events, key=lambda event: event.createdAt, reverse=True)[0] if verification_events else None
+        payload = lifecycle_event.payload
+        latest_payload = latest_event.payload
+        lifecycle_policy_results = self._safe_dict(payload.get("lifecyclePolicyResults"))
+        lifecycle_summary = {
+            "lifecyclePolicy": payload.get("lifecyclePolicy"),
+            "stateMapping": list(payload.get("stateMapping") or []),
+            "terminalStates": list(payload.get("terminalStates") or []),
+            "heartbeatPolicy": lifecycle_policy_results.get("heartbeatPolicy"),
+            "childProcessTreeTrackingPolicy": lifecycle_policy_results.get("childProcessTreeTrackingPolicy"),
+            "orphanDetectionPolicy": lifecycle_policy_results.get("orphanDetectionPolicy"),
+            "terminalStateReconciliationPolicy": lifecycle_policy_results.get("terminalStateReconciliationPolicy"),
+        }
+        workspace_contract = self._safe_dict(payload.get("workspaceContract"))
+        workspace_summary = {
+            "workspacePlanId": payload.get("workspacePlanId") or workspace_contract.get("workspacePlanId"),
+            "materializationMode": workspace_contract.get("materializationMode"),
+            "environmentPolicy": workspace_contract.get("environmentPolicy"),
+            "environmentAllowlist": list(workspace_contract.get("environmentAllowlist") or []),
+            "commandsAllowed": bool(payload.get("commandExecutionAllowed", False))
+            and bool(workspace_contract.get("commandsAllowed", False)),
+            "sourceMutationAllowed": bool(payload.get("sourceMutationAllowed", False)),
+            "networkAllowed": bool(payload.get("networkAllowed", False)),
+            "credentialAccessAllowed": bool(payload.get("credentialAccessAllowed", False)),
+        }
+        output_summary = self._safe_dict(payload.get("outputArtifactSummary"))
+        verification_output_summary = self._safe_dict(verification_event.payload.get("outputArtifactSummary")) if verification_event else {}
+        cancellation_timeout_rollback = {
+            "timeoutPolicy": payload.get("timeoutPolicy"),
+            "cancellationPolicy": payload.get("cancellationPolicy"),
+            "cleanupPolicy": payload.get("cleanupPolicy"),
+            "rollbackPolicy": lifecycle_policy_results.get("rollbackPolicy"),
+            "idempotentCleanupPolicy": lifecycle_policy_results.get("idempotentCleanupPolicy"),
+            "terminalStateReconciliationPolicy": lifecycle_policy_results.get("terminalStateReconciliationPolicy"),
+        }
+        safety_flags = {
+            "sourceMutationAllowed": bool(payload.get("sourceMutationAllowed", False)),
+            "providerCallsAllowed": bool(payload.get("providerCallsAllowed", False)),
+            "networkAllowed": bool(payload.get("networkAllowed", False)),
+            "credentialAccessAllowed": bool(payload.get("credentialAccessAllowed", False)),
+            "shellExecutionAttempted": bool(payload.get("shellExecutionAttempted", False)),
+            "externalSendAttempted": bool(payload.get("externalSendAttempted", False)),
+        }
+        verification_evidence = self._safe_dict(verification_event.payload.get("subscriptionLaunchVerification")) if verification_event else {}
+        if not verification_evidence and latest_event.eventType == "execution_attempt.subscription_launch_fixture_completed":
+            approval_binding = self._safe_dict(payload.get("approvalBinding"))
+            verification_evidence = {
+                "status": "not_recorded",
+                "commandShape": approval_binding.get("verificationCommand"),
+                "rollbackStatus": "not_triggered",
+                "blockedReason": "subscription-launch-verification-missing",
+                "deliveryEligible": False,
+                "nextSafeAction": "Record the approved subscription launch verification command result before delivery eligibility.",
+                "rawOutputRetained": False,
+            }
+        output_artifact_references = list(output_summary.get("artifactReferences") or [])
+        for artifact in list(verification_output_summary.get("artifactReferences") or []):
+            if artifact not in output_artifact_references:
+                output_artifact_references.append(artifact)
+        return RuntimeEvidenceSubscriptionLaunchView(
+            status=str(latest_payload.get("status") or latest_payload.get("readinessStatus") or payload.get("status") or "recorded"),
+            readinessStatus=str(latest_payload.get("readinessStatus") or payload.get("readinessStatus") or "recorded"),
+            latestEventType=latest_event.eventType,
+            latestEventAt=latest_event.createdAt,
+            approvalBinding=self._safe_dict(payload.get("approvalBinding")),
+            lifecycleSummary=lifecycle_summary,
+            workspaceSummary=workspace_summary,
+            outputArtifactReferences=output_artifact_references,
+            verificationEvidence=verification_evidence,
+            safetyFlags=safety_flags,
+            cancellationTimeoutRollbackEvidence=cancellation_timeout_rollback,
+            relatedReports=[
+                "GET /work-items/{id}/runtime-evidence-export",
+                "GET /supervisor/execution-readiness-report",
+                "GET /supervisor/threat-boundary",
+            ],
+            rawOutputStored=bool(output_summary.get("rawOutputStored", False)),
+        )
+
+    def _safe_dict(self, value: object) -> dict[str, object]:
+        return value if isinstance(value, dict) else {}
 
     async def get_execution_readiness_report(self, session: AsyncSession) -> ExecutionReadinessReportView:
         configuration = self.get_execution_configuration_checks()
@@ -6135,13 +6320,18 @@ class SupervisorService:
             return None
         if attempt.status != ExecutionAttemptStatus.COMPLETED.value:
             raise ValueError("Verification evidence can be recorded only for a completed execution attempt.")
-        if payload.status not in {"passed", "failed", "timed_out", "could_not_run", "not_recorded"}:
-            raise ValueError("Verification evidence status must be passed, failed, timed_out, could_not_run, or not_recorded.")
+        if payload.status not in {"passed", "failed", "timed_out", "could_not_run", "not_recorded", "stale"}:
+            raise ValueError("Verification evidence status must be passed, failed, timed_out, could_not_run, not_recorded, or stale.")
         if not payload.commandShape.strip():
             raise ValueError("Verification evidence requires a command shape.")
         artifact_refs = list(attempt.artifact_refs_json or [])
         if any(isinstance(ref, dict) and ref.get("artifactType") == "verification_result" and ref.get("commandId") == payload.commandId for ref in artifact_refs):
             raise ValueError("Verification evidence commandId has already been recorded for this attempt.")
+        if attempt.lane == ExecutionLane.SUBSCRIPTION_AGENT.value and payload.rollbackStatus == "triggered":
+            for ref in artifact_refs:
+                verification = self._safe_dict(ref.get("subscriptionLaunchVerification")) if isinstance(ref, dict) else {}
+                if verification.get("rollbackStatus") == "triggered":
+                    raise ValueError("Rollback evidence has already been recorded for this subscription launch attempt.")
         allowed_commands = {
             ref.get("verificationCommand")
             for ref in artifact_refs
@@ -6154,7 +6344,16 @@ class SupervisorService:
 
         branch_ok, branch_output = self._git_output(["git", "branch", "--show-current"])
         head_ok, head_output = self._git_output(["git", "rev-parse", "HEAD"])
-        run_result = self._run_execution_attempt_verification_command(payload.commandShape)
+        if payload.status in {"not_recorded", "stale"}:
+            run_result = {
+                "status": payload.status,
+                "exitCode": payload.exitCode,
+                "durationMs": payload.durationMs,
+                "summary": payload.summary,
+                "recoveryAction": payload.recoveryAction,
+            }
+        else:
+            run_result = self._run_execution_attempt_verification_command(payload.commandShape)
         recorded_at = datetime.now(timezone.utc)
         evidence = {
             "artifactType": "verification_result",
@@ -6176,6 +6375,12 @@ class SupervisorService:
             "secretRetentionAllowed": False,
             "providerPayloadRetentionAllowed": False,
         }
+        if attempt.lane == ExecutionLane.SUBSCRIPTION_AGENT.value:
+            evidence["subscriptionLaunchVerification"] = self._subscription_launch_verification_evidence(
+                attempt,
+                payload,
+                run_result,
+            )
         artifact_refs.append(evidence)
         attempt.artifact_refs_json = artifact_refs
         attempt.updated_at = recorded_at
@@ -6190,12 +6395,72 @@ class SupervisorService:
         await session.refresh(item)
         return self._to_execution_attempt_view(attempt)
 
+    def _subscription_launch_verification_evidence(
+        self,
+        attempt: ExecutionAttempt,
+        payload: WorkItemVerificationEvidenceRequest,
+        run_result: dict,
+    ) -> dict[str, object]:
+        status = str(run_result["status"])
+        rollback_status = payload.rollbackStatus or (
+            "not_required" if status == "passed" else "available_not_triggered"
+        )
+        rollback_reason = payload.rollbackReason or (
+            "verification_passed" if status == "passed" else f"verification_{status}"
+        )
+        blocked_reason_by_status = {
+            "passed": None,
+            "failed": "subscription-launch-verification-failed",
+            "timed_out": "subscription-launch-verification-timed-out",
+            "could_not_run": "subscription-launch-verification-could-not-run",
+            "not_recorded": "subscription-launch-verification-missing",
+            "stale": "subscription-launch-verification-stale",
+        }
+        blocked_reason = blocked_reason_by_status.get(status, "subscription-launch-verification-invalid")
+        next_safe_action = payload.nextSafeAction or (
+            "Retain subscription-agent launch evidence for review."
+            if status == "passed"
+            else "Inspect retained subscription-agent launch artifacts before retry or rollback."
+        )
+        return {
+            "attemptId": attempt.id,
+            "routeDecisionId": attempt.route_decision_id,
+            "status": status,
+            "commandId": payload.commandId,
+            "commandShape": payload.commandShape,
+            "summary": str(run_result["summary"]),
+            "artifactRef": payload.artifactRef,
+            "recoveryPath": payload.recoveryAction or str(run_result["recoveryAction"]),
+            "rollbackStatus": rollback_status,
+            "rollbackReason": rollback_reason,
+            "blockedReason": blocked_reason,
+            "rollbackBlockedReason": "subscription_launch_rollback_triggered"
+            if rollback_status == "triggered"
+            else None,
+            "deliveryEligible": status == "passed" and rollback_status != "triggered",
+            "nextSafeAction": next_safe_action,
+            "rawOutputRetained": False,
+            "secretRetentionAllowed": False,
+            "providerPayloadRetentionAllowed": False,
+            "sourceCopiesRetained": False,
+        }
+
     def _run_execution_attempt_verification_command(self, command_shape: str) -> dict:
         allowed_commands = {
             "pnpm.cmd run check": ["pnpm.cmd", "run", "check"],
             "pnpm run check": ["pnpm", "run", "check"],
             "pnpm.cmd run test:supervisor": ["pnpm.cmd", "run", "test:supervisor"],
             "pnpm run test:supervisor": ["pnpm", "run", "test:supervisor"],
+            "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch": [
+                "pnpm.cmd",
+                "run",
+                "test:supervisor",
+                "--",
+                "tests/integration/test_routing_preview.py",
+                "-q",
+                "-k",
+                "subscription_agent_launch",
+            ],
         }
         command = allowed_commands.get(command_shape)
         if command is None:
@@ -6518,43 +6783,66 @@ class SupervisorService:
         attempt: ExecutionAttempt,
         evidence: dict,
     ) -> WorkflowEvent:
+        subscription_launch_verification = self._safe_dict(evidence.get("subscriptionLaunchVerification"))
+        payload = {
+            "attemptId": attempt.id,
+            "workItemId": item.id,
+            "routeDecisionId": attempt.route_decision_id,
+            "workerId": attempt.worker_id,
+            "selectedLane": attempt.lane,
+            "authorityMode": attempt.authority_mode,
+            "commandId": evidence["commandId"],
+            "commandShape": evidence["commandShape"],
+            "status": evidence["status"],
+            "exitCode": evidence["exitCode"],
+            "durationMs": evidence["durationMs"],
+            "summary": evidence["summary"],
+            "artifactRef": evidence["artifactRef"],
+            "recoveryAction": evidence["recoveryAction"],
+            "readinessStatus": "verification_recorded",
+            "outputArtifactSummary": {
+                "artifactReferences": [
+                    {
+                        "artifactKind": "verification_result",
+                        "path": evidence["artifactRef"],
+                        "rawPayloadStored": False,
+                        "operatorReviewRequired": True,
+                    }
+                ]
+                if evidence.get("artifactRef")
+                else [],
+                "rawOutputStored": False,
+            },
+            "worktreePath": evidence["worktreePath"],
+            "branch": evidence["branch"],
+            "headRevision": evidence["headRevision"],
+            "rawOutputRetained": False,
+            "secretRetentionAllowed": False,
+            "providerPayloadRetentionAllowed": False,
+            "sourceCopiesRetained": False,
+            "prCreationAllowed": False,
+            "mergeAllowed": False,
+            "cleanupAllowed": False,
+            "ciWaitAllowed": False,
+            "issueSyncAllowed": False,
+            "claudeLaunchAllowed": False,
+            "providerExpansionAllowed": False,
+            "subscriptionAgentLaunchAllowed": False,
+            "secretAccessAllowed": False,
+        }
+        if subscription_launch_verification:
+            payload["readinessStatus"] = subscription_launch_verification.get("readinessStatus") or (
+                "subscription_launch_rollback_triggered"
+                if subscription_launch_verification.get("rollbackStatus") == "triggered"
+                else "subscription_launch_verification_recorded"
+            )
+            payload["subscriptionLaunchVerification"] = subscription_launch_verification
         return await self._record_event(
             session,
             item,
             "execution_attempt.verification_recorded",
             f"Verification evidence recorded with status {evidence['status']}.",
-            {
-                "attemptId": attempt.id,
-                "workItemId": item.id,
-                "routeDecisionId": attempt.route_decision_id,
-                "workerId": attempt.worker_id,
-                "selectedLane": attempt.lane,
-                "authorityMode": attempt.authority_mode,
-                "commandId": evidence["commandId"],
-                "commandShape": evidence["commandShape"],
-                "status": evidence["status"],
-                "exitCode": evidence["exitCode"],
-                "durationMs": evidence["durationMs"],
-                "summary": evidence["summary"],
-                "artifactRef": evidence["artifactRef"],
-                "recoveryAction": evidence["recoveryAction"],
-                "worktreePath": evidence["worktreePath"],
-                "branch": evidence["branch"],
-                "headRevision": evidence["headRevision"],
-                "rawOutputRetained": False,
-                "secretRetentionAllowed": False,
-                "providerPayloadRetentionAllowed": False,
-                "sourceCopiesRetained": False,
-                "prCreationAllowed": False,
-                "mergeAllowed": False,
-                "cleanupAllowed": False,
-                "ciWaitAllowed": False,
-                "issueSyncAllowed": False,
-                "claudeLaunchAllowed": False,
-                "providerExpansionAllowed": False,
-                "subscriptionAgentLaunchAllowed": False,
-                "secretAccessAllowed": False,
-            },
+            payload,
             actor_type="supervisor",
         )
 
@@ -7144,6 +7432,704 @@ class SupervisorService:
             await session.refresh(item)
         return request
 
+    async def evaluate_subscription_agent_launch_request(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: WorkItemSubscriptionAgentLaunchRequest,
+    ) -> SubscriptionAgentLaunchRequestView | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        preview_payload = WorkItemRoutingPreviewRequest(
+            stepId=payload.stepId,
+            taskKind=payload.taskKind,
+            recordEvent=False,
+        )
+        preview = await self.get_routing_preview(session, work_item_id, preview_payload)
+        if not preview:
+            return None
+        if preview.decision.selectedLane != ExecutionLane.SUBSCRIPTION_HANDOFF.value:
+            raise ValueError(
+                f"Route selected {preview.decision.selectedLane}; subscription agent launch requires subscription_handoff."
+            )
+        if preview.profile.taskKind not in self._SUBSCRIPTION_AGENT_STUB_TASK_KINDS:
+            raise ValueError(f"Task kind {preview.profile.taskKind} is not eligible for subscription agent launch.")
+
+        requested_target = self.subscription_launch_registry.find_target(payload.requestedAgent)
+        explicit_target = self.subscription_launch_registry.find_target(payload.targetId)
+        target = explicit_target or requested_target or self.subscription_launch_registry.get_target(None)
+        attempt_id = preview.decision.decisionId
+        workspace_contract = self.disabled_subscription_launch_adapter.workspace_contract(
+            attempt_id=attempt_id,
+            target=target,
+        )
+        output_contract = self.disabled_subscription_launch_adapter.output_contract(attempt_id=attempt_id)
+        lifecycle_evidence = self.disabled_subscription_launch_adapter.lifecycle_evidence(target)
+        expected_values = {
+            "workItemId": item.id,
+            "executionAttemptId": attempt_id,
+            "routeDecisionId": preview.decision.decisionId,
+            "workerId": target.worker_id,
+            "lane": ExecutionLane.SUBSCRIPTION_AGENT.value,
+            "authorityMode": "operator_approval_required",
+            "workspacePlanId": workspace_contract["workspacePlanId"],
+            "launchPolicyId": target.launch_policy_id,
+            "targetId": target.target_id,
+            "commandTemplateId": target.command_template_id,
+            "commandTemplateExecutionStatus": "executable_by_kendall",
+            "approvalActor": "Bob",
+            "approvalTimestamp": self._subscription_launch_datetime_as_utc(
+                self._STORY_8_5_ACCEPTED_APPROVAL_TIMESTAMP
+            ).isoformat(),
+            "approvalExpiry": self._subscription_launch_datetime_as_utc(
+                self._STORY_8_5_ACCEPTED_APPROVAL_EXPIRY
+            ).isoformat(),
+            "permissionEnvelope": "approved_for_one_artifact_only_subscription_launch",
+            "environmentAllowlist": workspace_contract["environmentAllowlist"],
+            "blockedCredentialSessionPaths": workspace_contract["forbiddenPaths"],
+            "artifactLimits": {
+                "rawOutputBytes": 0,
+                "artifactReferenceOnly": True,
+                "sourceMutationAllowed": False,
+            },
+            "redactionPolicy": "required",
+            "truncationPolicy": "truncate_to_approved_artifact_limits",
+            "outputPolicy": "artifact_references_only_no_raw_output",
+            "startupTimeoutSeconds": 10,
+            "runTimeoutSeconds": 30,
+            "cancellationTimeoutSeconds": 5,
+            "heartbeatPolicy": lifecycle_evidence["heartbeatPolicy"],
+            "childProcessTreeTrackingPolicy": lifecycle_evidence["childProcessTreeTrackingPolicy"],
+            "orphanDetectionPolicy": lifecycle_evidence["orphanDetectionPolicy"],
+            "terminalStateReconciliationPolicy": lifecycle_evidence["terminalStateReconciliationPolicy"],
+            "idempotentCleanupPolicy": lifecycle_evidence["idempotentCleanupPolicy"],
+            "dashboardControls": "approval_bound_disabled_until_all_gates_green",
+            "rollbackPolicy": lifecycle_evidence["rollbackPolicy"],
+            "verificationCommand": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+            "allowedOutputMode": "artifact-only",
+        }
+
+        request_values = self._subscription_agent_launch_request_values(payload)
+        missing_fields = [
+            field
+            for field in self._SUBSCRIPTION_AGENT_LAUNCH_REQUIRED_FIELDS
+            if self._launch_envelope_value_missing(request_values.get(field))
+        ]
+        stale_fields = [
+            field
+            for field, expected_value in expected_values.items()
+            if not self._launch_envelope_value_missing(request_values.get(field)) and request_values.get(field) != expected_value
+        ]
+        rejected_fields: dict[str, str] = {}
+        if payload.requestedAgent is not None and requested_target is None:
+            rejected_fields["requestedAgent"] = "unsupported_subscription_launch_target"
+        if payload.targetId is not None and explicit_target is None:
+            rejected_fields["targetId"] = "unsupported_subscription_launch_target"
+        if requested_target and explicit_target and requested_target.target_id != explicit_target.target_id:
+            rejected_fields["targetSelector"] = "requested_agent_and_target_id_disagree"
+        rollback_reason = await self._subscription_launch_rollback_reason(session, item.id)
+        if rollback_reason:
+            rejected_fields["rollbackStatus"] = rollback_reason
+        if payload.approvalTimestamp and payload.approvalExpiry:
+            approval_timestamp = self._subscription_launch_datetime_as_utc(payload.approvalTimestamp)
+            approval_expiry = self._subscription_launch_datetime_as_utc(payload.approvalExpiry)
+            now = self._subscription_launch_now()
+            if approval_timestamp > now + timedelta(minutes=1):
+                if "approvalTimestamp" not in stale_fields:
+                    stale_fields.append("approvalTimestamp")
+                rejected_fields["approvalTimestamp"] = "future_effective_time"
+            if approval_expiry <= approval_timestamp:
+                rejected_fields["approvalExpiry"] = "not_after_approval_timestamp"
+            if approval_expiry <= now:
+                if "approvalExpiry" not in stale_fields:
+                    stale_fields.append("approvalExpiry")
+                rejected_fields["approvalExpiry"] = "expired"
+        accepted_fixture_path = (
+            not missing_fields
+            and not stale_fields
+            and not rejected_fields
+            and target.target_id == "codex.subscription.disabled"
+            and target.command_template_id == "codex-subscription-cli-template-disabled-v1"
+            and payload.commandTemplateExecutionStatus == "executable_by_kendall"
+            and payload.permissionEnvelope == "approved_for_one_artifact_only_subscription_launch"
+            and payload.allowedOutputMode == "artifact-only"
+        )
+        if not missing_fields:
+            if not target.enabled and not accepted_fixture_path:
+                rejected_fields["targetStatus"] = target.disabled_reason
+            if not accepted_fixture_path:
+                rejected_fields["processLaunchPermission"] = "not_approved"
+
+        if missing_fields:
+            status = "rejected_missing_exact_approval"
+            readiness_status = "blocked_pending_exact_launch_approval"
+        elif stale_fields:
+            status = "rejected_stale_exact_approval"
+            readiness_status = "subscription_launch_approval_stale"
+        elif rejected_fields.get("rollbackStatus"):
+            status = "rejected_rollback_triggered"
+            readiness_status = "subscription_launch_rollback_triggered"
+        elif accepted_fixture_path:
+            status = "accepted_artifact_only_fixture_completed"
+            readiness_status = "subscription_launch_fixture_completed"
+        elif rejected_fields.get("targetStatus"):
+            status = "rejected_target_not_enabled"
+            readiness_status = "subscription_launch_approval_rejected"
+        else:
+            status = "rejected_process_launch_not_approved"
+            readiness_status = "subscription_launch_approval_rejected"
+
+        blocked_reason_ids = (
+            []
+            if accepted_fixture_path
+            else self._subscription_agent_launch_blocked_reasons(
+                missing_fields=missing_fields,
+                stale_fields=stale_fields,
+                rejected_fields=rejected_fields,
+            )
+        )
+        output_artifact_summary = {
+            "artifactReferenceOnly": output_contract.get("artifactReferenceOnly", True),
+            "outputContractId": output_contract.get("outputContractId"),
+            "boundedByteCounts": output_contract.get("boundedByteCounts") or {},
+            "artifactReferences": output_contract.get("artifactReferences") or [],
+            "workflowEventRawOutputAllowed": output_contract.get("workflowEventRawOutputAllowed", False),
+            "generatedPatchHandling": output_contract.get("generatedPatchHandling"),
+            "rawOutputStored": output_contract.get("rawOutputStored", False),
+            "redactionRequired": output_contract.get("redactionRequired", True),
+            "truncationApplied": output_contract.get("truncationApplied", False),
+        }
+        if accepted_fixture_path:
+            output_artifact_summary["artifactReferences"] = self._subscription_agent_launch_fixture_artifacts(attempt_id)
+            output_artifact_summary["boundedByteCounts"] = {"stdout": 0, "stderr": 0, "generatedFiles": 2}
+        launch_request = SubscriptionAgentLaunchRequestView(
+            launchRequestId=f"subscription-agent-launch-request-{preview.decision.decisionId}",
+            workItemId=item.id,
+            status=status,
+            readinessStatus=readiness_status,
+            approvalAccepted=accepted_fixture_path,
+            processLaunchAllowed=accepted_fixture_path,
+            executionAllowed=accepted_fixture_path,
+            commandExecutionAllowed=False,
+            sourceMutationAllowed=False,
+            providerCallsAllowed=False,
+            networkAllowed=False,
+            credentialAccessAllowed=False,
+            processLaunchAttempted=accepted_fixture_path,
+            shellExecutionAttempted=False,
+            credentialAccessAttempted=False,
+            externalSendAttempted=False,
+            missingEnvelopeFields=missing_fields,
+            rejectedEnvelopeFields=rejected_fields,
+            staleEnvelopeFields=stale_fields,
+            blockedReasonIds=blocked_reason_ids,
+            nextSafeAction=self._subscription_agent_launch_next_safe_action(missing_fields, stale_fields, rejected_fields),
+            approvalBinding=self._subscription_agent_launch_evidence_binding(
+                request_values=request_values,
+                expected_values=expected_values,
+                missing_fields=missing_fields,
+                stale_fields=stale_fields,
+                attempt_id=attempt_id,
+            ),
+            workspaceContract=workspace_contract,
+            outputArtifactSummary=output_artifact_summary,
+            lifecycleEvidence=lifecycle_evidence,
+            safetyFlags={
+                "sourceMutationAllowed": False,
+                "issueSyncAllowed": False,
+                "prCreationAllowed": False,
+                "mergeAllowed": False,
+                "cleanupAllowed": False,
+                "failedCheckBypassAllowed": False,
+                "providerCallsAllowed": False,
+                "claudeLaunchAllowed": False,
+                "credentialAccessAllowed": False,
+                "networkAllowed": False,
+                "broadAutonomyAllowed": False,
+            },
+        )
+        if accepted_fixture_path:
+            await self._record_subscription_agent_launch_fixture_attempt(
+                session,
+                item,
+                launch_request,
+                attempt_id=attempt_id,
+                preview=preview,
+            )
+            await session.commit()
+            await session.refresh(item)
+        else:
+            await self._record_subscription_agent_launch_rejection_event(session, item, launch_request)
+            await session.commit()
+            await session.refresh(item)
+        return launch_request
+
+    async def _subscription_launch_rollback_reason(self, session: AsyncSession, work_item_id: str) -> str | None:
+        result = await session.execute(
+            select(WorkflowEvent)
+            .where(
+                WorkflowEvent.work_item_id == work_item_id,
+                WorkflowEvent.event_type == "execution_attempt.verification_recorded",
+            )
+            .order_by(WorkflowEvent.created_at.desc())
+        )
+        for event in result.scalars():
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            verification = payload.get("subscriptionLaunchVerification")
+            if isinstance(verification, dict) and verification.get("rollbackStatus") == "triggered":
+                reason = verification.get("rollbackReason")
+                return str(reason) if reason else "subscription_launch_rollback_triggered"
+        return None
+
+    def _subscription_agent_launch_fixture_artifacts(self, attempt_id: str) -> list[dict[str, object]]:
+        return [
+            {
+                "artifactId": f"subscription-fixture-output-summary-{attempt_id}",
+                "artifactKind": "fixture_output_summary",
+                "path": f"_bmad-output/subscription-launch/{attempt_id}/fixture-output-summary.json",
+                "verificationCommand": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "rawPayloadStored": False,
+                "operatorReviewRequired": True,
+            },
+            {
+                "artifactId": f"subscription-fixture-generated-patch-reference-{attempt_id}",
+                "artifactKind": "fixture_generated_patch_reference",
+                "path": f"_bmad-output/subscription-launch/{attempt_id}/fixture-generated.patch",
+                "applied": False,
+                "operatorReviewRequired": True,
+            },
+        ]
+
+    async def _record_subscription_agent_launch_fixture_attempt(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        launch_request: SubscriptionAgentLaunchRequestView,
+        *,
+        attempt_id: str,
+        preview: RoutingPreviewView,
+    ) -> None:
+        if await session.get(ExecutionAttempt, attempt_id):
+            raise ValueError(f"Subscription-agent launch attempt {attempt_id} already exists.")
+        active_attempt = await self._active_execution_attempt(session, item.id)
+        if active_attempt:
+            raise ValueError(f"Work item already has active execution attempt {active_attempt.id}.")
+        prior_fixture_result = await session.execute(
+            select(ExecutionAttempt)
+            .where(
+                ExecutionAttempt.work_item_id == item.id,
+                ExecutionAttempt.worker_id == "subscription.agent.disabled",
+                ExecutionAttempt.lane == ExecutionLane.SUBSCRIPTION_AGENT.value,
+            )
+            .limit(1)
+        )
+        prior_fixture_attempt = prior_fixture_result.scalar_one_or_none()
+        if prior_fixture_attempt:
+            raise ValueError(
+                f"Work item already has subscription-agent launch attempt {prior_fixture_attempt.id}."
+            )
+
+        now = datetime.now(timezone.utc)
+        attempt = ExecutionAttempt(
+            id=attempt_id,
+            work_item_id=item.id,
+            route_decision_id=preview.decision.decisionId,
+            worker_id=str(launch_request.approvalBinding["workerId"]),
+            lane=str(launch_request.approvalBinding["lane"]),
+            authority_mode=str(launch_request.approvalBinding["authorityMode"]),
+            status=ExecutionAttemptStatus.COMPLETED.value,
+            requested_by_label="Bob",
+            workspace_isolation_plan_json=self._subscription_agent_launch_workspace_isolation_plan(launch_request.workspaceContract),
+            artifact_refs_json=launch_request.outputArtifactSummary["artifactReferences"],
+            event_refs_json=[],
+            started_at=now,
+            completed_at=now,
+            heartbeat_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(attempt)
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise ValueError(f"Subscription-agent launch attempt {attempt_id} already exists.") from exc
+        started_event = await self._record_subscription_agent_launch_fixture_event(
+            session,
+            item,
+            attempt,
+            launch_request,
+            event_type="execution_attempt.subscription_launch_fixture_started",
+            summary="Subscription-agent artifact-only fixture launch entered the approved starting path.",
+        )
+        timeout_event = await self._record_subscription_agent_launch_fixture_event(
+            session,
+            item,
+            attempt,
+            launch_request,
+            event_type="execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+            summary="Subscription-agent artifact-only fixture timeout metadata recorded without process signal.",
+        )
+        cancellation_event = await self._record_subscription_agent_launch_fixture_event(
+            session,
+            item,
+            attempt,
+            launch_request,
+            event_type="execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+            summary="Subscription-agent artifact-only fixture cancellation metadata recorded without OS signal.",
+        )
+        rollback_event = await self._record_subscription_agent_launch_fixture_event(
+            session,
+            item,
+            attempt,
+            launch_request,
+            event_type="execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+            summary="Subscription-agent artifact-only fixture rollback-disabled metadata recorded without resource deletion.",
+        )
+        completed_event = await self._record_subscription_agent_launch_fixture_event(
+            session,
+            item,
+            attempt,
+            launch_request,
+            event_type="execution_attempt.subscription_launch_fixture_completed",
+            summary="Subscription-agent artifact-only fixture launch completed with metadata-only evidence.",
+        )
+        await session.flush()
+        attempt.event_refs_json = [
+            {"eventId": started_event.id, "eventType": started_event.event_type},
+            {"eventId": timeout_event.id, "eventType": timeout_event.event_type},
+            {"eventId": cancellation_event.id, "eventType": cancellation_event.event_type},
+            {"eventId": rollback_event.id, "eventType": rollback_event.event_type},
+            {"eventId": completed_event.id, "eventType": completed_event.event_type},
+        ]
+
+    def _subscription_agent_launch_workspace_isolation_plan(self, workspace_contract: dict[str, object]) -> dict[str, object]:
+        return {
+            "planId": str(workspace_contract.get("workspacePlanId") or "subscription-workspace-plan-not-recorded"),
+            "sourceSnapshotStrategy": "metadata_only_no_source_snapshot",
+            "branchStrategy": "none_artifact_only_fixture",
+            "readRoots": ["."],
+            "writeRoots": list(workspace_contract.get("writeRoots") or []),
+            "artifactRoot": str(workspace_contract.get("artifactRoot") or "_bmad-output/subscription-launch"),
+            "forbiddenPaths": list(workspace_contract.get("forbiddenPaths") or []),
+            "cleanupRule": str(workspace_contract.get("idempotentCleanupPolicy") or "cleanup_is_metadata_only_and_idempotent_without_deletion"),
+            "rollbackRule": str(workspace_contract.get("rollbackPolicy") or "rollback_records_global_disable_without_resource_deletion"),
+            "diffCaptureRule": "metadata_only_no_source_diff_capture",
+            "writesAllowed": False,
+            "sourceMutationAllowed": False,
+            "commandsAllowed": False,
+            "networkAllowed": False,
+            "credentialAccessAllowed": False,
+            "redactionBoundary": ["workflow_event_metadata_only", "artifact_references_only"],
+            "allowedCommandClasses": [],
+            "blockedCommandClasses": ["shell", "provider", "network", "credential", "source_mutation"],
+            "providerEndpointPolicy": "provider_endpoints_denied",
+            "promptConstructionPolicy": "no_prompt_construction",
+            "boundaryRejectionReason": "subscription_launch_fixture_artifact_only_boundary",
+            "materializationMode": str(workspace_contract.get("materializationMode") or "artifact_only_no_workspace_created"),
+            "environmentPolicy": str(workspace_contract.get("environmentPolicy") or "deny_inheritance_allowlist_only"),
+            "environmentAllowlist": list(workspace_contract.get("environmentAllowlist") or []),
+            "sessionBoundary": str(workspace_contract.get("sessionBoundary") or "credentials_sessions_and_shell_profiles_forbidden"),
+            "outputPolicy": str(workspace_contract.get("outputPolicy") or "artifact_references_only_no_raw_output"),
+        }
+
+    async def _record_subscription_agent_launch_fixture_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        attempt: ExecutionAttempt,
+        launch_request: SubscriptionAgentLaunchRequestView,
+        *,
+        event_type: str,
+        summary: str,
+    ) -> WorkflowEvent:
+        return await self._record_event(
+            session,
+            item,
+            event_type,
+            summary,
+            {
+                "launchRequestId": launch_request.launchRequestId,
+                "workItemId": item.id,
+                "executionAttemptId": attempt.id,
+                "attemptStatus": attempt.status,
+                "status": launch_request.status,
+                "readinessStatus": launch_request.readinessStatus,
+                "approvalAccepted": True,
+                "approvalBinding": launch_request.approvalBinding,
+                "workspaceContract": launch_request.workspaceContract,
+                "workspacePlanId": launch_request.workspaceContract.get("workspacePlanId"),
+                "launchPolicyId": launch_request.approvalBinding.get("launchPolicyId"),
+                "targetId": launch_request.approvalBinding.get("targetId"),
+                "commandTemplateId": launch_request.approvalBinding.get("commandTemplateId"),
+                "commandTemplateExecutable": True,
+                "outputContractId": launch_request.outputArtifactSummary.get("outputContractId"),
+                "outputArtifactSummary": launch_request.outputArtifactSummary,
+                "lifecyclePolicy": launch_request.lifecycleEvidence.get("lifecyclePolicy"),
+                "stateMapping": launch_request.lifecycleEvidence.get("stateMapping"),
+                "terminalStates": launch_request.lifecycleEvidence.get("terminalStates"),
+                "lifecyclePolicyResults": {
+                    "heartbeatPolicy": launch_request.lifecycleEvidence.get("heartbeatPolicy"),
+                    "childProcessTreeTrackingPolicy": launch_request.lifecycleEvidence.get("childProcessTreeTrackingPolicy"),
+                    "orphanDetectionPolicy": launch_request.lifecycleEvidence.get("orphanDetectionPolicy"),
+                    "terminalStateReconciliationPolicy": launch_request.lifecycleEvidence.get("terminalStateReconciliationPolicy"),
+                    "idempotentCleanupPolicy": launch_request.lifecycleEvidence.get("idempotentCleanupPolicy"),
+                    "rollbackPolicy": launch_request.lifecycleEvidence.get("rollbackPolicy"),
+                },
+                "timeoutPolicy": launch_request.lifecycleEvidence.get("timeoutPolicy"),
+                "cancellationPolicy": launch_request.lifecycleEvidence.get("cancellationPolicy"),
+                "cleanupPolicy": launch_request.lifecycleEvidence.get("cleanupPolicy"),
+                "artifactReferenceOnly": True,
+                "rawOutputStored": False,
+                "processLaunchAllowed": True,
+                "executionAllowed": True,
+                "commandExecutionAllowed": launch_request.commandExecutionAllowed,
+                "sourceMutationAllowed": False,
+                "providerCallsAllowed": False,
+                "networkAllowed": False,
+                "credentialAccessAllowed": False,
+                "processLaunchAttempted": True,
+                "shellExecutionAttempted": False,
+                "credentialAccessAttempted": False,
+                "externalSendAttempted": False,
+                "safetyFlags": launch_request.safetyFlags,
+            },
+        )
+
+    def _subscription_agent_launch_request_values(self, payload: WorkItemSubscriptionAgentLaunchRequest) -> dict[str, object]:
+        return {
+            "workItemId": payload.workItemId,
+            "executionAttemptId": payload.executionAttemptId or payload.attemptId,
+            "routeDecisionId": payload.routeDecisionId,
+            "workerId": payload.workerId,
+            "lane": payload.lane,
+            "authorityMode": payload.authorityMode,
+            "workspacePlanId": payload.workspacePlanId,
+            "launchPolicyId": payload.launchPolicyId,
+            "targetId": payload.targetId,
+            "commandTemplateId": payload.commandTemplateId,
+            "commandTemplateExecutionStatus": payload.commandTemplateExecutionStatus,
+            "approvalActor": payload.approvalActor,
+            "approvalTimestamp": self._subscription_launch_datetime_as_utc(payload.approvalTimestamp).isoformat()
+            if payload.approvalTimestamp
+            else None,
+            "approvalExpiry": self._subscription_launch_datetime_as_utc(payload.approvalExpiry).isoformat()
+            if payload.approvalExpiry
+            else None,
+            "permissionEnvelope": payload.permissionEnvelope,
+            "environmentAllowlist": payload.environmentAllowlist,
+            "blockedCredentialSessionPaths": payload.blockedCredentialSessionPaths,
+            "artifactLimits": payload.artifactLimits,
+            "redactionPolicy": payload.redactionPolicy,
+            "truncationPolicy": payload.truncationPolicy,
+            "outputPolicy": payload.outputPolicy,
+            "startupTimeoutSeconds": payload.startupTimeoutSeconds,
+            "runTimeoutSeconds": payload.runTimeoutSeconds,
+            "cancellationTimeoutSeconds": payload.cancellationTimeoutSeconds,
+            "heartbeatPolicy": payload.heartbeatPolicy,
+            "childProcessTreeTrackingPolicy": payload.childProcessTreeTrackingPolicy,
+            "orphanDetectionPolicy": payload.orphanDetectionPolicy,
+            "terminalStateReconciliationPolicy": payload.terminalStateReconciliationPolicy,
+            "idempotentCleanupPolicy": payload.idempotentCleanupPolicy,
+            "dashboardControls": payload.dashboardControls,
+            "rollbackPolicy": payload.rollbackPolicy,
+            "verificationCommand": payload.verificationCommand,
+            "allowedOutputMode": payload.allowedOutputMode,
+        }
+
+    def _subscription_launch_datetime_as_utc(self, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def _subscription_launch_now(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _subscription_agent_launch_evidence_binding(
+        self,
+        *,
+        request_values: dict[str, object],
+        expected_values: dict[str, object],
+        missing_fields: list[str],
+        stale_fields: list[str],
+        attempt_id: str,
+    ) -> dict[str, object]:
+        binding = {
+            field: (
+                self._subscription_agent_launch_sanitized_field(field, request_values.get(field))
+                if field in missing_fields
+                else expected_values.get(field, request_values.get(field))
+            )
+            for field in self._SUBSCRIPTION_AGENT_LAUNCH_REQUIRED_FIELDS
+        }
+        binding["attemptId"] = attempt_id
+        if stale_fields:
+            binding["submittedEnvelopeFields"] = {
+                field: self._subscription_agent_launch_sanitized_field(field, request_values.get(field))
+                for field in stale_fields
+            }
+        return binding
+
+    def _subscription_agent_launch_sanitized_field(self, field: str, value: object) -> object:
+        if field != "artifactLimits" or not isinstance(value, dict):
+            return self._subscription_agent_launch_sanitized_value(value)
+        safe: dict[str, object] = {}
+        if isinstance(value.get("rawOutputBytes"), (int, float)):
+            safe["rawOutputBytes"] = value["rawOutputBytes"]
+        elif "rawOutputBytes" in value:
+            safe["rawOutputBytes"] = "[redacted]"
+        if isinstance(value.get("artifactReferenceOnly"), bool):
+            safe["artifactReferenceOnly"] = value["artifactReferenceOnly"]
+        elif "artifactReferenceOnly" in value:
+            safe["artifactReferenceOnly"] = "[redacted]"
+        if isinstance(value.get("sourceMutationAllowed"), bool):
+            safe["sourceMutationAllowed"] = value["sourceMutationAllowed"]
+        elif "sourceMutationAllowed" in value:
+            safe["sourceMutationAllowed"] = "[redacted]"
+        if any(key not in {"rawOutputBytes", "artifactReferenceOnly", "sourceMutationAllowed"} for key in value):
+            safe["redactedUnknownKeys"] = True
+        return safe
+
+    def _subscription_agent_launch_sanitized_value(self, value: object) -> object:
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            return value if len(value) <= 120 else f"{value[:117]}..."
+        if isinstance(value, list):
+            return [self._subscription_agent_launch_sanitized_value(item) for item in value[:20]]
+        if isinstance(value, dict):
+            safe: dict[str, object] = {}
+            for index, (key, item) in enumerate(value.items()):
+                if index >= 20:
+                    safe["truncated"] = True
+                    break
+                safe_key = str(key)[:80]
+                if any(token in safe_key.lower() for token in ("raw", "secret", "credential", "token", "stdout", "stderr", "generatedpatch")):
+                    safe[safe_key] = "[redacted]"
+                else:
+                    safe[safe_key] = self._subscription_agent_launch_sanitized_value(item)
+            return safe
+        return str(value)[:120]
+
+    def _launch_envelope_value_missing(self, value: object) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return not value.strip()
+        if isinstance(value, (list, dict, tuple, set)):
+            return len(value) == 0
+        return False
+
+    def _subscription_agent_launch_blocked_reasons(
+        self,
+        *,
+        missing_fields: list[str],
+        stale_fields: list[str],
+        rejected_fields: dict[str, str],
+    ) -> list[str]:
+        reasons = {"real_process_launch_not_approved"}
+        reasons.update(f"missing_{self._camel_to_snake(field)}" for field in missing_fields)
+        reasons.update(f"stale_{self._camel_to_snake(field)}" for field in stale_fields)
+        if "targetStatus" in rejected_fields:
+            reasons.add("subscription_agent_target_not_enabled")
+        if "requestedAgent" in rejected_fields or "targetId" in rejected_fields or "targetSelector" in rejected_fields:
+            reasons.add("subscription_agent_target_unsupported")
+        if "commandTemplateExecutionStatus" in rejected_fields:
+            reasons.add("command_template_not_executable")
+        if "permissionEnvelope" in rejected_fields:
+            reasons.add("permission_envelope_not_approved")
+        if "approvalExpiry" in rejected_fields:
+            reasons.add("approval_expiry_invalid")
+        if "processLaunchPermission" in rejected_fields:
+            reasons.add("process_launch_not_approved")
+        if "rollbackStatus" in rejected_fields:
+            reasons.add("subscription_launch_rollback_triggered")
+        return sorted(reasons)
+
+    def _camel_to_snake(self, value: str) -> str:
+        chars: list[str] = []
+        for index, char in enumerate(value):
+            if char.isupper() and index > 0:
+                chars.append("_")
+            chars.append(char.lower())
+        return "".join(chars)
+
+    def _subscription_agent_launch_next_safe_action(
+        self,
+        missing_fields: list[str],
+        stale_fields: list[str],
+        rejected_fields: dict[str, str],
+    ) -> str:
+        if missing_fields:
+            for field in ("approvalActor", "approvalTimestamp", "approvalExpiry", "permissionEnvelope"):
+                if field in missing_fields:
+                    return f"Fill {field} before exact launch approval can be requested."
+            return f"Fill {missing_fields[0]} before exact launch approval can be requested."
+        if stale_fields:
+            return f"Refresh {stale_fields[0]} before reusing any prior approval."
+        if rejected_fields:
+            if "rollbackStatus" in rejected_fields:
+                return "Keep subscription-agent launch disabled until rollback evidence is reviewed."
+            return f"Inspect {next(iter(rejected_fields))} before exact launch approval can be requested."
+        return "Preserve disabled launch state until Bob supplies an exact launch approval packet."
+
+    async def _record_subscription_agent_launch_rejection_event(
+        self,
+        session: AsyncSession,
+        item: WorkItem,
+        launch_request: SubscriptionAgentLaunchRequestView,
+    ) -> None:
+        await self._record_event(
+            session,
+            item,
+            "routing.subscription_agent_launch_rejected",
+            "Subscription-agent launch request rejected before process start.",
+            {
+                "launchRequestId": launch_request.launchRequestId,
+                "status": launch_request.status,
+                "readinessStatus": launch_request.readinessStatus,
+                "approvalAccepted": launch_request.approvalAccepted,
+                "missingEnvelopeFields": launch_request.missingEnvelopeFields,
+                "rejectedEnvelopeFields": launch_request.rejectedEnvelopeFields,
+                "staleEnvelopeFields": launch_request.staleEnvelopeFields,
+                "blockedReasonIds": launch_request.blockedReasonIds,
+                "nextSafeAction": launch_request.nextSafeAction,
+                "approvalBinding": launch_request.approvalBinding,
+                "workspaceContract": launch_request.workspaceContract,
+                "workspacePlanId": launch_request.workspaceContract.get("workspacePlanId"),
+                "launchPolicyId": launch_request.approvalBinding.get("launchPolicyId"),
+                "targetId": launch_request.approvalBinding.get("targetId"),
+                "commandTemplateId": launch_request.approvalBinding.get("commandTemplateId"),
+                "commandTemplateExecutable": False,
+                "outputContractId": launch_request.outputArtifactSummary.get("outputContractId"),
+                "outputArtifactSummary": launch_request.outputArtifactSummary,
+                "lifecyclePolicy": launch_request.lifecycleEvidence.get("lifecyclePolicy"),
+                "stateMapping": launch_request.lifecycleEvidence.get("stateMapping"),
+                "terminalStates": launch_request.lifecycleEvidence.get("terminalStates"),
+                "lifecyclePolicyResults": {
+                    "heartbeatPolicy": launch_request.lifecycleEvidence.get("heartbeatPolicy"),
+                    "childProcessTreeTrackingPolicy": launch_request.lifecycleEvidence.get("childProcessTreeTrackingPolicy"),
+                    "orphanDetectionPolicy": launch_request.lifecycleEvidence.get("orphanDetectionPolicy"),
+                    "terminalStateReconciliationPolicy": launch_request.lifecycleEvidence.get("terminalStateReconciliationPolicy"),
+                    "idempotentCleanupPolicy": launch_request.lifecycleEvidence.get("idempotentCleanupPolicy"),
+                    "rollbackPolicy": launch_request.lifecycleEvidence.get("rollbackPolicy"),
+                },
+                "processLaunchAllowed": launch_request.processLaunchAllowed,
+                "executionAllowed": launch_request.executionAllowed,
+                "commandExecutionAllowed": launch_request.commandExecutionAllowed,
+                "sourceMutationAllowed": launch_request.sourceMutationAllowed,
+                "providerCallsAllowed": launch_request.providerCallsAllowed,
+                "networkAllowed": launch_request.networkAllowed,
+                "credentialAccessAllowed": launch_request.credentialAccessAllowed,
+                "processLaunchAttempted": launch_request.processLaunchAttempted,
+                "shellExecutionAttempted": launch_request.shellExecutionAttempted,
+                "credentialAccessAttempted": launch_request.credentialAccessAttempted,
+                "externalSendAttempted": launch_request.externalSendAttempted,
+                "safetyFlags": launch_request.safetyFlags,
+            },
+        )
+
     async def get_subscription_agent_launch_stub(
         self,
         session: AsyncSession,
@@ -7201,6 +8187,7 @@ class SupervisorService:
             workspaceContract=workspace_contract,
             outputContract=self.disabled_subscription_launch_adapter.output_contract(attempt_id=preview.decision.decisionId),
             lifecycleEvidence=self.disabled_subscription_launch_adapter.lifecycle_evidence(target),
+            readinessEvidence=self.disabled_subscription_launch_adapter.readiness_evidence(target),
             processLaunchAllowed=False,
             executionAllowed=False,
         )
@@ -7696,6 +8683,9 @@ class SupervisorService:
         item: WorkItem,
         stub: SubscriptionAgentLaunchStubView,
     ) -> None:
+        readiness_evidence = stub.readinessEvidence or {}
+        lifecycle_evidence = stub.lifecycleEvidence or {}
+        output_contract = stub.outputContract or {}
         await self._record_event(
             session,
             item,
@@ -7716,8 +8706,37 @@ class SupervisorService:
                 "launchPolicyId": stub.approvalBinding.get("launchPolicyId"),
                 "commandTemplateId": stub.approvalBinding.get("commandTemplateId"),
                 "workspacePlanId": stub.workspaceContract.get("workspacePlanId"),
-                "outputContractId": stub.outputContract.get("outputContractId"),
-                "lifecyclePolicy": stub.lifecycleEvidence.get("lifecyclePolicy"),
+                "outputContractId": output_contract.get("outputContractId"),
+                "commandTemplateExecutable": lifecycle_evidence.get(
+                    "commandTemplateExecutable",
+                    readiness_evidence.get("commandTemplateExecutable", False),
+                ),
+                "lifecyclePolicy": lifecycle_evidence.get("lifecyclePolicy"),
+                "stateMapping": list(lifecycle_evidence.get("stateMapping") or []),
+                "terminalStates": list(lifecycle_evidence.get("terminalStates") or []),
+                "readinessStatus": readiness_evidence.get("status") or "blocked_pending_exact_launch_approval",
+                "blockedReasonIds": list(readiness_evidence.get("blockedReasonIds") or []),
+                "missingEnvelopeFields": list(readiness_evidence.get("missingEnvelopeFields") or []),
+                "rejectedEnvelopeFields": readiness_evidence.get("rejectedEnvelopeFields") or {},
+                "staleEnvelopeFields": list(readiness_evidence.get("staleEnvelopeFields") or []),
+                "lifecyclePolicyResults": {
+                    "timeoutPolicy": lifecycle_evidence.get("timeoutPolicy"),
+                    "cancellationPolicy": lifecycle_evidence.get("cancellationPolicy"),
+                    "heartbeatPolicy": lifecycle_evidence.get("heartbeatPolicy"),
+                    "childProcessTreeTrackingPolicy": lifecycle_evidence.get("childProcessTreeTrackingPolicy"),
+                    "orphanDetectionPolicy": lifecycle_evidence.get("orphanDetectionPolicy"),
+                    "terminalStateReconciliationPolicy": lifecycle_evidence.get("terminalStateReconciliationPolicy"),
+                    "idempotentCleanupPolicy": lifecycle_evidence.get("idempotentCleanupPolicy"),
+                    "rollbackPolicy": lifecycle_evidence.get("rollbackPolicy"),
+                },
+                "outputArtifactSummary": {
+                    "artifactReferenceOnly": output_contract.get("artifactReferenceOnly", True),
+                    "boundedByteCounts": output_contract.get("boundedByteCounts") or {},
+                    "artifactReferences": output_contract.get("artifactReferences") or [],
+                    "workflowEventRawOutputAllowed": output_contract.get("workflowEventRawOutputAllowed", False),
+                    "generatedPatchHandling": output_contract.get("generatedPatchHandling"),
+                    "rawOutputStored": output_contract.get("rawOutputStored", False),
+                },
                 "processLaunchAttempted": False,
                 "shellExecutionAttempted": False,
                 "credentialAccessAttempted": False,

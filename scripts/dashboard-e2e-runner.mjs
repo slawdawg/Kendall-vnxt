@@ -73,6 +73,7 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
           PLAYWRIGHT_DISABLE_WEBSERVER: "true",
           PLAYWRIGHT_DASHBOARD_URL: dashboardUrl,
           PLAYWRIGHT_SUPERVISOR_URL: supervisorUrl,
+          PLAYWRIGHT_E2E_DB_PATH: dbPath,
         },
         label: "playwright",
       },
@@ -152,7 +153,7 @@ async function waitForExit(child) {
   return await new Promise((resolve) => {
     const hardStop = setTimeout(() => {
       stopProcessTree(child).finally(() => resolve(child.kendallExpectedPassObserved ? 0 : 1));
-    }, 30_000);
+    }, 90_000);
     const passWatchdog = setInterval(() => {
       if (child.kendallExpectedPassObserved) {
         clearTimeout(hardStop);

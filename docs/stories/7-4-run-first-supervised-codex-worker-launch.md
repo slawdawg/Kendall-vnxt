@@ -5,7 +5,7 @@ baseline_commit: fcd1351e926af2370a92e812ca41bf236ee458f4
 # Story 7.4: Run the First Supervised Codex Worker Launch
 
 Date: 2026-06-11
-Status: review
+Status: done
 
 ## Story
 
