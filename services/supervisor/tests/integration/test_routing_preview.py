@@ -5,6 +5,7 @@ import socket
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
@@ -4933,6 +4934,66 @@ def test_low_risk_delivery_plan_blocks_green_stage_when_policy_is_missing(tmp_pa
     assert "would push branch codex/story-10-1" in action.dryRunEffects
 
 
+def test_low_risk_delivery_plan_requires_pr_url_for_merge_binding(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "low-risk-delivery-plan-missing-pr-url.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import service
+    from supervisor.api.schemas import TrustedDeliveryEligibilityCheckView, TrustedDeliveryEligibilityStageEvaluationView
+
+    stage = TrustedDeliveryEligibilityStageEvaluationView(
+        stageId="merge-auto-eligible",
+        label="Merge",
+        status="eligible",
+        eligible=True,
+        checks=[
+            TrustedDeliveryEligibilityCheckView(
+                checkId="merge-state",
+                label="Merge state",
+                gateFamily="merge_state",
+                status="passed",
+                summary="Merge checks passed.",
+                evidence=["mergeStatus=ready", "ciStatus=passed", "reviewState=approved"],
+            )
+        ],
+        allowedOperations=["merge approved eligible PR"],
+        blockedOperations=["cleanup", "force push"],
+        nextAction="Request exact approval before execution.",
+    )
+    blockers = service._low_risk_delivery_binding_blockers(  # type: ignore[attr-defined]
+        SimpleNamespace(currentBranch="codex/story-10-2", headRevision="fixture-head"),
+        {
+            "executionBranch": "codex/story-10-2",
+            "pullRequestHeadRevision": "fixture-head",
+            "ciStatus": "passed",
+            "reviewState": "approved",
+            "mergeStatus": "ready",
+        },
+        action_id="merge",
+    )
+    action = service._low_risk_delivery_plan_action(  # type: ignore[attr-defined]
+        stage,
+        action_id="merge",
+        label="Merge",
+        binding_blockers=blockers,
+        delivery_evidence={"pullRequestHeadRevision": "fixture-head"},
+        required_approval="Exact approval required.",
+        dry_run_ready=["would merge the approved PR"],
+        dry_run_blocked=["would block merge until PR evidence is current"],
+    )
+
+    assert "pull-request-url-missing" in blockers
+    assert action.status == "blocked"
+    assert action.eligible is False
+    assert "pull-request-url-missing" in action.blockedReasons
+    assert "policy-missing" in action.blockedReasons
+    assert action.allowedOperations == []
+    assert action.dryRunEffects == ["would block merge until PR evidence is current"]
+
+
 def test_delivery_execution_evidence_without_policy_is_report_only(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "delivery-execution-evidence-report-only.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -6099,6 +6160,51 @@ def test_cleanup_plan_blocks_unsafe_path_crossing(tmp_path, monkeypatch) -> None
     assert "cleanup-target-outside-approved-root" in plan["blockedReasons"]
     assert "blocked-path-present" in plan["blockedReasons"]
     assert plan["cleanupAllowed"] is False
+
+
+def test_cleanup_plan_blocks_missing_approved_root_proof(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-plan-missing-approved-root.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/work-items",
+            json={
+                "title": "Cleanup missing approved-root proof fixture",
+                "requestedOutcome": "Block cleanup when approved-root proof is missing.",
+                "source": "test",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "executionBranch": "codex/story-10-3",
+                    "cleanupPolicyId": "low-risk-cleanup-policy-v1",
+                    "cleanupTargetPath": (tmp_path / "missing-approved-root").as_posix(),
+                    "cleanupTargetExists": True,
+                    "cleanupTargetGitRegistered": True,
+                    "deliveryExecutionEvidence": [
+                        {
+                            "mode": "approved_merge_action_recorded",
+                            "status": "recorded",
+                            "mergeStatus": "merged",
+                            "artifactRefs": ["delivery-evidence://merge-missing-approved-root"],
+                        }
+                    ],
+                },
+            },
+        )
+        response = client.get(f"/work-items/{created.json()['data']['id']}/cleanup-plan")
+
+    assert response.status_code == 200
+    plan = response.json()["data"]
+    assert plan["status"] == "blocked"
+    assert plan["cleanupAllowed"] is False
+    assert "cleanup-target-approved-root-missing" in plan["blockedReasons"]
+    assert "cleanup-target-outside-approved-root" not in plan["blockedReasons"]
 
 
 def test_cleanup_plan_blocks_failed_delivery_evidence(tmp_path, monkeypatch) -> None:

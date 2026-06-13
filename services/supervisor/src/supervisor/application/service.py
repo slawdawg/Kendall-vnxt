@@ -4270,6 +4270,8 @@ class SupervisorService:
                     blockers.append("pr-head-evidence-missing")
                 elif pull_request_head != eligibility.headRevision:
                     blockers.append("stale-pr-head")
+            else:
+                blockers.append("pull-request-url-missing")
 
         if action_id == "cleanup":
             cleanup_target = delivery_evidence.get("cleanupTarget")
@@ -4505,6 +4507,8 @@ class SupervisorService:
             blockers.append("cleanup-target-ambiguous")
         if inside_approved_root is False:
             blockers.append("cleanup-target-outside-approved-root")
+        elif cleanup_target_path and inside_approved_root is not True:
+            blockers.append("cleanup-target-approved-root-missing")
         if blocked_paths:
             blockers.append("blocked-path-present")
         if source_files:
