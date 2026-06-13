@@ -229,3 +229,13 @@ Stories in this epic do not approve push, PR mutation, merge, deploy, branch del
 | --- | --- |
 | `12-1-refresh-github-delivery-approval-packet-from-current-pr-evidence.md` | Done story for refreshing the PR #103 GitHub delivery approval packet from current PR, CI, review, mergeability, retained-evidence, rollback, and stop-line evidence without performing delivery. |
 | `12-2-record-post-merge-delivery-and-cleanup-evidence.md` | Done story for recording PR #103 merge evidence, remote branch cleanup, remote-tracking prune, registered worktree state, and preserved cleanup stop lines after delivery. |
+
+## Draft Epic 13 Story Map
+
+Epic 13 starts after the GitHub delivery lane was merged and cleaned up. Its theme is adaptive scoring as bounded decision support: define and later prove scoring only as metadata-only, human-reviewed recommendation evidence without priority mutation, authority changes, provider calls, or autopromotion.
+
+Stories in this epic do not approve scoring execution, provider-backed scoring, priority mutation, candidate promotion, authority state changes, launch, delivery, cleanup, or failed-check bypass.
+
+| Story | Summary |
+| --- | --- |
+| `13-1-define-adaptive-scoring-decision-support-contract.md` | Done story for defining the adaptive-scoring approval packet, allowed metadata inputs, deterministic formula requirements, output-use policy, approval binding, rollback/removal path, and stop lines without computing or applying a score. |
