@@ -1815,6 +1815,23 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     assert report["reportId"] == "authority-readiness-matrix-report-v1"
     assert report["readOnly"] is True
     assert report["executionAuthorityApproved"] is False
+    assert {finding["findingId"] for finding in report["currentStateFindings"]} == {
+        "planning-reconciliation-current",
+        "pr-103-review-gated",
+    }
+    pr_finding = next(finding for finding in report["currentStateFindings"] if finding["findingId"] == "pr-103-review-gated")
+    assert pr_finding["status"] == "ci_green_external_review_blocked"
+    assert any("mergeStateStatus=BLOCKED" in evidence for evidence in pr_finding["evidence"])
+    assert any("Local story completion is recorded" in evidence for evidence in pr_finding["evidence"])
+    assert any("merged into codex/epic-10-delivery-cleanup-plans, not directly into main" in evidence for evidence in pr_finding["evidence"])
+    assert any("Merged-to-main state remains false" in evidence for evidence in pr_finding["evidence"])
+    packet = report["nextLaneDecisionPacket"]
+    assert packet["packetId"] == "epic-11-next-lane-authority-decision-packet-2026-06-13"
+    assert packet["status"] == "decision_only_no_authority_granted"
+    assert packet["approvalRequired"] is True
+    assert packet["noAuthorityGranted"] is True
+    assert "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md" in packet["packetPath"]
+    assert any("Do not treat the decision packet recommendation as approval" in stop_line for stop_line in packet["stopLines"])
     assert {family["familyId"] for family in report["families"]} == {
         "local-provider-execution",
         "subscription-agent-launch",

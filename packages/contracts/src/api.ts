@@ -819,10 +819,35 @@ export interface AuthorityReadinessFamilyView {
   nextAction: string;
 }
 
+export interface CurrentStateReconciliationFindingView {
+  findingId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+  relatedDocs: string[];
+  nextAction: string;
+}
+
+export interface NextLaneDecisionPacketView {
+  packetId: string;
+  status: string;
+  recommendation: string;
+  packetPath: string;
+  approvalRequired: boolean;
+  noAuthorityGranted: boolean;
+  requiredFreshnessCheck: string;
+  relatedDocs: string[];
+  stopLines: string[];
+  nextAction: string;
+}
+
 export interface AuthorityReadinessMatrixReportView {
   reportId: string;
   generatedAt: string;
   summary: string;
+  currentStateFindings: CurrentStateReconciliationFindingView[];
+  nextLaneDecisionPacket: NextLaneDecisionPacketView;
   families: AuthorityReadinessFamilyView[];
   readinessLadder: ProviderEnablementPolicyStepView[];
   stopLines: string[];

@@ -1,7 +1,7 @@
 ﻿from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator, model_validator
 
 from supervisor.domain.types import (
     AuditMode,
@@ -878,10 +878,41 @@ class AuthorityReadinessFamilyView(BaseModel):
         return value
 
 
+class CurrentStateReconciliationFindingView(BaseModel):
+    findingId: str
+    label: str
+    status: str
+    summary: str
+    evidence: list[str] = Field(default_factory=list)
+    relatedDocs: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
+class NextLaneDecisionPacketView(BaseModel):
+    packetId: str
+    status: str
+    recommendation: str
+    packetPath: str
+    approvalRequired: bool = True
+    noAuthorityGranted: bool = True
+    requiredFreshnessCheck: str
+    relatedDocs: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
+    nextAction: str
+
+    @model_validator(mode="after")
+    def require_blocked_authority_when_approval_is_required(self) -> "NextLaneDecisionPacketView":
+        if self.approvalRequired and not self.noAuthorityGranted:
+            raise ValueError("approval-required next-lane packets cannot grant execution authority")
+        return self
+
+
 class AuthorityReadinessMatrixReportView(BaseModel):
     reportId: str
     generatedAt: datetime
     summary: str
+    currentStateFindings: list[CurrentStateReconciliationFindingView]
+    nextLaneDecisionPacket: NextLaneDecisionPacketView
     families: list[AuthorityReadinessFamilyView]
     readinessLadder: list[ProviderEnablementPolicyStepView]
     stopLines: list[str]
