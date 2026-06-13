@@ -184,7 +184,7 @@ The highest-value next work should:
 
 1. **Current-State Reconciliation And Next-Lane Authority Planning**: keep checks, docs, safe backlog items, PR state, and blocked-story state current after Epic 10.
 2. **Authority Readiness Refresh**: update readiness evidence for delivery, cleanup, provider, process-launch, premium, and scoring lanes.
-3. **Provider/Process/Premium Decision Packet**: decide which lane, if any, should receive the next exact approval packet.
+3. **Next-Lane Authority Decision Packet**: use `docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md` to compare provider, process-launch, premium, adaptive scoring, GitHub delivery, and cleanup lanes and decide which lane, if any, should receive the next exact approval packet.
 4. **Read-Only Evidence Polish**: add small review shortcuts only when useful.
 
 ## Stop Conditions
