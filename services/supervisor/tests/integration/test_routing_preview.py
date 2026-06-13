@@ -1819,23 +1819,61 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
         "local-provider-execution",
         "subscription-agent-launch",
         "premium-execution",
+        "adaptive-scoring",
         "worker-command-source-network-credentials",
         "remote-delivery-automation",
+        "github-delivery",
+        "cleanup-automation",
     }
+    for family in report["families"]:
+        assert family["rollbackPath"].strip()
+        assert family["requiredApprovals"]
+        assert family["requiredEvidence"]
+        assert family["relatedReports"]
+        assert family["relatedDocs"]
+        assert family["stopLines"]
     provider_family = next(family for family in report["families"] if family["familyId"] == "local-provider-execution")
     assert provider_family["status"] == "blocked_pending_explicit_approval"
     assert provider_family["blockedStories"] == [
         "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md"
     ]
     assert "GET /supervisor/disabled-provider-proofs" in provider_family["relatedReports"]
+    assert "no-call fixture evidence" in provider_family["rollbackPath"]
     launch_family = next(family for family in report["families"] if family["familyId"] == "subscription-agent-launch")
     assert "docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md" in launch_family["blockedStories"]
     assert "/controls#maintenance-action-plan-report" in launch_family["dashboardAnchors"]
+    scoring_family = next(family for family in report["families"] if family["familyId"] == "adaptive-scoring")
+    assert scoring_family["status"] == "blocked_pending_explicit_approval"
+    assert "GET /supervisor/development-runway-report" in scoring_family["relatedReports"]
+    assert any("Do not run adaptive scoring" in stop_line for stop_line in scoring_family["stopLines"])
     command_family = next(family for family in report["families"] if family["familyId"] == "worker-command-source-network-credentials")
     assert command_family["status"] == "blocked_by_default"
     assert any("Blocked command classes" in evidence for evidence in command_family["requiredEvidence"])
     remote_family = next(family for family in report["families"] if family["familyId"] == "remote-delivery-automation")
     assert "GET /supervisor/delivery-readiness-policy-report" in remote_family["relatedReports"]
+    delivery_family = next(family for family in report["families"] if family["familyId"] == "github-delivery")
+    assert delivery_family["status"] == "evidence_ready_approval_required"
+    assert "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md" in delivery_family["relatedDocs"]
+    assert "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md" in delivery_family["relatedDocs"]
+    assert "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md" in delivery_family["relatedDocs"]
+    assert "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md" in delivery_family["relatedDocs"]
+    assert any("cleanup plan" in evidence for evidence in delivery_family["requiredEvidence"])
+    assert any("PR #103" in evidence for evidence in delivery_family["requiredEvidence"])
+    assert "dry-run planning" in delivery_family["rollbackPath"]
+    cleanup_family = next(family for family in report["families"] if family["familyId"] == "cleanup-automation")
+    assert cleanup_family["status"] == "blocked_pending_explicit_approval"
+    assert "GET /supervisor/local-cleanup-readiness-report" in cleanup_family["relatedReports"]
+    assert "GET /supervisor/remote-cleanup-sync-readiness-report" in cleanup_family["relatedReports"]
+    assert "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md" in cleanup_family["relatedDocs"]
+    assert "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md" in cleanup_family["relatedDocs"]
+    assert "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md" in cleanup_family["relatedDocs"]
+    assert "docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md" in cleanup_family["relatedDocs"]
+    assert "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md" in cleanup_family["relatedDocs"]
+    assert any("Low-risk delivery dry-run plan" in evidence for evidence in cleanup_family["requiredEvidence"])
+    assert any("Delivery execution evidence" in evidence for evidence in cleanup_family["requiredEvidence"])
+    assert any("Trusted authority ledger" in evidence for evidence in cleanup_family["requiredEvidence"])
+    assert any("Do not remove worktrees" in stop_line for stop_line in cleanup_family["stopLines"])
+    assert "leave the target untouched" in cleanup_family["rollbackPath"]
     assert {step["stepId"] for step in report["readinessLadder"]} == {
         "explicit-authority-approval",
         "evidence-surface-alignment",
