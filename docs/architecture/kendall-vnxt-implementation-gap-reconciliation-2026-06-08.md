@@ -1,7 +1,7 @@
 # Kendall_vNxt Implementation Gap Reconciliation
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, maintenance readiness evidence-link coverage, development runway PR batching policy coverage, development runway evidence links, and runtime review evidence links through Story 3.65
+Updated: 2026-06-13 after Story 4.4 approved VM-to-host Ollama implementation, Epic 8 artifact-only subscription launch evidence, and Epic 10 low-risk delivery/cleanup planning, evidence, Dev Console, and approval-ledger hardening
 Scope: Code-aware reconciliation of architecture and PRD gaps against current implementation
 
 Source review artifacts:
@@ -30,6 +30,13 @@ Source review artifacts:
 - `docs/stories/3-63-development-runway-pr-batching-policy.md`
 - `docs/stories/3-64-development-runway-evidence-links.md`
 - `docs/stories/3-65-runtime-review-evidence-links.md`
+- `docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
+- `docs/stories/8-5-execute-one-explicitly-approved-artifact-only-subscription-agent-launch.md`
+- `docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md`
+- `docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md`
+- `docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md`
+- `docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md`
+- `docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md`
 
 Implementation areas checked:
 
@@ -48,9 +55,9 @@ Current state:
 - Dynamic routing, worker registry, handoff artifacts, premium approval artifacts, local evidence packets, disabled subscription-agent stubs, and fleet visibility are implemented.
 - Execution attempts are first-class supervisor state with creation, rejection, lifecycle transitions, route-bound approval, history, workspace isolation metadata, runtime evidence export, and dashboard visibility.
 - Disabled execution configuration checks and worker threat-boundary surfaces exist and are test-backed.
-- Real external/local worker execution remains intentionally deferred.
+- Real external/local worker execution remains intentionally deferred; completed bounded evidence is limited to Story 4.4's approved Ollama endpoint/model call and Story 8.5's no-production-process artifact-only fixture path.
 
-The remaining work is no longer "add execution attempts." The next useful work is to harden the architecture and product around future enablement: dependency gates, command/read boundary documentation, provider enablement precedence, richer attempt reporting, and later controlled worker execution only after explicit decisions.
+The remaining work is no longer "add execution attempts." The next useful work is to keep current-state evidence reconciled, refresh authority readiness from completed delivery/cleanup work, and select the next authority lane only after exact approval.
 
 ## Status Legend
 
@@ -93,7 +100,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Runtime evidence export readiness references | Implemented | `RuntimeEvidenceExportBoundaryView.relatedSupervisorReports`, Story 3.9 | Work-item exports now point to readiness, boundary, disabled provider proof, config, and threat reports. |
 | Provider disabled adapter fixture expansion | Implemented | `docs/architecture/kendall-vnxt-provider-disabled-fixtures-2026-06-08.md`, provider proof contract, Story 3.10 | Provider proofs now include endpoint family, redaction, timeout, cancellation, and retention policy fields. |
 | First local provider PRD draft | Documented | `docs/prds/local-provider-ollama-disabled-to-limited-execution.md`, Story 3.10 | Drafts Ollama gates, endpoint policy, prompt/retention policy, future acceptance criteria, rollback, and open questions without approving implementation. |
-| Ollama PRD review and story breakdown | Implemented for approved host lane | `docs/prds/local-provider-ollama-prd-review-2026-06-08.md`, Stories 4.1-4.4 | Stories 4.1-4.3 are complete as non-executing no-call preparation; Story 4.4 is approved only for VM-to-host endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`. |
+| Ollama PRD review and story breakdown | Implemented for approved host lane | `docs/prds/local-provider-ollama-prd-review-2026-06-08.md`, Stories 4.1-4.4 | Stories 4.1-4.3 are complete as non-executing no-call preparation; Story 4.4 is implemented only for VM-to-host endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`. |
 | Runtime evidence export dashboard access | Implemented | `RuntimeEvidenceExportPanel`, Story 3.11 | Work-item detail pages show export summary, safety flags, related reports, and git-backed boundary evidence. |
 | Runtime evidence report anchor links | Implemented | `RuntimeEvidenceExportPanel`, Story 3.40 | Runtime export related report entries link to the same stable controls-page report anchors used by evidence overview shortcuts. |
 | Runtime evidence review manifest | Implemented | `RuntimeEvidenceExportView.reviewManifest`, Story 3.20 | Adds export counts, checklist, retention notes, and stop lines without changing approval state. |
@@ -123,7 +130,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Development runway drift check | Implemented | `pnpm run check:development-runway`, Story 3.54 | Keeps development runway contracts, schemas, API route, service slices, dashboard rendering, report catalog, runtime evidence, browser assertions, runbooks, and story evidence aligned. |
 | Runtime evidence review drift check | Implemented | `pnpm run check:runtime-review`, Story 3.57 | Keeps runtime evidence review contracts, schemas, API route, service queue construction, dashboard rendering, work-item detail shortcuts, report catalog, runtime evidence, browser assertions, runbooks, and story evidence aligned. |
 | Subscription-agent launch PRD | Documented | `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`, Story 3.12 | Drafts supervised launch gates, lifecycle, workspace, output, session, dashboard, runtime export, rollback, and open questions without approving implementation. |
-| Subscription-agent launch PRD review and story breakdown | Partially implemented | `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`, Stories 5.1-5.5 | Stories 5.1-5.4 are complete as non-executing preparation; Story 5.5 remains blocked pending explicit process-launch approval. |
+| Subscription-agent launch PRD review and story breakdown | Partial with approved artifact-only fixture lane | `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`, Stories 5.1-5.5, Epic 8 | Stories 5.1-5.4 are complete as non-executing preparation; Story 8.5 completed the exact-approved artifact-only launch fixture path; direct process launch remains blocked pending explicit process-launch approval. |
 | Execution authority approval checkpoints | Documented | `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`, Story 3.13 | Defines approval language, non-approval language, evidence requirements, and currently blocked authority stories. |
 | Dashboard evidence overview polish | Implemented | `EvidenceOverviewPanel`, Story 3.14 | Work-item detail pages show read-only shortcuts and summaries for routing, attempts, exports, and history. |
 | Evidence overview review shortcuts | Implemented | `EvidenceOverviewPanel`, Story 3.33 | Surfaces runtime export review navigator items at the top of work-item detail without adding execution controls. |
@@ -152,8 +159,12 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Supervisor report catalog | Implemented | `GET /supervisor/report-catalog`, `SupervisorReportCatalogPanel`, Story 3.18 | Indexes read-only supervisor evidence reports and stop lines without changing approval state. |
 | Maintenance readiness report | Implemented | `GET /supervisor/maintenance-readiness-report`, `MaintenanceReadinessReportPanel`, Story 3.19 | Tracks safe maintenance lanes, report alignment, and blocked authority posture without changing approval state. |
 | Maintenance readiness evidence links | Implemented | `MaintenanceReadinessTrackView.dashboardAnchors`, Story 3.62 | Renders related report, document, and dashboard anchor evidence for each safe maintenance lane without adding execution controls. |
-| Real local provider calls | Deferred | Threat boundary and config checks deny calls | Requires future PRD and provider-specific safety decision. |
-| Direct subscription-agent process launch | Deferred | Launch stub is disabled | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
+| Low-risk delivery plan contract | Implemented, PR-gated to main | `LowRiskDeliveryPlanReportView`, `GET /work-items/{id}/low-risk-delivery-plan`, Stories 10.1 and 10.4 | Defines report-only PR, merge, and cleanup planning. As verified on 2026-06-13, PR #103 was CI-green and externally review-gated; re-check GitHub before claiming merge to `main`. |
+| Delivery execution evidence | Implemented, PR-gated to main | `DeliveryExecutionEvidencePayload`, `DeliveryExecutionEvidenceView`, Stories 10.2 and 10.5 | Records bounded metadata-only delivery evidence and rejects stale or unapproved actions through approval-ledger binding. |
+| Cleanup plan and residue classification | Implemented, PR-gated to main | `CleanupPlanView`, `CleanupPlanResidueView`, Story 10.3 | Distinguishes Git worktrees, filesystem residue, source files, retained evidence, and blocked cleanup paths. |
+| Dev Console delivery/cleanup visibility | Implemented, PR-gated to main | `DeliveryCleanupPlanPanel`, Story 10.4 | Shows PR, merge, cleanup readiness, blocked reasons, dry-run effects, retained evidence, and next safe actions without mutation controls. |
+| Real local provider expansion | Deferred beyond Story 4.4 | Threat boundary and config checks deny unapproved calls | Story 4.4 covers only the approved VM-to-host Ollama endpoint/model; any other endpoint, model, provider, or retention expansion requires successor approval. |
+| Direct subscription-agent process launch | Deferred beyond artifact-only fixture lane | Launch stub is disabled for direct process launch | Requires process lifecycle, workspace policy, approval, cancellation, and secret/session handling. |
 | Premium execution | Deferred | Approval request artifacts only | Requires premium provider boundary and explicit approval policy. |
 | Adaptive scoring | Deferred | Outcome evidence exists but corpus is small | Use reporting first; scoring waits for enough audited outcomes. |
 
@@ -163,17 +174,17 @@ The architecture gap has moved from missing execution-attempt primitives to miss
 
 The highest-value next work should:
 
-1. Keep architecture docs aligned with the implemented non-executing control plane.
-2. Continue maintenance and hygiene while waiting for explicit execution-authority approval.
-3. Wait for explicit approval before moving any Ollama or launch story from blocked to ready.
-4. Use execution-readiness reports to decide when a provider-specific PRD has enough evidence.
-5. Only then implement the next controlled worker execution capability.
+1. Keep architecture docs aligned with the implemented control plane and approved bounded execution slices.
+2. Continue maintenance and hygiene while waiting for explicit approval on broader execution-authority lanes.
+3. Wait for explicit approval before expanding Ollama beyond Story 4.4 or moving direct process launch from blocked to ready.
+4. Use execution-readiness and authority-readiness reports to decide when a provider-specific, process-launch, premium, scoring, delivery, or cleanup lane has enough evidence.
+5. Only then implement the next controlled worker or automation capability.
 
 ## Recommended Next Backlog
 
-1. **Maintenance And Hygiene**: keep checks, docs, safe backlog items, and blocked-story state current.
-2. **Provider Approval Checkpoint**: wait for explicit approval before implementing any Ollama execution story.
-3. **Provider PRD Review Loop**: decide whether Ollama remains first or another local provider should be prioritized.
+1. **Current-State Reconciliation And Next-Lane Authority Planning**: keep checks, docs, safe backlog items, PR state, and blocked-story state current after Epic 10.
+2. **Authority Readiness Refresh**: update readiness evidence for delivery, cleanup, provider, process-launch, premium, and scoring lanes.
+3. **Provider/Process/Premium Decision Packet**: decide which lane, if any, should receive the next exact approval packet.
 4. **Read-Only Evidence Polish**: add small review shortcuts only when useful.
 
 ## Stop Conditions
@@ -181,7 +192,7 @@ The highest-value next work should:
 Stop for explicit operator approval before any change that would:
 
 - launch a subscription-agent process,
-- call a local or remote model/provider endpoint,
+- call a local or remote model/provider endpoint outside the exact-approved Story 4.4 VM-to-host Ollama endpoint/model boundary,
 - enable premium execution,
 - permit arbitrary shell commands,
 - allow worker source mutation,

@@ -1,6 +1,6 @@
 # Story Index
 
-Date: 2026-06-08
+Date: 2026-06-13
 Status: current navigation index
 
 ## Post-Epic-6 Status Reconciliation
@@ -167,28 +167,28 @@ Epic 7 starts after the Epic 6 retrospective. Its theme is useful supervised exe
 
 | Story | Slice |
 | --- | --- |
-| `7-1-define-green-gate-delivery-readiness-contract.md` | Review first Epic 7 story defining the green-gate delivery readiness contract, negative fixtures, machine-checkable blocked reasons, and read-only authority boundary before mutating worker launch. |
-| `7-2-define-bounded-codex-worker-launch-contract.md` | Review Codex launch authority envelope with stale/mismatch rejection and no-launch enforcement. |
-| `7-3-block-out-of-scope-diffs-before-worker-mutation.md` | Review diff guard that blocks unexpected file changes before real worker mutation can become delivery-eligible. |
-| `7-4-run-first-supervised-codex-worker-launch.md` | Review first real bounded Codex launch story, gated by explicit approval and prior diff guard. |
-| `7-5-record-verification-results-and-recovery-evidence.md` | Review verification and recovery evidence story for supervised worker output. |
-| `7-6-show-green-gate-readiness-in-dev-console.md` | Review Dev Console readiness view consuming real persisted green-gate evidence. |
-| `7-7-compute-pr-merge-cleanup-eligibility-from-green-gate-evidence.md` | Review eligibility computation for PR, merge, and cleanup, reporting readiness without performing gated actions. |
+| `7-1-define-green-gate-delivery-readiness-contract.md` | Done first Epic 7 story defining the green-gate delivery readiness contract, negative fixtures, machine-checkable blocked reasons, and read-only authority boundary before mutating worker launch. |
+| `7-2-define-bounded-codex-worker-launch-contract.md` | Done Codex launch authority envelope with stale/mismatch rejection and no-launch enforcement. |
+| `7-3-block-out-of-scope-diffs-before-worker-mutation.md` | Done diff guard that blocks unexpected file changes before real worker mutation can become delivery-eligible. |
+| `7-4-run-first-supervised-codex-worker-launch.md` | Done first real bounded Codex launch story, gated by explicit approval and prior diff guard. |
+| `7-5-record-verification-results-and-recovery-evidence.md` | Done verification and recovery evidence story for supervised worker output. |
+| `7-6-show-green-gate-readiness-in-dev-console.md` | Done Dev Console readiness view consuming real persisted green-gate evidence. |
+| `7-7-compute-pr-merge-cleanup-eligibility-from-green-gate-evidence.md` | Done eligibility computation for PR, merge, and cleanup, reporting readiness without performing gated actions. |
 
 ## Draft Epic 8 Story Map
 
 Epic 8 starts after the Epic 7 retrospective. Its theme is supervised subscription-agent launch: revive deferred Story 5.5 as a staged, approval-bound launch path while preserving the real-process stop line until a later exact approval packet is accepted.
 
-Stories 8.1 through 8.6 currently have accepted story files. Story 8.6 is ready for development and remains below new execution, cleanup, GitHub, provider, credential, network, and source-mutation authority boundaries.
+Stories 8.1 through 8.6 are complete within their approved scope and remain below new direct process-launch, cleanup, GitHub, provider, credential, network, and source-mutation authority boundaries.
 
 | Story | Slice |
 | --- | --- |
-| `8-1-refresh-subscription-agent-launch-approval-packet-from-epic-7-evidence.md` | Ready-for-dev packet refresh that maps Epic 7 controls to the deferred subscription-agent launch gates without approving real process launch. |
-| `8-2-define-first-launch-target-policy-and-execution-envelope.md` | Ready-for-dev policy story for first launch target, command template, environment allowlist, artifact limits, timeout/cancel policy, expiry, dashboard controls, rollback, and verification. |
-| `8-3-implement-disabled-dry-run-process-supervisor-adapter.md` | Ready-for-dev disabled/dry-run adapter story for lifecycle, cancellation, timeout, output artifact, and rollback behavior before real launch. |
-| `8-4-show-subscription-launch-readiness-in-dev-console.md` | Ready-for-dev Dev Console readiness story for subscription launch blocked states, dry-run evidence, missing approvals, and execution-prohibited display. |
+| `8-1-refresh-subscription-agent-launch-approval-packet-from-epic-7-evidence.md` | Done packet refresh that maps Epic 7 controls to the deferred subscription-agent launch gates without approving real process launch. |
+| `8-2-define-first-launch-target-policy-and-execution-envelope.md` | Done policy story for first launch target, command template, environment allowlist, artifact limits, timeout/cancel policy, expiry, dashboard controls, rollback, and verification. |
+| `8-3-implement-disabled-dry-run-process-supervisor-adapter.md` | Done disabled/dry-run adapter story for lifecycle, cancellation, timeout, output artifact, and rollback behavior before real launch. |
+| `8-4-show-subscription-launch-readiness-in-dev-console.md` | Done Dev Console readiness story for subscription launch blocked states, dry-run evidence, missing approvals, and execution-prohibited display. |
 | `8-5-execute-one-explicitly-approved-artifact-only-subscription-agent-launch.md` | Done exact-approval artifact-only fixture launch story with retained metadata evidence and no broad authority expansion. |
-| `8-6-record-verification-recovery-and-rollback-evidence.md` | Ready-for-dev evidence story for subscription-launch verification, recovery path, rollback state, retained artifact references, and next safe action. |
+| `8-6-record-verification-recovery-and-rollback-evidence.md` | Done evidence story for subscription-launch verification, recovery path, rollback state, retained artifact references, and next safe action. |
 
 ## Draft Epic 9 Story Map
 
@@ -206,4 +206,12 @@ Stories 8.1 through 8.6 currently have accepted story files. Story 8.6 is ready 
 | `10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md` | Done evidence story for approved PR and merge actions with metadata-only delivery results, stale-state rejection, exact policy identity, and retention-boundary enforcement. |
 | `10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md` | Done cleanup planning story for preserving evidence, distinguishing Git worktrees from filesystem residue, source files, and blocked paths, and blocking ambiguous deletion. |
 | `10-4-show-delivery-and-cleanup-plans-in-dev-console.md` | Done dashboard story for showing PR, merge, and cleanup plan states, dry-run effects, blocked reasons, retained evidence, and cleanup residue classification. |
-| `10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md` | Ready-for-dev authority hardening story for validating delivery execution approval IDs against a trusted metadata-only approval ledger. |
+| `10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md` | Done authority hardening story for validating delivery execution approval IDs against a trusted metadata-only approval ledger. |
+
+## Draft Epic 11 Story Map
+
+Epic 11 starts after the Epic 10 retrospective. Its theme is current-state reconciliation and next-lane authority planning: refresh stale planning/status artifacts after Epic 10 without granting provider, process-launch, premium, scoring, GitHub, cleanup, or broad automation authority.
+
+| Story | Summary |
+| --- | --- |
+| `11-1-reconcile-planning-status-after-epic-10-delivery.md` | Done reconciliation story for aligning story, PRD, architecture, sprint, and PR-state claims with current implementation evidence. |
