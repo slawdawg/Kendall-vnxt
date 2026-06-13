@@ -218,3 +218,13 @@ Epic 11 starts after the Epic 10 retrospective. Its theme is current-state recon
 | `11-2-refresh-authority-readiness-matrix-from-current-evidence.md` | Done story for refreshing the authority readiness matrix with current delivery, cleanup, provider, process, premium, and scoring evidence without granting new authority. |
 | `11-3-create-next-lane-authority-decision-packet.md` | Done story for creating a decision-only packet comparing the next candidate authority lanes without executing or approving any lane. |
 | `11-4-show-reconciliation-and-next-lane-readiness-in-dev-console.md` | Done story for showing reconciliation state and next-lane readiness in the Dev Console without adding execution controls. |
+
+## Draft Epic 12 Story Map
+
+Epic 12 starts after Bob selected the `github-delivery` deferred authority lane. Its theme is GitHub delivery approval and current PR evidence: refresh PR #103 delivery evidence and approval requirements before any merge or remote mutation is requested.
+
+Stories in this epic do not approve push, PR mutation, merge, deploy, branch deletion, worktree deletion, cleanup, issue sync, credential access, failed-check bypass, or worker remote automation.
+
+| Story | Summary |
+| --- | --- |
+| `12-1-refresh-github-delivery-approval-packet-from-current-pr-evidence.md` | Done story for refreshing the PR #103 GitHub delivery approval packet from current PR, CI, review, mergeability, retained-evidence, rollback, and stop-line evidence without performing delivery. |
