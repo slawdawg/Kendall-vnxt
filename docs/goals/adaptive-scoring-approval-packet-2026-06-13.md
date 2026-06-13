@@ -124,11 +124,10 @@ If scoring evidence is stale, contradicted, or disapproved:
 
 ## Exact Approval Template
 
-`I approve the adaptive-scoring lane for one bounded scoring operation using inputs <inputs>, formula <formula-id-version>, output use <decision-support-only>, required evidence <required-evidence>, retained evidence <metadata-only-evidence>, rollback path <rollback>, stop lines <stop-lines>, and expiry/review point <expiry>.`
+`I approve the adaptive-scoring lane for one bounded scoring operation using input set id <input-set-id>, allowed inputs <inputs>, formula <formula-id-version>, output use <decision-support-only>, retained evidence <metadata-only-evidence>, operator <operator>, human review path <human-review-path>, rollback path <rollback>, stop lines <stop-lines>, and expiry/review point <expiry>.`
 
 ## Verification
 
 - `pnpm.cmd run check:docs`
 
 If a later story changes contracts, supervisor reports, dashboard rendering, drift checks, or tests, it must also run the smallest relevant check and then `pnpm.cmd run check` if runtime behavior changed.
-
