@@ -1,7 +1,8 @@
 # Kendall_vNxt Current Gap Review And Recommendations
 
 Date: 2026-06-08
-Updated: 2026-06-09 after safe evidence, managed recipe policy, runbook chain, report-anchor polish, GitHub workflow policy, safe delivery hygiene, delivery readiness policy, delivery readiness drift coverage, maintenance readiness drift coverage, core readiness drift coverage, execution boundary drift coverage, execution evidence drift coverage, provider fixture drift coverage, process lifecycle drift coverage, maintenance action plan coverage, authority readiness matrix coverage, development runway coverage, runtime evidence review coverage, verification execution plan coverage, work-item review queue shortcut coverage, verification handoff checkpoint coverage, development runway readiness-check coverage, safe backlog report-anchor coverage, maintenance action evidence-link coverage, maintenance readiness evidence-link coverage, development runway PR batching policy coverage, development runway evidence links, and runtime review evidence links through Story 3.65
+Updated: 2026-06-13 after Story 4.4 approved VM-to-host Ollama implementation, Epic 8 artifact-only subscription launch evidence, and Epic 10 delivery/cleanup planning, evidence, Dev Console, and approval-ledger hardening
+Previous safe-work update: Updated: 2026-06-09 through Story 3.65 evidence-link and drift-check coverage
 Status: current recommendation
 Scope: Architecture, PRDs, stories, supervisor implementation, dashboard implementation, and routing follow-on work
 
@@ -9,14 +10,14 @@ Scope: Architecture, PRDs, stories, supervisor implementation, dashboard impleme
 
 The execution-attempt control plane is now implemented. Kendall_vNxt can represent execution attempts, reject unsafe lanes, record lifecycle and approval evidence, attach workspace isolation plans, expose runtime evidence exports, show attempt evidence in the dashboard, and surface disabled-by-default execution and threat-boundary checks.
 
-The remaining gap is not basic execution-attempt state. It is the governance and enablement layer required before real workers can be turned on.
+The remaining gap is not basic execution-attempt state. It is the governance and enablement layer required before additional real workers or broader authority lanes can be turned on.
 
 Current safe posture:
 
 - Routing and attempt evidence are inspectable.
-- Real process launch remains disabled.
-- Local provider/model calls remain disabled.
-- Ollama Stories 4.1-4.3 now add non-executing settings, registry, prompt/retention, timeout/cancellation, dashboard, export, and no-call fixture evidence.
+- Direct process launch remains disabled; Story 8.5 completed only the exact-approved artifact-only fixture path without production process launch authority.
+- Local provider/model calls remain disabled except for Story 4.4's exact-approved VM-to-host Ollama endpoint/model boundary.
+- Ollama Stories 4.1-4.3 add non-executing settings, registry, prompt/retention, timeout/cancellation, dashboard, export, and no-call fixture evidence; Story 4.4 adds the approved VM-to-host adapter boundary only.
 - Premium execution remains disabled.
 - Arbitrary shell execution remains disabled.
 - Worker source mutation, network access, and credential access remain disabled.
@@ -105,6 +106,7 @@ Do not rebuild these as new architecture work:
 - Safe backlog delivery-hygiene guidance for larger PR slices, Git/GCM or connector-backed remote work, and plaintext-token stop lines.
 - Delivery readiness policy report for PR, CI, merge, and local-only waiver rules without remote automation approval.
 - Delivery readiness policy drift check in the active verification chain and current runbooks.
+- Epic 10 low-risk delivery and cleanup planning, metadata-only delivery execution evidence, cleanup residue classification, Dev Console visibility, and trusted approval-ledger binding. As verified on 2026-06-13, PR #103 was CI-green and externally review-gated; re-check GitHub before claiming merge to `main`.
 - Maintenance readiness drift check in the active verification chain and current runbooks.
 - Core readiness drift checks for documentation authority and verification readiness reports.
 - Execution boundary drift check for execution configuration, execution readiness, and threat-boundary reports.
@@ -129,11 +131,11 @@ Recommendation: draft provider-specific or subscription-agent PRDs only after th
 
 ### 2. Provider PRD Approval And Story Breakdown
 
-The Ollama provider PRD exists as a draft. Stories 4.1-4.3 now cover non-executing preparation, but no executable lane has been approved.
+The Ollama provider PRD exists as a draft. Stories 4.1-4.3 cover non-executing preparation, and Story 4.4 implemented only the exact-approved VM-to-host endpoint/model lane.
 
 Risk: generic OpenAI-compatible assumptions could hide provider differences in endpoints, auth, timeouts, model selection, retention, and cancellation behavior.
 
-Recommendation: keep Story 4.4 limited to the approved VM-to-host endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`. Only expand provider calls after a successor approval names the new endpoint, model id, scope, and rollback plan.
+Recommendation: keep Story 4.4 limited to the approved VM-to-host endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`. Only expand provider calls after a successor approval names the new endpoint, model id, scope, evidence, stop lines, and rollback plan.
 
 ### 3. Maintenance And Hygiene
 
@@ -152,14 +154,15 @@ Recommendation: keep docs, tests, evidence surfaces, and blocked-story status cu
 
 ## Recommended Immediate Story
 
-Title: Maintenance And Hygiene
+Title: Current-State Reconciliation And Next-Lane Authority Planning
 
-Goal: Keep checks, docs, blocked-story state, and read-only evidence surfaces current while waiting for explicit execution-authority approval.
+Goal: Keep checks, docs, blocked-story state, PR delivery state, and read-only evidence surfaces current before selecting the next authority lane.
 
 Acceptance outline:
 
 - Run and document relevant checks.
-- Keep blocked authority stories blocked unless explicit approval is present.
+- Keep blocked authority stories blocked unless exact approval is present.
+- Distinguish local story completion, stacked PR merge, CI-green PR state, and merged-to-main state.
 - Improve docs/tests/read-only evidence surfaces where useful, preferably in larger coherent slices.
 - Keep all current execution authority disabled.
 
