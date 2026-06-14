@@ -14,7 +14,15 @@ function assertIncludes(source, text, message, failures) {
   }
 }
 
+function scriptCommands(script) {
+  return (script ?? "")
+    .split("&&")
+    .map((command) => command.trim())
+    .filter(Boolean);
+}
+
 const approvalPacket = readWorkspaceFile("docs/goals/cleanup-automation-approval-packet-2026-06-14.md");
+const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const deliveryCheck = readWorkspaceFile("scripts/check-delivery-readiness-policy-report.mjs");
@@ -22,6 +30,15 @@ const storyIndex = readWorkspaceFile("docs/stories/index.md");
 const story = readWorkspaceFile("docs/stories/18-1-refresh-cleanup-automation-approval-packet.md");
 
 const failures = [];
+
+for (const [scriptName, command] of [
+  ["check:cleanup-automation", "node ./scripts/check-cleanup-automation-approval-packet.mjs"],
+  ["check", "pnpm run check:cleanup-automation"],
+]) {
+  if (!scriptCommands(packageJson.scripts?.[scriptName]).includes(command)) {
+    failures.push(`package.json ${scriptName} must include exact command: ${command}`);
+  }
+}
 
 for (const packetText of [
   "Status: approval-required, non-executing packet",
@@ -35,7 +52,14 @@ for (const packetText of [
   "Cleanup outside approved roots.",
   "Target path is inside the approved cleanup root.",
   "Dry-run effects are reviewed.",
+  "Target id",
+  "Operator",
+  "Approval timestamp",
+  "Expiry or review point",
+  "Arbitrary, ambiguous, stale, expired, mismatched, or underspecified approval IDs must be rejected.",
   "Do not delete from this packet alone.",
+  "Do not delete ambiguous paths.",
+  "Do not delete based on stale PR, merge, or worktree evidence.",
   "Do not delete source checkout roots.",
   "Do not delete `main` or protected branches.",
   "Do not delete retained evidence unless separately approved.",
