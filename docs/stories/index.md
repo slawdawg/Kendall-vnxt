@@ -283,6 +283,7 @@ Stories in this epic do not approve process launch, shell expansion, credential/
 | Story | Summary |
 | --- | --- |
 | `16-1-refresh-subscription-agent-process-launch-approval-packet.md` | Done story for refreshing the subscription-agent process-launch approval packet with workspace, command, environment, lifecycle, output, retention, verification, rollback, and stop-line requirements without launching a process. |
+| `16-2-pin-subscription-agent-process-launch-packet-to-drift-checks.md` | Review story for pinning the subscription-agent process-launch approval packet to no-launch drift checks across packet, settings, service gate, and integration-test evidence without launching a process. |
 
 ## Draft Epic 17 Story Map
 

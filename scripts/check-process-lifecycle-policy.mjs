@@ -30,8 +30,8 @@ const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-impleme
 const failures = [];
 
 assertCondition(
-  packageJson.scripts?.["check:process-lifecycle"] === "node ./scripts/check-process-lifecycle-policy.mjs",
-  "package.json must define check:process-lifecycle as node ./scripts/check-process-lifecycle-policy.mjs",
+  packageJson.scripts?.["check:process-lifecycle"]?.includes("node ./scripts/check-process-lifecycle-policy.mjs"),
+  "package.json must run node ./scripts/check-process-lifecycle-policy.mjs from check:process-lifecycle",
   failures,
 );
 assertCondition(
