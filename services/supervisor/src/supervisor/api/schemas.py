@@ -256,10 +256,32 @@ class WorkItemSubscriptionAgentLaunchRequest(BaseModel):
     allowedOutputMode: str | None = None
 
 
+class LocalProviderApprovalInstance(BaseModel):
+    approvalId: str | None = None
+    status: str | None = None
+    authorityFamily: str | None = None
+    operation: str | None = None
+    endpointUrl: str | None = None
+    modelId: str | None = None
+    promptSourceId: str | None = None
+    promptTemplateId: str | None = None
+    redactionPolicy: str | None = None
+    timeoutCancellationPolicy: str | None = None
+    retainedEvidencePolicy: str | None = None
+    retainedEvidence: list[str] = Field(default_factory=list)
+    approvedBy: str | None = None
+    approvedAt: datetime | None = None
+    expiresAt: datetime | None = None
+    reviewPoint: str | None = None
+    rollbackPath: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
+
+
 class WorkItemLocalEvidenceExplanationRequest(BaseModel):
     stepId: str | None = None
     taskKind: str | None = None
     recordEvent: bool = False
+    localProviderApproval: LocalProviderApprovalInstance | None = None
 
 
 class WorkItemRoutingOverrideRequest(BaseModel):
@@ -606,6 +628,10 @@ class LocalProviderAttemptMetadataView(BaseModel):
     status: str
     modelId: str
     endpointFamily: str
+    approvalId: str | None = None
+    approvalStatus: str | None = None
+    rejectionReason: str | None = None
+    rejectionReasons: list[str] = Field(default_factory=list)
     finishReason: str | None = None
     promptSummary: str
     responseSummary: str

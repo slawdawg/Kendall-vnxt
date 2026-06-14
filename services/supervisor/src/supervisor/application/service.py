@@ -20,6 +20,13 @@ class DeliveryApprovalValidation:
     approval_reference: str | None = None
 
 
+@dataclass(frozen=True)
+class LocalProviderApprovalValidation:
+    approved: bool
+    blockers: list[str]
+    approval_reference: str | None = None
+
+
 from supervisor.api.schemas import (
     AuditEventView,
     AuthorityReadinessFamilyView,
@@ -75,6 +82,7 @@ from supervisor.api.schemas import (
     LocalEvidencePacketView,
     LocalCleanupPolicyItemView,
     LocalCleanupReadinessReportView,
+    LocalProviderApprovalInstance,
     LowRiskDeliveryPlanActionView,
     LowRiskDeliveryPlanReportView,
     LocalProviderAttemptMetadataView,
@@ -9595,11 +9603,19 @@ class SupervisorService:
         evidence_summary = self._local_evidence_summary(item, preview, events)
         provider_evidence_summary = self._local_provider_evidence_summary(item, preview, events)
         if bool(ollama_state["enabled"]):
-            provider_result = await self.ollama_provider_adapter.explain(
-                evidence_summary=provider_evidence_summary,
-                evidence_count=len(events),
-            )
-            provider_attempt = LocalProviderAttemptMetadataView(**provider_result.to_metadata())
+            approval_validation = self._validate_local_provider_approval(payload.localProviderApproval, ollama_state)
+            if approval_validation.approved:
+                provider_result = await self.ollama_provider_adapter.explain(
+                    evidence_summary=provider_evidence_summary,
+                    evidence_count=len(events),
+                )
+                provider_attempt = LocalProviderAttemptMetadataView(
+                    **provider_result.to_metadata(),
+                    approvalId=approval_validation.approval_reference,
+                    approvalStatus="accepted",
+                )
+            else:
+                provider_attempt = self._local_provider_rejected_attempt(approval_validation, ollama_state)
         explanation = LocalEvidenceExplanationView(
             explanationId=f"local-evidence-{preview.decision.decisionId}",
             workItemId=item.id,
@@ -9639,6 +9655,120 @@ class SupervisorService:
             await session.commit()
             await session.refresh(item)
         return explanation
+
+    def _validate_local_provider_approval(
+        self,
+        approval: LocalProviderApprovalInstance | None,
+        ollama_state: dict[str, object],
+    ) -> LocalProviderApprovalValidation:
+        if approval is None:
+            return LocalProviderApprovalValidation(False, ["approval-instance-missing"])
+
+        blockers: list[str] = []
+        expected_endpoint = self.settings.ollama_approved_endpoint_url.strip()
+        expected_model = self.settings.ollama_approved_model_id.strip()
+        expected_fields = [
+            ("status", approval.status, "accepted", "approval-status-not-accepted"),
+            ("authorityFamily", approval.authorityFamily, "local-provider-execution", "approval-authority-family-mismatch"),
+            ("operation", approval.operation, "one bounded Ollama provider operation", "approval-operation-mismatch"),
+            ("endpointUrl", approval.endpointUrl, expected_endpoint, "approval-endpoint-mismatch"),
+            ("modelId", approval.modelId, expected_model, "approval-model-mismatch"),
+            ("retainedEvidencePolicy", approval.retainedEvidencePolicy, "metadata-only", "approval-retention-policy-mismatch"),
+            (
+                "timeoutCancellationPolicy",
+                approval.timeoutCancellationPolicy,
+                "connect_timeout_2s_total_timeout_120s",
+                "approval-timeout-cancellation-policy-mismatch",
+            ),
+        ]
+        for _field_name, actual, expected, blocker in expected_fields:
+            if not isinstance(actual, str) or actual.strip() != expected:
+                blockers.append(blocker)
+
+        required_text_fields = [
+            ("approvalId", approval.approvalId, "approval-id-missing"),
+            ("promptSourceId", approval.promptSourceId, "approval-prompt-source-missing"),
+            ("promptTemplateId", approval.promptTemplateId, "approval-prompt-template-missing"),
+            ("approvedBy", approval.approvedBy, "approval-operator-missing"),
+        ]
+        for _field_name, value, blocker in required_text_fields:
+            if not isinstance(value, str) or not value.strip():
+                blockers.append(blocker)
+        if approval.redactionPolicy != "metadata_only_no_raw_prompt_completion_reasoning_or_provider_payload":
+            blockers.append("approval-redaction-policy-mismatch")
+
+        if not any(isinstance(ref, str) and ref.strip() for ref in approval.retainedEvidence):
+            blockers.append("approval-retained-evidence-missing")
+        rollback_steps = [step.strip() for step in approval.rollbackPath if isinstance(step, str) and step.strip()]
+        if not rollback_steps:
+            blockers.append("approval-rollback-missing")
+        elif not any(
+            "disable local-provider" in step.lower() and "ollama" in step.lower()
+            for step in rollback_steps
+        ):
+            blockers.append("approval-rollback-mismatch")
+        stop_lines = [stop_line.strip() for stop_line in approval.stopLines if isinstance(stop_line, str) and stop_line.strip()]
+        if not stop_lines:
+            blockers.append("approval-stop-lines-missing")
+        else:
+            stop_line_text = "\n".join(stop_lines).lower()
+            if expected_endpoint.lower() not in stop_line_text:
+                blockers.append("approval-stop-lines-endpoint-missing")
+            if expected_model.lower() not in stop_line_text:
+                blockers.append("approval-stop-lines-model-missing")
+            if not all(term in stop_line_text for term in ["raw prompt", "completion", "reasoning", "provider payload"]):
+                blockers.append("approval-stop-lines-retention-missing")
+
+        now = datetime.now(timezone.utc)
+        approved_at = self._normalize_timestamp(approval.approvedAt) if approval.approvedAt else None
+        expires_at = self._normalize_timestamp(approval.expiresAt) if approval.expiresAt else None
+        if approved_at is None:
+            blockers.append("approval-approved-at-missing")
+        elif approved_at > now + timedelta(minutes=1):
+            blockers.append("approval-approved-at-future")
+        if expires_at is None:
+            if not isinstance(approval.reviewPoint, str) or not approval.reviewPoint.strip():
+                blockers.append("approval-expiry-or-review-point-missing")
+        elif expires_at <= now:
+            blockers.append("approval-expired")
+        if approved_at and expires_at and approved_at > expires_at:
+            blockers.append("approval-approved-after-expiry")
+
+        unique_blockers = list(dict.fromkeys(blockers))
+        return LocalProviderApprovalValidation(
+            approved=not unique_blockers,
+            blockers=unique_blockers,
+            approval_reference=approval.approvalId if not unique_blockers else approval.approvalId,
+        )
+
+    def _local_provider_rejected_attempt(
+        self,
+        validation: LocalProviderApprovalValidation,
+        ollama_state: dict[str, object],
+    ) -> LocalProviderAttemptMetadataView:
+        blockers = validation.blockers or ["approval-rejected"]
+        return LocalProviderAttemptMetadataView(
+            status="rejected",
+            modelId=str(ollama_state.get("approved_model_id") or self.settings.ollama_approved_model_id),
+            endpointFamily="approved_vm_to_host_ollama_openai_compatible",
+            approvalId=validation.approval_reference,
+            approvalStatus="rejected",
+            rejectionReason=blockers[0],
+            rejectionReasons=blockers,
+            finishReason=None,
+            promptSummary="Provider prompt not built; approval binding rejected before adapter execution.",
+            responseSummary=f"Provider call rejected before adapter execution: {blockers[0]}.",
+            responseCharacterCount=0,
+            reasoningCharacterCount=0,
+            promptCharacterCount=0,
+            completionTokens=None,
+            promptTokens=None,
+            totalTokens=None,
+            redactionApplied=True,
+            rawPayloadRetained=False,
+            timeoutState="not_started",
+            cancellationState="not_started",
+        )
 
     async def record_routing_override(
         self,
