@@ -32,7 +32,7 @@
     "check:reports": "node ./scripts/check-supervisor-report-catalog.mjs",
     "check:execution-boundary": "node ./scripts/check-execution-boundary-reports.mjs",
     "check:execution-evidence": "node ./scripts/check-execution-evidence-boundaries.mjs",
-    "check:provider-fixtures": "node ./scripts/check-provider-fixture-policy.mjs",
+    "check:provider-fixtures": "node ./scripts/check-provider-fixture-policy.mjs && node ./scripts/check-local-provider-execution-approval-packet.mjs",
     "check:process-lifecycle": "node ./scripts/check-process-lifecycle-policy.mjs",
     "check:runbooks": "node ./scripts/check-runbook-verification.mjs",
     "check:runtime-export": "node ./scripts/check-runtime-evidence-export.mjs",

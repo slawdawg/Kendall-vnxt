@@ -28,8 +28,8 @@ const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-impleme
 const failures = [];
 
 assertCondition(
-  packageJson.scripts?.["check:provider-fixtures"] === "node ./scripts/check-provider-fixture-policy.mjs",
-  "package.json must define check:provider-fixtures as node ./scripts/check-provider-fixture-policy.mjs",
+  packageJson.scripts?.["check:provider-fixtures"]?.includes("node ./scripts/check-provider-fixture-policy.mjs"),
+  "package.json must run node ./scripts/check-provider-fixture-policy.mjs from check:provider-fixtures",
   failures,
 );
 assertCondition(

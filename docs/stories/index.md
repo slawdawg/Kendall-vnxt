@@ -263,6 +263,7 @@ Stories in this epic do not approve provider calls, endpoint/model discovery, br
 | Story | Summary |
 | --- | --- |
 | `14-1-refresh-local-provider-execution-approval-packet.md` | Done story for refreshing the local-provider execution approval packet for the approved Ollama endpoint `http://192.168.1.128:11434/v1/chat/completions`, model `qwen3:14b`, metadata-only retention, rollback, and stop lines without calling a provider. |
+| `14-2-pin-local-provider-approval-packet-to-drift-checks.md` | Review story for pinning the local-provider approval packet to no-call drift checks across packet, settings, service gate, and integration-test evidence without calling Ollama. |
 
 ## Draft Epic 15 Story Map
 
