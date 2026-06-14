@@ -448,6 +448,14 @@ test.describe("dashboard workflow coverage", () => {
     });
     await waitForState(request, workItemId, "implementing");
     await escalateWorkItem(request, workItemId, "Approval required before any retry or cleanup.");
+    const approvalWorkItemId = await createWorkItem(request, {
+      title: "Monitoring home approval next step",
+      requestedOutcome: "Verify approve and audit next steps are treated as gated on the home page.",
+      riskLevel: "medium",
+    });
+    await waitForState(request, approvalWorkItemId, "implementing");
+    await applyAction(request, approvalWorkItemId, "submit_for_validation", "Ready for validation.");
+    await applyAction(request, approvalWorkItemId, "validation_passed", "Checks look clean.");
 
     await page.goto("/");
 
@@ -462,6 +470,12 @@ test.describe("dashboard workflow coverage", () => {
     await expect(attentionItem.getByText("Approval required before any retry or cleanup.")).toBeVisible();
     await expect(attentionItem.getByRole("link", { name: /Open detail/ })).toBeVisible();
     await expect(attentionItem.getByRole("button")).toHaveCount(0);
+
+    const approvalItem = page.locator("article").filter({ hasText: "Monitoring home approval next step" }).first();
+    await expect(approvalItem).toBeVisible();
+    await expect(approvalItem.getByText("Next: Inspect evidence first")).toBeVisible();
+    await expect(approvalItem.getByText("Authority-gated: inspect before action")).toBeVisible();
+    await expect(approvalItem.getByRole("button")).toHaveCount(0);
 
     await expect(page.getByRole("button", { name: "Expand dashboard coverage" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Review risky work" })).toHaveCount(0);
