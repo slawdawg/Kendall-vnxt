@@ -28,6 +28,7 @@
     "check:documentation-authority": "node ./scripts/check-documentation-authority-report.mjs",
     "check:verification-readiness": "node ./scripts/check-verification-readiness-report.mjs",
     "check:authority-readiness": "node ./scripts/check-authority-readiness-matrix-report.mjs",
+    "check:worker-launch": "node ./scripts/check-real-cli-worker-launch-approval-packet.mjs",
     "check:e2e-report": "node ./scripts/check-dashboard-e2e-report.mjs",
     "check:reports": "node ./scripts/check-supervisor-report-catalog.mjs",
     "check:execution-boundary": "node ./scripts/check-execution-boundary-reports.mjs",
@@ -56,6 +57,6 @@
     "test:e2e:dashboard:managed:mobile": "node ./scripts/run-managed-mobile-recipe-e2e.mjs",
     "test:e2e:dashboard:provider-raw-output": "node ./scripts/run-provider-raw-output-ui-e2e.mjs",
     "test:supervisor": "node ./scripts/run-supervisor-tests.mjs",
-    "check": "pnpm run preflight && pnpm run check:docs && pnpm run check:documentation-authority && pnpm run check:verification-readiness && pnpm run check:authority-readiness && pnpm run check:e2e-report && pnpm run check:reports && pnpm run check:execution-boundary && pnpm run check:execution-evidence && pnpm run check:provider-fixtures && pnpm run check:process-lifecycle && pnpm run check:runbooks && pnpm run check:runtime-export && pnpm run check:runtime-review && pnpm run check:safe-backlog && pnpm run check:managed-recipes && pnpm run check:maintenance-action-plan && pnpm run check:development-runway && pnpm run check:delivery-readiness && pnpm run check:maintenance-readiness && pnpm run build:dashboard && pnpm run test:supervisor"
+    "check": "pnpm run preflight && pnpm run check:docs && pnpm run check:documentation-authority && pnpm run check:verification-readiness && pnpm run check:authority-readiness && pnpm run check:worker-launch && pnpm run check:e2e-report && pnpm run check:reports && pnpm run check:execution-boundary && pnpm run check:execution-evidence && pnpm run check:provider-fixtures && pnpm run check:process-lifecycle && pnpm run check:runbooks && pnpm run check:runtime-export && pnpm run check:runtime-review && pnpm run check:safe-backlog && pnpm run check:managed-recipes && pnpm run check:maintenance-action-plan && pnpm run check:development-runway && pnpm run check:delivery-readiness && pnpm run check:maintenance-readiness && pnpm run build:dashboard && pnpm run test:supervisor"
   }
 }
