@@ -1,6 +1,6 @@
 # Story Index
 
-Date: 2026-06-13
+Date: 2026-06-14
 Status: current navigation index
 
 ## Post-Epic-6 Status Reconciliation
@@ -9,12 +9,12 @@ Epics 3, 4, 5, and 6 have been reconciled after Epic 6 MVP completion.
 
 - Epic 3 readiness, maintenance, verification, report, and evidence-link stories are closed as delivered story evidence.
 - Epic 4 Ollama/provider stories are closed within their approved scope: Stories 4.1-4.3 are non-executing preparation, and Story 4.4 is limited to the approved VM-to-host Ollama endpoint/model boundary.
-- Epic 5 subscription-launch stories are closed for non-executing preparation through Story 5.4. Story 5.5 remains deferred post-MVP until explicit supervised process-launch approval exists.
-- Epic 6 MVP is complete through Story 3.66 and PR #98. Story 6.1 is done for the fake-worker spike; real Codex/Claude process launch remains a post-MVP authority gate.
+- Epic 5 subscription-launch stories are closed for non-executing preparation through Story 5.4. Story 5.5 remains deferred post-MVP until Bob accepts an exact supervised process-launch approval for a concrete target/scope.
+- Epic 6 MVP is complete through Story 3.66 and PR #98. Story 6.1 is done for the fake-worker spike; real Codex/Claude process launch remains a post-MVP authority gate until Bob accepts an exact worker-launch approval for a concrete target/scope.
 
 ## Blocked Pending Explicit Approval
 
-These stories must not be implemented until the operator explicitly approves the named authority and scope.
+These stories must not be implemented for real execution until the operator explicitly approves the named authority and concrete scope. Approval packets now exist for the major authority lanes, but the packets are non-executing and approval-required.
 
 ### Orchestrator CLI Worker Launch
 
@@ -33,6 +33,20 @@ Stories 5.1-5.4 are complete as non-executing subscription-launch preparation. S
 - `5-5-subscription-launch-supervised-process-behind-approval.md`
 
 ## Closed Epic 3-6 Story Evidence
+
+## Current Authority Packets
+
+The remaining authority lanes now have current non-executing approval packets:
+
+- Adaptive scoring: `docs/goals/adaptive-scoring-approval-packet-2026-06-13.md`
+- Local provider execution: `docs/goals/local-provider-execution-approval-packet-2026-06-13.md`
+- Premium execution: `docs/goals/premium-execution-approval-packet-2026-06-13.md`
+- Real CLI worker launch: `docs/goals/real-cli-worker-launch-approval-packet-2026-06-14.md`
+- Subscription-agent process launch: `docs/goals/subscription-agent-process-launch-approval-packet-2026-06-13.md`
+- Cleanup automation: `docs/goals/cleanup-automation-approval-packet-2026-06-14.md`
+- GitHub delivery evidence: `docs/goals/github-delivery-approval-packet-pr-103-2026-06-13.md` and `docs/goals/github-delivery-post-merge-cleanup-evidence-pr-103-2026-06-13.md`
+
+Current audit: `docs/goals/gated-authority-backlog-completion-audit-2026-06-14.md`
 
 ## Selected Epic 6 MVP Proof Trial Story
 
@@ -289,3 +303,13 @@ Stories in this epic do not approve file deletion, worktree removal, branch dele
 | Story | Summary |
 | --- | --- |
 | `18-1-refresh-cleanup-automation-approval-packet.md` | Done story for refreshing the cleanup automation approval packet with target classification, approved-root proof, retained evidence, delivery evidence, dry-run effects, operation shape, rollback, and stop lines without deleting anything. |
+
+## Draft Epic 19 Story Map
+
+Epic 19 records the gated authority backlog completion audit after approval packets were created and merged for the deferred lanes.
+
+Stories in this epic do not approve or execute provider calls, paid calls, process launches, worker launches, source mutation, cleanup deletion, branch/ref deletion, issue sync, PR delivery, or failed-check bypass.
+
+| Story | Summary |
+| --- | --- |
+| `19-1-record-gated-authority-backlog-completion-audit.md` | Done story for recording the safe-prep completion audit and clarifying that execution remains blocked until exact target-specific approval is accepted. |
