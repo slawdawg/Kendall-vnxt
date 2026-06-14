@@ -1,5 +1,6 @@
 import { AttentionBrowser } from "../../components/attention-browser";
 import { PageIntro } from "../../components/page-intro";
+import { RouteBrief } from "../../components/route-brief";
 import { Shell } from "../../components/shell";
 import { buildNavStats } from "../../lib/nav-stats";
 import { getSavedOperatorViews, getWorkItems } from "../../lib/supervisor";
@@ -24,7 +25,11 @@ export default async function AttentionPage() {
           { label: "Supervisor-generated", value: String(attentionItems.filter((item) => item.origin === "supervisor").length) },
         ]}
       />
+      <RouteBrief eyebrow="Review order" title="Inspect escalation evidence before opening controls" action={{ href: "/audit", label: "Open audit" }}>
+        Start with blocked, escalated, or self-detected items. Use work-item detail and audit evidence before any retry, cleanup, or approval path.
+      </RouteBrief>
       <AttentionBrowser items={attentionItems} savedViews={savedViews} />
     </Shell>
   );
 }
+

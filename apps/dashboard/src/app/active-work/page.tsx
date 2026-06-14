@@ -1,5 +1,6 @@
 import { ActiveWorkBrowser } from "../../components/active-work-browser";
 import { PageIntro } from "../../components/page-intro";
+import { RouteBrief } from "../../components/route-brief";
 import { Shell } from "../../components/shell";
 import { buildNavStats } from "../../lib/nav-stats";
 import { getSavedOperatorViews, getWorkItems } from "../../lib/supervisor";
@@ -24,7 +25,11 @@ export default async function ActiveWorkPage() {
           { label: "Awaiting audit", value: String(items.filter((item) => item.state === "awaiting_audit").length) },
         ]}
       />
+      <RouteBrief eyebrow="Watch order" title="Follow validating and review pressure first" action={{ href: "/attention", label: "Open attention" }}>
+        Watch active items by decision pressure: validating, reviewing, and awaiting audit should be inspected before starting more queued work.
+      </RouteBrief>
       <ActiveWorkBrowser items={items} savedViews={savedViews} />
     </Shell>
   );
 }
+

@@ -555,6 +555,30 @@ test.describe("dashboard workflow coverage", () => {
       )
       .toBeTruthy();
   });
+  test("shows operational route briefs on monitoring destination pages", async ({ page }) => {
+    await page.goto("/attention");
+    await expect(page.getByText("Review order", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Inspect escalation evidence before opening controls" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open audit" }).first()).toHaveAttribute("href", "/audit");
+
+    await page.goto("/active-work");
+    await expect(page.getByText("Watch order", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Follow validating and review pressure first" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open attention" })).toHaveAttribute("href", "/attention");
+
+    await page.goto("/queue");
+    await expect(page.getByText("Triage order", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Balance ready work against blocked load" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open active work" })).toHaveAttribute("href", "/active-work");
+    await expect(page.getByRole("button", { name: /approve|retry|cleanup|launch|execute/i })).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByText("Triage order", { exact: true })).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+      )
+      .toBeTruthy();
+  });
   test("shows compact routing fleet data on controls", async ({ page, request }) => {
     const workItemId = await createWorkItem(request, {
       title: "Routing fleet evidence",
@@ -1686,8 +1710,4 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gateAudit.getByText("operator-checkpoint")).toBeVisible();
   });
 });
-
-
-
-
 
