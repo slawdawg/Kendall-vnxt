@@ -269,3 +269,13 @@ Stories in this epic do not approve process launch, shell expansion, credential/
 | Story | Summary |
 | --- | --- |
 | `16-1-refresh-subscription-agent-process-launch-approval-packet.md` | Done story for refreshing the subscription-agent process-launch approval packet with workspace, command, environment, lifecycle, output, retention, verification, rollback, and stop-line requirements without launching a process. |
+
+## Draft Epic 17 Story Map
+
+Epic 17 starts after the subscription-agent process-launch approval packet. Its theme is real CLI worker launch approval readiness: refresh the deferred Codex/Claude real-process launch envelope from fake-worker and Epic 7 evidence without launching a worker.
+
+Stories in this epic do not approve Codex launch, Claude launch, shell execution, source mutation, credential/session access, PR delivery, cleanup, issue sync, or failed-check bypass.
+
+| Story | Summary |
+| --- | --- |
+| `17-1-refresh-real-cli-worker-launch-approval-packet.md` | Done story for refreshing the real CLI worker launch approval packet with tool identity, command, file scope, mutation permission, retention, verification, review, rollback, and stop-line requirements without launching Codex or Claude. |
