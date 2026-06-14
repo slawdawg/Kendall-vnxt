@@ -39,7 +39,8 @@ Relevant existing context:
 - `docs/stories/6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md`
 - `docs/goals/epic-7-useful-supervised-execution-plan-2026-06-11.md`
 - `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`
-- `_bmad-output/planning-artifacts/deferred-authority-backlog-map-2026-06-13.md`
+- `docs/stories/index.md`
+- `docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md`
 
 ### Guardrails
 
@@ -54,7 +55,8 @@ Relevant existing context:
 
 - [Source: `docs/goals/real-cli-worker-launch-approval-packet-2026-06-14.md`]
 - [Source: `docs/stories/6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md`]
-- [Source: `_bmad-output/planning-artifacts/deferred-authority-backlog-map-2026-06-13.md#2-real-cli-worker-launch-beyond-fake-worker-spike`]
+- [Source: `docs/stories/index.md#orchestrator-cli-worker-launch`]
+- [Source: `docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md`]
 
 ## Dev Agent Record
 
@@ -72,6 +74,7 @@ GPT-5 Codex
 - Created `docs/goals/real-cli-worker-launch-approval-packet-2026-06-14.md`.
 - Preserved Story 6.1 fake-worker evidence as no-launch baseline.
 - Defined future real CLI worker approval binding, Codex/Claude-specific requirements, rollback, and stop lines.
+- Addressed PR #114 code review by replacing local-only `_bmad-output` citations with tracked story index and Epic 11 decision packet references.
 
 ### File List
 
@@ -82,3 +85,13 @@ GPT-5 Codex
 ### Change Log
 
 - 2026-06-14: Refreshed real CLI worker launch approval packet without launching a worker.
+- 2026-06-14: Code review patch replaced local-only backlog-map citations with tracked source documents.
+
+## Senior Developer Review (AI)
+
+Review date: 2026-06-14
+Outcome: Approve after patch
+
+### Findings
+
+- [x] [Review][Patch] Story referenced local ignored `_bmad-output` backlog evidence that reviewers cannot follow. Fixed by citing tracked story index and Epic 11 decision packet sources.
