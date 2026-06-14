@@ -279,3 +279,13 @@ Stories in this epic do not approve Codex launch, Claude launch, shell execution
 | Story | Summary |
 | --- | --- |
 | `17-1-refresh-real-cli-worker-launch-approval-packet.md` | Done story for refreshing the real CLI worker launch approval packet with tool identity, command, file scope, mutation permission, retention, verification, review, rollback, and stop-line requirements without launching Codex or Claude. |
+
+## Draft Epic 18 Story Map
+
+Epic 18 starts after the real CLI worker launch approval packet. Its theme is cleanup automation approval readiness: refresh the target-specific deletion/removal approval envelope from current cleanup planning evidence without deleting anything.
+
+Stories in this epic do not approve file deletion, worktree removal, branch deletion, remote ref deletion, retained evidence deletion, cleanup commands, or failed-check bypass.
+
+| Story | Summary |
+| --- | --- |
+| `18-1-refresh-cleanup-automation-approval-packet.md` | Done story for refreshing the cleanup automation approval packet with target classification, approved-root proof, retained evidence, delivery evidence, dry-run effects, operation shape, rollback, and stop lines without deleting anything. |
