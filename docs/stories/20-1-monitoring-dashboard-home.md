@@ -4,7 +4,7 @@ baseline_commit: 5bcd868d9a0d574028e5fba7dde0f9aca639480b
 
 # Story 20.1: Monitoring Dashboard Home
 
-Status: review
+Status: done
 
 ## Story
 
@@ -207,3 +207,4 @@ GPT-5 Codex
 - 2026-06-14: Created Story 20.1 and moved it to ready-for-dev.
 - 2026-06-14: Implemented monitoring-first dashboard home, moved intake/actions to deliberate surfaces, verified focused e2e, dashboard build, docs, and full local gate, and moved Story 20.1 to review.
 - 2026-06-14: Addressed BMAD code-review findings and re-ran focused e2e, dashboard build, and full local gate.
+- 2026-06-14: Merged PR #120 after green CI and moved Story 20.1 to done.
