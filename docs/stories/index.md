@@ -263,6 +263,7 @@ Stories in this epic do not approve provider calls, endpoint/model discovery, br
 | Story | Summary |
 | --- | --- |
 | `14-1-refresh-local-provider-execution-approval-packet.md` | Done story for refreshing the local-provider execution approval packet for the approved Ollama endpoint `http://192.168.1.128:11434/v1/chat/completions`, model `qwen3:14b`, metadata-only retention, rollback, and stop lines without calling a provider. |
+| `14-2-pin-local-provider-approval-packet-to-drift-checks.md` | Review story for pinning the local-provider approval packet to no-call drift checks across packet, settings, service gate, and integration-test evidence without calling Ollama. |
 
 ## Draft Epic 15 Story Map
 
@@ -273,6 +274,7 @@ Stories in this epic do not approve paid provider calls, credential/session acce
 | Story | Summary |
 | --- | --- |
 | `15-1-refresh-premium-execution-approval-packet.md` | Done story for refreshing the premium-execution approval packet with provider/account boundary, cost ceiling, data classification, audit evidence, retained evidence, abort policy, rollback path, and stop lines without making a paid call. |
+| `15-2-pin-premium-execution-approval-packet-to-drift-checks.md` | Review story for pinning the premium execution approval packet to no-cost drift checks across packet, settings, service gate, and integration-test evidence without making a paid call. |
 
 ## Draft Epic 16 Story Map
 
@@ -283,6 +285,7 @@ Stories in this epic do not approve process launch, shell expansion, credential/
 | Story | Summary |
 | --- | --- |
 | `16-1-refresh-subscription-agent-process-launch-approval-packet.md` | Done story for refreshing the subscription-agent process-launch approval packet with workspace, command, environment, lifecycle, output, retention, verification, rollback, and stop-line requirements without launching a process. |
+| `16-2-pin-subscription-agent-process-launch-packet-to-drift-checks.md` | Review story for pinning the subscription-agent process-launch approval packet to no-launch drift checks across packet, settings, service gate, and integration-test evidence without launching a process. |
 
 ## Draft Epic 17 Story Map
 
@@ -293,6 +296,7 @@ Stories in this epic do not approve Codex launch, Claude launch, shell execution
 | Story | Summary |
 | --- | --- |
 | `17-1-refresh-real-cli-worker-launch-approval-packet.md` | Done story for refreshing the real CLI worker launch approval packet with tool identity, command, file scope, mutation permission, retention, verification, review, rollback, and stop-line requirements without launching Codex or Claude. |
+| `17-2-pin-real-cli-worker-launch-packet-to-drift-checks.md` | Review story for pinning the real CLI worker launch approval packet to no-launch drift checks across packet, settings, service readiness, and integration-test evidence without launching Codex or Claude. |
 
 ## Draft Epic 18 Story Map
 
@@ -314,3 +318,23 @@ Stories in this epic do not approve or execute provider calls, paid calls, proce
 | Story | Summary |
 | --- | --- |
 | `19-1-record-gated-authority-backlog-completion-audit.md` | Done story for recording the safe-prep completion audit and clarifying that execution remains blocked until exact target-specific approval is accepted. |
+
+
+## Draft Epic 20 Story Map
+
+Epic 20 starts after Bob selected the dashboard's primary mode as monitoring. Its theme is a monitoring-first dashboard home: Mission Control overview, attention queue, live activity, and read-only evidence drill-in before command or mutation controls.
+
+Stories in this epic do not approve or execute provider calls, paid calls, process launches, worker launches, source mutation, cleanup deletion, branch/ref deletion, issue sync, PR delivery, retry automation, approval automation, or failed-check bypass.
+
+| Story | Summary |
+| --- | --- |
+| `20-1-monitoring-dashboard-home.md` | Done story for recomposing the dashboard home into a monitoring-first Mission Control surface while preserving existing detail/control pages and authority boundaries. |
+## Draft Epic 21 Story Map
+
+Epic 21 starts from the token-economy brainstorming lane. Its theme is reducing token waste across Kendall_Nxt agents and workflows while preserving visible progress, plain-English explanations, safety gates, evidence, and Bob steering points.
+
+Stories in this epic do not approve provider calls, paid usage, compression-layer adoption, process launch, worker launch, credential/session access, GitHub mutation, cleanup, or broad automation.
+
+| Story | Summary |
+| --- | --- |
+| `21-1-token-economy-foundation.md` | Done story for quiet competent operator behavior, plain-English escalation, Tool Churn RCA workflow, AI context entry map, usage measurement plan, and compression-tool evaluation gates without adopting external tools. |
