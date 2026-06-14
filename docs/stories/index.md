@@ -296,6 +296,7 @@ Stories in this epic do not approve Codex launch, Claude launch, shell execution
 | Story | Summary |
 | --- | --- |
 | `17-1-refresh-real-cli-worker-launch-approval-packet.md` | Done story for refreshing the real CLI worker launch approval packet with tool identity, command, file scope, mutation permission, retention, verification, review, rollback, and stop-line requirements without launching Codex or Claude. |
+| `17-2-pin-real-cli-worker-launch-packet-to-drift-checks.md` | Review story for pinning the real CLI worker launch approval packet to no-launch drift checks across packet, settings, service readiness, and integration-test evidence without launching Codex or Claude. |
 
 ## Draft Epic 18 Story Map
 
