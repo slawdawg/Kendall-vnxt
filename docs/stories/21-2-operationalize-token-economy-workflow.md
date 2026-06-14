@@ -4,7 +4,7 @@ baseline_commit: 0ac467c3874198e20d6b1dbcf8785243774d7377
 
 # Story 21.2: Operationalize Token Economy Workflow
 
-Status: ready-for-review
+Status: done
 
 ## Story
 
@@ -41,6 +41,14 @@ so that future Codex sessions stop wasteful retries quickly and preserve the les
   - [x] Run `pnpm.cmd run check:token-economy`.
   - [x] Run `pnpm.cmd run check:docs`.
   - [x] Run full `pnpm.cmd run check` because the package script chain changes.
+
+### Review Findings
+
+- [x] [Review][Patch] Remove or guard the nonexistent Tool Churn RCA skill route [`docs/workflows/tool-churn-rca.md`]
+- [x] [Review][Patch] Make `check-token-economy` report missing artifacts instead of throwing `ENOENT` [`scripts/check-token-economy.mjs`]
+- [x] [Review][Patch] Keep RCA examples as an expansion path, not mandatory first-read context [`docs/ai-context/index.md`]
+- [x] [Review][Patch] Validate each RCA example packet includes the required packet fields [`scripts/check-token-economy.mjs`]
+- [x] [Review][Patch] Verify Story 21.2 content anchors, not only file existence and index reference [`scripts/check-token-economy.mjs`]
 
 ## Dev Notes
 
@@ -135,6 +143,9 @@ GPT-5 Codex
 - Initial `pnpm.cmd run check` stopped at preflight because the fresh worktree was missing `services/supervisor/.venv`; this matched the missing supervisor virtual environment RCA example.
 - `pnpm.cmd run setup:py` created the supervisor virtual environment for this worktree.
 - Final `pnpm.cmd run check` passed: preflight, docs/report drift checks, token-economy drift check, dashboard build, and 197 supervisor tests passed with 1 existing `aiosqlite` deprecation warning.
+- After BMAD review patches, `pnpm.cmd run check:token-economy` passed.
+- After BMAD review patches, `pnpm.cmd run check:docs` passed.
+- After BMAD review patches, final `pnpm.cmd run check` passed: preflight, docs/report drift checks, token-economy drift check, dashboard build, and 197 supervisor tests passed with 1 existing `aiosqlite` deprecation warning.
 
 ### Completion Notes List
 
@@ -142,6 +153,7 @@ GPT-5 Codex
 - Added Tool Churn RCA example packets for Windows sandbox timeout, PowerShell quoting/parser errors, missing supervisor venv/tool path confusion, and Git safe-directory or permission denial.
 - Added `scripts/check-token-economy.mjs` and wired `check:token-economy` into `pnpm run check`.
 - Verified focused docs and full repo checks after setting up the supervisor virtual environment.
+- Applied BMAD review patches for RCA route accuracy, missing-artifact handling, example-field validation, exact check-chain wiring, and Story 21.2 content anchors.
 
 ### File List
 
@@ -159,3 +171,5 @@ GPT-5 Codex
 - 2026-06-14: Created Story 21.2 from token-economy handoff and Story 21.1 foundation.
 - 2026-06-14: Implemented Tool Churn RCA examples and token-economy drift check.
 - 2026-06-14: Verified focused token-economy/docs checks and full `pnpm.cmd run check`; marked ready for review.
+- 2026-06-14: Applied BMAD code review patches.
+- 2026-06-14: Reverified after review patches and marked story done.

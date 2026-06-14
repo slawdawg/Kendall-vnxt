@@ -8,6 +8,14 @@ function readWorkspaceFile(path) {
   return readFileSync(join(rootDir, path), "utf8");
 }
 
+function readRequiredWorkspaceFile(path, failures) {
+  if (!existsSync(join(rootDir, path))) {
+    failures.push(`Missing token economy artifact ${path}`);
+    return "";
+  }
+  return readWorkspaceFile(path);
+}
+
 function assertCondition(condition, message, failures) {
   if (!condition) {
     failures.push(message);
@@ -16,13 +24,15 @@ function assertCondition(condition, message, failures) {
 
 const failures = [];
 
-const packageJson = JSON.parse(readWorkspaceFile("package.json"));
-const agents = readWorkspaceFile("AGENTS.md");
-const contextIndex = readWorkspaceFile("docs/ai-context/index.md");
-const rcaWorkflow = readWorkspaceFile("docs/workflows/tool-churn-rca.md");
-const rcaExamples = readWorkspaceFile("docs/workflows/tool-churn-rca-examples.md");
-const evaluationPlan = readWorkspaceFile("docs/research/token-economy-tool-evaluation.md");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const packageJsonSource = readRequiredWorkspaceFile("package.json", failures);
+const packageJson = packageJsonSource ? JSON.parse(packageJsonSource) : {};
+const agents = readRequiredWorkspaceFile("AGENTS.md", failures);
+const contextIndex = readRequiredWorkspaceFile("docs/ai-context/index.md", failures);
+const rcaWorkflow = readRequiredWorkspaceFile("docs/workflows/tool-churn-rca.md", failures);
+const rcaExamples = readRequiredWorkspaceFile("docs/workflows/tool-churn-rca-examples.md", failures);
+const evaluationPlan = readRequiredWorkspaceFile("docs/research/token-economy-tool-evaluation.md", failures);
+const storyIndex = readRequiredWorkspaceFile("docs/stories/index.md", failures);
+const story21 = readRequiredWorkspaceFile("docs/stories/21-2-operationalize-token-economy-workflow.md", failures);
 
 assertCondition(
   packageJson.scripts?.["check:token-economy"] === "node ./scripts/check-token-economy.mjs",
@@ -30,7 +40,10 @@ assertCondition(
   failures,
 );
 assertCondition(
-  packageJson.scripts?.check?.includes("pnpm run check:token-economy"),
+  packageJson.scripts?.check
+    ?.split("&&")
+    .map((script) => script.trim())
+    .includes("pnpm run check:token-economy"),
   "pnpm run check must include pnpm run check:token-economy",
   failures,
 );
@@ -56,8 +69,10 @@ for (const requiredText of [
 }
 
 assertCondition(
-  contextIndex.includes("docs/workflows/tool-churn-rca-examples.md"),
-  "AI context index must route tool failures to the Tool Churn RCA examples",
+  contextIndex.includes(
+    "| Tool or command failure | `AGENTS.md#tool-resolution-and-verification`, `AGENTS.md#windows-sandbox`, `docs/workflows/tool-churn-rca.md` |",
+  ) && contextIndex.includes("needs Tool Churn RCA examples from `docs/workflows/tool-churn-rca-examples.md`"),
+  "AI context index must keep Tool Churn RCA examples as expansion context for repeated or brittle failures",
   failures,
 );
 assertCondition(
@@ -66,14 +81,31 @@ assertCondition(
   failures,
 );
 
-for (const packetText of [
+const exampleHeadings = [
   "Windows Sandbox Runner Timeout",
   "PowerShell Quoting Or Parser Error",
   "Missing Supervisor Virtual Environment",
   "Git Safe-Directory Or Permission Denial",
+];
+const packetFields = [
   "Tool Churn RCA Packet",
-]) {
-  assertCondition(rcaExamples.includes(packetText), `RCA examples must include ${packetText}`, failures);
+  "- What failed:",
+  "- Failure class:",
+  "- Most likely cause:",
+  "- Evidence:",
+  "- Retry stop line:",
+  "- One next safe action:",
+  "- Durable fix recommendation:",
+];
+
+for (const heading of exampleHeadings) {
+  const start = rcaExamples.indexOf(`## ${heading}`);
+  assertCondition(start !== -1, `RCA examples must include ${heading}`, failures);
+  const next = start === -1 ? -1 : rcaExamples.indexOf("\n## ", start + 1);
+  const section = start === -1 ? "" : rcaExamples.slice(start, next === -1 ? undefined : next);
+  for (const field of packetFields) {
+    assertCondition(section.includes(field), `RCA example ${heading} must include ${field}`, failures);
+  }
 }
 
 for (const evaluationText of [
@@ -90,6 +122,15 @@ assertCondition(
   "Story index must reference Story 21.2 token economy operationalization",
   failures,
 );
+for (const storyText of [
+  "Tool Churn RCA guidance to become a directly usable workflow",
+  "static drift check verifies",
+  "docs/workflows/tool-churn-rca-examples.md",
+  "does not install external token tools",
+  "pnpm.cmd run check:token-economy",
+]) {
+  assertCondition(story21.includes(storyText), `Story 21.2 must preserve ${storyText}`, failures);
+}
 
 if (failures.length > 0) {
   console.error("Token economy drift check failed:");
