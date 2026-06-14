@@ -14,6 +14,13 @@ function assertIncludes(source, text, message, failures) {
   }
 }
 
+function assertSettingDefaultFalse(source, fieldName, alias, failures) {
+  const settingPattern = new RegExp(`${fieldName}: bool = Field\\(\\s*default=False,\\s*alias="${alias}",?\\s*\\)`);
+  if (!settingPattern.test(source)) {
+    failures.push(`Settings must keep ${fieldName} default disabled with alias ${alias}`);
+  }
+}
+
 const approvalPacket = readWorkspaceFile("docs/goals/subscription-agent-process-launch-approval-packet-2026-06-13.md");
 const settingsSource = readWorkspaceFile("services/supervisor/src/supervisor/config/settings.py");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
@@ -44,14 +51,16 @@ for (const packetText of [
 
 for (const settingsText of [
   "allow_subscription_agent_launch: bool = Field(default=False, alias=\"SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH\")",
-  "allow_codex_subscription_agent_launch: bool = Field(",
-  "alias=\"SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH\"",
-  "allow_claude_subscription_agent_launch: bool = Field(",
-  "alias=\"SUPERVISOR_ALLOW_CLAUDE_SUBSCRIPTION_AGENT_LAUNCH\"",
-  "allow_gemini_subscription_agent_launch: bool = Field(",
-  "alias=\"SUPERVISOR_ALLOW_GEMINI_SUBSCRIPTION_AGENT_LAUNCH\"",
 ]) {
   assertIncludes(settingsSource, settingsText, `Settings must preserve subscription launch disabled defaults: ${settingsText}`, failures);
+}
+
+for (const [fieldName, alias] of [
+  ["allow_codex_subscription_agent_launch", "SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH"],
+  ["allow_claude_subscription_agent_launch", "SUPERVISOR_ALLOW_CLAUDE_SUBSCRIPTION_AGENT_LAUNCH"],
+  ["allow_gemini_subscription_agent_launch", "SUPERVISOR_ALLOW_GEMINI_SUBSCRIPTION_AGENT_LAUNCH"],
+]) {
+  assertSettingDefaultFalse(settingsSource, fieldName, alias, failures);
 }
 
 for (const serviceText of [
