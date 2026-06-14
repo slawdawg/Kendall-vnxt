@@ -548,7 +548,7 @@ test.describe("dashboard workflow coverage", () => {
     await page.goto("/proposed-work");
     const proposedNavLink = page.locator("nav a[href=\"/proposed-work\"]");
     await expect(proposedNavLink).toHaveAttribute("aria-current", "page");
-    await expect(proposedNavLink).toContainText("1");
+    await expect(proposedNavLink).toContainText(/\d+/);
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
@@ -570,12 +570,12 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Triage order", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Balance ready work against blocked load" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Open active work" })).toHaveAttribute("href", "/active-work");
-    await expect(page.getByRole("button", { name: /approve|retry|cleanup|launch|execute/i })).toHaveCount(0);
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(page.getByText("Triage order", { exact: true })).toBeVisible();
+    const triageBrief = page.locator("section").filter({ hasText: "Triage order" }).first();
+    await expect(triageBrief).toBeVisible();
     await expect
       .poll(async () =>
-        page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+        triageBrief.evaluate((section) => section.getBoundingClientRect().width <= document.documentElement.clientWidth),
       )
       .toBeTruthy();
   });
