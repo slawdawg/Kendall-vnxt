@@ -273,6 +273,7 @@ Stories in this epic do not approve paid provider calls, credential/session acce
 | Story | Summary |
 | --- | --- |
 | `15-1-refresh-premium-execution-approval-packet.md` | Done story for refreshing the premium-execution approval packet with provider/account boundary, cost ceiling, data classification, audit evidence, retained evidence, abort policy, rollback path, and stop lines without making a paid call. |
+| `15-2-pin-premium-execution-approval-packet-to-drift-checks.md` | Review story for pinning the premium execution approval packet to no-cost drift checks across packet, settings, service gate, and integration-test evidence without making a paid call. |
 
 ## Draft Epic 16 Story Map
 
