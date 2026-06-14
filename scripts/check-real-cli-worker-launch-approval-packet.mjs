@@ -14,6 +14,19 @@ function assertIncludes(source, text, message, failures) {
   }
 }
 
+function assertBlockIncludes(source, startText, endText, requiredTexts, messagePrefix, failures) {
+  const start = source.indexOf(startText);
+  const end = source.indexOf(endText, start + startText.length);
+  if (start === -1 || end === -1 || end <= start) {
+    failures.push(`${messagePrefix} block must be present`);
+    return;
+  }
+  const block = source.slice(start, end);
+  for (const text of requiredTexts) {
+    assertIncludes(block, text, `${messagePrefix} block must include: ${text}`, failures);
+  }
+}
+
 const approvalPacket = readWorkspaceFile("docs/goals/real-cli-worker-launch-approval-packet-2026-06-14.md");
 const settingsSource = readWorkspaceFile("services/supervisor/src/supervisor/config/settings.py");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
@@ -31,6 +44,18 @@ for (const packetText of [
   "One tool identity: Codex CLI or Claude Code CLI, not both.",
   "Argument-array execution only; no shell expansion.",
   "Tool identity: `codex-cli` or `claude-code-cli`",
+  "Approved cwd/worktree path",
+  "Allowed file scope",
+  "Source mutation permission",
+  "Diff guard policy",
+  "Prompt/source retention policy",
+  "Environment allowlist",
+  "Blocked credential/session paths",
+  "Timeout/cancellation policy",
+  "Verification command",
+  "Review requirement",
+  "rollback path <rollback>",
+  "Expiry or review point",
   "Do not launch a real CLI worker from this packet alone.",
   "Do not use shell string execution.",
   "Do not run both Codex and Claude from one approval.",
@@ -52,9 +77,6 @@ for (const settingsText of [
 for (const serviceText of [
   "No-launch Codex readiness report.",
   "This report does not approve Codex CLI process launch.",
-  "processLaunchApproved=False",
-  "workerTaskExecutionApproved=False",
-  "sourceMutationApproved=False",
   "No-launch Claude review readiness report.",
   "This report does not approve Claude CLI process launch.",
   "reviewTaskExecutionApproved=False",
@@ -69,6 +91,15 @@ for (const serviceText of [
 ]) {
   assertIncludes(serviceSource, serviceText, `Supervisor service must preserve worker launch boundary: ${serviceText}`, failures);
 }
+
+assertBlockIncludes(
+  serviceSource,
+  "No-launch Codex readiness report.",
+  "No-launch Claude review readiness report.",
+  ["processLaunchApproved=False", "workerTaskExecutionApproved=False", "sourceMutationApproved=False"],
+  "Codex no-launch readiness report",
+  failures,
+);
 
 for (const testText of [
   "does not approve Codex CLI process launch",
