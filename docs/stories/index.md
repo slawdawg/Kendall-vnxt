@@ -339,3 +339,4 @@ Stories in this epic do not approve provider calls, paid usage, compression-laye
 | --- | --- |
 | `21-1-token-economy-foundation.md` | Done story for quiet competent operator behavior, plain-English escalation, Tool Churn RCA workflow, AI context entry map, usage measurement plan, and compression-tool evaluation gates without adopting external tools. |
 | `21-2-operationalize-token-economy-workflow.md` | Done story for operational Tool Churn RCA examples and a token-economy drift check wired into repo verification. |
+| `21-3-harden-tool-churn-rca-drift-check.md` | Done story for pinning Tool Churn RCA trigger conditions, failure classes, retry stop lines, next safe actions, and non-goals in the token-economy drift check. |
