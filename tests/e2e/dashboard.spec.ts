@@ -441,12 +441,28 @@ test.describe("dashboard workflow coverage", () => {
   });
 
   test("opens to a monitoring-first home without authority-gated action controls", async ({ page, request }) => {
+    await page.goto("/");
+    await expect(page.getByText("Operations Brief")).toBeVisible();
+    await expect(page.getByText("Calm monitoring")).toBeVisible();
+    const auditBriefLink = page.getByRole("link", { name: "Open audit" }).first();
+    await expect(auditBriefLink).toBeVisible();
+    await expect(auditBriefLink).toHaveAttribute("href", "/audit");
+    await expect(page.getByText("Operator review first")).toHaveCount(0);
+
     const workItemId = await createWorkItem(request, {
       title: "Monitoring home attention item",
       requestedOutcome: "Verify the home page presents monitoring and safe drill-in paths.",
       riskLevel: "medium",
     });
     await waitForState(request, workItemId, "implementing");
+
+    await page.goto("/");
+    await expect(page.getByText("Watch active work", { exact: true })).toBeVisible();
+    const activeBriefLink = page.getByRole("link", { name: "Open active work" });
+    await expect(activeBriefLink).toBeVisible();
+    await expect(activeBriefLink).toHaveAttribute("href", "/active-work");
+    await expect(page.getByText("Operator review first")).toHaveCount(0);
+
     await escalateWorkItem(request, workItemId, "Approval required before any retry or cleanup.");
     const approvalWorkItemId = await createWorkItem(request, {
       title: "Monitoring home approval next step",
@@ -464,6 +480,15 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Attention queue")).toBeVisible();
     await expect(page.getByText("Live activity")).toBeVisible();
     await expect(page.getByText("Read-only evidence")).toBeVisible();
+    await expect(page.getByText("Operations Brief")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "What to inspect next" })).toBeVisible();
+    await expect(page.getByText("Operator review first")).toBeVisible();
+    await expect(page.getByText("Evidence first", { exact: true })).toBeVisible();
+    await expect(page.getByText("Execution controls", { exact: true })).toBeVisible();
+    await expect(page.getByText("0 on home", { exact: true })).toBeVisible();
+    const attentionBriefLink = page.getByRole("link", { name: "Open attention review" });
+    await expect(attentionBriefLink).toBeVisible();
+    await expect(attentionBriefLink).toHaveAttribute("href", "/attention");
 
     const attentionItem = page.locator("article").filter({ hasText: "Monitoring home attention item" }).first();
     await expect(attentionItem).toBeVisible();
@@ -481,8 +506,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByRole("button", { name: "Review risky work" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Send to validation" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Approve work" })).toHaveCount(0);
-  });
+    await expect(page.getByRole("button", { name: /approve|retry|cleanup|launch|execute|send to validation/i })).toHaveCount(0);
 
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByText("Operations Brief")).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+      )
+      .toBeTruthy();
+  });
   test("shows compact routing fleet data on controls", async ({ page, request }) => {
     const workItemId = await createWorkItem(request, {
       title: "Routing fleet evidence",
@@ -1614,3 +1647,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gateAudit.getByText("operator-checkpoint")).toBeVisible();
   });
 });
+
+
+
+

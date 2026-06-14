@@ -39,6 +39,10 @@ function needsAuthorityReview(item: WorkItemView) {
   return authorityKeywords.some((keyword) => text.includes(keyword));
 }
 
+function pluralize(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function WorkItemSummary({ item, compact = false }: { item: WorkItemView; compact?: boolean }) {
   const authorityReview = needsAuthorityReview(item);
   return (
@@ -114,12 +118,33 @@ function Panel({
   );
 }
 
+function BriefCard({ label, value, children }: { label: string; value: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-[0.5rem] border bg-[var(--surface)] p-4">
+      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--muted)]">{label}</p>
+      <p className="mt-2 text-base font-semibold text-[var(--foreground)]">{value}</p>
+      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{children}</p>
+    </div>
+  );
+}
+
 export function MonitoringHome({ status, items }: { status: RunStatusView; items: WorkItemView[] }) {
   const allAttentionItems = sortByLatest(items.filter((item) => item.needsAttention || item.blockedReason));
   const attentionItems = allAttentionItems.slice(0, 5);
-  const activeItems = sortByLatest(items.filter((item) => activeStates.has(item.state))).slice(0, 6);
+  const allActiveItems = sortByLatest(items.filter((item) => activeStates.has(item.state)));
+  const activeItems = allActiveItems.slice(0, 6);
   const recentItems = sortByLatest(items).slice(0, 4);
   const failedOrBlocked = items.filter((item) => ["blocked", "needs_rework"].includes(item.state)).length;
+  const authorityReviewCount = items.filter((item) => needsAuthorityReview(item)).length;
+  const priorityHref = allAttentionItems.length > 0 ? "/attention" : allActiveItems.length > 0 ? "/active-work" : "/audit";
+  const priorityLabel = allAttentionItems.length > 0 ? "Open attention review" : allActiveItems.length > 0 ? "Open active work" : "Open audit";
+  const priorityValue = allAttentionItems.length > 0 ? "Operator review first" : allActiveItems.length > 0 ? "Watch active work" : "Calm monitoring";
+  const priorityCopy =
+    allAttentionItems.length > 0
+      ? `${pluralize(allAttentionItems.length, "item")} ${allAttentionItems.length === 1 ? "needs" : "need"} review before any control surface.`
+      : allActiveItems.length > 0
+        ? `${pluralize(allActiveItems.length, "item")} currently moving; inspect progress before intervening.`
+        : "No active attention pressure; use audit and recent evidence for a quiet check.";
 
   return (
     <div className="space-y-4">
@@ -139,6 +164,37 @@ export function MonitoringHome({ status, items }: { status: RunStatusView; items
           ))}
         </div>
         <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{status.summary}</p>
+      </section>
+
+      <section className="rounded-[0.75rem] border bg-[var(--panel)] p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--info)]">Operations Brief</p>
+            <h2 className="mt-2 text-lg font-semibold">What to inspect next</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
+              Passive status only: use the brief to choose a read-only route before opening deliberate controls.
+            </p>
+          </div>
+          <Link
+            href={priorityHref}
+            className="inline-flex w-fit items-center rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-sm font-medium transition hover:border-[var(--info)] hover:text-[var(--info)]"
+          >
+            {priorityLabel}
+          </Link>
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          <BriefCard label="Priority" value={priorityValue}>
+            {priorityCopy}
+          </BriefCard>
+          <BriefCard label="Safety posture" value="Evidence first">
+            {authorityReviewCount > 0
+              ? `${pluralize(authorityReviewCount, "authority-sensitive item")} flagged; inspect evidence before action.`
+              : "No authority-sensitive attention currently detected on the home surface."}
+          </BriefCard>
+          <BriefCard label="Execution controls" value="0 on home">
+            The home page remains monitoring-only. Execution, approval, retry, cleanup, and launch controls stay elsewhere.
+          </BriefCard>
+        </div>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
@@ -205,3 +261,4 @@ export function MonitoringHome({ status, items }: { status: RunStatusView; items
     </div>
   );
 }
+

@@ -2,17 +2,18 @@
 
 :root {
   color-scheme: dark;
-  --background: #101716;
-  --background-elevated: #16201f;
-  --foreground: #edf4ef;
-  --panel: #182322;
-  --panel-strong: #223231;
-  --surface: #111918;
-  --surface-strong: #20302f;
-  --line: #2d403d;
-  --accent: #5cc8a6;
-  --accent-2: #f09a61;
-  --muted: #9fb0ab;
+  --background: #111417;
+  --background-elevated: #171d21;
+  --foreground: #edf2ee;
+  --panel: #191f23;
+  --panel-strong: #242c31;
+  --surface: #12171b;
+  --surface-strong: #20282d;
+  --line: #334047;
+  --accent: #74d6b3;
+  --accent-2: #f2a766;
+  --info: #87bfff;
+  --muted: #a9b2af;
   --warn: #ff8d6a;
   --font-display: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
   --font-code: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
