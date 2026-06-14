@@ -303,6 +303,7 @@ Stories in this epic do not approve file deletion, worktree removal, branch dele
 | Story | Summary |
 | --- | --- |
 | `18-1-refresh-cleanup-automation-approval-packet.md` | Done story for refreshing the cleanup automation approval packet with target classification, approved-root proof, retained evidence, delivery evidence, dry-run effects, operation shape, rollback, and stop lines without deleting anything. |
+| `18-2-pin-cleanup-automation-packet-to-drift-checks.md` | Review story for pinning the cleanup automation approval packet to no-deletion drift checks across packet, cleanup planning service, delivery-readiness checks, and integration-test evidence without deleting anything. |
 
 ## Draft Epic 19 Story Map
 
