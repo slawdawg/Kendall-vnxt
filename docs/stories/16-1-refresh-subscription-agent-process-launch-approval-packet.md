@@ -14,7 +14,7 @@ so that any future real launch requires exact workspace, command, environment, l
 
 ## Acceptance Criteria
 
-1. Given subscription-agent process launch is selected as the next gated lane, when the packet is refreshed, then it binds any future candidate launch to work item id, execution attempt id, route decision id, worker id, lane, authority mode, workspace plan id, launch policy id, target id, command template id, command argv, cwd, environment allowlist, blocked credential/session paths, artifact limits, redaction/truncation, timeouts, lifecycle policies, verification command, retained evidence, operator, rollback path, stop lines, and expiry or review point.
+1. Given subscription-agent process launch is selected as the next gated lane, when the packet is refreshed, then it binds any future candidate launch to work item id, execution attempt id, route decision id, worker id, lane, authority mode, workspace plan id, launch policy id, target id, command template id, command argv, cwd, environment allowlist, blocked credential/session paths, artifact limits, redaction/truncation, timeouts, lifecycle policies, verification command, retained evidence, operator, approval timestamp, rollback path, stop lines, and expiry or review point.
 2. Given Epic 8 only approved an artifact-only fixture path, when this story completes, then it explicitly keeps production/direct process launch blocked until Bob accepts the exact future launch approval.
 3. Given process launch is high risk, when the packet is written, then it blocks shell expansion, arbitrary environment inheritance, credential/session access, provider calls, source mutation, generated patch application, issue sync, PR delivery, cleanup, and failed-check bypass.
 4. Given the story is documentation/packet-only, when verification runs, then `pnpm.cmd run check:docs` passes.
@@ -78,6 +78,7 @@ GPT-5 Codex
 - Created `docs/goals/subscription-agent-process-launch-approval-packet-2026-06-13.md`.
 - Preserved Epic 8 Story 8.5 as artifact-only fixture evidence, not direct production launch approval.
 - Defined exact future process-launch approval binding, environment/workspace constraints, output retention, lifecycle evidence, rollback, and stop lines.
+- Addressed PR #113 code review by adding approval timestamp to the required binding and exact approval template.
 
 ### File List
 
@@ -88,3 +89,13 @@ GPT-5 Codex
 ### Change Log
 
 - 2026-06-13: Refreshed subscription-agent process-launch approval packet without launching a process.
+- 2026-06-13: Code review patch added approval timestamp to the future launch approval binding/template.
+
+## Senior Developer Review (AI)
+
+Review date: 2026-06-13
+Outcome: Approve after patch
+
+### Findings
+
+- [x] [Review][Patch] Exact approval template omitted approval timestamp needed for stale-approval rejection. Fixed in `docs/goals/subscription-agent-process-launch-approval-packet-2026-06-13.md`.

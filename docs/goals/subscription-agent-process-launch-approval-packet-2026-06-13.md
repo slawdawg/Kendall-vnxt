@@ -72,6 +72,7 @@ Any future process-launch execution evidence must bind:
 - Verification command
 - Retained evidence
 - Operator
+- Approval timestamp
 - Rollback/global-disable procedure
 - Stop lines
 - Expiry or review point
@@ -163,11 +164,10 @@ If a future approved launch fails:
 
 ## Exact Approval Template
 
-`I approve the subscription-agent-launch lane for one bounded supervised process-launch operation using work item <work-item-id>, execution attempt <attempt-id>, route decision <route-decision-id>, worker <worker-id>, lane <lane>, authority mode <authority-mode>, workspace plan <workspace-plan-id>, launch policy <launch-policy-id>, target <target-id>, command template <command-template-id>, command argv <argv-template>, cwd <cwd>, environment allowlist <env-allowlist>, blocked credential/session paths <blocked-paths>, artifact limits <artifact-limits>, redaction/truncation policy <redaction-truncation-policy>, startup/run/cancellation timeouts <timeouts>, heartbeat/orphan/reconciliation/cleanup policies <lifecycle-policies>, verification command <verification-command>, retained evidence <metadata-only-evidence>, operator <operator>, rollback path <rollback>, stop lines <stop-lines>, and expiry/review point <expiry>.`
+`I approve the subscription-agent-launch lane for one bounded supervised process-launch operation using work item <work-item-id>, execution attempt <attempt-id>, route decision <route-decision-id>, worker <worker-id>, lane <lane>, authority mode <authority-mode>, workspace plan <workspace-plan-id>, launch policy <launch-policy-id>, target <target-id>, command template <command-template-id>, command argv <argv-template>, cwd <cwd>, environment allowlist <env-allowlist>, blocked credential/session paths <blocked-paths>, artifact limits <artifact-limits>, redaction/truncation policy <redaction-truncation-policy>, startup/run/cancellation timeouts <timeouts>, heartbeat/orphan/reconciliation/cleanup policies <lifecycle-policies>, verification command <verification-command>, retained evidence <metadata-only-evidence>, operator <operator>, approval timestamp <approval-timestamp>, rollback path <rollback>, stop lines <stop-lines>, and expiry/review point <expiry>.`
 
 ## Verification
 
 - `pnpm.cmd run check:docs`
 
 If a later story changes process-launch contracts, supervisor service code, lifecycle handling, dashboard rendering, drift checks, or tests, it must also run the smallest relevant subscription-launch/process-lifecycle check and full `pnpm.cmd run check` before merge.
-
