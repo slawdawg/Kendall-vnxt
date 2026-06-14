@@ -1,4 +1,5 @@
 import { ControlPanel } from "../../components/control-panel";
+import { CreateWorkItemForm } from "../../components/create-work-item-form";
 import { ClaudeReviewApprovalReportPanel } from "../../components/claude-review-approval-report-panel";
 import { ClaudeReviewReadinessReportPanel } from "../../components/claude-review-readiness-report-panel";
 import { CodexImplementationApprovalReportPanel } from "../../components/codex-implementation-approval-report-panel";
@@ -41,6 +42,7 @@ import {
   getDeliveryReadinessPolicyReport,
   getDevelopmentRunwayReport,
   getExecutionReadinessReport,
+  getExecutionRecipes,
   getEpic6CompletionAuditReport,
   getGitHubDeliveryAuthorityReport,
   getGitHubWorkflowPolicyReport,
@@ -95,6 +97,7 @@ export default async function ControlsPage() {
     claudeReviewReadinessReport,
     claudeReviewApprovalReport,
     deliveryReadinessPolicyReport,
+    executionRecipes,
   ] = await Promise.all([
     getRunStatus(),
     getWorkItems(),
@@ -126,6 +129,7 @@ export default async function ControlsPage() {
     getClaudeReviewReadinessReport(),
     getClaudeReviewApprovalReport(),
     getDeliveryReadinessPolicyReport(),
+    getExecutionRecipes(),
   ]);
   const navStats = buildNavStats(items);
 
@@ -143,6 +147,7 @@ export default async function ControlsPage() {
         ]}
       />
       <OperatorProfilePanel />
+      <CreateWorkItemForm executionRecipes={executionRecipes} />
       <ControlPanel />
       <div id="execution-readiness-report" className="scroll-mt-28">
         <ExecutionReadinessReportPanel report={readinessReport} />

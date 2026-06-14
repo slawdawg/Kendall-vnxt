@@ -429,14 +429,44 @@ test.describe("dashboard workflow coverage", () => {
   });
 
   test("shows supervisor-owned recipe details during intake", async ({ page }) => {
+    await page.goto("/controls");
+
+    const intake = page.locator("section").filter({ hasText: "Start next work" }).first();
+    await intake.getByRole("button", { name: "Expand dashboard coverage" }).click();
+    await expect(intake.getByText("Template selected: Expand dashboard coverage. Fill in the blanks and launch the work.")).toBeVisible();
+    await expect(intake.getByText("Recipe: Dashboard test coverage")).toBeVisible();
+    await expect(intake.getByText("Branch: e2e-*")).toBeVisible();
+    await expect(intake.getByText("blocked", { exact: true })).toBeVisible();
+    await expect(intake.getByText(/pnpm run test:e2e:dashboard/)).toBeVisible();
+  });
+
+  test("opens to a monitoring-first home without authority-gated action controls", async ({ page, request }) => {
+    const workItemId = await createWorkItem(request, {
+      title: "Monitoring home attention item",
+      requestedOutcome: "Verify the home page presents monitoring and safe drill-in paths.",
+      riskLevel: "medium",
+    });
+    await waitForState(request, workItemId, "implementing");
+    await escalateWorkItem(request, workItemId, "Approval required before any retry or cleanup.");
+
     await page.goto("/");
 
-    await page.getByRole("button", { name: "Expand dashboard coverage" }).click();
-    await expect(page.getByText("Template selected: Expand dashboard coverage. Fill in the blanks and launch the work.")).toBeVisible();
-    await expect(page.getByText("Recipe: Dashboard test coverage")).toBeVisible();
-    await expect(page.getByText("Branch: e2e-*")).toBeVisible();
-    await expect(page.getByText("blocked", { exact: true })).toBeVisible();
-    await expect(page.getByText(/pnpm run test:e2e:dashboard/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Monitoring", exact: true })).toBeVisible();
+    await expect(page.getByText("Mission Control")).toBeVisible();
+    await expect(page.getByText("Attention queue")).toBeVisible();
+    await expect(page.getByText("Live activity")).toBeVisible();
+    await expect(page.getByText("Read-only evidence")).toBeVisible();
+
+    const attentionItem = page.locator("article").filter({ hasText: "Monitoring home attention item" }).first();
+    await expect(attentionItem).toBeVisible();
+    await expect(attentionItem.getByText("Approval required before any retry or cleanup.")).toBeVisible();
+    await expect(attentionItem.getByRole("link", { name: /Open detail/ })).toBeVisible();
+    await expect(attentionItem.getByRole("button")).toHaveCount(0);
+
+    await expect(page.getByRole("button", { name: "Expand dashboard coverage" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Review risky work" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Send to validation" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Approve work" })).toHaveCount(0);
   });
 
   test("shows compact routing fleet data on controls", async ({ page, request }) => {
@@ -881,7 +911,7 @@ test.describe("dashboard workflow coverage", () => {
   });
 
   test("guides a non-coder through intake templates and advanced fields", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/controls");
 
     await page.getByRole("button", { name: "Review risky work" }).click();
     await expect(page.getByText("Template selected: Review risky work. Fill in the blanks and launch the work.")).toBeVisible();
@@ -908,7 +938,7 @@ test.describe("dashboard workflow coverage", () => {
 
     await waitForState(request, workItemId, "implementing");
 
-    await page.goto("/");
+    await page.goto("/queue");
 
     const card = page.locator("article").filter({ hasText: "Compact action progression" }).first();
     await expect(card).toBeVisible();

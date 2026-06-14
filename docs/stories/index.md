@@ -313,3 +313,13 @@ Stories in this epic do not approve or execute provider calls, paid calls, proce
 | Story | Summary |
 | --- | --- |
 | `19-1-record-gated-authority-backlog-completion-audit.md` | Done story for recording the safe-prep completion audit and clarifying that execution remains blocked until exact target-specific approval is accepted. |
+
+## Draft Epic 20 Story Map
+
+Epic 20 starts after Bob selected the dashboard's primary mode as monitoring. Its theme is a monitoring-first dashboard home: Mission Control overview, attention queue, live activity, and read-only evidence drill-in before command or mutation controls.
+
+Stories in this epic do not approve or execute provider calls, paid calls, process launches, worker launches, source mutation, cleanup deletion, branch/ref deletion, issue sync, PR delivery, retry automation, approval automation, or failed-check bypass.
+
+| Story | Summary |
+| --- | --- |
+| `20-1-monitoring-dashboard-home.md` | Review story for recomposing the dashboard home into a monitoring-first Mission Control surface while preserving existing detail/control pages and authority boundaries. |
