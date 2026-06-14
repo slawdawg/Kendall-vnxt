@@ -322,4 +322,4 @@ Stories in this epic do not approve or execute provider calls, paid calls, proce
 
 | Story | Summary |
 | --- | --- |
-| `20-1-monitoring-dashboard-home.md` | Review story for recomposing the dashboard home into a monitoring-first Mission Control surface while preserving existing detail/control pages and authority boundaries. |
+| `20-1-monitoring-dashboard-home.md` | Done story for recomposing the dashboard home into a monitoring-first Mission Control surface while preserving existing detail/control pages and authority boundaries. |
