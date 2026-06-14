@@ -6,26 +6,26 @@ import { getSupervisorBaseUrl } from "../lib/supervisor";
 
 const refreshPauseStorageKey = "kendall-dashboard-realtime-refresh-paused-until";
 
-function isRefreshPaused() {
+function getRefreshPauseRemainingMs() {
   let raw: string | null = null;
   try {
     raw = window.localStorage.getItem(refreshPauseStorageKey);
   } catch {
-    return false;
+    return 0;
   }
   if (!raw) {
-    return false;
+    return 0;
   }
   const pausedUntil = Number(raw);
   if (!Number.isFinite(pausedUntil) || Date.now() >= pausedUntil) {
     try {
       window.localStorage.removeItem(refreshPauseStorageKey);
     } catch {
-      return false;
+      return 0;
     }
-    return false;
+    return 0;
   }
-  return true;
+  return pausedUntil - Date.now();
 }
 
 export function RealtimeRefresh() {
@@ -40,9 +40,16 @@ export function RealtimeRefresh() {
         clearTimeout(refreshTimer);
       }
       refreshTimer = setTimeout(() => {
-        if (isRefreshPaused()) {
-          refreshTimer = null;
+        const remainingPauseMs = getRefreshPauseRemainingMs();
+        if (remainingPauseMs > 0) {
+          refreshTimer = setTimeout(() => {
+            router.refresh();
+            refreshTimer = null;
+          }, remainingPauseMs + 25);
           return;
+        }
+        if (refreshTimer) {
+          refreshTimer = null;
         }
         router.refresh();
         refreshTimer = null;

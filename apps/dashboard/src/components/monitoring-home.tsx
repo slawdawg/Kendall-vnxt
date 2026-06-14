@@ -8,7 +8,10 @@ import { formatLane, formatWorkflowState } from "../lib/workflow-display";
 const activeStates = new Set(["implementing", "validating", "reviewing", "awaiting_audit"]);
 const authorityKeywords = [
   "approval",
+  "approve",
+  "audit",
   "retry",
+  "rework",
   "cleanup",
   "merge",
   "provider",
