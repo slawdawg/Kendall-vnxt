@@ -16,6 +16,7 @@ Evidence:
 - `docs/stories/index.md` lists remaining blocked authority families and current non-executing authority packets.
 - `docs/goals/gated-authority-backlog-completion-audit-2026-06-14.md` records that safe preparation exists, but real execution remains blocked until exact target-specific approval.
 - The repo-owned workspace script has created separate active worktrees for coordination, local Ollama execution, premium execution, subscription-agent process launch, real CLI worker launch, and cleanup automation.
+- Adaptive scoring remains a tracked high-risk authority lane, but it has no active worktree in this split because the current prep bundle is limited to the six lane PRs listed below.
 
 ## 2. Impact Analysis
 
@@ -37,6 +38,7 @@ No completed story status changes.
 Future story work should be created or resumed inside the matching lane worktree:
 
 - Local Ollama/provider execution readiness.
+- Adaptive scoring readiness.
 - Premium provider execution readiness.
 - Subscription-agent process launch readiness.
 - Real CLI worker launch readiness.
@@ -76,6 +78,7 @@ Current lane map:
 | --- | --- | --- | --- | --- |
 | Coordination | `codex/authority-lane-coordination` | `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260614-coordinate-high-risk-authority-lane-readiness` | Yes | Not an execution lane |
 | Local Ollama/provider execution | `codex/local-ollama-provider-execution-lane` | `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260614-prepare-local-ollama-provider-execution-authorit` | Yes, no-call readiness only | Blocked pending exact provider-call approval |
+| Adaptive scoring | Not started in this split | Not started in this split | Yes, no-apply/no-compute readiness only after a lane is created | Blocked pending exact adaptive-score compute/apply approval |
 | Premium provider execution | `codex/premium-provider-execution-lane` | `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260614-prepare-premium-provider-execution-authority-lan` | Yes, no-cost readiness only | Blocked pending exact paid-call approval |
 | Subscription-agent process launch | `codex/subscription-agent-process-launch-lane` | `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260614-prepare-subscription-agent-process-launch-author` | Yes, no-launch readiness only | Blocked pending exact process-launch approval |
 | Real CLI worker launch | `codex/real-cli-worker-launch-lane` | `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260614-prepare-real-cli-worker-launch-authority-lane` | Yes, no-launch readiness only | Blocked pending exact worker-launch approval |
@@ -109,6 +112,7 @@ Each lane branch may prepare:
 Each lane branch must stop before:
 
 - External provider call.
+- Adaptive-score compute or apply operation.
 - Paid provider call.
 - Process launch.
 - Worker launch.
@@ -151,6 +155,7 @@ Success criteria:
 - [x] Worktree split created through the repo-owned workspace script.
 - [x] Coordination branch designated as the shared map.
 - [x] Lane branches designated for local Ollama, premium provider, subscription-agent launch, real CLI worker launch, and cleanup automation.
+- [x] Adaptive scoring retained as a high-risk lane with no active worktree in this split.
 - [x] Parallel safe-prep boundary defined.
 - [x] Real execution stop lines preserved.
 - [x] Merge-order guidance defined.
