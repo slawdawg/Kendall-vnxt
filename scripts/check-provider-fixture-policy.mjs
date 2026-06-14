@@ -14,6 +14,13 @@ function assertCondition(condition, message, failures) {
   }
 }
 
+function scriptCommands(script) {
+  return (script ?? "")
+    .split("&&")
+    .map((command) => command.trim())
+    .filter(Boolean);
+}
+
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const adapterSource = readWorkspaceFile("services/supervisor/src/supervisor/domain/disabled_provider_adapter.py");
 const registrySource = readWorkspaceFile("services/supervisor/src/supervisor/domain/worker_registry.py");
@@ -28,12 +35,12 @@ const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-impleme
 const failures = [];
 
 assertCondition(
-  packageJson.scripts?.["check:provider-fixtures"] === "node ./scripts/check-provider-fixture-policy.mjs",
-  "package.json must define check:provider-fixtures as node ./scripts/check-provider-fixture-policy.mjs",
+  scriptCommands(packageJson.scripts?.["check:provider-fixtures"]).includes("node ./scripts/check-provider-fixture-policy.mjs"),
+  "package.json must run node ./scripts/check-provider-fixture-policy.mjs from check:provider-fixtures",
   failures,
 );
 assertCondition(
-  packageJson.scripts?.check?.includes("pnpm run check:provider-fixtures"),
+  scriptCommands(packageJson.scripts?.check).includes("pnpm run check:provider-fixtures"),
   "pnpm run check must include pnpm run check:provider-fixtures",
   failures,
 );

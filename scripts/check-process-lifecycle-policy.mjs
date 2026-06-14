@@ -14,6 +14,13 @@ function assertCondition(condition, message, failures) {
   }
 }
 
+function scriptCommands(script) {
+  return (script ?? "")
+    .split("&&")
+    .map((command) => command.trim())
+    .filter(Boolean);
+}
+
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const contractSource = readWorkspaceFile("packages/contracts/src/api.ts");
 const typesSource = readWorkspaceFile("services/supervisor/src/supervisor/domain/types.py");
@@ -30,12 +37,19 @@ const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-impleme
 const failures = [];
 
 assertCondition(
-  packageJson.scripts?.["check:process-lifecycle"] === "node ./scripts/check-process-lifecycle-policy.mjs",
-  "package.json must define check:process-lifecycle as node ./scripts/check-process-lifecycle-policy.mjs",
+  scriptCommands(packageJson.scripts?.["check:process-lifecycle"]).includes("node ./scripts/check-process-lifecycle-policy.mjs"),
+  "package.json must run node ./scripts/check-process-lifecycle-policy.mjs from check:process-lifecycle",
   failures,
 );
 assertCondition(
-  packageJson.scripts?.check?.includes("pnpm run check:process-lifecycle"),
+  scriptCommands(packageJson.scripts?.["check:process-lifecycle"]).includes(
+    "node ./scripts/check-subscription-agent-process-launch-approval-packet.mjs",
+  ),
+  "package.json must run node ./scripts/check-subscription-agent-process-launch-approval-packet.mjs from check:process-lifecycle",
+  failures,
+);
+assertCondition(
+  scriptCommands(packageJson.scripts?.check).includes("pnpm run check:process-lifecycle"),
   "pnpm run check must include pnpm run check:process-lifecycle",
   failures,
 );
