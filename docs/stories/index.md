@@ -314,6 +314,7 @@ Stories in this epic do not approve or execute provider calls, paid calls, proce
 | --- | --- |
 | `19-1-record-gated-authority-backlog-completion-audit.md` | Done story for recording the safe-prep completion audit and clarifying that execution remains blocked until exact target-specific approval is accepted. |
 
+
 ## Draft Epic 20 Story Map
 
 Epic 20 starts after Bob selected the dashboard's primary mode as monitoring. Its theme is a monitoring-first dashboard home: Mission Control overview, attention queue, live activity, and read-only evidence drill-in before command or mutation controls.
@@ -323,3 +324,12 @@ Stories in this epic do not approve or execute provider calls, paid calls, proce
 | Story | Summary |
 | --- | --- |
 | `20-1-monitoring-dashboard-home.md` | Done story for recomposing the dashboard home into a monitoring-first Mission Control surface while preserving existing detail/control pages and authority boundaries. |
+## Draft Epic 21 Story Map
+
+Epic 21 starts from the token-economy brainstorming lane. Its theme is reducing token waste across Kendall_Nxt agents and workflows while preserving visible progress, plain-English explanations, safety gates, evidence, and Bob steering points.
+
+Stories in this epic do not approve provider calls, paid usage, compression-layer adoption, process launch, worker launch, credential/session access, GitHub mutation, cleanup, or broad automation.
+
+| Story | Summary |
+| --- | --- |
+| `21-1-token-economy-foundation.md` | Done story for quiet competent operator behavior, plain-English escalation, Tool Churn RCA workflow, AI context entry map, usage measurement plan, and compression-tool evaluation gates without adopting external tools. |
