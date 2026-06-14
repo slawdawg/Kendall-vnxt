@@ -46,6 +46,10 @@ Classify the failure before choosing another action:
 Keep the packet short unless the issue threatens safety, data loss, CI, or
 user-facing behavior.
 
+Use `.agents/skills/tool-churn-rca/SKILL.md` when an invokable skill route is
+available. Use `docs/workflows/tool-churn-rca-examples.md` for packet examples
+covering common Kendall_Nxt failure classes.
+
 ```text
 Tool Churn RCA Packet
 - What failed:

@@ -87,7 +87,9 @@ If command or tool churn appears, stop blind retries and route to
 command/tool path fails twice, when a Windows sandbox runner timeout happens
 before command output, when PowerShell quoting/parser errors repeat, when a
 missing tool/path or permission denial blocks progress, or when guidance already
-identifies the attempted command shape as known-bad.
+identifies the attempted command shape as known-bad. Use
+`docs/workflows/tool-churn-rca-examples.md` when a concrete packet example would
+prevent another vague retry.
 
 Before loading broad context, check `docs/ai-context/index.md` for the smallest
 relevant first-read path. Prefer exact source links, small summaries, and

@@ -29,7 +29,7 @@ enough. Keep exact file links and line references for decisions and evidence.
 | Start/list/resume/finish Codex workspace work | `AGENTS.md#codex-workspace-protocol`, `scripts/codex-workspace.mjs` usage text | Workspace state is stale, cleanup is requested, PR delivery is needed |
 | BMAD story implementation | The story file, `AGENTS.md`, nearest similar story in `docs/stories/` | Story references architecture, PRD, UX, prior evidence, or code contracts |
 | BMAD planning/story/PRD/architecture work | Matching `.agents/skills/bmad-*` `SKILL.md`, then directly referenced step files | The skill requests planning artifacts or continuation state |
-| Tool or command failure | `AGENTS.md#tool-resolution-and-verification`, `AGENTS.md#windows-sandbox`, `docs/workflows/tool-churn-rca.md` | The failure repeats, requires authority, or points to brittle tooling |
+| Tool or command failure | `AGENTS.md#tool-resolution-and-verification`, `AGENTS.md#windows-sandbox`, `docs/workflows/tool-churn-rca.md`, `docs/workflows/tool-churn-rca-examples.md` | The failure repeats, requires authority, or points to brittle tooling |
 | Git/GitHub delivery | `AGENTS.md#codex-workspace-protocol`, relevant delivery/readiness story, current PR/CI evidence | Push, PR creation, merge, branch deletion, cleanup, or issue sync is requested |
 | Windows/PowerShell behavior | `AGENTS.md#windows-sandbox`, `AGENTS.md#powershell-commands` | Scheduler, ACL, PATH, or sandbox behavior remains unclear |
 | Supervisor/dashboard code changes | Relevant story, nearby tests, package scripts, target app/service files | API contracts, UI state, or cross-package behavior changes |
