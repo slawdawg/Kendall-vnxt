@@ -339,3 +339,13 @@ Stories in this epic do not approve provider calls, paid usage, compression-laye
 | --- | --- |
 | `21-1-token-economy-foundation.md` | Done story for quiet competent operator behavior, plain-English escalation, Tool Churn RCA workflow, AI context entry map, usage measurement plan, and compression-tool evaluation gates without adopting external tools. |
 | `21-2-operationalize-token-economy-workflow.md` | Done story for operational Tool Churn RCA examples and a token-economy drift check wired into repo verification. |
+
+## Draft Epic 22 Story Map
+
+Epic 22 focuses on coordination for concurrent Codex development lanes, especially when PRs, merge gates, local-only commits, and active managed worktrees coexist.
+
+Stories in this epic do not approve PR merges, cleanup, branch deletion, local commit discard, provider calls, paid usage, worker launch, process launch, credential/session access, or execution authority.
+
+| Story | Summary |
+| --- | --- |
+| `22-1-workspace-coordination-report.md` | Done story for a workspace coordination report workflow and drift check that classifies active lanes, merge gates, local-only commits, cleanup candidates, and stop lines. |

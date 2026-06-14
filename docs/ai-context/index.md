@@ -26,7 +26,7 @@ enough. Keep exact file links and line references for decisions and evidence.
 
 | Task type | Read first | Expand when |
 | --- | --- | --- |
-| Start/list/resume/finish Codex workspace work | `AGENTS.md#codex-workspace-protocol`, `scripts/codex-workspace.mjs` usage text | Workspace state is stale, cleanup is requested, PR delivery is needed |
+| Start/list/resume/finish Codex workspace work | `AGENTS.md#codex-workspace-protocol`, `docs/workflows/workspace-coordination-report.md`, `scripts/codex-workspace.mjs` usage text | Workspace state is stale, cleanup is requested, PR delivery is needed |
 | BMAD story implementation | The story file, `AGENTS.md`, nearest similar story in `docs/stories/` | Story references architecture, PRD, UX, prior evidence, or code contracts |
 | BMAD planning/story/PRD/architecture work | Matching `.agents/skills/bmad-*` `SKILL.md`, then directly referenced step files | The skill requests planning artifacts or continuation state |
 | Tool or command failure | `AGENTS.md#tool-resolution-and-verification`, `AGENTS.md#windows-sandbox`, `docs/workflows/tool-churn-rca.md` | The failure repeats, requires authority, points to brittle tooling, or needs Tool Churn RCA examples from `docs/workflows/tool-churn-rca-examples.md` |
