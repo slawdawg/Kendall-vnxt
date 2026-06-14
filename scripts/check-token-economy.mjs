@@ -40,10 +40,12 @@ const contextIndex = readRequiredWorkspaceFile("docs/ai-context/index.md", failu
 const rcaWorkflow = readRequiredWorkspaceFile("docs/workflows/tool-churn-rca.md", failures);
 const rcaExamples = readRequiredWorkspaceFile("docs/workflows/tool-churn-rca-examples.md", failures);
 const evaluationPlan = readRequiredWorkspaceFile("docs/research/token-economy-tool-evaluation.md", failures);
+const measurementReadiness = readRequiredWorkspaceFile("docs/research/token-economy-measurement-readiness.md", failures);
 const storyIndex = readRequiredWorkspaceFile("docs/stories/index.md", failures);
 const story21_2 = readRequiredWorkspaceFile("docs/stories/21-2-operationalize-token-economy-workflow.md", failures);
 const story21_3 = readRequiredWorkspaceFile("docs/stories/21-3-harden-tool-churn-rca-drift-check.md", failures);
 const rcaNonGoals = sectionBetween(rcaWorkflow, "## Non-Goals");
+const story21_4 = readRequiredWorkspaceFile("docs/stories/21-4-token-economy-measurement-readiness.md", failures);
 
 assertCondition(
   packageJson.scripts?.["check:token-economy"] === "node ./scripts/check-token-economy.mjs",
@@ -64,9 +66,11 @@ for (const path of [
   "docs/workflows/tool-churn-rca-examples.md",
   "docs/ai-context/index.md",
   "docs/research/token-economy-tool-evaluation.md",
+  "docs/research/token-economy-measurement-readiness.md",
   "docs/stories/21-1-token-economy-foundation.md",
   "docs/stories/21-2-operationalize-token-economy-workflow.md",
   "docs/stories/21-3-harden-tool-churn-rca-drift-check.md",
+  "docs/stories/21-4-token-economy-measurement-readiness.md",
 ]) {
   assertCondition(existsSync(join(rootDir, path)), `Missing token economy artifact ${path}`, failures);
 }
@@ -85,6 +89,13 @@ assertCondition(
     "| Tool or command failure | `AGENTS.md#tool-resolution-and-verification`, `AGENTS.md#windows-sandbox`, `docs/workflows/tool-churn-rca.md` |",
   ) && contextIndex.includes("needs Tool Churn RCA examples from `docs/workflows/tool-churn-rca-examples.md`"),
   "AI context index must keep Tool Churn RCA examples as expansion context for repeated or brittle failures",
+  failures,
+);
+assertCondition(
+  contextIndex.includes("docs/research/token-economy-tool-evaluation.md") &&
+    contextIndex.includes("docs/research/token-economy-measurement-readiness.md") &&
+    contextIndex.includes("Savings claims, adoption, installation, paid usage, or networked integration are proposed"),
+  "AI context index must route token-economy research and savings claims to measurement readiness",
   failures,
 );
 assertCondition(
@@ -200,6 +211,11 @@ assertCondition(
   "Story index must reference Story 21.3 Tool Churn RCA drift-check hardening",
   failures,
 );
+assertCondition(
+  storyIndex.includes("21-4-token-economy-measurement-readiness.md"),
+  "Story index must reference Story 21.4 token economy measurement readiness",
+  failures,
+);
 for (const storyText of [
   "Tool Churn RCA guidance to become a directly usable workflow",
   "static drift check verifies",
@@ -219,6 +235,64 @@ for (const storyText of [
   "pnpm.cmd run check:token-economy",
 ]) {
   assertCondition(story21_3.includes(storyText), `Story 21.3 must preserve ${storyText}`, failures);
+}
+
+for (const packetField of [
+  "- Workflow type:",
+  "- Task boundary:",
+  "- Context loaded:",
+  "- Major tool calls:",
+  "- Repeated command/tool failures:",
+  "- Verification outcome:",
+  "- Safety or authority signals preserved:",
+  "- Rough duration:",
+  "- Token or usage source:",
+  "- Measurement confidence:",
+  "- Follow-up recommendation:",
+]) {
+  assertCondition(
+    measurementReadiness.includes(packetField),
+    `Measurement readiness baseline packet must include ${packetField}`,
+    failures,
+  );
+}
+
+for (const workflowSample of [
+  "BMAD story implementation",
+  "Tool Churn RCA diagnosis",
+  "Documentation update with verification",
+  "Research or external tool evaluation",
+  "PR delivery or review-comment resolution",
+]) {
+  assertCondition(
+    measurementReadiness.includes(workflowSample),
+    `Measurement readiness must include workflow sample ${workflowSample}`,
+    failures,
+  );
+}
+
+for (const adoptionGate of [
+  "The tool's local data sources.",
+  "Whether it reads credentials, sessions, prompts, completions, reasoning",
+  "Before/after evidence on at least two workflow families.",
+  "Failure cases where the tool hides meaning, citations, paths, line numbers",
+  "A rollback path and disabled-by-default expectation.",
+  "Raw prompt, completion, reasoning trace, provider payload, or secret retention.",
+]) {
+  assertCondition(
+    measurementReadiness.includes(adoptionGate),
+    `Measurement readiness must preserve adoption gate ${adoptionGate}`,
+    failures,
+  );
+}
+
+for (const storyText of [
+  "baseline packet captures workflow type",
+  "keeps them evaluation-only",
+  "does not install tools, call providers, spend money",
+  "pnpm.cmd run check:token-economy",
+]) {
+  assertCondition(story21_4.includes(storyText), `Story 21.4 must preserve ${storyText}`, failures);
 }
 
 if (failures.length > 0) {
