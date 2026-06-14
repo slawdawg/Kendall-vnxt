@@ -419,6 +419,7 @@ test.describe("dashboard workflow coverage", () => {
       )
       .toBeTruthy();
 
+
     await candidateCard.getByRole("button", { name: "Approve" }).click();
     const approvedCard = page.locator("article").filter({ hasText: "Review Story 6.4 parser" }).first();
     await expect(approvedCard.getByText("Approved")).toBeVisible();
@@ -442,6 +443,16 @@ test.describe("dashboard workflow coverage", () => {
 
   test("opens to a monitoring-first home without authority-gated action controls", async ({ page, request }) => {
     await page.goto("/");
+    await expect(page.getByRole("navigation", { name: "Dashboard sections" })).toBeVisible();
+    await expect(page.getByText("Monitor", { exact: true })).toBeVisible();
+    await expect(page.getByText("Watch state", { exact: true })).toBeVisible();
+    await expect(page.getByText("Evidence", { exact: true })).toBeVisible();
+    await expect(page.getByText("Inspect records", { exact: true })).toBeVisible();
+    await expect(page.getByText("Deliberate", { exact: true })).toBeVisible();
+    await expect(page.getByText("Open controls", { exact: true })).toBeVisible();
+    await expect(page.locator("nav a[href=\"/\"]")).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("nav a[href=\"/controls\"]")).toBeVisible();
+    await expect(page.getByRole("button", { name: /approve|retry|cleanup|launch|execute|start work|fix a problem/i })).toHaveCount(0);
     await expect(page.getByText("Operations Brief")).toBeVisible();
     await expect(page.getByText("Calm monitoring")).toBeVisible();
     const auditBriefLink = page.getByRole("link", { name: "Open audit" }).first();
@@ -457,6 +468,9 @@ test.describe("dashboard workflow coverage", () => {
     await waitForState(request, workItemId, "implementing");
 
     await page.goto("/");
+    const activeNavLink = page.locator("nav a[href=\"/active-work\"]");
+    await expect(activeNavLink).toBeVisible();
+    await expect(activeNavLink).toContainText("1");
     await expect(page.getByText("Watch active work", { exact: true })).toBeVisible();
     const activeBriefLink = page.getByRole("link", { name: "Open active work" });
     await expect(activeBriefLink).toBeVisible();
@@ -486,6 +500,12 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Evidence first", { exact: true })).toBeVisible();
     await expect(page.getByText("Execution controls", { exact: true })).toBeVisible();
     await expect(page.getByText("0 on home", { exact: true })).toBeVisible();
+    const attentionNavLink = page.locator("nav a[href=\"/attention\"]");
+    await expect(attentionNavLink).toBeVisible();
+    await expect(attentionNavLink).toContainText("1");
+    await expect(page.locator("nav a[href=\"/queue\"]")).toBeVisible();
+    await expect(page.locator("nav a[href=\"/audit\"]")).toBeVisible();
+    await expect(page.locator("nav a[href=\"/proposed-work\"]")).toBeVisible();
     const attentionBriefLink = page.getByRole("link", { name: "Open attention review" });
     await expect(attentionBriefLink).toBeVisible();
     await expect(attentionBriefLink).toHaveAttribute("href", "/attention");
@@ -510,6 +530,25 @@ test.describe("dashboard workflow coverage", () => {
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByText("Operations Brief")).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+      )
+      .toBeTruthy();
+
+    await createCandidateWork(request, {
+      title: "Navigation proposed count",
+      requestedOutcome: "Verify proposed work count remains attached to grouped navigation.",
+      source: "operator",
+      sourceArtifactPath: "docs/stories/navigation-proposed-count.md",
+      sourceArtifactType: "manual_note",
+      riskLevel: "low",
+      priority: "normal",
+    });
+    await page.goto("/proposed-work");
+    const proposedNavLink = page.locator("nav a[href=\"/proposed-work\"]");
+    await expect(proposedNavLink).toHaveAttribute("aria-current", "page");
+    await expect(proposedNavLink).toContainText("1");
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
@@ -1647,6 +1686,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gateAudit.getByText("operator-checkpoint")).toBeVisible();
   });
 });
+
 
 
 
