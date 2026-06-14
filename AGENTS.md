@@ -60,6 +60,39 @@
   first, then broaden only when the touched code crosses package, API, or
   workflow boundaries.
 
+## Token Economy and Progress Visibility
+
+Use a quiet competent operator posture by default. Routine updates should be
+short and should report the current phase, meaningful deltas, blockers, or the
+next decision point. Do not repeat background context, restate an already agreed
+plan, or narrate obvious command mechanics when nothing important changed.
+
+When something important changes, explain it in plain English for Bob:
+
+- What changed?
+- Why does it matter?
+- What happens next?
+
+Token economy must not make automation invisible. Keep lightweight signs of
+life during real work, especially during long-running tasks, but spend words on
+state changes rather than ceremony.
+
+Never compress away safety or steering information. Be explicit when work
+touches approvals, destructive operations, source or evidence boundaries,
+provider calls, paid usage, worker or process launch, GitHub delivery, cleanup,
+failed checks, uncertainty, or a decision Bob needs to make.
+
+If command or tool churn appears, stop blind retries and route to
+`docs/workflows/tool-churn-rca.md`. Trigger that workflow when the same
+command/tool path fails twice, when a Windows sandbox runner timeout happens
+before command output, when PowerShell quoting/parser errors repeat, when a
+missing tool/path or permission denial blocks progress, or when guidance already
+identifies the attempted command shape as known-bad.
+
+Before loading broad context, check `docs/ai-context/index.md` for the smallest
+relevant first-read path. Prefer exact source links, small summaries, and
+narrow `rg`/file reads over dumping large artifacts into chat.
+
 ## Git and Edit Hygiene
 
 - Check `git diff --stat` or `git diff --name-only` before and after edits when

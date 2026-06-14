@@ -95,6 +95,7 @@ const intakeTemplates = [
 type IntakeTemplate = (typeof intakeTemplates)[number];
 
 const storageKey = "kendall-dashboard-intake-draft";
+const refreshPauseStorageKey = "kendall-dashboard-realtime-refresh-paused-until";
 const defaultForm = {
   templateId: "operator-blank" as IntakeTemplate["id"],
   title: "",
@@ -152,6 +153,17 @@ function recipeIdForTemplate(template: IntakeTemplate): string | null {
   return "executionRecipeId" in template ? template.executionRecipeId : null;
 }
 
+function pauseRealtimeRefresh() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(refreshPauseStorageKey, String(Date.now() + 10_000));
+  } catch {
+    // If storage is unavailable, the form still works; it just cannot pause live refresh.
+  }
+}
+
 export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: WorkItemExecutionRecipeView[] }) {
   const router = useRouter();
   const { profile } = useOperatorProfile();
@@ -159,6 +171,7 @@ export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: Wor
   const [message, setMessage] = useState("Pick a work type and describe the outcome you need.");
   const [form, setForm] = useState(defaultForm);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const skipInitialPersist = useRef(true);
   const selectedTemplate = intakeTemplates.find((template) => template.id === form.templateId) ?? intakeTemplates[0];
   const recipeById = new Map(executionRecipes.map((recipe) => [recipe.id, recipe]));
@@ -168,6 +181,7 @@ export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: Wor
     // Hydrate the client-only draft after mount so refresh restores work in progress.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm(readStoredDraft());
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
@@ -189,6 +203,7 @@ export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: Wor
   }, [form]);
 
   function updateField(field: keyof typeof form, value: string) {
+    pauseRealtimeRefresh();
     setForm((current) => {
       const next = { ...current, [field]: value };
       if (typeof window !== "undefined") {
@@ -199,6 +214,7 @@ export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: Wor
   }
 
   function applyTemplate(template: IntakeTemplate) {
+    pauseRealtimeRefresh();
     setForm((current) => {
       const next = {
         ...current,
@@ -222,6 +238,7 @@ export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: Wor
 
   function submit() {
     startTransition(async () => {
+      pauseRealtimeRefresh();
       setMessage("Starting the next work item...");
       try {
         const response = await fetch(`${getSupervisorBaseUrl()}/work-items`, {
@@ -268,7 +285,11 @@ export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: Wor
     !form.source.trim();
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section
+      className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm"
+      onFocusCapture={pauseRealtimeRefresh}
+      onPointerDownCapture={pauseRealtimeRefresh}
+    >
       <div className="flex flex-col gap-2">
         <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Intake</p>
         <h2 className="text-2xl font-semibold">Start next work</h2>
@@ -286,10 +307,11 @@ export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: Wor
               <button
                 key={template.id}
                 type="button"
+                disabled={!hydrated}
                 onClick={() => applyTemplate(template)}
                 className={`rounded-2xl border px-4 py-4 text-left transition ${
                   selected ? "border-[var(--accent)] bg-[var(--surface-strong)]" : "bg-[var(--panel)]"
-                }`}
+                } disabled:cursor-wait disabled:opacity-60`}
               >
                 <p className="text-sm font-semibold">{template.name}</p>
                 <p className="mt-1 text-sm text-[var(--muted)]">{template.summary}</p>
@@ -393,10 +415,11 @@ export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: Wor
               <button
                 key={option.value}
                 type="button"
+                disabled={!hydrated}
                 onClick={() => updateField("riskLevel", option.value)}
                 className={`rounded-2xl border px-4 py-4 text-left transition ${
                   selected ? "border-[var(--accent)] bg-[var(--surface-strong)]" : "bg-[var(--panel)]"
-                }`}
+                } disabled:cursor-wait disabled:opacity-60`}
               >
                 <p className="text-sm font-semibold">{option.label}</p>
                 <p className="mt-1 text-sm text-[var(--muted)]">{option.hint}</p>
