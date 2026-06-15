@@ -81,29 +81,27 @@ not merge unless all PR conversations are resolved.
 
 ## Recommended Next Work
 
-Create the next managed worktree for token economy operationalization:
+Token-economy operationalization is no longer the next lane. Story 21.2 was
+completed for the operational Tool Churn RCA examples and token-economy drift
+check, Story 21.3 was completed for Tool Churn RCA drift-check hardening, and
+Story 21.4 was completed for measurement-readiness guidance.
+
+After reboot, do not create another worktree for the completed Story 21.2
+operationalization scope. Start from current `main`, read
+`docs/stories/index.md`, and choose the next incomplete story or authority lane
+that is still listed as ready, review, deferred, or blocked.
+
+Useful orientation commands:
 
 ```text
-node ./scripts/codex-workspace.mjs start "operationalize token economy workflow"
+git status --short --branch
+node ./scripts/codex-workspace.mjs list
+Select-String -Path docs\stories\index.md -Pattern "Review story|deferred|blocked|Ready|Status"
 ```
 
-Recommended scope for the next PR:
-
-1. Turn the Tool Churn RCA workflow into a more directly invokable BMAD-style
-   skill or workflow path, so repeated tool failures can be handled by a
-   specific RCA route instead of ad hoc retries.
-2. Add a lightweight `check:token-economy` or docs drift check that verifies the
-   `AGENTS.md` guidance still points to the RCA workflow, AI context map, and
-   evaluation-only external-tool policy.
-3. Add example RCA packets for likely repeat offenders:
-   - Windows sandbox runner timeout before command output.
-   - PowerShell quoting or parser errors.
-   - Missing supervisor virtual environment or Python path confusion.
-   - Git safe-directory or permission-related command failure.
-
-Keep external tools evaluation-only in this next story. Do not install or adopt
-Headroom, CC Usage, Defluffer, Redis LangCache, or similar tooling without a
-new explicit story and approval.
+Keep external tools evaluation-only unless a later story explicitly approves
+adoption. Do not install or adopt Headroom, CC Usage, Defluffer, Redis LangCache,
+or similar tooling from this handoff alone.
 
 ## Resume Commands
 

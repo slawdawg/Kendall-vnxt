@@ -88,22 +88,25 @@ Reason:
   - retention: metadata-only
   - rollback: disable local-provider or Ollama-specific gates
 
-Recommended sequence:
+Current sequence status:
 
-1. Optionally clean the merged lane worktrees with exact approval.
-2. Create a new story for one bounded local Ollama provider execution path.
-3. Implement the runtime path behind existing disabled-by-default gates.
-4. Require an exact approval instance before any real provider call.
-5. Capture metadata-only execution evidence.
-6. Run focused provider checks, then full verification if shared runtime code changes.
+1. Local Ollama provider execution is complete for the approved VM-to-host
+   endpoint/model boundary.
+2. Subscription-agent supervised process launch is complete for the bounded
+   approval path.
+3. Do not create another worktree for either completed lane from this handoff.
 
-After local Ollama, proceed in this order:
+Recommended next-work sequence after reboot:
 
-1. Subscription-agent supervised process launch.
-2. Real CLI worker launch.
-3. Cleanup automation.
-4. Premium provider execution.
-5. Adaptive scoring as its own separate lane, because it remains tracked but did not get an active worktree in the six-lane split.
+1. Confirm current state from `docs/stories/index.md` and
+   `node ./scripts/codex-workspace.mjs list`.
+2. Continue with the next incomplete approved lane, starting with real CLI
+   worker launch if it is still not implemented beyond the approval packet.
+3. Then proceed to cleanup automation and premium provider execution only when
+   each lane has an exact accepted approval packet and disabled-by-default gate
+   wiring.
+4. Keep adaptive scoring as its own separate lane unless `docs/stories/index.md`
+   shows it has already advanced.
 
 ## Key Files To Read On Resume
 
@@ -139,4 +142,3 @@ Use this prompt after reboot:
 ```text
 Read docs/handoffs/current.md and docs/handoffs/codex-handoff-2026-06-14-provider-worker-execution-readiness.md. Resume from the merged provider/worker execution-readiness baseline. Start by confirming clean repo status, then recommend whether to apply merged-worktree cleanup or create the local Ollama runtime execution story.
 ```
-
