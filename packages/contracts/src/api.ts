@@ -538,10 +538,32 @@ export interface LocalReadonlyWorkerPreviewView {
   commandsAllowed: boolean;
 }
 
+export interface LocalProviderApprovalInstance {
+  approvalId?: string | null;
+  status?: string | null;
+  authorityFamily?: string | null;
+  operation?: string | null;
+  endpointUrl?: string | null;
+  modelId?: string | null;
+  promptSourceId?: string | null;
+  promptTemplateId?: string | null;
+  redactionPolicy?: string | null;
+  timeoutCancellationPolicy?: string | null;
+  retainedEvidencePolicy?: string | null;
+  retainedEvidence?: string[];
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  expiresAt?: string | null;
+  reviewPoint?: string | null;
+  rollbackPath?: string[];
+  stopLines?: string[];
+}
+
 export interface LocalEvidenceExplanationPayload {
   stepId?: string | null;
   taskKind?: string | null;
   recordEvent?: boolean;
+  localProviderApproval?: LocalProviderApprovalInstance | null;
 }
 
 export interface LocalEvidenceItemView {
@@ -554,6 +576,10 @@ export interface LocalProviderAttemptMetadataView {
   status: string;
   modelId: string;
   endpointFamily: string;
+  approvalId?: string | null;
+  approvalStatus?: string | null;
+  rejectionReason?: string | null;
+  rejectionReasons: string[];
   finishReason?: string | null;
   promptSummary: string;
   responseSummary: string;

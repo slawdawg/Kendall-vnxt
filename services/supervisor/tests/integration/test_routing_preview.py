@@ -1151,6 +1151,81 @@ def test_ollama_provider_gate_rejects_unapproved_endpoint(tmp_path, monkeypatch)
     assert checks["ollama-provider-gate"]["modelCallsAllowed"] is False
 
 
+def _accepted_local_provider_approval(**overrides):
+    now = datetime.now(timezone.utc)
+    approval = {
+        "approvalId": "local-provider-approval-test-001",
+        "status": "accepted",
+        "authorityFamily": "local-provider-execution",
+        "operation": "one bounded Ollama provider operation",
+        "endpointUrl": "http://192.168.1.128:11434/v1/chat/completions",
+        "modelId": "qwen3:14b",
+        "promptSourceId": "work-item-local-evidence-summary",
+        "promptTemplateId": "local-evidence-explanation-v1",
+        "redactionPolicy": "metadata_only_no_raw_prompt_completion_reasoning_or_provider_payload",
+        "timeoutCancellationPolicy": "connect_timeout_2s_total_timeout_120s",
+        "retainedEvidencePolicy": "metadata-only",
+        "retainedEvidence": ["work_item_metadata", "workflow_event_summaries"],
+        "approvedBy": "Bob",
+        "approvedAt": now.isoformat(),
+        "expiresAt": (now + timedelta(minutes=10)).isoformat(),
+        "rollbackPath": ["disable local-provider and Ollama-specific gates"],
+        "stopLines": [
+            "Do not call any endpoint other than http://192.168.1.128:11434/v1/chat/completions.",
+            "Do not use any model other than qwen3:14b.",
+            "Do not retain raw prompt, completion, reasoning, or provider payload text in workflow events.",
+        ],
+    }
+    approval.update(overrides)
+    return approval
+
+
+def test_ollama_local_evidence_explanation_rejects_missing_approval_before_adapter_call(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "ollama-local-evidence-missing-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    adapter_calls = {"count": 0}
+
+    async def fake_explain(self, *, evidence_summary, evidence_count, cancellation_event=None):
+        adapter_calls["count"] += 1
+        raise AssertionError("Ollama adapter must not run without exact approval.")
+
+    monkeypatch.setattr("supervisor.domain.ollama_provider_adapter.OllamaProviderAdapter.explain", fake_explain)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        response = client.post(
+            f"/work-items/{work_item_id}/local-evidence-explanation",
+            json={"taskKind": "evidence_summary", "recordEvent": True},
+        )
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+
+    assert response.status_code == 200
+    explanation = response.json()["data"]
+    assert adapter_calls["count"] == 0
+    assert explanation["providerAttempt"]["status"] == "rejected"
+    assert explanation["providerAttempt"]["approvalStatus"] == "rejected"
+    assert explanation["providerAttempt"]["rejectionReason"] == "approval-instance-missing"
+    assert explanation["providerAttempt"]["rawPayloadRetained"] is False
+    assert explanation["providerAttempt"]["promptCharacterCount"] == 0
+
+    events = events_response.json()["data"]
+    recorded = next(event for event in events if event["eventType"] == "routing.local_evidence_explained")
+    assert recorded["payload"]["providerAttempt"]["status"] == "rejected"
+    assert recorded["payload"]["providerAttempt"]["rejectionReason"] == "approval-instance-missing"
+    assert "OK." not in str(recorded)
+    assert "Okay, the user wants" not in str(recorded)
+
+
 def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider_text(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "ollama-local-evidence-explanation.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -1195,7 +1270,11 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
         work_item_id = _create_routing_work_item(client)
         response = client.post(
             f"/work-items/{work_item_id}/local-evidence-explanation",
-            json={"taskKind": "evidence_summary", "recordEvent": True},
+            json={
+                "taskKind": "evidence_summary",
+                "recordEvent": True,
+                "localProviderApproval": _accepted_local_provider_approval(),
+            },
         )
         events_response = client.get(f"/work-items/{work_item_id}/events")
 
@@ -1203,6 +1282,8 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
     explanation = response.json()["data"]
     assert explanation["providerAttempt"]["status"] == "completed"
     assert explanation["providerAttempt"]["modelId"] == "qwen3:14b"
+    assert explanation["providerAttempt"]["approvalId"] == "local-provider-approval-test-001"
+    assert explanation["providerAttempt"]["approvalStatus"] == "accepted"
     assert explanation["providerAttempt"]["responseCharacterCount"] == 3
     assert explanation["providerAttempt"]["reasoningCharacterCount"] == 42
     assert explanation["providerAttempt"]["rawPayloadRetained"] is False
@@ -1219,9 +1300,102 @@ def test_ollama_local_evidence_explanation_records_metadata_without_raw_provider
 
     events = events_response.json()["data"]
     recorded = next(event for event in events if event["eventType"] == "routing.local_evidence_explained")
+    assert recorded["payload"]["providerAttempt"]["approvalStatus"] == "accepted"
     assert recorded["payload"]["providerAttempt"]["rawPayloadRetained"] is False
     assert "OK." not in str(recorded)
     assert "Okay, the user wants" not in str(recorded)
+
+
+def test_ollama_local_evidence_explanation_rejects_mismatched_or_expired_approval(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "ollama-local-evidence-bad-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    adapter_calls = {"count": 0}
+
+    async def fake_explain(self, *, evidence_summary, evidence_count, cancellation_event=None):
+        adapter_calls["count"] += 1
+        raise AssertionError("Ollama adapter must not run for mismatched or expired approval.")
+
+    monkeypatch.setattr("supervisor.domain.ollama_provider_adapter.OllamaProviderAdapter.explain", fake_explain)
+
+    expired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        response = client.post(
+            f"/work-items/{work_item_id}/local-evidence-explanation",
+            json={
+                "taskKind": "evidence_summary",
+                "localProviderApproval": _accepted_local_provider_approval(
+                    endpointUrl="http://127.0.0.1:11434/v1/chat/completions",
+                    expiresAt=expired_at.isoformat(),
+                ),
+            },
+        )
+
+    assert response.status_code == 200
+    explanation = response.json()["data"]
+    assert adapter_calls["count"] == 0
+    assert explanation["providerAttempt"]["status"] == "rejected"
+    assert explanation["providerAttempt"]["approvalStatus"] == "rejected"
+    assert "approval-endpoint-mismatch" in explanation["providerAttempt"]["rejectionReasons"]
+    assert "approval-expired" in explanation["providerAttempt"]["rejectionReasons"]
+    assert explanation["providerAttempt"]["rawPayloadRetained"] is False
+
+
+def test_ollama_local_evidence_explanation_rejects_unsafe_placeholder_approval_text(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "ollama-local-evidence-placeholder-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS", "true")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_ENDPOINT_URL", "http://192.168.1.128:11434/v1/chat/completions")
+    monkeypatch.setenv("SUPERVISOR_OLLAMA_MODEL_ID", "qwen3:14b")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    adapter_calls = {"count": 0}
+
+    async def fake_explain(self, *, evidence_summary, evidence_count, cancellation_event=None):
+        adapter_calls["count"] += 1
+        raise AssertionError("Ollama adapter must not run for unsafe placeholder approval text.")
+
+    monkeypatch.setattr("supervisor.domain.ollama_provider_adapter.OllamaProviderAdapter.explain", fake_explain)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        response = client.post(
+            f"/work-items/{work_item_id}/local-evidence-explanation",
+            json={
+                "taskKind": "evidence_summary",
+                "localProviderApproval": _accepted_local_provider_approval(
+                    redactionPolicy="none",
+                    rollbackPath=["anything"],
+                    stopLines=["anything"],
+                ),
+            },
+        )
+
+    assert response.status_code == 200
+    explanation = response.json()["data"]
+    assert adapter_calls["count"] == 0
+    assert explanation["providerAttempt"]["status"] == "rejected"
+    assert "approval-redaction-policy-mismatch" in explanation["providerAttempt"]["rejectionReasons"]
+    assert "approval-rollback-mismatch" in explanation["providerAttempt"]["rejectionReasons"]
+    assert "approval-stop-lines-endpoint-missing" in explanation["providerAttempt"]["rejectionReasons"]
+    assert "approval-stop-lines-model-missing" in explanation["providerAttempt"]["rejectionReasons"]
+    assert "approval-stop-lines-retention-missing" in explanation["providerAttempt"]["rejectionReasons"]
+    assert explanation["providerAttempt"]["rawPayloadRetained"] is False
 
 
 def test_ollama_provider_request_uses_connect_timeout_without_global_socket_mutation(monkeypatch) -> None:
