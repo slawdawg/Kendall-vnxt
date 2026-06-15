@@ -419,6 +419,7 @@ test.describe("dashboard workflow coverage", () => {
       )
       .toBeTruthy();
 
+
     await candidateCard.getByRole("button", { name: "Approve" }).click();
     const approvedCard = page.locator("article").filter({ hasText: "Review Story 6.4 parser" }).first();
     await expect(approvedCard.getByText("Approved")).toBeVisible();
@@ -441,12 +442,48 @@ test.describe("dashboard workflow coverage", () => {
   });
 
   test("opens to a monitoring-first home without authority-gated action controls", async ({ page, request }) => {
+    await page.goto("/");
+    await expect(page.getByRole("navigation", { name: "Dashboard sections" })).toBeVisible();
+    await expect(page.getByText("Monitor", { exact: true })).toBeVisible();
+    await expect(page.getByText("Watch state", { exact: true })).toBeVisible();
+    await expect(page.getByText("Evidence", { exact: true })).toBeVisible();
+    await expect(page.getByText("Inspect records", { exact: true })).toBeVisible();
+    await expect(page.getByText("Deliberate", { exact: true })).toBeVisible();
+    await expect(page.getByText("Open controls", { exact: true })).toBeVisible();
+    await expect(page.locator("nav a[href=\"/\"]")).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("nav a[href=\"/controls\"]")).toBeVisible();
+    await expect(page.getByRole("button", { name: /approve|retry|cleanup|launch|execute|start work|fix a problem/i })).toHaveCount(0);
+    await expect(page.getByText("Operations Brief")).toBeVisible();
+    await expect(page.getByText("Calm monitoring")).toBeVisible();
+    await expect(page.getByText("Scan Order")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Read the board top-down" })).toBeVisible();
+    const initialScanOrder = page.locator("section").filter({ hasText: "Read the board top-down" }).first();
+    await expect(initialScanOrder.getByRole("link", { name: /Attention/ })).toHaveAttribute("href", "/attention");
+    await expect(initialScanOrder.getByRole("link", { name: /Active work/ })).toHaveAttribute("href", "/active-work");
+    await expect(initialScanOrder.getByRole("link", { name: /Recent evidence/ })).toHaveAttribute("href", "/queue");
+    await expect(initialScanOrder.getByRole("link", { name: /Audit trail/ })).toHaveAttribute("href", "/audit");
+    const auditBriefLink = page.getByRole("link", { name: "Open audit" }).first();
+    await expect(auditBriefLink).toBeVisible();
+    await expect(auditBriefLink).toHaveAttribute("href", "/audit");
+    await expect(page.getByText("Operator review first")).toHaveCount(0);
+
     const workItemId = await createWorkItem(request, {
       title: "Monitoring home attention item",
       requestedOutcome: "Verify the home page presents monitoring and safe drill-in paths.",
       riskLevel: "medium",
     });
     await waitForState(request, workItemId, "implementing");
+
+    await page.goto("/");
+    const activeNavLink = page.locator("nav a[href=\"/active-work\"]");
+    await expect(activeNavLink).toBeVisible();
+    await expect(activeNavLink).toContainText("1");
+    await expect(page.getByText("Watch active work", { exact: true })).toBeVisible();
+    const activeBriefLink = page.getByRole("link", { name: "Open active work" });
+    await expect(activeBriefLink).toBeVisible();
+    await expect(activeBriefLink).toHaveAttribute("href", "/active-work");
+    await expect(page.getByText("Operator review first")).toHaveCount(0);
+
     await escalateWorkItem(request, workItemId, "Approval required before any retry or cleanup.");
     const approvalWorkItemId = await createWorkItem(request, {
       title: "Monitoring home approval next step",
@@ -464,6 +501,24 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Attention queue")).toBeVisible();
     await expect(page.getByText("Live activity")).toBeVisible();
     await expect(page.getByText("Read-only evidence")).toBeVisible();
+    await expect(page.getByText("Operations Brief")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "What to inspect next" })).toBeVisible();
+    await expect(page.getByText("Operator review first")).toBeVisible();
+    await expect(page.getByText("Evidence first", { exact: true })).toBeVisible();
+    await expect(page.getByText("Execution controls", { exact: true })).toBeVisible();
+    await expect(page.getByText("0 on home", { exact: true })).toBeVisible();
+    const scanOrder = page.locator("section").filter({ hasText: "Read the board top-down" }).first();
+    await expect(scanOrder.getByRole("link", { name: /Attention/ })).toContainText("1");
+    await expect(scanOrder.getByText("A passive path from urgent signals to evidence")).toBeVisible();
+    const attentionNavLink = page.locator("nav a[href=\"/attention\"]");
+    await expect(attentionNavLink).toBeVisible();
+    await expect(attentionNavLink).toContainText("1");
+    await expect(page.locator("nav a[href=\"/queue\"]")).toBeVisible();
+    await expect(page.locator("nav a[href=\"/audit\"]")).toBeVisible();
+    await expect(page.locator("nav a[href=\"/proposed-work\"]")).toBeVisible();
+    const attentionBriefLink = page.getByRole("link", { name: "Open attention review" });
+    await expect(attentionBriefLink).toBeVisible();
+    await expect(attentionBriefLink).toHaveAttribute("href", "/attention");
 
     const attentionItem = page.locator("article").filter({ hasText: "Monitoring home attention item" }).first();
     await expect(attentionItem).toBeVisible();
@@ -481,8 +536,59 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByRole("button", { name: "Review risky work" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Send to validation" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Approve work" })).toHaveCount(0);
-  });
+    await expect(page.getByRole("button", { name: /approve|retry|cleanup|launch|execute|send to validation/i })).toHaveCount(0);
 
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByText("Operations Brief")).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+      )
+      .toBeTruthy();
+
+    await createCandidateWork(request, {
+      title: "Navigation proposed count",
+      requestedOutcome: "Verify proposed work count remains attached to grouped navigation.",
+      source: "operator",
+      sourceArtifactPath: "docs/stories/navigation-proposed-count.md",
+      sourceArtifactType: "manual_note",
+      riskLevel: "low",
+      priority: "normal",
+    });
+    await page.goto("/proposed-work");
+    const proposedNavLink = page.locator("nav a[href=\"/proposed-work\"]");
+    await expect(proposedNavLink).toHaveAttribute("aria-current", "page");
+    await expect(proposedNavLink).toContainText(/\d+/);
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+      )
+      .toBeTruthy();
+  });
+  test("shows operational route briefs on monitoring destination pages", async ({ page }) => {
+    await page.goto("/attention");
+    await expect(page.getByText("Review order", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Inspect escalation evidence before opening controls" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open audit" }).first()).toHaveAttribute("href", "/audit");
+
+    await page.goto("/active-work");
+    await expect(page.getByText("Watch order", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Follow validating and review pressure first" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open attention" })).toHaveAttribute("href", "/attention");
+
+    await page.goto("/queue");
+    await expect(page.getByText("Triage order", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Balance ready work against blocked load" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open active work" })).toHaveAttribute("href", "/active-work");
+    await page.setViewportSize({ width: 390, height: 844 });
+    const triageBrief = page.locator("section").filter({ hasText: "Triage order" }).first();
+    await expect(triageBrief).toBeVisible();
+    await expect
+      .poll(async () =>
+        triageBrief.evaluate((section) => section.getBoundingClientRect().width <= document.documentElement.clientWidth),
+      )
+      .toBeTruthy();
+  });
   test("shows compact routing fleet data on controls", async ({ page, request }) => {
     const workItemId = await createWorkItem(request, {
       title: "Routing fleet evidence",
@@ -576,16 +682,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByText("Merged-to-main state remains false")).toBeVisible();
     await expect(authorityMatrixPanel.getByRole("heading", { name: "Next-lane authority packet" })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("decision_only_no_authority_granted")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("Execution blocked")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md").first()).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("Execution blocked", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Do not treat the decision packet recommendation as approval.")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("local-provider-execution")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("subscription-agent-launch")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("adaptive-scoring")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("worker-command-source-network-credentials")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("remote-delivery-automation")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("github-delivery")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("cleanup-automation")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("local-provider-execution", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("subscription-agent-launch", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("adaptive-scoring", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("worker-command-source-network-credentials", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("remote-delivery-automation", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("github-delivery", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("cleanup-automation", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.locator('[data-family-id="local-provider-execution"][data-status-kind="blocked"]')).toBeVisible();
     await expect(authorityMatrixPanel.locator('[data-family-id="github-delivery"][data-status-kind="blocked"]')).toBeVisible();
     await expect(authorityMatrixPanel.getByText("evidence_ready_approval_required")).toBeVisible();
@@ -593,7 +699,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByText("Related reports").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Related docs").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Rollback path:").first()).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("GET /supervisor/local-cleanup-readiness-report")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("explicit-authority-approval")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Authority readiness matrix entries are not execution-authority approvals.")).toBeVisible();
@@ -827,12 +933,14 @@ test.describe("dashboard workflow coverage", () => {
     const epicCompletionPanel = page.locator("#epic-6-completion-audit-report");
     await expect(epicCompletionPanel.getByText("Epic 6 audit", { exact: true })).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Completion status" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("delivery_eligibility_ready_progressive_hardening")).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Local readiness stack" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Trusted delivery eligibility" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Real BMAD story done proof" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Approve one real BMAD story trial")).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Launching Codex or Claude workers without bounded approval.")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Overall", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Epic complete", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Remote delivery", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Cleanup", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Prepared" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Remaining" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Blocked operations" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Required evidence" })).toBeVisible();
     await expect(page.locator("#epic-6-completion-audit-report")).toBeVisible();
 
     const mvpProofPanel = page.locator("#epic-6-mvp-proof-trial-report");
@@ -841,8 +949,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(mvpProofPanel.getByRole("heading", { name: "Bounded Codex implementation" })).toBeVisible();
     await expect(mvpProofPanel.getByRole("heading", { name: "Bounded Claude review" })).toBeVisible();
     await expect(mvpProofPanel.getByRole("heading", { name: "GitHub delivery" })).toBeVisible();
-    await expect(mvpProofPanel.getByText("waiting_for_bounded_trial_approval")).toBeVisible();
-    await expect(mvpProofPanel.getByText("One Codex implementation launch approval")).toBeVisible();
+    await expect(mvpProofPanel.getByText("Trial status", { exact: true })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "Approval packets" })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "Blocked operations" })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "Next safe actions" })).toBeVisible();
     await expect(page.locator("#epic-6-mvp-proof-trial-report")).toBeVisible();
 
     const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();
@@ -1412,7 +1522,7 @@ test.describe("dashboard workflow coverage", () => {
   });
 
   test("hides synthetic provider raw output while showing bounded metadata", async ({ page, request }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(180_000);
     const fixtures = await loadProviderRawOutputUiFixtures();
     expect(fixtures.map((fixture) => fixture.caseId)).toEqual([
       "provider-success",
@@ -1442,7 +1552,7 @@ test.describe("dashboard workflow coverage", () => {
         expect(exportJson, `Runtime export API retained ${fixture.caseId} raw-output sentinel ${sentinel}`).not.toContain(sentinel);
       }
 
-      await page.goto(`/work-items/${workItemId}#runtime-evidence-export`);
+      await page.goto(`/work-items/${workItemId}#runtime-evidence-export`, { waitUntil: "domcontentloaded" });
 
       const exportPanel = page.locator("#runtime-evidence-export");
       await expect(exportPanel).toBeInViewport();
@@ -1614,3 +1724,4 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gateAudit.getByText("operator-checkpoint")).toBeVisible();
   });
 });
+

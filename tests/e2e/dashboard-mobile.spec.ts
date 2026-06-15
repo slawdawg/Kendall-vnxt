@@ -30,7 +30,7 @@ test("shows proposed work on a phone viewport", async ({ page, request }) => {
 });
 
 test("restores a saved intake draft after refresh and clears it after submit", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/controls");
 
   await page.getByRole("button", { name: "Fix a problem" }).click();
   await page.getByLabel("2. Name the work").fill("Draft restore smoke");
@@ -53,7 +53,7 @@ test("restores a saved intake draft after refresh and clears it after submit", a
   await page.getByRole("button", { name: "Start work" }).click();
   await expect(page).toHaveURL(/\/work-items\/.+/);
 
-  await page.goto("/");
+  await page.goto("/controls");
   await expect(page.getByLabel("2. Name the work")).toHaveValue("");
   await expect(page.getByLabel("3. Describe the result you need")).toHaveValue("");
   await expect(page.getByLabel("Helpful context")).toHaveValue("");
@@ -61,3 +61,4 @@ test("restores a saved intake draft after refresh and clears it after submit", a
   await page.getByRole("button", { name: "Adjust advanced fields" }).click();
   await expect(page.getByLabel("Source")).toHaveValue("operator-dashboard");
 });
+

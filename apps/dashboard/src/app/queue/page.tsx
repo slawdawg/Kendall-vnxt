@@ -1,6 +1,7 @@
 import { PageIntro } from "../../components/page-intro";
 import { Shell } from "../../components/shell";
 import { QueueBrowser } from "../../components/queue-browser";
+import { RouteBrief } from "../../components/route-brief";
 import { buildNavStats } from "../../lib/nav-stats";
 import { getSavedOperatorViews, getWorkItems } from "../../lib/supervisor";
 
@@ -20,7 +21,11 @@ export default async function QueuePage() {
           { label: "Done", value: String(items.filter((item) => item.state === "done").length) },
         ]}
       />
+      <RouteBrief eyebrow="Triage order" title="Balance ready work against blocked load" action={{ href: "/active-work", label: "Open active work" }}>
+        Use the queue to compare ready work, blocked/rework load, and active capacity before moving into deliberate controls.
+      </RouteBrief>
       <QueueBrowser items={items} savedViews={savedViews} />
     </Shell>
   );
 }
+
