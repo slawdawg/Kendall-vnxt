@@ -89,6 +89,8 @@ for (const testText of [
   "test_subscription_agent_launch_stub_can_record_workflow_event",
   "test_subscription_agent_launch_request_rejects_missing_exact_approval_before_process_start",
   "test_subscription_agent_launch_request_accepts_exact_artifact_only_fixture_path",
+  "test_subscription_agent_runtime_accepts_exact_approval_and_records_metadata_only",
+  "test_subscription_agent_runtime_rejects_artifact_only_approval_reuse",
   "test_subscription_agent_launch_request_read_only_accepted_fixture_is_evaluation_ready",
   "processLaunchAllowed",
   "executionAllowed",
@@ -108,7 +110,9 @@ for (const storyText of [
 for (const indexText of [
   "Subscription-agent process launch: `docs/goals/subscription-agent-process-launch-approval-packet-2026-06-13.md`",
   "Epic 16 starts after the premium-execution approval packet.",
-  "Stories in this epic do not approve process launch, shell expansion, credential/session inheritance, provider calls, source mutation, generated patch application, issue sync, PR delivery, cleanup, or failed-check bypass.",
+  "Stories 16.1 and 16.2 do not approve process launch, shell expansion, credential/session inheritance, provider calls, source mutation, generated patch application, issue sync, PR delivery, cleanup, or failed-check bypass.",
+  "Runtime stories in this epic must preserve those denials except for the one explicitly approved supervised launch operation they implement.",
+  "`16-3-implement-bounded-subscription-agent-supervised-runtime.md`",
 ]) {
   assertIncludes(storyIndex, indexText, `Story index must preserve subscription launch authority status: ${indexText}`, failures);
 }

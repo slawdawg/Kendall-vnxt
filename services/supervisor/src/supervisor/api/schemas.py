@@ -245,6 +245,9 @@ class WorkItemSubscriptionAgentLaunchRequest(BaseModel):
     startupTimeoutSeconds: PositiveInt | None = None
     runTimeoutSeconds: PositiveInt | None = None
     cancellationTimeoutSeconds: PositiveInt | None = None
+    startupTimeoutPolicy: str | None = None
+    runTimeoutPolicy: str | None = None
+    cancellationTimeoutPolicy: str | None = None
     heartbeatPolicy: str | None = None
     childProcessTreeTrackingPolicy: str | None = None
     orphanDetectionPolicy: str | None = None
@@ -254,6 +257,13 @@ class WorkItemSubscriptionAgentLaunchRequest(BaseModel):
     rollbackPolicy: str | None = None
     verificationCommand: str | None = None
     allowedOutputMode: str | None = None
+    approvalId: str | None = None
+    authorityFamily: str | None = None
+    operation: str | None = None
+    commandArgv: list[str] = Field(default_factory=list)
+    cwd: str | None = None
+    retainedEvidence: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
 
 
 class LocalProviderApprovalInstance(BaseModel):
@@ -579,6 +589,7 @@ class SubscriptionAgentLaunchRequestView(BaseModel):
     lifecycleEvidence: dict[str, Any] = Field(default_factory=dict)
     safetyFlags: dict[str, bool] = Field(default_factory=dict)
     mutationContract: dict[str, Any] = Field(default_factory=dict)
+    runtimeEvidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class LocalEvidencePacketItemView(BaseModel):
