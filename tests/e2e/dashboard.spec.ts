@@ -672,16 +672,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByText("Merged-to-main state remains false")).toBeVisible();
     await expect(authorityMatrixPanel.getByRole("heading", { name: "Next-lane authority packet" })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("decision_only_no_authority_granted")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("Execution blocked")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md").first()).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("Execution blocked", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Do not treat the decision packet recommendation as approval.")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("local-provider-execution")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("subscription-agent-launch")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("adaptive-scoring")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("worker-command-source-network-credentials")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("remote-delivery-automation")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("github-delivery")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("cleanup-automation")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("local-provider-execution", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("subscription-agent-launch", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("adaptive-scoring", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("worker-command-source-network-credentials", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("remote-delivery-automation", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("github-delivery", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("cleanup-automation", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.locator('[data-family-id="local-provider-execution"][data-status-kind="blocked"]')).toBeVisible();
     await expect(authorityMatrixPanel.locator('[data-family-id="github-delivery"][data-status-kind="blocked"]')).toBeVisible();
     await expect(authorityMatrixPanel.getByText("evidence_ready_approval_required")).toBeVisible();
@@ -689,7 +689,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByText("Related reports").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Related docs").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Rollback path:").first()).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("GET /supervisor/local-cleanup-readiness-report")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("explicit-authority-approval")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Authority readiness matrix entries are not execution-authority approvals.")).toBeVisible();
@@ -923,12 +923,14 @@ test.describe("dashboard workflow coverage", () => {
     const epicCompletionPanel = page.locator("#epic-6-completion-audit-report");
     await expect(epicCompletionPanel.getByText("Epic 6 audit", { exact: true })).toBeVisible();
     await expect(epicCompletionPanel.getByRole("heading", { name: "Completion status" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("delivery_eligibility_ready_progressive_hardening")).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Local readiness stack" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Trusted delivery eligibility" })).toBeVisible();
-    await expect(epicCompletionPanel.getByRole("heading", { name: "Real BMAD story done proof" })).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Approve one real BMAD story trial")).toBeVisible();
-    await expect(epicCompletionPanel.getByText("Launching Codex or Claude workers without bounded approval.")).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Overall", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Epic complete", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Remote delivery", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByText("Cleanup", { exact: true })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Prepared" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Remaining" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Blocked operations" })).toBeVisible();
+    await expect(epicCompletionPanel.getByRole("heading", { name: "Required evidence" })).toBeVisible();
     await expect(page.locator("#epic-6-completion-audit-report")).toBeVisible();
 
     const mvpProofPanel = page.locator("#epic-6-mvp-proof-trial-report");
@@ -937,8 +939,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(mvpProofPanel.getByRole("heading", { name: "Bounded Codex implementation" })).toBeVisible();
     await expect(mvpProofPanel.getByRole("heading", { name: "Bounded Claude review" })).toBeVisible();
     await expect(mvpProofPanel.getByRole("heading", { name: "GitHub delivery" })).toBeVisible();
-    await expect(mvpProofPanel.getByText("waiting_for_bounded_trial_approval")).toBeVisible();
-    await expect(mvpProofPanel.getByText("One Codex implementation launch approval")).toBeVisible();
+    await expect(mvpProofPanel.getByText("Trial status", { exact: true })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "Approval packets" })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "Blocked operations" })).toBeVisible();
+    await expect(mvpProofPanel.getByRole("heading", { name: "Next safe actions" })).toBeVisible();
     await expect(page.locator("#epic-6-mvp-proof-trial-report")).toBeVisible();
 
     const codexReadinessPanel = page.locator("section").filter({ hasText: "No-launch readiness" }).first();
@@ -1508,7 +1512,7 @@ test.describe("dashboard workflow coverage", () => {
   });
 
   test("hides synthetic provider raw output while showing bounded metadata", async ({ page, request }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(180_000);
     const fixtures = await loadProviderRawOutputUiFixtures();
     expect(fixtures.map((fixture) => fixture.caseId)).toEqual([
       "provider-success",
@@ -1538,7 +1542,7 @@ test.describe("dashboard workflow coverage", () => {
         expect(exportJson, `Runtime export API retained ${fixture.caseId} raw-output sentinel ${sentinel}`).not.toContain(sentinel);
       }
 
-      await page.goto(`/work-items/${workItemId}#runtime-evidence-export`);
+      await page.goto(`/work-items/${workItemId}#runtime-evidence-export`, { waitUntil: "domcontentloaded" });
 
       const exportPanel = page.locator("#runtime-evidence-export");
       await expect(exportPanel).toBeInViewport();

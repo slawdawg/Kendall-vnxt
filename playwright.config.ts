@@ -24,6 +24,7 @@ const dbPath = (
   process.env.PLAYWRIGHT_E2E_DB_PATH ?? path.join(localDataDir, `e2e-supervisor-${process.pid}.db`)
 ).replaceAll("\\", "/");
 const dbUrl = `sqlite+aiosqlite:///${dbPath}`;
+process.env.PLAYWRIGHT_E2E_DB_PATH = dbPath;
 
 export default defineConfig({
   testDir: path.join(__dirname, "tests", "e2e"),
