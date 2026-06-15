@@ -455,6 +455,13 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByRole("button", { name: /approve|retry|cleanup|launch|execute|start work|fix a problem/i })).toHaveCount(0);
     await expect(page.getByText("Operations Brief")).toBeVisible();
     await expect(page.getByText("Calm monitoring")).toBeVisible();
+    await expect(page.getByText("Scan Order")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Read the board top-down" })).toBeVisible();
+    const initialScanOrder = page.locator("section").filter({ hasText: "Read the board top-down" }).first();
+    await expect(initialScanOrder.getByRole("link", { name: /Attention/ })).toHaveAttribute("href", "/attention");
+    await expect(initialScanOrder.getByRole("link", { name: /Active work/ })).toHaveAttribute("href", "/active-work");
+    await expect(initialScanOrder.getByRole("link", { name: /Recent evidence/ })).toHaveAttribute("href", "/queue");
+    await expect(initialScanOrder.getByRole("link", { name: /Audit trail/ })).toHaveAttribute("href", "/audit");
     const auditBriefLink = page.getByRole("link", { name: "Open audit" }).first();
     await expect(auditBriefLink).toBeVisible();
     await expect(auditBriefLink).toHaveAttribute("href", "/audit");
@@ -500,6 +507,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(page.getByText("Evidence first", { exact: true })).toBeVisible();
     await expect(page.getByText("Execution controls", { exact: true })).toBeVisible();
     await expect(page.getByText("0 on home", { exact: true })).toBeVisible();
+    const scanOrder = page.locator("section").filter({ hasText: "Read the board top-down" }).first();
+    await expect(scanOrder.getByRole("link", { name: /Attention/ })).toContainText("1");
+    await expect(scanOrder.getByText("A passive path from urgent signals to evidence")).toBeVisible();
     const attentionNavLink = page.locator("nav a[href=\"/attention\"]");
     await expect(attentionNavLink).toBeVisible();
     await expect(attentionNavLink).toContainText("1");

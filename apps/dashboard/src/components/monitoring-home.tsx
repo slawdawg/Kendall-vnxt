@@ -128,6 +128,40 @@ function BriefCard({ label, value, children }: { label: string; value: string; c
   );
 }
 
+function ScanStep({
+  index,
+  title,
+  count,
+  href,
+  children,
+}: {
+  index: number;
+  title: string;
+  count: string;
+  href: string;
+  children: ReactNode;
+}) {
+  return (
+    <li className="min-w-0">
+      <Link
+        href={href}
+        className="block h-full rounded-[0.5rem] border bg-[var(--surface)] p-4 transition hover:border-[var(--info)] hover:text-[var(--info)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--panel-strong)] font-mono text-xs text-[var(--muted)]">
+            {index}
+          </span>
+          <span className="rounded-full bg-[var(--panel-strong)] px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
+            {count}
+          </span>
+        </div>
+        <h3 className="mt-3 text-sm font-semibold text-[var(--foreground)]">{title}</h3>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{children}</p>
+      </Link>
+    </li>
+  );
+}
+
 export function MonitoringHome({ status, items }: { status: RunStatusView; items: WorkItemView[] }) {
   const allAttentionItems = sortByLatest(items.filter((item) => item.needsAttention || item.blockedReason));
   const attentionItems = allAttentionItems.slice(0, 5);
@@ -197,6 +231,32 @@ export function MonitoringHome({ status, items }: { status: RunStatusView; items
         </div>
       </section>
 
+      <section className="rounded-[0.75rem] border bg-[var(--panel)] p-5 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--info)]">Scan Order</p>
+            <h2 className="mt-2 text-lg font-semibold">Read the board top-down</h2>
+          </div>
+          <p className="max-w-xl text-sm leading-6 text-[var(--muted)]">
+            A passive path from urgent signals to evidence, keeping control surfaces out of the home page.
+          </p>
+        </div>
+        <ol className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <ScanStep index={1} title="Attention" count={String(allAttentionItems.length)} href="/attention">
+            Start with blocked, escalated, or authority-sensitive work before watching normal flow.
+          </ScanStep>
+          <ScanStep index={2} title="Active work" count={String(allActiveItems.length)} href="/active-work">
+            Check moving items for current step, owner, and evidence before intervention.
+          </ScanStep>
+          <ScanStep index={3} title="Recent evidence" count={String(recentItems.length)} href="/queue">
+            Review newly updated records when attention is quiet but the queue is changing.
+          </ScanStep>
+          <ScanStep index={4} title="Audit trail" count={String(status.doneCount)} href="/audit">
+            Fall back to completed and retained evidence when the board is calm.
+          </ScanStep>
+        </ol>
+      </section>
+
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
         <Panel
           eyebrow="Attention queue"
@@ -261,4 +321,3 @@ export function MonitoringHome({ status, items }: { status: RunStatusView; items
     </div>
   );
 }
-
