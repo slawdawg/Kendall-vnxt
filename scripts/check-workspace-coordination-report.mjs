@@ -1,0 +1,126 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const rootDir = fileURLToPath(new URL("..", import.meta.url));
+
+function readWorkspaceFile(path) {
+  return readFileSync(join(rootDir, path), "utf8");
+}
+
+function readRequiredWorkspaceFile(path, failures) {
+  if (!existsSync(join(rootDir, path))) {
+    failures.push(`Missing workspace coordination artifact ${path}`);
+    return "";
+  }
+  return readWorkspaceFile(path);
+}
+
+function assertCondition(condition, message, failures) {
+  if (!condition) {
+    failures.push(message);
+  }
+}
+
+const failures = [];
+const workflowPath = "docs/workflows/workspace-coordination-report.md";
+const storyPath = "docs/stories/22-1-workspace-coordination-report.md";
+const packageJsonSource = readRequiredWorkspaceFile("package.json", failures);
+const packageJson = packageJsonSource ? JSON.parse(packageJsonSource) : {};
+const workflow = readRequiredWorkspaceFile(workflowPath, failures);
+const story = readRequiredWorkspaceFile(storyPath, failures);
+const storyIndex = readRequiredWorkspaceFile("docs/stories/index.md", failures);
+
+assertCondition(
+  packageJson.scripts?.["check:workspace-coordination"] === "node ./scripts/check-workspace-coordination-report.mjs",
+  "package.json must define check:workspace-coordination as node ./scripts/check-workspace-coordination-report.mjs",
+  failures,
+);
+assertCondition(
+  packageJson.scripts?.check
+    ?.split("&&")
+    .map((script) => script.trim())
+    .includes("pnpm run check:workspace-coordination"),
+  "pnpm run check must include pnpm run check:workspace-coordination",
+  failures,
+);
+
+for (const path of [workflowPath, storyPath]) {
+  assertCondition(existsSync(join(rootDir, path)), `Missing workspace coordination artifact ${path}`, failures);
+}
+
+for (const packetField of [
+  "- Current checkout:",
+  "- Root status:",
+  "- Active managed worktrees:",
+  "- PRs waiting at merge gate:",
+  "- Clean active lanes:",
+  "- Dirty active lanes:",
+  "- Local-only commits:",
+  "- Closed but retained lanes:",
+  "- Cleanup candidates:",
+  "- Blocked approval packets:",
+  "- Next safe slice:",
+  "- Stop lines:",
+]) {
+  assertCondition(workflow.includes(packetField), `Workspace coordination report must include ${packetField}`, failures);
+}
+
+for (const classification of [
+  "clean active lane",
+  "dirty active lane",
+  "merge-gated lane",
+  "local-only commit",
+  "cleanup candidate",
+]) {
+  assertCondition(workflow.includes(classification), `Workspace coordination workflow must define ${classification}`, failures);
+}
+
+for (const stopLine of [
+  "Merge a PR.",
+  "Delete a worktree.",
+  "Delete a local or remote branch.",
+  "Discard local commits.",
+  "Rewrite a shared branch.",
+  "Resolve a review thread that has not been addressed.",
+  "Start work in a lane whose scope overlaps an active dirty lane.",
+]) {
+  assertCondition(workflow.includes(stopLine), `Workspace coordination workflow must preserve stop line ${stopLine}`, failures);
+}
+
+for (const requiredText of [
+  "node ./scripts/codex-workspace.mjs start",
+  "Open PRs waiting at a merge gate.",
+  "Dirty active lanes.",
+  "Authority lanes owned by other sessions.",
+  "This workflow does not merge PRs, clean worktrees, delete branches",
+]) {
+  assertCondition(workflow.includes(requiredText), `Workspace coordination workflow must include ${requiredText}`, failures);
+}
+
+for (const storyText of [
+  "multiple managed worktrees are active",
+  "cleanup dry-run and a narrow approval packet",
+  "starting a non-overlapping",
+  "managed worktree",
+  "pnpm.cmd run check:workspace-coordination",
+  "does not merge PRs, clean worktrees, delete branches",
+]) {
+  assertCondition(story.includes(storyText), `Story 22.1 must preserve ${storyText}`, failures);
+}
+
+assertCondition(
+  storyIndex.includes("22-1-workspace-coordination-report.md"),
+  "Story index must reference Story 22.1 workspace coordination report",
+  failures,
+);
+
+if (failures.length > 0) {
+  console.error("Workspace coordination report drift check failed:");
+  for (const failure of failures) {
+    console.error(`- ${failure}`);
+  }
+  process.exit(1);
+}
+
+console.log("OK: workspace coordination report drift checks passed.");
