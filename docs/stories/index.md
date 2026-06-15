@@ -279,14 +279,15 @@ Stories in this epic do not approve paid provider calls, credential/session acce
 
 ## Draft Epic 16 Story Map
 
-Epic 16 starts after the premium-execution approval packet. Its theme is subscription-agent process-launch approval readiness: refresh the deferred Story 5.5 direct-launch envelope from current Epic 8 evidence without launching a real process.
+Epic 16 starts after the premium-execution approval packet. Its theme is subscription-agent process-launch authority: first refresh and pin the deferred Story 5.5 direct-launch envelope from current Epic 8 evidence without launching a real process, then add an explicitly bounded runtime path behind exact process-launch approval.
 
-Stories in this epic do not approve process launch, shell expansion, credential/session inheritance, provider calls, source mutation, generated patch application, issue sync, PR delivery, cleanup, or failed-check bypass.
+Stories 16.1 and 16.2 do not approve process launch, shell expansion, credential/session inheritance, provider calls, source mutation, generated patch application, issue sync, PR delivery, cleanup, or failed-check bypass. Runtime stories in this epic must preserve those denials except for the one explicitly approved supervised launch operation they implement.
 
 | Story | Summary |
 | --- | --- |
 | `16-1-refresh-subscription-agent-process-launch-approval-packet.md` | Done story for refreshing the subscription-agent process-launch approval packet with workspace, command, environment, lifecycle, output, retention, verification, rollback, and stop-line requirements without launching a process. |
 | `16-2-pin-subscription-agent-process-launch-packet-to-drift-checks.md` | Review story for pinning the subscription-agent process-launch approval packet to no-launch drift checks across packet, settings, service gate, and integration-test evidence without launching a process. |
+| `16-3-implement-bounded-subscription-agent-supervised-runtime.md` | Done story for requiring a server-accepted exact subscription-agent process-launch approval instance before any bounded supervised runtime adapter can start a process. |
 
 ## Draft Epic 17 Story Map
 

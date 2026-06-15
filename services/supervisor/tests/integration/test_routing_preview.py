@@ -1,5 +1,6 @@
 ﻿import asyncio
 import json
+import os
 import sqlite3
 import socket
 import sys
@@ -2953,6 +2954,57 @@ def _approved_subscription_launch_binding(stub: dict, **overrides: object) -> di
     return approval
 
 
+def _approved_subscription_runtime_binding(stub: dict, **overrides: object) -> dict:
+    now = datetime.now(timezone.utc)
+    attempt_id = stub["approvalBinding"]["attemptId"]
+    approval_id_identity = "|".join(
+        [
+            "subscription-agent-launch",
+            "one bounded supervised process-launch operation",
+            stub["workItemId"],
+            attempt_id,
+            stub["approvalBinding"]["targetId"],
+            stub["approvalBinding"]["commandTemplateId"],
+            stub["approvalBinding"]["workspacePlanId"],
+            "codex --version",
+        ]
+    )
+    approval_id = f"subscription-runtime-approval-{uuid.uuid5(uuid.NAMESPACE_URL, approval_id_identity)}"
+    approval = _approved_subscription_launch_binding(
+        stub,
+        approvalTimestamp=now.isoformat(),
+        approvalExpiry=(now + timedelta(minutes=10)).isoformat(),
+        approvalId=approval_id,
+        authorityFamily="subscription-agent-launch",
+        operation="one bounded supervised process-launch operation",
+        commandTemplateExecutionStatus="executable_by_kendall_supervised_runtime",
+        permissionEnvelope="approved_for_one_bounded_supervised_subscription_launch",
+        redactionPolicy="metadata_only_no_raw_output_generated_patch_prompt_completion_provider_payload",
+        allowedOutputMode="summary-and-artifact-references-only",
+        commandArgv=["codex", "--version"],
+        cwd=os.path.join(os.getcwd(), "_bmad-output", "subscription-runtime", attempt_id),
+        retainedEvidence=["approval_instance_id", "attempt_id", "runtime_metadata", "artifact_references"],
+        startupTimeoutPolicy="bounded_startup_timeout_enforced_before_process_run",
+        runTimeoutPolicy="bounded_run_timeout_enforced_with_discard_only_output_counters",
+        cancellationTimeoutPolicy="direct_process_kill_then_wait_without_child_tree_claims",
+        heartbeatPolicy="not_enforced_for_single_bounded_probe",
+        childProcessTreeTrackingPolicy="not_claimed_direct_process_only",
+        orphanDetectionPolicy="not_claimed_direct_process_only",
+        terminalStateReconciliationPolicy="direct_process_returncode_reconciled",
+        idempotentCleanupPolicy="runtime_workspace_cleanup_deferred_no_source_or_branch_deletion",
+        rollbackPolicy="disable subscription-agent process launch and return to artifact-only fixture evidence",
+        stopLines=[
+            "Do not use shell string execution.",
+            "Do not read credentials, sessions, browser profiles, Git credentials, SSH keys, cloud credentials, or provider credentials.",
+            "Do not call local, remote, or premium providers unless separately approved.",
+            "Do not mutate source unless separately approved.",
+            "Disable subscription-agent process launch if approval binding is stale.",
+        ],
+    )
+    approval.update(overrides)
+    return approval
+
+
 def test_subscription_agent_launch_request_rejects_disabled_target_without_mutating_stub_contract(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "subscription-agent-launch-disabled-target.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -3190,6 +3242,239 @@ def test_subscription_agent_launch_request_accepts_exact_artifact_only_fixture_p
         assert "rawStderr" not in event["payload"]
         assert "generatedPatch" not in event["payload"]
     assert {event_ref["eventId"] for event_ref in attempt["eventRefs"]} == {event["id"] for event in launch_events}
+
+
+def test_subscription_agent_runtime_rejects_missing_exact_approval_before_adapter_call(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-missing-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    adapter_calls = {"count": 0}
+
+    async def fake_run(self, **kwargs):
+        adapter_calls["count"] += 1
+        raise AssertionError("Runtime adapter must not run without exact approval.")
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True},
+        )
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert adapter_calls["count"] == 0
+    assert launch["approvalAccepted"] is False
+    assert launch["processLaunchAttempted"] is False
+    assert launch["commandExecutionAllowed"] is False
+    assert launch["runtimeEvidence"] == {}
+
+
+def test_subscription_agent_runtime_accepts_exact_approval_and_records_metadata_only(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-exact-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    from supervisor.domain.subscription_launch import SupervisedSubscriptionLaunchResult
+
+    adapter_calls = {"count": 0, "kwargs": None}
+
+    async def fake_run(self, **kwargs):
+        adapter_calls["count"] += 1
+        adapter_calls["kwargs"] = kwargs
+        return SupervisedSubscriptionLaunchResult(
+            status="completed",
+            exit_code=0,
+            stdout_byte_count=12,
+            stderr_byte_count=0,
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+        events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert adapter_calls["count"] == 1
+    assert adapter_calls["kwargs"]["command_argv"] == ["codex", "--version"]
+    assert adapter_calls["kwargs"]["environment_allowlist"] == ["PATH"]
+    assert adapter_calls["kwargs"]["cwd"].endswith(os.path.join("_bmad-output", "subscription-runtime", stub["approvalBinding"]["attemptId"]))
+    assert launch["status"] == "accepted_supervised_runtime_completed"
+    assert launch["readinessStatus"] == "subscription_launch_runtime_completed"
+    assert launch["approvalAccepted"] is True
+    assert launch["processLaunchAttempted"] is True
+    assert launch["commandExecutionAllowed"] is True
+    assert launch["sourceMutationAllowed"] is False
+    assert launch["providerCallsAllowed"] is False
+    assert launch["credentialAccessAllowed"] is False
+    assert launch["runtimeEvidence"]["status"] == "completed"
+    assert launch["runtimeEvidence"]["stdoutByteCount"] == 12
+    assert launch["runtimeEvidence"]["rawStdoutRetained"] is False
+    assert launch["runtimeEvidence"]["rawStderrRetained"] is False
+
+    attempt = attempts[0]
+    assert attempt["status"] == "completed"
+    runtime_event = next(event for event in events if event["eventType"] == "execution_attempt.subscription_launch_runtime_recorded")
+    assert runtime_event["payload"]["runtimeEvidence"]["status"] == "completed"
+    assert runtime_event["payload"]["runtimeEvidence"]["rawStdoutRetained"] is False
+    assert "rawStdoutText" not in str(runtime_event)
+    assert "rawStderrText" not in str(runtime_event)
+    assert "generatedPatchContent" not in str(runtime_event)
+
+
+def test_subscription_agent_runtime_rejects_self_attested_unregistered_approval(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-unregistered-approval.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    adapter_calls = {"count": 0}
+
+    async def fake_run(self, **kwargs):
+        adapter_calls["count"] += 1
+        raise AssertionError("Runtime adapter must not run for unregistered approval.")
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert adapter_calls["count"] == 0
+    assert launch["approvalAccepted"] is False
+    assert "accepted-approval-instance-not-registered" in launch["rejectedEnvelopeFields"]["runtimeApproval"]
+
+
+def test_subscription_agent_runtime_replay_does_not_launch_second_process(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-replay.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+    from supervisor.domain.subscription_launch import SupervisedSubscriptionLaunchResult
+
+    adapter_calls = {"count": 0}
+
+    async def fake_run(self, **kwargs):
+        adapter_calls["count"] += 1
+        return SupervisedSubscriptionLaunchResult(status="completed", exit_code=0)
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(stub)
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        first = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        second = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+        attempts = client.get(f"/work-items/{work_item_id}/execution-attempts").json()["data"]
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert adapter_calls["count"] == 1
+    assert second.json()["data"]["runtimeEvidence"]["status"] == "replayed_existing_attempt"
+    assert len(attempts) == 1
+
+
+def test_subscription_agent_runtime_rejects_artifact_only_approval_reuse(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "subscription-agent-runtime-artifact-reuse.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_SUBSCRIPTION_AGENT_LAUNCH", "true")
+    monkeypatch.setenv("SUPERVISOR_ALLOW_CODEX_SUBSCRIPTION_AGENT_LAUNCH", "true")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    adapter_calls = {"count": 0}
+
+    async def fake_run(self, **kwargs):
+        adapter_calls["count"] += 1
+        raise AssertionError("Runtime adapter must not run for artifact-only approval reuse.")
+
+    monkeypatch.setattr("supervisor.domain.subscription_launch.SupervisedSubscriptionLaunchAdapter.run", fake_run)
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        stub = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch-stub",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex"},
+        ).json()["data"]
+        approval = _approved_subscription_runtime_binding(
+            stub,
+            permissionEnvelope="approved_for_one_artifact_only_subscription_launch",
+        )
+        monkeypatch.setenv("SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS", str(approval["approvalId"]))
+        response = client.post(
+            f"/work-items/{work_item_id}/subscription-agent-launch",
+            json={"taskKind": "architecture_review", "requestedAgent": "codex", "recordEvent": True, **approval},
+        )
+
+    assert response.status_code == 200
+    launch = response.json()["data"]
+    assert adapter_calls["count"] == 0
+    assert launch["approvalAccepted"] is False
+    assert launch["processLaunchAttempted"] is False
+    assert launch["commandExecutionAllowed"] is False
 
 
 def test_subscription_agent_launch_request_rejects_future_dated_approval(tmp_path, monkeypatch) -> None:

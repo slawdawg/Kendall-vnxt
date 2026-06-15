@@ -37,6 +37,10 @@ class Settings(BaseSettings):
         default=False,
         alias="SUPERVISOR_ALLOW_GEMINI_SUBSCRIPTION_AGENT_LAUNCH",
     )
+    accepted_subscription_runtime_approval_ids: str = Field(
+        default="",
+        alias="SUPERVISOR_ACCEPTED_SUBSCRIPTION_RUNTIME_APPROVAL_IDS",
+    )
     allow_local_provider_calls: bool = Field(default=False, alias="SUPERVISOR_ALLOW_LOCAL_PROVIDER_CALLS")
     allow_ollama_provider_calls: bool = Field(default=False, alias="SUPERVISOR_ALLOW_OLLAMA_PROVIDER_CALLS")
     ollama_endpoint_url: str | None = Field(default=None, alias="SUPERVISOR_OLLAMA_ENDPOINT_URL")

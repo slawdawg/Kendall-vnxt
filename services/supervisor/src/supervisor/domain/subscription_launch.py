@@ -1,4 +1,7 @@
+import asyncio
+import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 
 EPIC_8_SUBSCRIPTION_LAUNCH_POLICY_ID = "epic-8-first-subscription-launch-policy-v1"
@@ -38,6 +41,156 @@ class SubscriptionLaunchTarget:
     command_execution_allowed: bool = False
     credential_access_allowed: bool = False
     external_send_allowed: bool = False
+
+
+@dataclass(frozen=True)
+class SupervisedSubscriptionLaunchResult:
+    status: str
+    exit_code: int | None
+    stdout_byte_count: int = 0
+    stderr_byte_count: int = 0
+    timed_out: bool = False
+    cancelled: bool = False
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_type: str | None = None
+
+    def to_metadata(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "exitCode": self.exit_code,
+            "stdoutByteCount": self.stdout_byte_count,
+            "stderrByteCount": self.stderr_byte_count,
+            "timedOut": self.timed_out,
+            "cancelled": self.cancelled,
+            "startedAt": self.started_at.isoformat() if self.started_at else None,
+            "completedAt": self.completed_at.isoformat() if self.completed_at else None,
+            "errorType": self.error_type,
+            "rawStdoutRetained": False,
+            "rawStderrRetained": False,
+            "shellExecutionAttempted": False,
+            "credentialAccessAttempted": False,
+            "externalSendAttempted": False,
+            "outputCaptureMode": "discard_only_bounded_byte_counter",
+            "processTreeTracking": "not_claimed_direct_process_only",
+            "orphanReconciliation": "not_claimed_direct_process_only",
+        }
+
+
+class SupervisedSubscriptionLaunchAdapter:
+    async def run(
+        self,
+        *,
+        command_argv: list[str],
+        cwd: str,
+        environment_allowlist: list[str],
+        startup_timeout_seconds: int,
+        run_timeout_seconds: int,
+        max_output_bytes: int = 0,
+    ) -> SupervisedSubscriptionLaunchResult:
+        if not command_argv or any(not isinstance(part, str) or not part.strip() for part in command_argv):
+            return SupervisedSubscriptionLaunchResult(
+                status="failed",
+                exit_code=None,
+                error_type="invalid_command_argv",
+                completed_at=datetime.now(timezone.utc),
+            )
+
+        started_at = datetime.now(timezone.utc)
+        allowed_env = {
+            name: os.environ[name]
+            for name in environment_allowlist
+            if isinstance(name, str) and name in os.environ
+        }
+        try:
+            process = await asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    *command_argv,
+                    cwd=cwd,
+                    env=allowed_env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                ),
+                timeout=startup_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            return SupervisedSubscriptionLaunchResult(
+                status="timed_out",
+                exit_code=None,
+                timed_out=True,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+                error_type="startup_timeout",
+            )
+        except Exception as exc:
+            return SupervisedSubscriptionLaunchResult(
+                status="failed",
+                exit_code=None,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+                error_type=type(exc).__name__,
+            )
+
+        output_limit = max(max_output_bytes, 65536)
+
+        async def count_stream(stream: asyncio.StreamReader | None) -> int:
+            if stream is None:
+                return 0
+            total = 0
+            while True:
+                chunk = await stream.read(4096)
+                if not chunk:
+                    return total
+                total += len(chunk)
+                if total > output_limit:
+                    raise ValueError("output_byte_limit_exceeded")
+
+        try:
+            stdout_count, stderr_count, _return_code = await asyncio.wait_for(
+                asyncio.gather(count_stream(process.stdout), count_stream(process.stderr), process.wait()),
+                timeout=run_timeout_seconds,
+            )
+            stdout_byte_count = int(stdout_count)
+            stderr_byte_count = int(stderr_count)
+        except ValueError:
+            process.kill()
+            await process.wait()
+            return SupervisedSubscriptionLaunchResult(
+                status="failed",
+                exit_code=process.returncode,
+                stdout_byte_count=0,
+                stderr_byte_count=0,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+                error_type="output_byte_limit_exceeded",
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return SupervisedSubscriptionLaunchResult(
+                status="timed_out",
+                exit_code=process.returncode,
+                stdout_byte_count=0,
+                stderr_byte_count=0,
+                timed_out=True,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+                error_type="run_timeout",
+            )
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
+        completed_at = datetime.now(timezone.utc)
+        exit_code = process.returncode
+        return SupervisedSubscriptionLaunchResult(
+            status="completed" if exit_code == 0 else "failed",
+            exit_code=exit_code,
+            stdout_byte_count=stdout_byte_count,
+            stderr_byte_count=stderr_byte_count,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
 
 
 class SubscriptionLaunchRegistry:

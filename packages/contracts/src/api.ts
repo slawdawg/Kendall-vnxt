@@ -459,6 +459,9 @@ export interface WorkItemSubscriptionAgentLaunchPayload {
   startupTimeoutSeconds?: number | null;
   runTimeoutSeconds?: number | null;
   cancellationTimeoutSeconds?: number | null;
+  startupTimeoutPolicy?: string | null;
+  runTimeoutPolicy?: string | null;
+  cancellationTimeoutPolicy?: string | null;
   heartbeatPolicy?: string | null;
   childProcessTreeTrackingPolicy?: string | null;
   orphanDetectionPolicy?: string | null;
@@ -468,6 +471,13 @@ export interface WorkItemSubscriptionAgentLaunchPayload {
   rollbackPolicy?: string | null;
   verificationCommand?: string | null;
   allowedOutputMode?: string | null;
+  approvalId?: string | null;
+  authorityFamily?: string | null;
+  operation?: string | null;
+  commandArgv?: string[];
+  cwd?: string | null;
+  retainedEvidence?: string[];
+  stopLines?: string[];
 }
 
 export interface SubscriptionAgentLaunchRequestView {
@@ -498,6 +508,7 @@ export interface SubscriptionAgentLaunchRequestView {
   lifecycleEvidence: Record<string, unknown>;
   safetyFlags: Record<string, boolean>;
   mutationContract: Record<string, unknown>;
+  runtimeEvidence: Record<string, unknown>;
 }
 
 export interface LocalEvidencePacketItemView {
