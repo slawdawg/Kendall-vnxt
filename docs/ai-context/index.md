@@ -34,7 +34,7 @@ enough. Keep exact file links and line references for decisions and evidence.
 | Windows/PowerShell behavior | `AGENTS.md#windows-sandbox`, `AGENTS.md#powershell-commands` | Scheduler, ACL, PATH, or sandbox behavior remains unclear |
 | Supervisor/dashboard code changes | Relevant story, nearby tests, package scripts, target app/service files | API contracts, UI state, or cross-package behavior changes |
 | KNX governance or safety work | Matching `.agents/skills/knx-*` skill, `_bmad/memory/knx/` documents if present | Source/evidence boundaries, execution policy, or safety validation expands |
-| Research/tool evaluation | Current story/spec, `docs/research/token-economy-tool-evaluation.md`, official docs or primary sources | Adoption, installation, paid usage, or networked integration is proposed |
+| Research/tool evaluation | Current story/spec, `docs/research/token-economy-tool-evaluation.md`, `docs/research/token-economy-measurement-readiness.md`, official docs or primary sources | Savings claims, adoption, installation, paid usage, or networked integration are proposed |
 
 ## Expansion Rules
 
