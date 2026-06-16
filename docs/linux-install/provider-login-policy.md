@@ -30,8 +30,9 @@ Allowed:
 - Bob may perform interactive provider login from the VM terminal after
   deployment when a workflow needs it.
 - Codex may verify whether a provider CLI exists.
-- Codex may verify auth only after Bob has performed the login, using redacted
-  checks such as `gh auth status >/dev/null`.
+- Codex may run redacted auth-status probes such as
+  `gh auth status >/dev/null` to report `valid`, `pending`, or
+  `not configured`. A pending or missing auth result is not a bootstrap failure.
 - Codex may verify private GitHub repo access with a non-interactive
   `git ls-remote` probe only after Bob has configured the required auth.
 
@@ -50,10 +51,11 @@ Not allowed without separate approval:
 ## Manual Login Rule
 
 When Codex or Claude requires login, Bob performs it interactively inside the
-VM. After login, verification should record only:
+VM. Before or after login, verification should record only:
 
 - CLI command exists.
-- Redacted auth status if the CLI provides a safe check.
+- Redacted auth status if the CLI provides a safe check, including pending or
+  not-configured state.
 - Provider action was manually completed by Bob.
 - No token details retained.
 

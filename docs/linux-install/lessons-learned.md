@@ -95,6 +95,8 @@ Correction:
 - Treat `gh auth login` as a separate post-deployment user milestone, not part
   of base VM bootstrap.
 - Do not fail base bootstrap because GitHub auth is absent.
+- Redacted status probes may report `valid`, `pending`, or `not configured`
+  before login, but they must not start login flows or retain raw auth output.
 - Run GitHub auth only when a selected workflow needs private repo access.
 - Verify auth without retaining raw auth output:
 
