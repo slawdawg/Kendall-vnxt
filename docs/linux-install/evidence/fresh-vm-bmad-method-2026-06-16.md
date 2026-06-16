@@ -1,4 +1,4 @@
-# Fresh VM Agent CLI Verification
+# Fresh VM BMAD Method CLI Verification
 
 Date: 2026-06-16
 Target alias: `kendall-linux`
@@ -9,19 +9,18 @@ Repo path: `/home/slaw_dawg/Kendall_Nxt`
 
 ## Scope
 
-Bob installed the required agent CLIs interactively on the VM. Codex then ran
-read-only verification.
+Bob approved and ran an interactive install of the BMAD Method CLI/package on
+the VM. Codex then ran read-only verification.
 
-No OpenAI or Anthropic login, token handling, provider calls, paid usage,
-reboot, repo changes, or SSH private key movement were performed by this
-verification.
+No `bmad-method install` command was run during verification. No project BMAD
+files, `.claude` files, provider credentials, repo files, or SSH private keys
+were modified by this verification.
 
 ## Direct CLI Check
 
 | Tool | Result |
 | --- | --- |
-| Codex CLI | pass: `/usr/local/bin/codex`, `codex-cli 0.140.0` |
-| Claude Code | pass: `/usr/local/bin/claude`, `2.1.178 (Claude Code)` |
+| BMAD Method CLI | pass: `/usr/local/bin/bmad-method`, `6.8.0` |
 
 ## Full Validator
 
@@ -45,12 +44,13 @@ Result: pass with expected hostname warning.
 | gh | pass: `2.46.0` |
 | Codex CLI | pass: `0.140.0` |
 | Claude Code | pass: `2.1.178` |
+| BMAD Method CLI | pass: `6.8.0` |
 | GitHub auth | pass |
 | Repo | pass: `/home/slaw_dawg/Kendall_Nxt`, branch `main` |
 | Repo preflight | pass |
 
-## Follow-Up
+## Remaining Decision
 
-A later gap review identified BMAD Method CLI as an additional baseline
-requirement. That was subsequently verified in
-`fresh-vm-bmad-method-2026-06-16.md`.
+The Linux VM now satisfies the full technical baseline proof, including BMAD
+Method CLI. The active operating decision is to treat `kendall-linux` as the
+primary Kendall_Nxt development baseline.

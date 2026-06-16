@@ -156,6 +156,7 @@ run_version_check uv "uv --version"
 run_version_check gh "gh --version"
 run_version_check codex "codex --version"
 run_version_check claude "claude --version"
+run_version_check bmad-method "bmad-method --version"
 
 if command -v gh >/dev/null 2>&1; then
   if gh auth status >/dev/null 2>&1; then

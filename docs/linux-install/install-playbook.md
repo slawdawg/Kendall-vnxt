@@ -218,10 +218,10 @@ The script installs only the toolchain:
 It does not clone the repo, authenticate GitHub, copy private keys, start
 long-running services, or reboot.
 
-## 10. Agent CLI Install
+## 10. Agent CLI And BMAD Method Install
 
-Codex CLI and Claude Code are required for the full development baseline. They
-are separate from GitHub auth and repo setup.
+Codex CLI, Claude Code, and BMAD Method are required for the full development
+baseline. They are separate from GitHub auth and repo setup.
 
 Install them from an interactive SSH terminal after the base toolchain is ready:
 
@@ -233,9 +233,11 @@ This installs:
 
 - Codex CLI package: `@openai/codex`
 - Claude Code package: `@anthropic-ai/claude-code`
+- BMAD Method package: `bmad-method`
 
-It does not authenticate OpenAI, authenticate Anthropic, clone the repo, start
-services, or reboot. Provider login/setup remains a separate manual milestone.
+It does not authenticate OpenAI, authenticate Anthropic, run `bmad-method
+install`, clone the repo, start services, or reboot. Provider login/setup and
+BMAD project install/upgrade remain separate manual milestones.
 
 ## 11. Manual GitHub Auth And Repo Clone
 
@@ -288,3 +290,72 @@ pnpm run check
 
 This proves the documentation checks, dashboard production build, and
 supervisor tests before reboot proof.
+
+## 13. Playwright Browser And E2E Proof
+
+The full check does not prove browser runtime readiness. On Ubuntu 26.04,
+Playwright 1.60.0 cannot install Chromium, so the repo baseline uses
+`@playwright/test` 1.61.0 or newer.
+
+Install browser dependencies from an interactive Linux terminal if sudo is
+required:
+
+```bash
+cd /home/slaw_dawg/Kendall_Nxt
+pnpm dlx playwright@1.61.0 install-deps chromium
+```
+
+Install or refresh browser binaries:
+
+```bash
+cd /home/slaw_dawg/Kendall_Nxt
+pnpm exec playwright install chromium
+```
+
+Run the dashboard e2e proof:
+
+```bash
+cd /home/slaw_dawg/Kendall_Nxt
+PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright pnpm run test:e2e:dashboard
+```
+
+Expected: all dashboard e2e tests pass. Record the result as separate evidence
+from `pnpm run check`.
+
+## 14. Reboot Proof
+
+After full check and Playwright e2e pass, reboot the VM through the console or
+an approved interactive SSH session:
+
+```bash
+sudo reboot
+```
+
+After SSH returns, rerun verify-only, preflight, and a small toolchain probe:
+
+```bash
+cd /home/slaw_dawg/Kendall_Nxt
+pnpm run preflight
+node ./scripts/codex-workspace.mjs doctor
+codex --version
+claude --version
+bmad-method --version
+```
+
+## 15. Real Work-Cycle Proof
+
+Create, verify, and clean up an isolated Codex workspace experiment from the
+Linux clone. Use the runbook command in
+`docs/workflows/linux-primary-development-runbook.md` and record the result.
+
+## 16. Snapshot
+
+After the toolchain, GitHub auth, repo setup, full check, Playwright e2e,
+reboot proof, and real work-cycle proof pass, take a VM snapshot.
+
+Record:
+
+- Snapshot date.
+- Repo branch and commit.
+- Tool versions.
+- Any remaining policy-only gaps.

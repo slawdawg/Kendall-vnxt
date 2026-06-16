@@ -34,6 +34,7 @@ mutation behind explicit Bob approval.
 | gh | `2.46.0`, authenticated as `slawdawg` |
 | Codex CLI | `codex-cli 0.140.0` |
 | Claude Code | `2.1.178` |
+| BMAD Method CLI | `6.8.0` |
 
 ## Connect
 
@@ -73,6 +74,7 @@ uv --version
 gh auth status
 codex --version
 claude --version
+bmad-method --version
 pnpm run preflight
 node ./scripts/codex-workspace.mjs doctor
 ```
@@ -84,8 +86,8 @@ Expected:
 - pnpm resolves to `11.5.2` in the repo.
 - uv resolves without a PATH override.
 - gh is authenticated to `github.com` as `slawdawg`.
-- Codex CLI and Claude Code are installed. Provider login/use is governed by
-  `docs/linux-install/provider-login-policy.md`.
+- Codex CLI, Claude Code, and BMAD Method are installed. Provider login/use is
+  governed by `docs/linux-install/provider-login-policy.md`.
 - preflight passes.
 - workspace doctor passes. A missing state root warning is acceptable before
   the first workspace start.
@@ -108,8 +110,12 @@ Current Linux VM evidence:
 - Reboot proof passed.
 - Real work-cycle proof passed.
 - VM snapshot was taken after proof.
-- Codex CLI and Claude Code were installed and verified after the initial gap
-  review.
+- Codex CLI, Claude Code, and BMAD Method CLI were installed and verified after
+  gap reviews.
+- Playwright browser/e2e proof passed after updating `@playwright/test` to
+  `1.61.0`, installing browser dependencies interactively, and fixing brittle
+  dashboard assertions. Current evidence: `25 passed`.
+  See `docs/linux-install/evidence/fresh-vm-playwright-e2e-2026-06-16.md`.
 
 ## Development Servers
 
@@ -214,13 +220,14 @@ env GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/slawdawg/Kendall-vnxt
 
 ## Provider CLIs
 
-Codex CLI and Claude Code are installed for the Linux baseline.
+Codex CLI, Claude Code, and BMAD Method are required for the Linux baseline.
 
 Version checks:
 
 ```bash
 codex --version
 claude --version
+bmad-method --version
 ```
 
 Provider login and usage policy is governed by:
@@ -305,6 +312,8 @@ Fallback path:
 - [x] Real Linux work-cycle proof passes.
 - [x] Codex CLI installed and verified.
 - [x] Claude Code installed and verified.
+- [x] BMAD Method CLI installed and verified.
+- [x] Dashboard Playwright e2e suite passes on the VM.
 - [x] No stale process residue observed after checks.
 - [x] Snapshot/backup policy confirmed.
 - [x] First normal development task completed from Linux.

@@ -14,7 +14,7 @@ Status: draft v1
 | Fresh VM baseline | `validate-linux-install.sh --verify-only --skip-repo` | VM | Ubuntu 26.04, expected user, and target identity detected; missing tools are reported | None |
 | OS baseline | `validate-linux-install.sh --verify-only` | VM | Ubuntu 26.04 detected after setup | None |
 | Toolchain | `validate-linux-install.sh --verify-only` | VM | node, pnpm, uv, gh, git available | None |
-| Agent CLIs | `validate-linux-install.sh --verify-only` | VM | `codex` and `claude` available | None |
+| Agent CLIs | `validate-linux-install.sh --verify-only` | VM | `codex`, `claude`, and `bmad-method` available | None |
 | Repo readiness | `validate-linux-install.sh --verify-only` | VM | repo exists and requested read-only checks pass | None |
 | GitHub readiness | `validate-linux-install.sh --verify-only` | VM | `gh auth status` succeeds or manual auth is clearly pending | None |
 | Private repo probe | `git ls-remote ... HEAD` | VM | Private repo HEAD resolves without prompting | None |
@@ -23,6 +23,7 @@ Status: draft v1
 | Apply | Future apply mode | VM | Only approved packages/files/services changed | Mutating, approval required |
 | Post-apply verify | Future verify mode | VM | Same baseline and repo checks pass after apply | None |
 | Full check | `pnpm run check` | VM | Docs checks, dashboard build, and supervisor tests pass | Repo build/test artifacts only |
+| Playwright e2e | `pnpm run test:e2e:dashboard` | VM | Chromium launches and dashboard e2e tests pass | Browser cache/test artifacts; dependency install is mutating |
 | Reboot proof | `sudo reboot`, then verify | VM | SSH returns and toolchain/repo checks still pass | Reboot, approval required |
 | Real work cycle | Codex workspace experiment | VM | create, verify, and cleanup a real repo work item | Isolated worktree mutation |
 | Snapshot | VM manager snapshot | VM | Bob confirms snapshot after all proofs pass | VM recovery point |

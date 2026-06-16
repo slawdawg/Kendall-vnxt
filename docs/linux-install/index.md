@@ -20,6 +20,7 @@ moving secrets or relying on one-off operator memory.
 - [Remote approval template](remote-approval-template.md)
 - [Troubleshooting](troubleshooting.md)
 - [Lessons learned](lessons-learned.md)
+- [Remaining gaps](remaining-gaps.md)
 - [Evidence schema](evidence/schema.md)
 - [Fresh VM toolchain evidence](evidence/fresh-vm-toolchain-2026-06-16.md)
 - [Fresh VM repo setup evidence](evidence/fresh-vm-repo-setup-2026-06-16.md)
@@ -28,6 +29,8 @@ moving secrets or relying on one-off operator memory.
 - [Fresh VM real work-cycle evidence](evidence/fresh-vm-work-cycle-2026-06-16.md)
 - [Fresh VM snapshot evidence](evidence/fresh-vm-snapshot-2026-06-16.md)
 - [Fresh VM agent CLI evidence](evidence/fresh-vm-agent-clis-2026-06-16.md)
+- [Fresh VM BMAD Method evidence](evidence/fresh-vm-bmad-method-2026-06-16.md)
+- [Fresh VM Playwright e2e evidence](evidence/fresh-vm-playwright-e2e-2026-06-16.md)
 - [Existing Linux primary-development runbook](../workflows/linux-primary-development-runbook.md)
 - [Platform evaluation evidence](../platform-evaluation-sprint.md)
 

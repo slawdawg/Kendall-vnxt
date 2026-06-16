@@ -187,8 +187,9 @@ treated as ready:
 9. Run remote VM verify-only through `linux-bootstrap.mjs`.
 10. Request Bob approval for any remote VM apply.
 11. Enable `linux-bootstrap.mjs --apply` only after approval.
-12. Run reboot proof.
-13. Complete one normal development work cycle from Linux.
+12. Run Playwright browser dependency and dashboard e2e proof.
+13. Run reboot proof.
+14. Complete one normal development work cycle from Linux.
 
 ## Verify-Only Contract
 
@@ -206,10 +207,11 @@ Required checks:
 - gh is installed.
 - Codex CLI is installed.
 - Claude Code is installed.
+- BMAD Method CLI is installed.
 - GitHub auth is either valid or reports `manual auth required`.
 - private repo access is checked only when GitHub auth is already valid.
 - `pnpm run preflight` passes when repo validation is requested.
-- optional full check, dashboard smoke, and workspace smoke are explicit flags.
+- optional full check, dashboard e2e, and workspace smoke are explicit flags.
 - no stale exact `node`, `pnpm`, or `python` processes remain after smoke tests.
 
 The validator must exit non-zero on failed required checks and write only
@@ -243,8 +245,9 @@ Rules:
   credential state, or write credential helper configuration without a separate
   approval.
 - Long-running services are not started by default.
-- Agent CLI install may install `@openai/codex` and
-  `@anthropic-ai/claude-code`, but provider login remains manual.
+- Agent CLI install may install `@openai/codex`,
+  `@anthropic-ai/claude-code`, and `bmad-method`, but provider login and BMAD
+  project install/upgrade remain manual.
 
 ## Evidence Policy
 

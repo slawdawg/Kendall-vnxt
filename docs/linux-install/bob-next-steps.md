@@ -487,10 +487,12 @@ Toolchain: verified
 GitHub auth: manually completed
 Repo clone/setup/preflight: verified
 Full pnpm run check: verified
+Dashboard Playwright e2e: verified
 Reboot proof: verified
 First real work cycle: verified
 VM snapshot: taken
 Codex CLI and Claude Code: verified
+BMAD Method CLI: verified
 Provider login policy: documented
 Decision: kendall-linux is primary Kendall_Nxt development baseline
 ```

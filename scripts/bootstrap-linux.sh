@@ -17,7 +17,7 @@ Modes:
   --dry-run              Print planned actions and exit.
   --verify-only          Verify supported OS/user and installed tool versions.
   --install-toolchain    Install Node/npm, pnpm, uv, gh, and build prerequisites.
-  --install-agent-clis   Install Codex CLI and Claude Code through npm.
+  --install-agent-clis   Install Codex CLI, Claude Code, and BMAD Method through npm.
 
 Options:
   --user <name>          Expected Linux user. Default: slaw_dawg.
@@ -26,8 +26,9 @@ Options:
   --skip-uv              Do not install uv.
   -h, --help             Show this help.
 
-This script does not clone repos, authenticate GitHub/OpenAI/Anthropic, copy SSH
-private keys, edit SSH server config, start long-running services, or reboot.
+This script does not clone repos, run BMAD project install/upgrade, authenticate
+GitHub/OpenAI/Anthropic, copy SSH private keys, edit SSH server config, start
+long-running services, or reboot.
 USAGE
 }
 
@@ -70,7 +71,7 @@ require_interactive_sudo() {
 }
 
 print_versions() {
-  for tool in git node npm pnpm uv gh codex claude; do
+  for tool in git node npm pnpm uv gh codex claude bmad-method; do
     if command -v "$tool" >/dev/null 2>&1; then
       case "$tool" in
         gh) "$tool" --version | head -n 1 ;;
@@ -90,11 +91,11 @@ install_agent_clis() {
     fail "npm is required before installing agent CLIs. Run --install-toolchain first."
   fi
 
-  log "Installing Codex CLI and Claude Code globally through npm."
-  sudo npm install -g @openai/codex @anthropic-ai/claude-code
+  log "Installing Codex CLI, Claude Code, and BMAD Method globally through npm."
+  sudo npm install -g @openai/codex @anthropic-ai/claude-code bmad-method
 
   log "Agent CLI install complete. Versions:"
-  for tool in codex claude; do
+  for tool in codex claude bmad-method; do
     if command -v "$tool" >/dev/null 2>&1; then
       "$tool" --version 2>/dev/null | head -n 1 || true
     else
@@ -179,10 +180,10 @@ Planned actions:
 - sudo npm install -g pnpm@$install_pnpm_version.
 - Install uv for the current user unless --skip-uv is set.
 - Add /usr/local/bin uv/uvx symlinks if needed.
-- Install Codex CLI and Claude Code only when --install-agent-clis is run.
+- Install Codex CLI, Claude Code, and BMAD Method only when --install-agent-clis is run.
 
-No repo clone, GitHub/OpenAI/Anthropic auth, SSH private key copy, service
-start, or reboot.
+No repo clone, BMAD project install/upgrade, GitHub/OpenAI/Anthropic auth, SSH
+private key copy, service start, or reboot.
 EOF
     ;;
   --verify-only)

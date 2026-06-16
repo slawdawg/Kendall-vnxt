@@ -184,20 +184,23 @@ content
 - Prefer repo scripts for durable automation instead of complex inline remote
   commands.
 
-## 2026-06-16: Agent CLIs Are Baseline Requirements
+## 2026-06-16: Agent CLIs And BMAD Method Are Baseline Requirements
 
 Problem: the VM passed repo setup, full check, reboot proof, and work-cycle
-proof, but Codex CLI and Claude Code were not installed.
+proof, but Codex CLI, Claude Code, and then BMAD Method were not all installed.
 
 Correction:
 
-- Treat `codex` and `claude` as required agent CLIs for the Linux development
-  baseline.
-- Add both to the validator.
+- Treat `codex`, `claude`, and `bmad-method` as required CLIs for the Linux
+  development baseline.
+- Add all three to the validator.
 - Install them as a separate approved agent-CLI step.
 - Keep provider authentication separate and manual. Installing the CLI does not
   approve OpenAI or Anthropic login, token handling, provider calls, or paid
   usage.
+- Keep BMAD project install/upgrade separate. Installing the `bmad-method`
+  package does not approve rewriting `_bmad`, `.claude`, or other project
+  integration files.
 
 ## 2026-06-16: Cutover Needs An Operating Policy, Not Just Green Checks
 
@@ -229,3 +232,89 @@ Correction:
 - Prefer the stable `kendall-linux` SSH alias in routine commands.
 - Update version rows for Node, pnpm, uv, gh, Codex CLI, and Claude Code from
   current VM checks.
+
+## 2026-06-16: Playwright Package Does Not Prove Browser Runtime
+
+Problem: `pnpm exec playwright --version` passed, but
+`~/.cache/ms-playwright` was missing on the VM.
+
+Correction:
+
+- Treat Playwright package availability and browser runtime availability as
+  separate checks.
+- Dashboard build and supervisor tests are proven by `pnpm run check`.
+- Playwright 1.60.0 is not enough for Ubuntu 26.04 browser install.
+- Playwright 1.61.0 downloaded Chromium successfully, but browser launch still
+  required missing system libraries such as `libatk-1.0.so.0`.
+- Dashboard e2e tests need a separate approved browser install/dependency/proof
+  step:
+
+```bash
+pnpm dlx playwright@1.61.0 install-deps chromium
+pnpm run test:e2e:dashboard
+```
+
+- This is remote-write because it downloads browser binaries and may install
+  system packages.
+- If sudo is required, Bob must run the dependency command interactively.
+
+## 2026-06-16: Playwright Runtime And Test Correctness Are Separate
+
+Problem: after Playwright 1.61 browser download and system dependencies were
+installed, the suite launched but still failed three dashboard assertions.
+
+Correction:
+
+- Treat browser/runtime readiness separately from e2e test correctness.
+- Intermediate `22 passed, 3 failed` meant Linux could run Playwright, but the
+  dashboard e2e suite still needed test/app triage.
+- Do not label the e2e lane complete until the full dashboard e2e command
+  passes on the VM.
+- The final proof passed:
+
+```bash
+PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright pnpm run test:e2e:dashboard
+```
+
+Result: `25 passed`.
+
+## 2026-06-16: E2E Tests Must Not Depend On Shared Fixture Counts
+
+Problem: after Linux Playwright runtime was fixed, several failures were
+caused by brittle assumptions in dashboard e2e assertions:
+
+- Empty-state text was expected even when previous tests had already created
+  proposed work.
+- A navigation badge was expected to contain a specific count even though the
+  suite can create multiple active items.
+- Subscription launch readiness expected stale/rejected approval values that
+  belong to later dedicated tests.
+- A plain `false` text lookup matched multiple safety flags under strict mode.
+
+Correction:
+
+- Scope empty-state assertions to cases where no item cards exist.
+- Assert route availability and page behavior instead of exact shared-state
+  counts.
+- Keep stale/rejected launch assertions in the stale/rejected tests.
+- Use exact or first-match locators when repeated status values are expected.
+
+## 2026-06-16: Avoid Remote Grep Regex Pipes From PowerShell
+
+Problem: a focused Playwright rerun command used a `--grep` pattern with `|`
+through PowerShell-to-SSH quoting. The remote shell treated pieces of the regex
+as commands and caused an `EPIPE` in the test runner.
+
+Correction:
+
+- Do not send regex pipes through ad hoc host-to-SSH command strings.
+- Use simple exact commands, a checked-in script, or run the command inside an
+  interactive Linux shell.
+- After a failed remote test command, check for leftover exact process names:
+
+```bash
+pgrep -x node || true
+pgrep -x uv || true
+pgrep -x python || true
+pgrep -x python3 || true
+```
