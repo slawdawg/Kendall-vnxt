@@ -77,7 +77,12 @@ print_versions() {
       if version_output="$("$tool" --version 2>/dev/null)"; then
         version="$(printf '%s\n' "$version_output" | head -n 1)"
         if [ -n "$version" ]; then
-          printf '%s\n' "$version"
+          if [ "$tool" = "pnpm" ] && [ "$version" != "$install_pnpm_version" ]; then
+            printf '%s version mismatch: expected %s but found %s\n' "$tool" "$install_pnpm_version" "$version"
+            result=1
+          else
+            printf '%s\n' "$version"
+          fi
         else
           printf '%s version check returned no output\n' "$tool"
           result=1

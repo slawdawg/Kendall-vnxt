@@ -334,6 +334,8 @@ Correction:
 
 - Version checks now fail if the command exits non-zero or returns no output.
 - The validator checks the expected pnpm version before recording a pass.
+- Bootstrap verify-only also checks the expected pnpm version before recording
+  a pass.
 - Value-taking flags reject missing values immediately.
 - Bootstrap verify-only returns non-zero when any required tool is missing or
   has a failed version command.
