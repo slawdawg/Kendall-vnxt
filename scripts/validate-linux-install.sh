@@ -81,6 +81,49 @@ check_node_range() {
   [ "$major" -ge "$minimum_node_major" ] && [ "$major" -lt "$maximum_node_major_exclusive" ]
 }
 
+repo_root() {
+  if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+    cd "$script_dir/.." && pwd -P
+    return
+  fi
+
+  if [ -d "docs/linux-install/evidence" ]; then
+    pwd -P
+    return
+  fi
+
+  return 1
+}
+
+validate_evidence_path() {
+  path="$1"
+  root="$(repo_root)" || {
+    printf 'Cannot resolve repo root for evidence path validation. Run from the repo root or use a checked-out script file.\n' >&2
+    exit 2
+  }
+  allowed_dir="$root/docs/linux-install/evidence"
+  evidence_dir="$(dirname "$path")"
+
+  if [ ! -d "$allowed_dir" ]; then
+    printf 'Approved evidence directory does not exist: %s\n' "$allowed_dir" >&2
+    exit 2
+  fi
+
+  if [ ! -d "$evidence_dir" ]; then
+    printf 'Evidence directory does not exist: %s\n' "$evidence_dir" >&2
+    exit 2
+  fi
+
+  evidence_dir_real="$(cd "$evidence_dir" && pwd -P)"
+  allowed_dir_real="$(cd "$allowed_dir" && pwd -P)"
+
+  if [ "$evidence_dir_real" != "$allowed_dir_real" ]; then
+    printf 'Evidence path must be under this checkout docs/linux-install/evidence: %s\n' "$path" >&2
+    exit 2
+  fi
+}
+
 run_version_check() {
   tool="$1"
   command="$2"
@@ -183,13 +226,7 @@ if [ "$mode" != "verify" ]; then
 fi
 
 if [ -n "$evidence_path" ]; then
-  case "$evidence_path" in
-    docs/linux-install/evidence/*|*/docs/linux-install/evidence/*) ;;
-    *)
-      printf 'Evidence path must be under docs/linux-install/evidence: %s\n' "$evidence_path" >&2
-      exit 2
-      ;;
-  esac
+  validate_evidence_path "$evidence_path"
 fi
 
 current_user="$(id -un 2>/dev/null || printf unknown)"
@@ -289,11 +326,6 @@ if [ "$json" = "yes" ]; then
 fi
 
 if [ -n "$evidence_path" ]; then
-  evidence_dir="$(dirname "$evidence_path")"
-  if [ ! -d "$evidence_dir" ]; then
-    printf 'Evidence directory does not exist: %s\n' "$evidence_dir" >&2
-    exit 2
-  fi
   printf '%s' "$summary_json" > "$evidence_path"
 fi
 

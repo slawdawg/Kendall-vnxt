@@ -64,6 +64,14 @@ check_node_range() {
 }
 
 require_supported_target() {
+  if [ "$(id -u)" = "0" ]; then
+    fail "root is not a supported bootstrap user. Run as the intended non-root Linux user."
+  fi
+
+  if [ "$expected_user" = "root" ]; then
+    fail "expected user must be a non-root Linux user"
+  fi
+
   if [ "$(id -un)" != "$expected_user" ]; then
     fail "expected user $expected_user but found $(id -un)"
   fi
