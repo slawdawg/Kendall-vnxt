@@ -1,27 +1,33 @@
-# Linux Install Playbook
+# Kendall Vnxt Ubuntu Deployment Playbook
 
 Status: planned
-Target v1: Ubuntu 26.04 LTS, existing `slaw_dawg` user
+Target v1: Ubuntu 26.04 LTS or later, existing non-root Linux user
 
 ## Purpose
 
-Create a repeatable, validated Linux installation path for Kendall_Nxt without
-moving secrets or relying on one-off operator memory.
+Create a repeatable, validated path to deploy Kendall Vnxt from GitHub onto
+Ubuntu 26.04 or later without moving secrets or relying on one-off operator
+memory.
 
-## Current Plan
+## Generic Install Path
 
-- [Bob next steps](bob-next-steps.md)
-- [Implementation plan](implementation-plan.md)
 - [Install playbook](install-playbook.md)
 - [Install contract](install-contract.md)
+- [Implementation plan](implementation-plan.md)
 - [Validation matrix](validation-matrix.md)
 - [SSH key policy](ssh-key-policy.md)
 - [Provider login policy](provider-login-policy.md)
 - [Remote approval template](remote-approval-template.md)
 - [Troubleshooting](troubleshooting.md)
 - [Lessons learned](lessons-learned.md)
-- [Remaining gaps](remaining-gaps.md)
 - [Evidence schema](evidence/schema.md)
+
+## Current Instance Notes And Evidence
+
+- [Bob next steps](bob-next-steps.md) - current lab host notes, not the generic
+  installer entry point.
+- [Remaining gaps](remaining-gaps.md) - current Linux host gaps and policy
+  follow-ups, not the generic installer entry point.
 - [Fresh VM toolchain evidence](evidence/fresh-vm-toolchain-2026-06-16.md)
 - [Fresh VM repo setup evidence](evidence/fresh-vm-repo-setup-2026-06-16.md)
 - [Fresh VM full check evidence](evidence/fresh-vm-full-check-2026-06-16.md)
@@ -31,6 +37,7 @@ moving secrets or relying on one-off operator memory.
 - [Fresh VM agent CLI evidence](evidence/fresh-vm-agent-clis-2026-06-16.md)
 - [Fresh VM BMAD Method evidence](evidence/fresh-vm-bmad-method-2026-06-16.md)
 - [Fresh VM Playwright e2e evidence](evidence/fresh-vm-playwright-e2e-2026-06-16.md)
+- [Current VM sync and base verification evidence](evidence/current-vm-sync-base-verify-2026-06-16.md)
 - [Existing Linux primary-development runbook](../workflows/linux-primary-development-runbook.md)
 - [Platform evaluation evidence](../platform-evaluation-sprint.md)
 
@@ -38,9 +45,10 @@ moving secrets or relying on one-off operator memory.
 
 Version 1 is intentionally narrow:
 
-- Ubuntu 26.04 LTS only.
-- Existing `slaw_dawg` user only.
+- Ubuntu 26.04 LTS or later.
+- Existing non-root Linux user.
 - Public SSH key installation only.
-- Provider and repository-service authentication is post-deployment only.
+- Provider authentication is post-deployment only. Private GitHub repo access
+  auth is manual and allowed before clone when needed.
 - Verify-only and dry-run behavior before any installer apply mode.
-- Remote mutation only after Bob approves a named operation scope.
+- Remote mutation only after the operator approves a named operation scope.

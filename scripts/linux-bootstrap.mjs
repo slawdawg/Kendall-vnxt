@@ -9,13 +9,14 @@ First-milestone Linux bootstrap orchestrator.
 
 Options:
   --plan              Print the staged plan. This is the only supported mode.
-  --target <alias>    SSH target alias. Default: kendall-linux.
-  --user <name>       Expected Linux user. Default: slaw_dawg.
-  --hostname <name>   Expected target hostname. Default: Kendall_vNxt.
+  --target <alias>    SSH target alias or host. Default: ubuntu-target.
+  --user <name>       Optional expected Linux user. Defaults to remote current user.
+  --hostname <name>   Optional expected target hostname.
   -h, --help          Show this help.
 
-Apply, remote verification, package install, SSH key install, GitHub auth, and
-reboot modes are intentionally unavailable in this milestone.`;
+Apply, remote verification, package install, SSH key install, provider auth,
+Tailnet enrollment, and reboot modes are intentionally unavailable in this
+milestone.`;
 }
 
 function fail(message, code = 2) {
@@ -26,9 +27,29 @@ function fail(message, code = 2) {
 }
 
 let mode = null;
-let target = "kendall-linux";
-let user = "slaw_dawg";
-let hostname = "Kendall_vNxt";
+let target = "ubuntu-target";
+let user = "";
+let hostname = "";
+
+function optionValue(option, index) {
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) {
+    fail(`Missing value for ${option}.`);
+  }
+  return value;
+}
+
+function validateCommandToken(name, value, pattern = /^[A-Za-z0-9._@%+=:,-]+$/) {
+  if (!value) {
+    return;
+  }
+  if (value.startsWith("-")) {
+    fail(`${name} must not start with '-'.`);
+  }
+  if (!pattern.test(value)) {
+    fail(`${name} contains unsupported characters for generated shell commands.`);
+  }
+}
 
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];
@@ -37,15 +58,15 @@ for (let index = 0; index < args.length; index += 1) {
       mode = "plan";
       break;
     case "--target":
-      target = args[index + 1];
+      target = optionValue(arg, index);
       index += 1;
       break;
     case "--user":
-      user = args[index + 1];
+      user = optionValue(arg, index);
       index += 1;
       break;
     case "--hostname":
-      hostname = args[index + 1];
+      hostname = optionValue(arg, index);
       index += 1;
       break;
     case "--verify-only":
@@ -68,10 +89,28 @@ if (mode !== "plan") {
   fail("This first-milestone orchestrator only supports --plan.");
 }
 
-for (const [name, value] of Object.entries({ target, user, hostname })) {
+for (const [name, value] of Object.entries({ target })) {
   if (!value || value.startsWith("--")) {
     fail(`Missing value for ${name}.`);
   }
+}
+
+validateCommandToken("target", target);
+validateCommandToken("user", user, /^[A-Za-z0-9._-]+$/);
+validateCommandToken("hostname", hostname, /^[A-Za-z0-9._-]+$/);
+
+function verifyArgs({ includeRepo = false } = {}) {
+  const scriptArgs = ["--verify-only"];
+  if (user) {
+    scriptArgs.push("--user", user);
+  }
+  if (hostname) {
+    scriptArgs.push("--hostname", hostname);
+  }
+  if (!includeRepo) {
+    scriptArgs.push("--skip-repo");
+  }
+  return scriptArgs.join(" ");
 }
 
 const plan = {
@@ -79,26 +118,26 @@ const plan = {
   mode: "plan",
   target: {
     alias: target,
-    user,
-    hostname,
+    user: user || "remote-current-user",
+    hostname: hostname || "not-enforced",
     durableIdentity: "ssh-alias",
     rawIpPolicy: "discovery-only",
   },
   stages: [
     {
       id: "local-syntax",
-      command: "node --check scripts/linux-bootstrap.mjs && bash -n scripts/validate-linux-install.sh",
+      command: "node --check scripts/linux-bootstrap.mjs && bash -n scripts/bootstrap-linux.sh scripts/validate-linux-install.sh",
       mutation: "none",
     },
     {
       id: "first-ssh-trust",
       command: `ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes ${target} 'whoami; hostname; cat /etc/os-release'`,
       mutation: "known_hosts add only",
-      status: "run-once-for-new-vm",
+      status: "run-once-for-new-host",
     },
     {
       id: "remote-baseline-verify",
-      command: `Get-Content -Raw scripts\\validate-linux-install.sh | ssh ${target} 'bash -s -- --verify-only --user ${user} --hostname ${hostname} --skip-repo'`,
+      command: `Get-Content -Raw scripts\\validate-linux-install.sh | ssh ${target} 'bash -s -- ${verifyArgs()}'`,
       mutation: "none",
       status: "future-gated",
     },
@@ -110,7 +149,7 @@ const plan = {
     },
     {
       id: "remote-post-apply-verify",
-      command: `Get-Content -Raw scripts\\validate-linux-install.sh | ssh ${target} 'bash -s -- --verify-only --user ${user} --hostname ${hostname}'`,
+      command: `Get-Content -Raw scripts\\validate-linux-install.sh | ssh ${target} 'bash -s -- ${verifyArgs({ includeRepo: true })}'`,
       mutation: "none",
       status: "blocked-until-apply-exists",
     },
@@ -118,11 +157,11 @@ const plan = {
   stopLines: [
     "host-key mismatch",
     "target alias mismatch",
-    "remote user is not slaw_dawg",
-    "Ubuntu release is not 26.04",
+    "remote user does not match --user when --user is provided",
+    "Ubuntu release is older than 26.04",
     "private key input",
     "authorized_keys overwrite",
-    "automated GitHub auth",
+    "automated provider, repository-service, or Tailnet auth",
     "unexpected package/file/service mutation",
     "reboot request without separate approval",
   ],

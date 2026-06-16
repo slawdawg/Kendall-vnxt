@@ -29,25 +29,25 @@ installation, service change, or credential-related change.
 ## Example: Future Apply Approval
 
 - Approval id: `linux-bootstrap-apply-YYYYMMDD-01`
-- Target alias: `kendall-linux`
-- Target user: `slaw_dawg`
-- Target hostname: `Kendall_vNxt`
+- Target alias: `<ssh-alias-or-host>`
+- Target user: `<linux-user>`
+- Target hostname: `<optional-expected-hostname-or-not-enforced>`
 - Operation family: `apply`
-- Exact command or script: `node ./scripts/linux-bootstrap.mjs --apply --target kendall-linux --user slaw_dawg`
+- Exact command or script: `node ./scripts/linux-bootstrap.mjs --apply --target <ssh-alias-or-host> --user <linux-user>`
 - Mode: bounded remote mutation
 - Expected packages changed: Node, pnpm, uv, gh, git, build/runtime packages listed by dry run
-- Expected files changed: Kendall_Nxt repo checkout/update paths, optional shell profile PATH entries after dry-run confirmation
+- Expected files changed: Kendall Vnxt repo checkout/update paths, optional shell profile PATH entries after dry-run confirmation
 - Expected services changed: none unless listed by dry run
-- Expected auth changes: none; GitHub auth remains manual
+- Expected auth changes: none; GitHub/provider/Tailscale auth remains manual
 - Reboot required: no; any reboot needs a separate approval
 - Evidence destination: approved repo evidence folder
 - Rollback plan: restore backed-up files, report package changes, preserve evidence
 - Rollback limits: package manager cannot guarantee exact pre-existing transitive state without snapshot
-- Recovery path if SSH fails: use VM console, restore SSH config or `authorized_keys` backup
-- Stop lines: host-key mismatch, wrong user, wrong OS, private key input, GitHub auth automation, unexpected reboot
-- Approval text: `I approve linux-bootstrap-apply-YYYYMMDD-01 for kendall-linux as slaw_dawg.`
+- Recovery path if SSH fails: use host console, restore SSH config or `authorized_keys` backup
+- Stop lines: host-key mismatch, wrong user, wrong OS, private key input, auth automation, unexpected reboot
+- Approval text: `I approve linux-bootstrap-apply-YYYYMMDD-01 for <ssh-alias-or-host> as <linux-user>.`
 
 ## Reboot Approval
 
 Reboot approval must be separate and must name the target alias, reason, expected
-downtime, recovery path, and verification command to run after the VM returns.
+downtime, recovery path, and verification command to run after the host returns.

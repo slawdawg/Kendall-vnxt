@@ -2,11 +2,13 @@
 set -u
 
 mode=""
-expected_user="slaw_dawg"
-expected_os_version="26.04"
-expected_hostname="Kendall_vNxt"
+expected_user="$(id -un 2>/dev/null || printf unknown)"
+minimum_os_version="26.04"
+expected_hostname=""
 expected_pnpm_version="11.5.2"
-repo_path="/home/slaw_dawg/Kendall_Nxt"
+minimum_node_major="22"
+maximum_node_major_exclusive="25"
+repo_path="${HOME:-/home/$expected_user}/Kendall_Nxt"
 run_preflight="yes"
 json="no"
 evidence_path=""
@@ -20,15 +22,18 @@ usage() {
 Usage: scripts/validate-linux-install.sh --verify-only [options]
 
 Verify-only Linux install readiness checks. This script does not install
-packages, edit files, alter SSH configuration, authenticate GitHub, or reboot.
+packages, alter SSH configuration, authenticate providers, or reboot. The
+optional --evidence flag writes one redacted JSON evidence file under an
+approved repo evidence directory.
 
 Options:
   --verify-only             Required mode for v1.
-  --user <name>             Expected Linux user. Default: slaw_dawg.
-  --os-version <version>    Expected Ubuntu VERSION_ID. Default: 26.04.
-  --hostname <name>         Expected target hostname. Default: Kendall_vNxt.
+  --user <name>             Expected Linux user. Default: current user.
+  --min-os-version <ver>    Minimum Ubuntu VERSION_ID. Default: 26.04.
+  --os-version <version>    Alias for --min-os-version.
+  --hostname <name>         Optional expected target hostname.
   --pnpm-version <version>  Expected pnpm version. Default: 11.5.2.
-  --repo <path>             Kendall_Nxt repo path. Default: /home/slaw_dawg/Kendall_Nxt.
+  --repo <path>             Kendall_Nxt repo path. Default: $HOME/Kendall_Nxt.
   --skip-repo               Skip repo presence and preflight checks.
   --skip-preflight          Check repo presence but skip pnpm preflight.
   --json                    Emit a compact JSON summary.
@@ -57,6 +62,25 @@ record() {
   fi
 }
 
+version_at_least() {
+  current="$1"
+  minimum="$2"
+  first="$(printf '%s\n%s\n' "$minimum" "$current" | sort -V | head -n 1)"
+  [ "$first" = "$minimum" ]
+}
+
+node_major_version() {
+  node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1
+}
+
+check_node_range() {
+  major="$(node_major_version || true)"
+  if [ -z "$major" ]; then
+    return 1
+  fi
+  [ "$major" -ge "$minimum_node_major" ] && [ "$major" -lt "$maximum_node_major_exclusive" ]
+}
+
 run_version_check() {
   tool="$1"
   command="$2"
@@ -66,6 +90,8 @@ run_version_check() {
       version="$(printf '%s\n' "$version_output" | head -n 1)"
       if [ -z "$version" ]; then
         record fail "$tool" "$command returned no version output"
+      elif [ "$tool" = "node" ] && ! check_node_range; then
+        record fail "$tool" "expected >=$minimum_node_major < $maximum_node_major_exclusive but found $version"
       elif [ -n "$expected_version" ] && [ "$version" != "$expected_version" ]; then
         record fail "$tool" "expected $expected_version but found $version"
       else
@@ -100,9 +126,9 @@ while [ "$#" -gt 0 ]; do
       expected_user="$2"
       shift 2
       ;;
-    --os-version)
+    --min-os-version|--os-version)
       require_option_value "$1" "${2-}"
-      expected_os_version="$2"
+      minimum_os_version="$2"
       shift 2
       ;;
     --hostname)
@@ -156,6 +182,16 @@ if [ "$mode" != "verify" ]; then
   exit 2
 fi
 
+if [ -n "$evidence_path" ]; then
+  case "$evidence_path" in
+    docs/linux-install/evidence/*|*/docs/linux-install/evidence/*) ;;
+    *)
+      printf 'Evidence path must be under docs/linux-install/evidence: %s\n' "$evidence_path" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 current_user="$(id -un 2>/dev/null || printf unknown)"
 if [ "$current_user" = "$expected_user" ]; then
   record pass user "running as $current_user"
@@ -164,7 +200,9 @@ else
 fi
 
 current_hostname="$(hostname 2>/dev/null || printf unknown)"
-if [ "$current_hostname" = "$expected_hostname" ]; then
+if [ -z "$expected_hostname" ]; then
+  record pass hostname "hostname is $current_hostname"
+elif [ "$current_hostname" = "$expected_hostname" ]; then
   record pass hostname "hostname is $current_hostname"
 else
   record warn hostname "expected $expected_hostname but found $current_hostname"
@@ -173,10 +211,10 @@ fi
 if [ -r /etc/os-release ]; then
   os_id="$(. /etc/os-release && printf '%s' "${ID:-unknown}")"
   os_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-unknown}")"
-  if [ "$os_id" = "ubuntu" ] && [ "$os_version" = "$expected_os_version" ]; then
+  if [ "$os_id" = "ubuntu" ] && version_at_least "$os_version" "$minimum_os_version"; then
     record pass os-release "Ubuntu $os_version detected"
   else
-    record fail os-release "expected ubuntu $expected_os_version but found $os_id $os_version"
+    record fail os-release "expected ubuntu $minimum_os_version or later but found $os_id $os_version"
   fi
 else
   record fail os-release "/etc/os-release is not readable"
@@ -225,13 +263,25 @@ else
   result="fail"
 fi
 
-summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","mode":"verify","target":{"user":"%s","hostname":"%s","repo":"%s"},"authority":{"level":"verify","approval_id":null},"checks_summary":{"pass":%s,"fail":%s,"warn":%s},"mutations":[],"redactions":["gh-auth-output","environment","authorized-keys"],"result":"%s"}\n' \
+authority_level="verify"
+mutations_json="[]"
+if [ -n "$evidence_path" ]; then
+  authority_level="evidence-write"
+  mutations_json='["evidence-file"]'
+fi
+
+summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","mode":"verify","target":{"user":"%s","hostname":"%s","repo":"%s","minimumOsVersion":"%s","nodeRange":">=%s <%s"},"authority":{"level":"%s","approval_id":null},"checks_summary":{"pass":%s,"fail":%s,"warn":%s},"mutations":%s,"redactions":["gh-auth-output","environment","authorized-keys"],"result":"%s"}\n' \
   "$(json_escape "$expected_user")" \
   "$(json_escape "$expected_hostname")" \
   "$(json_escape "$repo_path")" \
+  "$(json_escape "$minimum_os_version")" \
+  "$(json_escape "$minimum_node_major")" \
+  "$(json_escape "$maximum_node_major_exclusive")" \
+  "$(json_escape "$authority_level")" \
   "$checks_passed" \
   "$checks_failed" \
   "$checks_warned" \
+  "$mutations_json" \
   "$result")"
 
 if [ "$json" = "yes" ]; then

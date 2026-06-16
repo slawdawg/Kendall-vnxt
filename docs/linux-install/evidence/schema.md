@@ -1,4 +1,4 @@
-# Linux Install Evidence Schema
+# Kendall Vnxt Ubuntu Deployment Evidence Schema
 
 Status: draft v1
 
@@ -13,20 +13,23 @@ machine state.
   "generated_at": "2026-06-16T00:00:00.000Z",
   "mode": "plan|verify|apply|post-apply",
   "target": {
-    "alias": "kendall-linux",
-    "user": "slaw_dawg",
-    "hostname": "Kendall_vNxt",
+    "alias": "ubuntu-target",
+    "user": "linux-user",
+    "hostname": "ubuntu-host-or-not-enforced",
+    "repo": "$HOME/Kendall_Nxt",
+    "minimumOsVersion": "26.04",
+    "nodeRange": ">=22 <25",
     "address_source": "ssh-config|operator-input|discovery"
   },
   "authority": {
-    "level": "plan|verify|apply|reboot|cleanup",
+    "level": "plan|verify|evidence-write|apply|reboot|cleanup",
     "approval_id": null
   },
   "checks": [
     {
       "id": "os-release",
       "status": "pass|fail|warn|skip",
-      "summary": "Ubuntu 26.04 detected"
+      "summary": "Ubuntu 26.04 or later detected"
     }
   ],
   "mutations": [],
@@ -66,5 +69,6 @@ Evidence must not include:
 ## File Location
 
 First-milestone scripts default to stdout-only summaries. If file evidence is
-enabled later, write under an approved repo evidence folder and name files with
-the target alias, mode, and UTC timestamp.
+enabled with `--evidence`, write under `docs/linux-install/evidence/` and name
+files with the target alias, mode, and UTC timestamp. File evidence uses the
+`evidence-write` authority level and records an `evidence-file` mutation.
