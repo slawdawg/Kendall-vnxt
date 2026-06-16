@@ -71,16 +71,35 @@ require_interactive_sudo() {
 }
 
 print_versions() {
+  result=0
   for tool in git node npm pnpm uv gh codex claude bmad-method; do
     if command -v "$tool" >/dev/null 2>&1; then
-      case "$tool" in
-        gh) "$tool" --version | head -n 1 ;;
-        *) "$tool" --version | head -n 1 ;;
-      esac
+      if version_output="$("$tool" --version 2>/dev/null)"; then
+        version="$(printf '%s\n' "$version_output" | head -n 1)"
+        if [ -n "$version" ]; then
+          printf '%s\n' "$version"
+        else
+          printf '%s version check returned no output\n' "$tool"
+          result=1
+        fi
+      else
+        printf '%s version check failed\n' "$tool"
+        result=1
+      fi
     else
       printf '%s missing\n' "$tool"
+      result=1
     fi
   done
+  return "$result"
+}
+
+require_option_value() {
+  option="$1"
+  value="${2-}"
+  if [ -z "$value" ]; then
+    fail "missing value for $option"
+  fi
 }
 
 install_agent_clis() {
@@ -143,15 +162,18 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --user)
-      expected_user="${2:-}"
+      require_option_value "$1" "${2-}"
+      expected_user="$2"
       shift 2
       ;;
     --os-version)
-      expected_os_version="${2:-}"
+      require_option_value "$1" "${2-}"
+      expected_os_version="$2"
       shift 2
       ;;
     --pnpm-version)
-      install_pnpm_version="${2:-}"
+      require_option_value "$1" "${2-}"
+      install_pnpm_version="$2"
       shift 2
       ;;
     --skip-uv)

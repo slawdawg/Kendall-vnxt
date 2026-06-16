@@ -5,6 +5,7 @@ mode=""
 expected_user="slaw_dawg"
 expected_os_version="26.04"
 expected_hostname="Kendall_vNxt"
+expected_pnpm_version="11.5.2"
 repo_path="/home/slaw_dawg/Kendall_Nxt"
 run_preflight="yes"
 json="no"
@@ -26,6 +27,7 @@ Options:
   --user <name>             Expected Linux user. Default: slaw_dawg.
   --os-version <version>    Expected Ubuntu VERSION_ID. Default: 26.04.
   --hostname <name>         Expected target hostname. Default: Kendall_vNxt.
+  --pnpm-version <version>  Expected pnpm version. Default: 11.5.2.
   --repo <path>             Kendall_Nxt repo path. Default: /home/slaw_dawg/Kendall_Nxt.
   --skip-repo               Skip repo presence and preflight checks.
   --skip-preflight          Check repo presence but skip pnpm preflight.
@@ -58,11 +60,32 @@ record() {
 run_version_check() {
   tool="$1"
   command="$2"
+  expected_version="${3:-}"
   if command -v "$tool" >/dev/null 2>&1; then
-    version="$($command 2>/dev/null | head -n 1)"
-    record pass "$tool" "$version"
+    if version_output="$($command 2>/dev/null)"; then
+      version="$(printf '%s\n' "$version_output" | head -n 1)"
+      if [ -z "$version" ]; then
+        record fail "$tool" "$command returned no version output"
+      elif [ -n "$expected_version" ] && [ "$version" != "$expected_version" ]; then
+        record fail "$tool" "expected $expected_version but found $version"
+      else
+        record pass "$tool" "$version"
+      fi
+    else
+      record fail "$tool" "$command failed"
+    fi
   else
     record fail "$tool" "$tool is not available on PATH"
+  fi
+}
+
+require_option_value() {
+  option="$1"
+  value="${2-}"
+  if [ -z "$value" ]; then
+    printf 'Missing value for %s\n' "$option" >&2
+    usage >&2
+    exit 2
   fi
 }
 
@@ -73,19 +96,28 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --user)
-      expected_user="${2:-}"
+      require_option_value "$1" "${2-}"
+      expected_user="$2"
       shift 2
       ;;
     --os-version)
-      expected_os_version="${2:-}"
+      require_option_value "$1" "${2-}"
+      expected_os_version="$2"
       shift 2
       ;;
     --hostname)
-      expected_hostname="${2:-}"
+      require_option_value "$1" "${2-}"
+      expected_hostname="$2"
+      shift 2
+      ;;
+    --pnpm-version)
+      require_option_value "$1" "${2-}"
+      expected_pnpm_version="$2"
       shift 2
       ;;
     --repo)
-      repo_path="${2:-}"
+      require_option_value "$1" "${2-}"
+      repo_path="$2"
       shift 2
       ;;
     --skip-repo)
@@ -101,7 +133,8 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --evidence)
-      evidence_path="${2:-}"
+      require_option_value "$1" "${2-}"
+      evidence_path="$2"
       json="yes"
       shift 2
       ;;
@@ -151,7 +184,7 @@ fi
 
 run_version_check git "git --version"
 run_version_check node "node --version"
-run_version_check pnpm "pnpm --version"
+run_version_check pnpm "pnpm --version" "$expected_pnpm_version"
 run_version_check uv "uv --version"
 run_version_check gh "gh --version"
 run_version_check codex "codex --version"

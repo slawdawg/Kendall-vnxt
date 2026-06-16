@@ -318,3 +318,22 @@ pgrep -x uv || true
 pgrep -x python || true
 pgrep -x python3 || true
 ```
+
+## 2026-06-16: Verify-Only Must Fail Closed
+
+Problem: review found that the Linux validator and bootstrap verify-only paths
+could report success too easily:
+
+- A tool shim could exist while its `--version` command failed.
+- A missing value for `--user`, `--repo`, or `--evidence` could hang argument
+  parsing instead of returning usage.
+- `bootstrap-linux.sh --verify-only` printed missing tools but did not make
+  them affect the exit code.
+
+Correction:
+
+- Version checks now fail if the command exits non-zero or returns no output.
+- The validator checks the expected pnpm version before recording a pass.
+- Value-taking flags reject missing values immediately.
+- Bootstrap verify-only returns non-zero when any required tool is missing or
+  has a failed version command.
