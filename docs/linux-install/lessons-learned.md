@@ -92,7 +92,10 @@ interactive GitHub auth.
 
 Correction:
 
-- Treat `gh auth login` as a separate manual milestone.
+- Treat `gh auth login` as a separate post-deployment user milestone, not part
+  of base VM bootstrap.
+- Do not fail base bootstrap because GitHub auth is absent.
+- Run GitHub auth only when a selected workflow needs private repo access.
 - Verify auth without retaining raw auth output:
 
 ```bash
@@ -216,9 +219,11 @@ Correction:
 - Record the current target identity, tool versions, completed proofs, and
   snapshot state.
 - Add a provider-login policy before treating Codex CLI or Claude Code as
-  operational tools.
-- Keep CLI installation separate from provider login, token handling, provider
-  calls, paid usage, and agent execution approvals.
+  authenticated operational tools.
+- Keep CLI installation and base bootstrap separate from provider login, token
+  handling, provider calls, paid usage, and agent execution approvals.
+- Provider/repository-service login is a post-deployment user action only when
+  a workflow needs it.
 
 ## 2026-06-16: Stale Evaluation Data Must Be Replaced During Cutover
 
@@ -339,3 +344,17 @@ Correction:
 - Value-taking flags reject missing values immediately.
 - Bootstrap verify-only returns non-zero when any required tool is missing or
   has a failed version command.
+
+## 2026-06-16: Tailscale Installed Does Not Mean Tailscale Ready
+
+Problem: the VM has the Tailscale package and an active `tailscaled` service,
+but `tailscale ip -4` reported `NeedsLogin`.
+
+Correction:
+
+- Treat package install and daemon state as prerequisites only.
+- Do not use Tailscale or MagicDNS as the durable SSH target until `tailscale
+  ip -4` returns a Tailscale address and the `kendall-linux` SSH alias has been
+  tested through the approved stable name.
+- Keep the current LAN SSH alias working until Tailscale authentication and
+  name resolution are proven.

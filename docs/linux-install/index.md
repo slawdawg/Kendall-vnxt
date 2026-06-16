@@ -41,6 +41,6 @@ Version 1 is intentionally narrow:
 - Ubuntu 26.04 LTS only.
 - Existing `slaw_dawg` user only.
 - Public SSH key installation only.
-- Manual GitHub authentication only.
+- Provider and repository-service authentication is post-deployment only.
 - Verify-only and dry-run behavior before any installer apply mode.
 - Remote mutation only after Bob approves a named operation scope.

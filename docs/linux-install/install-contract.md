@@ -19,7 +19,7 @@ Version 1 supports exactly this target:
 - Stable operator alias `kendall-linux`.
 - VM/display hostname target `Kendall_vNxt`.
 - Public-key SSH access only.
-- Manual GitHub authentication only.
+- No provider or repository-service login is required for the base VM bootstrap.
 
 The observed IP address can change and is not a durable install target.
 
@@ -63,11 +63,17 @@ public key line. Any future key install mode must append to `authorized_keys`,
 preserve a backup, verify permissions, and prove a new SSH login succeeds before
 any optional password-login hardening is considered.
 
-## GitHub Auth Contract
+## Post-Deployment Auth Contract
 
-Bootstrap may install or verify `gh`, but GitHub login remains manual. Scripts
-may check whether `gh auth status` succeeds, but they must not print raw auth
-output or retain token scopes in evidence.
+Bootstrap may install CLIs such as `gh`, `codex`, and `claude`, but it must not
+authenticate them. GitHub, OpenAI/Codex, Anthropic/Claude, Tailscale, and any
+other provider or repository-service login are user-performed post-deployment
+steps only when a workflow actually needs that service.
+
+Scripts may report whether an auth check is valid, pending, or not configured,
+but missing auth must not fail the base VM bootstrap. Evidence must not print
+raw auth output, token scopes, auth URLs, device codes, credential helper
+output, or token values.
 
 ## Evidence Contract
 
@@ -89,7 +95,8 @@ A Linux install is considered proven only when:
 - Ubuntu release is 26.04.
 - Node, pnpm, uv, gh, git, and SSH checks pass.
 - The Kendall_Nxt repo is present and passes the agreed verification command.
-- GitHub auth is either valid or explicitly marked as a manual pending step.
+- Any provider or repository-service auth is either absent or user-configured
+  after deployment; auth absence does not fail the base bootstrap.
 - Evidence is redacted and linked from the playbook.
 - No stop line was crossed without a matching approval packet.
 

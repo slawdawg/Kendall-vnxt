@@ -171,8 +171,9 @@ SSH:
 Get-Content -Raw scripts\validate-linux-install.sh | ssh kendall-linux 'bash -s -- --verify-only --user slaw_dawg --hostname Kendall_vNxt --skip-repo'
 ```
 
-Review the redacted output. Warnings are allowed only when they map to explicit
-manual follow-up, such as pending GitHub auth.
+Review the redacted output. Missing provider or repository-service auth is not
+a base bootstrap failure. Treat it as a post-deployment user step only if a
+selected workflow needs that service.
 
 After future approved setup installs the toolchain and clones the repo, rerun
 without `--skip-repo`:
@@ -239,9 +240,11 @@ It does not authenticate OpenAI, authenticate Anthropic, run `bmad-method
 install`, clone the repo, start services, or reboot. Provider login/setup and
 BMAD project install/upgrade remain separate manual milestones.
 
-## 11. Manual GitHub Auth And Repo Clone
+## 11. Optional Post-Deployment Repo Access
 
-After the toolchain verifies, authenticate GitHub manually from the VM:
+Base Linux VM bootstrap is complete without GitHub authentication. If the next
+workflow needs access to a private GitHub repo, Bob performs GitHub auth
+manually from the VM after deployment:
 
 ```bash
 gh auth login

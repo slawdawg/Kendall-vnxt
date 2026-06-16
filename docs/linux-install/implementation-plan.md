@@ -29,7 +29,8 @@ Supported:
   normalized differently, record both values in evidence.
 - Host private key remains on Bob's current operator host.
 - Targets receive only the approved public key.
-- Manual `gh auth login` when GitHub authentication is missing.
+- Provider and repository-service authentication is excluded from base
+  bootstrap. Bob performs login after deployment only when needed.
 - Container validation as script/idempotency evidence.
 - VM validation as real platform evidence.
 
@@ -39,7 +40,7 @@ Not supported in v1:
 - Automated user creation.
 - Broad distro support.
 - Copying private SSH keys.
-- Automating GitHub token login.
+- Automating GitHub, OpenAI, Anthropic, Tailscale, or other provider login.
 - Starting long-running dev services by default.
 - Remote `--apply` without explicit Bob approval.
 
@@ -54,7 +55,7 @@ Every playbook step and script mode must name one authority family.
 | `container-write` | Yes | Mutate disposable test containers. |
 | `remote-read` | Yes | SSH read-only checks against an approved target. |
 | `remote-write` | Gated | Package install, SSH key install, repo clone, shell/profile changes, service changes. |
-| `github-auth` | Manual only | Bob runs or approves `gh auth login`; scripts only verify status. |
+| `post-deploy-auth` | Manual only after deployment | Bob runs `gh auth login`, provider login, or Tailscale auth only when a workflow needs it; scripts only verify status after login exists. |
 | `reboot` | Gated | VM reboot proof after approved setup. |
 | `cleanup` | Gated when destructive | Exact-path cleanup only, with evidence and recovery notes. |
 
@@ -69,7 +70,7 @@ Remote mutation approval must name:
 - packages installed or removed
 - config files touched
 - services enabled, disabled, started, or stopped
-- credential or auth state changes
+- credential or auth state changes; excluded from base bootstrap
 - reboot or session requirements
 - rollback or recovery path
 - rollback limits
@@ -130,7 +131,9 @@ Required one-command behavior:
 - Stop on unsupported OS.
 - Stop when `slaw_dawg` is missing in v1.
 - Stop on dirty existing repo unless explicitly allowed by a later contract.
-- Stop when GitHub auth is missing and print manual `gh auth login` guidance.
+- Do not fail base bootstrap when provider or repository-service auth is
+  missing. Report it as a post-deployment user step only when a selected
+  workflow needs it.
 - Never consume GitHub tokens or private keys.
 - Write redacted evidence.
 
@@ -208,8 +211,9 @@ Required checks:
 - Codex CLI is installed.
 - Claude Code is installed.
 - BMAD Method CLI is installed.
-- GitHub auth is either valid or reports `manual auth required`.
-- private repo access is checked only when GitHub auth is already valid.
+- Provider and repository-service auth is not required for base bootstrap.
+- private repo access is checked only when Bob has already configured GitHub
+  auth and requested a workflow that needs the private repo.
 - `pnpm run preflight` passes when repo validation is requested.
 - optional full check, dashboard e2e, and workspace smoke are explicit flags.
 - no stale exact `node`, `pnpm`, or `python` processes remain after smoke tests.
@@ -238,12 +242,12 @@ Rules:
 - Missing `slaw_dawg` exits non-zero in v1.
 - Public SSH key install requires explicit public key content or path.
 - Private key input is rejected.
-- GitHub auth is never automated.
-- OpenAI/Codex and Anthropic/Claude auth are never automated.
-- Bootstrap may detect GitHub auth state, but must not run `gh auth login`,
-  start browser/device-code flows, consume tokens, read token files, copy
-  credential state, or write credential helper configuration without a separate
-  approval.
+- GitHub, OpenAI/Codex, Anthropic/Claude, Tailscale, and other provider auth
+  are never part of base bootstrap automation.
+- Bootstrap may detect auth state, but must not run `gh auth login`, provider
+  login commands, Tailscale auth, browser/device-code flows, consume tokens,
+  read token files, copy credential state, or write credential helper
+  configuration.
 - Long-running services are not started by default.
 - Agent CLI install may install `@openai/codex`,
   `@anthropic-ai/claude-code`, and `bmad-method`, but provider login and BMAD
@@ -312,8 +316,8 @@ cover these stop-line cases before the install path is considered repeatable:
 - Remote bootstrap is attempted before verify-only preconditions pass.
 - Approval packet is missing rollback limits, reboot/session requirements, or
   evidence destination.
-- GitHub auth is missing and automation attempts to consume a token or start an
-  auth flow.
+- Missing GitHub/provider auth triggers an automated token read, login command,
+  browser/device-code flow, or credential helper mutation.
 - Evidence would include token scopes, auth URLs, credential helper output,
   shell history, broad home listings, or full environment dumps.
 
