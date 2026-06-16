@@ -5,7 +5,8 @@ Date: 2026-06-16
 
 The Linux VM is proven for normal repo setup, full `pnpm run check`, reboot,
 workspace lifecycle, Codex CLI, Claude Code, BMAD Method CLI, and dashboard
-Playwright e2e execution. These items remain either unproven or policy-only.
+Playwright e2e execution. Remaining items are either runtime hardening work or
+policy-only post-deployment boundaries.
 
 ## Completed Proof: Playwright Browser Runtime
 
@@ -59,15 +60,17 @@ Maintenance note: browser binary and dependency installation remains a
 remote-write operation. Future fresh installs should install Playwright 1.61+
 and run the browser dependency step interactively if sudo is required.
 
-## Provider Login Practice
+## Post-Deployment Provider Login Boundary
 
-Policy exists, but OpenAI/Codex and Anthropic/Claude interactive login have not
-been performed or verified.
+Provider and repository-service login is intentionally excluded from base Linux
+VM bootstrap. Bob performs login after deployment only when a selected workflow
+needs that service.
 
 Current boundary:
 
 - CLI install is verified.
-- Provider login is manual.
+- Missing provider auth is not a bootstrap gap.
+- Provider login is manual and post-deployment.
 - Provider calls, paid usage, token handling, and agent execution still require
   separate approval.
 
@@ -100,6 +103,13 @@ Remaining hardening:
 
 - DHCP reservation, local DNS, or approved Tailscale name.
 - Update only `HostName` in SSH config when the address changes.
+
+Current Tailscale state:
+
+- `tailscale` is installed at `/usr/bin/tailscale`.
+- `tailscaled` is active.
+- `tailscale ip -4` reports `NeedsLogin`, so Tailscale/MagicDNS is not yet a
+  proven access path for `kendall-linux`.
 
 ## Maintenance Policy
 

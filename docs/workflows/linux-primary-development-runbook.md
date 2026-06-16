@@ -31,7 +31,7 @@ mutation behind explicit Bob approval.
 | Node | `v22.22.1` |
 | pnpm | `11.5.2` |
 | uv | `0.11.21`, system-visible through `/usr/local/bin/uv` |
-| gh | `2.46.0`, authenticated as `slawdawg` |
+| gh | `2.46.0`; authentication is user-configured post-deployment when needed |
 | Codex CLI | `codex-cli 0.140.0` |
 | Claude Code | `2.1.178` |
 | BMAD Method CLI | `6.8.0` |
@@ -71,7 +71,7 @@ git status --short --branch
 node --version
 pnpm --version
 uv --version
-gh auth status
+gh --version
 codex --version
 claude --version
 bmad-method --version
@@ -85,9 +85,9 @@ Expected:
 - Node is in the repo-supported range `>=22 <25`.
 - pnpm resolves to `11.5.2` in the repo.
 - uv resolves without a PATH override.
-- gh is authenticated to `github.com` as `slawdawg`.
+- gh is installed. Authentication is not required for base readiness.
 - Codex CLI, Claude Code, and BMAD Method are installed. Provider login/use is
-  governed by `docs/linux-install/provider-login-policy.md`.
+  post-deployment and governed by `docs/linux-install/provider-login-policy.md`.
 - preflight passes.
 - workspace doctor passes. A missing state root warning is acceptable before
   the first workspace start.
@@ -210,8 +210,10 @@ Current GitHub state:
 env GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/slawdawg/Kendall-vnxt.git HEAD
 ```
 
-Do not store raw tokens in the repo, shell history, handoff docs, or evidence
-records. If auth expires, refresh through `gh auth login`, then rerun:
+This is post-deployment user auth state, not part of base VM bootstrap. Do not
+store raw tokens in the repo, shell history, handoff docs, or evidence records.
+If a workflow needs private GitHub access and auth is absent or expired, Bob
+refreshes it interactively with `gh auth login`, then rerun:
 
 ```bash
 gh auth status

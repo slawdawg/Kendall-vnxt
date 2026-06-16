@@ -16,9 +16,9 @@ Status: draft v1
 | Toolchain | `validate-linux-install.sh --verify-only` | VM | node, pnpm, uv, gh, git available | None |
 | Agent CLIs | `validate-linux-install.sh --verify-only` | VM | `codex`, `claude`, and `bmad-method` available | None |
 | Repo readiness | `validate-linux-install.sh --verify-only` | VM | repo exists and requested read-only checks pass | None |
-| GitHub readiness | `validate-linux-install.sh --verify-only` | VM | `gh auth status` succeeds or manual auth is clearly pending | None |
-| Private repo probe | `git ls-remote ... HEAD` | VM | Private repo HEAD resolves without prompting | None |
-| Repo setup | `git clone`, `pnpm run setup` | VM | Repo clone exists, dependencies install, preflight passes | Mutating, approval required |
+| Post-deployment GitHub readiness | `gh auth status`, only after Bob logs in | VM | Auth succeeds when a selected workflow needs private GitHub access | User auth state |
+| Private repo probe | `git ls-remote ... HEAD`, only after Bob logs in | VM | Private repo HEAD resolves without prompting | None |
+| Repo setup | `git clone`, `pnpm run setup` | VM | Repo clone exists, dependencies install, preflight passes when repo work is requested | Mutating, approval required |
 | Apply dry run | Future apply mode | VM | Reports exact intended mutations and rollback limits | None |
 | Apply | Future apply mode | VM | Only approved packages/files/services changed | Mutating, approval required |
 | Post-apply verify | Future verify mode | VM | Same baseline and repo checks pass after apply | None |
@@ -43,7 +43,8 @@ The flow must fail closed when:
 - Remote apply is requested before verify-only preconditions pass.
 - The approval packet omits rollback, reboot, evidence, or expected mutation
   details.
-- A script attempts automated GitHub login or credential helper mutation.
+- A script attempts automated GitHub, provider, Tailscale, or credential helper
+  login/mutation during base bootstrap.
 - Evidence would include token scopes, auth URLs, credential helper output,
   shell history, broad environment dumps, or broad home listings.
 

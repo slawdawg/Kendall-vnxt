@@ -228,8 +228,9 @@ That command must still run as:
 plan -> verify -> apply -> verify -> evidence
 ```
 
-and fail closed on unsupported OS, missing user, dirty repo, missing GitHub
-auth, private-key input, or unapproved remote mutation.
+and fail closed on unsupported OS, missing user, dirty repo, private-key input,
+or unapproved remote mutation. Missing provider or repository-service auth is a
+post-deployment user step, not a bootstrap failure.
 
 ## Step 6: Review The Contract
 
@@ -259,10 +260,11 @@ the fresh VM:
 Get-Content -Raw scripts\validate-linux-install.sh | ssh kendall-linux 'bash -s -- --verify-only --user slaw_dawg --hostname Kendall_vNxt --skip-repo'
 ```
 
-On a brand-new VM, missing Node, pnpm, uv, gh, GitHub auth, and repo checks are
-expected findings. The purpose of this first verify-only pass is to prove the
-target identity and produce a precise missing-tool list before any apply mode is
-approved.
+On a brand-new VM, missing Node, pnpm, uv, gh, and repo checks are expected
+findings. Missing provider or repository-service auth should be reported as a
+post-deployment state only. The purpose of this first verify-only pass is to
+prove the target identity and produce a precise missing-tool list before any
+apply mode is approved.
 
 Expected:
 
@@ -367,10 +369,11 @@ Do not approve remote apply unless the packet names:
 - rollback limits
 - evidence destination
 
-GitHub auth remains manual. Bootstrap may install `gh` and detect auth state,
-but must not run `gh auth login`, start browser/device-code flows, consume
-tokens, read token files, copy credential state, or write credential helper
-configuration without a separate approval.
+GitHub, provider, and Tailscale auth remain manual post-deployment user steps.
+Bootstrap may install CLIs and detect auth state, but must not run
+`gh auth login`, provider login commands, Tailscale auth, browser/device-code
+flows, consume tokens, read token files, copy credential state, or write
+credential helper configuration.
 
 Example remote approval packet:
 
@@ -384,7 +387,7 @@ Operation family: remote-write
 Command/script: node ./scripts/linux-bootstrap.mjs --target kendall-linux --user slaw_dawg --apply
 Expected file changes: repo clone/config only as listed by --plan; no private key writes
 Packages/config/services: only those listed by --plan; no service enable/start unless separately approved
-Credential/auth changes: install gh allowed; GitHub login/token handling not approved
+Credential/auth changes: install gh allowed; GitHub/provider/Tailscale login and token handling are not part of base bootstrap
 Reboot/session requirements: reboot not approved in this packet
 Rollback/recovery path: stop on failure; preserve evidence; restore from Git, VM snapshot, or fresh Linux install path
 Rollback limits: package installs may require manual package removal; no destructive cleanup approved
@@ -414,7 +417,7 @@ send the sudo password through chat or scripts.
 Then from Windows:
 
 ```powershell
-ssh kendall-linux 'cd /home/slaw_dawg/Kendall_Nxt && node --version && pnpm --version && uv --version && gh auth status && pnpm run preflight'
+ssh kendall-linux 'cd /home/slaw_dawg/Kendall_Nxt && node --version && pnpm --version && uv --version && gh --version && pnpm run preflight'
 ```
 
 Expected:
@@ -423,7 +426,8 @@ Expected:
 - Node resolves.
 - pnpm resolves.
 - uv resolves without PATH override.
-- gh auth still works or clearly reports manual auth required.
+- gh resolves. GitHub auth is checked only later when a selected workflow needs
+  private repo access.
 - preflight passes.
 
 Record this as reboot proof evidence.
@@ -431,7 +435,8 @@ Record this as reboot proof evidence.
 Current pre-reboot evidence already captured:
 
 - Fresh VM toolchain verification.
-- Manual GitHub auth and private repo access.
+- Optional post-deployment GitHub auth and private repo access, when repo work
+  required it.
 - Repo clone, setup, and verify-only.
 - Full `pnpm run check` with dashboard build and supervisor tests.
 
@@ -484,7 +489,7 @@ Linux baseline proof complete:
 Target alias: kendall-linux
 Target user: slaw_dawg
 Toolchain: verified
-GitHub auth: manually completed
+GitHub auth: manually completed post-deployment for repo access
 Repo clone/setup/preflight: verified
 Full pnpm run check: verified
 Dashboard Playwright e2e: verified

@@ -129,8 +129,10 @@ Symptom: `gh auth status` fails.
 
 Fix:
 
-- Treat this as a manual step.
-- Run GitHub auth interactively only after Bob approves it.
+- Do not treat this as a base bootstrap failure.
+- Treat this as a post-deployment user step only when the current workflow
+  needs private GitHub access.
+- Run GitHub auth interactively only by Bob from the VM terminal.
 - Do not paste tokens into bootstrap scripts or evidence.
 
 Verify after login with:

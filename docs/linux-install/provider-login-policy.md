@@ -7,6 +7,10 @@ Date: 2026-06-16
 
 Define how provider CLIs are handled on the Linux baseline VM.
 
+Authentication is not part of the base Linux VM bootstrap. The bootstrap may
+install tools and prove they run, but login is a post-deployment user action
+performed only when a workflow needs that provider or repository service.
+
 ## Installed CLIs
 
 The Linux baseline requires these CLIs on PATH:
@@ -17,21 +21,27 @@ The Linux baseline requires these CLIs on PATH:
 
 Installing a CLI is not the same as authorizing provider use.
 
+The base bootstrap is complete even when these tools are not authenticated.
+
 ## Auth Boundary
 
 Allowed:
 
-- Bob may perform interactive provider login from the VM terminal.
+- Bob may perform interactive provider login from the VM terminal after
+  deployment when a workflow needs it.
 - Codex may verify whether a provider CLI exists.
-- Codex may verify GitHub auth with redacted checks such as
-  `gh auth status >/dev/null`.
+- Codex may run redacted auth-status probes such as
+  `gh auth status >/dev/null` to report `valid`, `pending`, or
+  `not configured`. A pending or missing auth result is not a bootstrap failure.
 - Codex may verify private GitHub repo access with a non-interactive
-  `git ls-remote` probe.
+  `git ls-remote` probe only after Bob has configured the required auth.
 
 Not allowed without separate approval:
 
 - Automated OpenAI login.
 - Automated Anthropic login.
+- Automated GitHub login.
+- Treating missing auth as a base bootstrap failure.
 - Token import or token file manipulation.
 - Copying provider credential state between hosts.
 - Printing, storing, or retaining API keys, refresh tokens, OAuth device codes,
@@ -41,10 +51,11 @@ Not allowed without separate approval:
 ## Manual Login Rule
 
 When Codex or Claude requires login, Bob performs it interactively inside the
-VM. After login, verification should record only:
+VM. Before or after login, verification should record only:
 
 - CLI command exists.
-- Redacted auth status if the CLI provides a safe check.
+- Redacted auth status if the CLI provides a safe check, including pending or
+  not-configured state.
 - Provider action was manually completed by Bob.
 - No token details retained.
 
