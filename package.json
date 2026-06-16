@@ -16,6 +16,7 @@
     "codex:workspace:doctor": "node ./scripts/codex-workspace.mjs doctor",
     "test:codex-workspace": "node ./scripts/test-codex-workspace.mjs",
     "bootstrap:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/bootstrap-windows.ps1",
+    "linux:plan": "node ./scripts/linux-bootstrap.mjs --plan",
     "startup:windows:verify": "powershell -ExecutionPolicy Bypass -File ./scripts/windows/Test-KendallNxtStartup.ps1",
     "setup": "node ./scripts/setup.mjs",
     "setup:js": "pnpm install",
