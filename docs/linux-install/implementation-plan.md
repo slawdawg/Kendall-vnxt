@@ -1,13 +1,13 @@
-# Linux Install Playbook Implementation Plan
+# Kendall Vnxt Ubuntu Deployment Implementation Plan
 
 Date: 2026-06-16
 Status: reviewed plan
 
 ## Goal
 
-Make the Kendall_Nxt Linux installation path repeatable, safe, and testable.
-The first supported target is a clean Ubuntu 26.04 LTS VM created with an
-existing `slaw_dawg` user.
+Make the Kendall Vnxt deployment path on Ubuntu repeatable, safe, and
+testable. The supported target is a fresh Ubuntu 26.04 LTS or later install on a
+physical machine, VM, or cloud host with an existing non-root Linux user.
 
 This plan incorporates the round-table review from Winston, Amelia, Murat, and
 Paige. The core decision is contract-first and verify-only-first. Remote
@@ -18,31 +18,36 @@ approval boundary exist.
 
 Supported:
 
-- Ubuntu 26.04 LTS.
-- Creating the VM as an operator prerequisite.
-- VM/display identity `Kendall_vNxt`.
-- Existing Linux user `slaw_dawg`.
-- Repo path `/home/slaw_dawg/Kendall_Nxt`.
-- Stable target alias `kendall-linux`; raw IP addresses are current observations
-  only and must not be embedded as durable playbook identity.
-- The VM/display identity is `Kendall_vNxt`. If the Linux OS hostname is
-  normalized differently, record both values in evidence.
-- Host private key remains on Bob's current operator host.
+- Ubuntu 26.04 LTS or later.
+- Creating or choosing the Ubuntu machine as an operator prerequisite.
+- Physical machine, VM, or cloud host.
+- Existing non-root Linux user.
+- Repo path defaults to `$HOME/Kendall_Nxt` and may be overridden with
+  `--repo`.
+- Direct local-terminal access for the primary on-host path, or a stable SSH
+  target alias or host name for the optional remote operator path. Raw IP
+  addresses are current observations only and must not be embedded as durable
+  playbook identity.
+- Optional expected hostname. If not provided, record the observed hostname
+  without failing validation.
+- Host private key remains on the operator host.
 - Targets receive only the approved public key.
-- Provider and repository-service authentication is excluded from base
-  bootstrap. Bob performs login after deployment only when needed.
+- Provider authentication is excluded from base bootstrap. Private GitHub repo
+  access auth is a manual user action before clone when the repo is private.
+  OpenAI, Anthropic, Tailscale, and similar provider login remain
+  post-deployment only when needed.
 - Container validation as script/idempotency evidence.
-- VM validation as real platform evidence.
+- Host validation as real platform evidence.
 
 Not supported in v1:
 
-- Automated VM provisioning.
+- Automated machine, VM, or cloud provisioning.
 - Automated user creation.
 - Broad distro support.
 - Copying private SSH keys.
 - Automating GitHub, OpenAI, Anthropic, Tailscale, or other provider login.
 - Starting long-running dev services by default.
-- Remote `--apply` without explicit Bob approval.
+- Remote `--apply` without explicit operator approval.
 
 ## Authority Model
 
@@ -55,8 +60,9 @@ Every playbook step and script mode must name one authority family.
 | `container-write` | Yes | Mutate disposable test containers. |
 | `remote-read` | Yes | SSH read-only checks against an approved target. |
 | `remote-write` | Gated | Package install, SSH key install, repo clone, shell/profile changes, service changes. |
-| `post-deploy-auth` | Manual only after deployment | Bob runs `gh auth login`, provider login, or Tailscale auth only when a workflow needs it; scripts only verify status after login exists. |
-| `reboot` | Gated | VM reboot proof after approved setup. |
+| `repo-auth` | Manual only when needed before private repo clone | The user runs `gh auth login` on the Ubuntu host when the Kendall Vnxt repo is private; scripts may run redacted status probes that report valid, pending, or not configured. |
+| `post-deploy-auth` | Manual only after deployment | The user runs provider login or Tailscale auth only when a workflow needs it; scripts may run redacted status probes that report valid, pending, or not configured. |
+| `reboot` | Gated | Host reboot proof after approved setup. |
 | `cleanup` | Gated when destructive | Exact-path cleanup only, with evidence and recovery notes. |
 
 Remote mutation approval must name:
@@ -109,13 +115,13 @@ gates. The command should orchestrate a staged flow:
 plan -> verify -> apply -> verify -> evidence
 ```
 
-Target host-side commands:
+Future target command surface:
 
 ```powershell
-pnpm run linux:plan -- --target kendall-linux --user slaw_dawg
-pnpm run linux:verify -- --target kendall-linux --user slaw_dawg
-pnpm run linux:bootstrap -- --target kendall-linux --user slaw_dawg --apply
-pnpm run linux:bootstrap -- --target kendall-linux --user slaw_dawg --apply --run-check
+pnpm run linux:plan -- --target <ssh-alias-or-host>
+pnpm run linux:verify -- --target <ssh-alias-or-host>       # future, not implemented
+pnpm run linux:bootstrap -- --target <ssh-alias-or-host> --apply       # future, not implemented
+pnpm run linux:bootstrap -- --target <ssh-alias-or-host> --apply --run-check       # future, not implemented
 ```
 
 The one-command path must still fail closed on stop lines. It must not mean
@@ -127,13 +133,13 @@ Required one-command behavior:
 - Verify target identity before mutation.
 - Copy or stream only approved bootstrap/validator scripts to the target.
 - Pass only public key content when SSH key installation is requested.
-- Keep Bob's private key on the host.
+- Keep the operator's private key on the host.
 - Stop on unsupported OS.
-- Stop when `slaw_dawg` is missing in v1.
+- Stop when `--user` is provided and the remote user does not match.
 - Stop on dirty existing repo unless explicitly allowed by a later contract.
-- Do not fail base bootstrap when provider or repository-service auth is
-  missing. Report it as a post-deployment user step only when a selected
-  workflow needs it.
+- Do not fail base bootstrap when provider auth is missing. Report it as a
+  post-deployment user step only when a selected workflow needs it. Private
+  repo auth is manual before clone when the repo is private.
 - Never consume GitHub tokens or private keys.
 - Write redacted evidence.
 
@@ -163,12 +169,12 @@ treated as ready:
 | `validation-matrix.md` | Separates container evidence from VM evidence and real work-cycle proof. | Container harness |
 | `troubleshooting.md` | Symptom-first recovery without broad secret-leaking diagnostics. | Operator handoff |
 | `remote-approval-template.md` | Standard approval packet for any remote mutation, reboot, or destructive cleanup. | Remote apply, reboot, cleanup |
-| VM creation checklist | Prevents the playbook from assuming an already-created evaluation VM. | Remote verify/apply |
+| Machine creation checklist | Prevents the playbook from assuming an already-created evaluation VM or host. | Remote verify/apply |
 | `scripts/linux-bootstrap.mjs` plan | Defines the host-side one-command orchestration boundary. | One-command remote bootstrap |
 | `scripts/validate-linux-install.sh` | First executable verify-only contract. | Bootstrap apply |
 | Container engine decision | Avoids accidental Docker/Podman coupling. | Container harness |
 | Stable target naming | Avoids binding docs/scripts to a DHCP-assigned IP. | Remote verify/apply |
-| Hostname/display-name evidence | Avoids confusing VMware display identity, OS hostname, SSH alias, and DNS name. | Remote verify/apply |
+| Hostname/target evidence | Avoids confusing display identity, OS hostname, SSH alias, and DNS name. | Remote verify/apply |
 | Reboot proof evidence | Confirms setup survives restart after final PATH/uv fix. | Primary-platform cutover |
 | First real work-cycle evidence | Proves daily development, not just synthetic checks. | Declaring Linux the active development baseline |
 
@@ -176,7 +182,7 @@ treated as ready:
 
 1. Create `install-contract.md` with authority model, scope, stop lines, and
    non-goals.
-2. Create the documentation skeleton: VM creation playbook, validation matrix, SSH key
+2. Create the documentation skeleton: host preparation playbook, validation matrix, SSH key
    policy, troubleshooting, and evidence schema.
 3. Implement `scripts/validate-linux-install.sh` in verify-only mode.
 4. Implement `scripts/bootstrap-linux.sh --dry-run` and `--verify-only`.
@@ -187,8 +193,8 @@ treated as ready:
    install and second-run idempotency.
 8. Add `scripts/check-linux-playbook-drift.mjs` with simple filename, mode, and
    version checks.
-9. Run remote VM verify-only through `linux-bootstrap.mjs`.
-10. Request Bob approval for any remote VM apply.
+9. Run remote host verify-only through `linux-bootstrap.mjs`.
+10. Request operator approval for any remote host apply.
 11. Enable `linux-bootstrap.mjs --apply` only after approval.
 12. Run Playwright browser dependency and dashboard e2e proof.
 13. Run reboot proof.
@@ -197,13 +203,16 @@ treated as ready:
 ## Verify-Only Contract
 
 The first executable script must be `validate-linux-install.sh`. It must not
-mutate the target.
+mutate the target except when `--evidence` is explicitly used to write one
+redacted evidence file under `docs/linux-install/evidence/`.
 
 Required checks:
 
-- Ubuntu version is `26.04`.
-- Current or target user is `slaw_dawg`.
-- `/home/slaw_dawg/Kendall_Nxt` exists when repo validation is requested.
+- Ubuntu version is `26.04` or later.
+- Current user is accepted by default; optional `--user` enforces a specific
+  remote user.
+- `$HOME/Kendall_Nxt` exists when repo validation is requested, unless `--repo`
+  overrides the path.
 - Node resolves and is compatible with repo requirements.
 - pnpm resolves to the repo-pinned version inside the repo.
 - uv resolves non-interactively.
@@ -212,14 +221,14 @@ Required checks:
 - Claude Code is installed.
 - BMAD Method CLI is installed.
 - Provider and repository-service auth is not required for base bootstrap.
-- private repo access is checked only when Bob has already configured GitHub
+- private repo access is checked only when the user has already configured GitHub
   auth and requested a workflow that needs the private repo.
 - `pnpm run preflight` passes when repo validation is requested.
 - optional full check, dashboard e2e, and workspace smoke are explicit flags.
 - no stale exact `node`, `pnpm`, or `python` processes remain after smoke tests.
 
 The validator must exit non-zero on failed required checks and write only
-redacted evidence.
+redacted evidence to approved evidence paths.
 
 ## Bootstrap Contract
 
@@ -236,10 +245,10 @@ Rules:
 - `--dry-run` prints planned actions and writes nothing.
 - `--verify-only` writes nothing and delegates readiness checks to the
   validator where possible.
-- `--install-toolchain` is idempotent for the approved VM toolchain scope and
+- `--install-toolchain` is idempotent for the approved host toolchain scope and
   may prompt interactively for sudo.
 - Unsupported OS exits non-zero before package mutation.
-- Missing `slaw_dawg` exits non-zero in v1.
+- User mismatch exits non-zero only when `--user` is provided.
 - Public SSH key install requires explicit public key content or path.
 - Private key input is rejected.
 - GitHub, OpenAI/Codex, Anthropic/Claude, Tailscale, and other provider auth
@@ -292,9 +301,10 @@ Evidence must not include:
 | --- | --- | --- |
 | Container clean install | Prove install mechanics on Ubuntu 26.04 | Yes |
 | Container second run | Prove idempotency | Yes |
-| VM creation checklist | Prove the target exists and has the expected user/network/SSH shape | Yes |
-| Remote VM verify-only | Prove real target current state through `kendall-linux` alias or another approved stable name | Yes |
-| Remote VM apply | Prove setup on real VM | Gated by Bob approval |
+| Host preparation checklist | Prove the target exists and has the expected user/network/console-or-SSH shape | Yes |
+| Local host verify-only | Prove real target current state from the Ubuntu host terminal | Yes |
+| Remote host verify-only | Prove real target current state through an approved SSH alias or stable name when using the remote path | Only for remote path |
+| Remote host apply | Prove setup on a real host | Gated by operator approval |
 | Reboot proof | Prove persistence | Yes before cutover |
 | First real work cycle | Prove daily usability | Yes before declaring Linux the active development baseline |
 
@@ -306,10 +316,10 @@ The validator, bootstrap harness, or documented manual checks must explicitly
 cover these stop-line cases before the install path is considered repeatable:
 
 - SSH alias resolves to the wrong host or an unexpected SSH host key.
-- Target resolves to a stale observed IP and cannot be tied back to
-  `Kendall_vNxt`.
-- `whoami` is not `slaw_dawg`.
-- Ubuntu version is not `26.04`.
+- Target resolves to a stale observed IP and cannot be tied back to the
+  intended Ubuntu host.
+- `--user` is provided and `whoami` does not match the expected user.
+- Ubuntu version is older than `26.04`.
 - `authorized_keys` update would overwrite existing entries instead of
   appending only when absent.
 - A private key path or private key material is provided as input.
@@ -344,7 +354,7 @@ The first milestone is complete only when:
 - `evidence/schema.md` lists allowed and forbidden evidence fields.
 - `validation-matrix.md` labels container results as non-VM-certified.
 - `remote-approval-template.md` can be used without rewriting it in chat.
-- `install-playbook.md` starts with VM creation and does not assume an existing VM.
+- `install-playbook.md` starts with host preparation and does not assume an existing VM.
 - `troubleshooting.md` gives symptom-first recovery without broad secret-leaking diagnostics.
 - `validate-linux-install.sh --verify-only` exists and performs no mutation.
 - `linux-bootstrap.mjs` has a documented no-mutation `--plan` path or stub.
@@ -355,6 +365,6 @@ The first milestone is complete only when:
 | Decision | Current default | When to decide |
 | --- | --- | --- |
 | Container engine | Undecided; prefer one engine for v1 | Before `test-linux-bootstrap-container.mjs` |
-| Stable target name | `kendall-linux` SSH alias; IP is not durable | Before remote verify/apply |
+| Stable target name | Operator-chosen SSH alias or host name; IP is not durable | Before remote verify/apply |
 | Reboot proof timing | Pending | Before primary-platform cutover |
 | First real work cycle | Pending | Before declaring Linux the active development baseline |

@@ -1,15 +1,21 @@
-# Bob Next Steps: Linux Install Playbook
+# Bob Next Steps: Kendall Vnxt Ubuntu Deployment
 
 Date: 2026-06-16
 Status: operator checklist
 
 ## Purpose
 
-This document lists the steps Bob needs to perform or approve so Kendall_Nxt can
-create a clean Ubuntu VM and turn it into a repeatable, tested Linux install
-playbook.
+This is a current-instance checklist for Bob's lab VM. It is not the generic
+installer entry point. New operators should start with
+[install-playbook.md](install-playbook.md), which supports any fresh Ubuntu
+26.04-or-later physical machine, VM, or cloud host with an existing non-root
+Linux user.
 
-Earlier evaluation proved a Linux VM can work well for Kendall_Nxt. The
+This document lists the steps Bob needs to perform or approve so Kendall Vnxt
+can be deployed from GitHub onto a clean Ubuntu VM and turned into a
+repeatable, tested deployment playbook.
+
+Earlier evaluation proved a Linux VM can work well for Kendall Vnxt. The
 repeatable path must still start from VM creation so it does not depend on that
 one evaluation machine or on operator memory.
 
@@ -24,23 +30,23 @@ Target identity for the repeatable install:
 
 | Field | Value |
 | --- | --- |
-| VM hostname / display name | `Kendall_vNxt` |
-| SSH alias | `kendall-linux` |
-| Current observed address | Discovery value only; update `kendall-linux` after VM creation |
-| Linux user | `slaw_dawg` |
-| Repo path | `/home/slaw_dawg/Kendall_Nxt` |
+| VM hostname / display name | `<vm-display-name>` |
+| SSH alias | `<ssh-alias>` |
+| Current observed address | Discovery value only; update `<ssh-alias>` after VM creation |
+| Linux user | `<linux-user>` |
+| Repo path | `$HOME/Kendall_Nxt` |
 | Supported v1 OS | Ubuntu 26.04 LTS |
-| Operator-host private key | `C:\Users\slaw_dawg\.ssh\kendall_linux_vm_eval_ed25519` |
-| Target public key only | `C:\Users\slaw_dawg\.ssh\kendall_linux_vm_eval_ed25519.pub` |
+| Operator-host private key | `<operator-private-key-path>` |
+| Target public key only | `<operator-public-key-path>` |
 
 ## Happy-Path Order
 
-Use this order for the first repeatable Linux install proof:
+Use this order for the first repeatable Kendall Vnxt Ubuntu deployment proof:
 
 1. Create the Ubuntu VM.
-2. Create or confirm the `slaw_dawg` Linux user.
+2. Create or confirm the intended Linux user.
 3. Enable SSH and install only the approved public key.
-4. Configure the Windows SSH alias `kendall-linux` to the VM's current address
+4. Configure the Windows SSH alias `<ssh-alias>` to the VM's current address
    or stable local name.
 5. Verify VM/display identity, OS hostname, SSH alias, and current address.
 6. Verify SSH host key and login path.
@@ -50,17 +56,17 @@ Use this order for the first repeatable Linux install proof:
 10. Approve bounded remote install only after verify-only passes.
 11. Reboot only after separate reboot approval.
 12. Re-run verification after reboot.
-13. Complete one real Kendall_Nxt work cycle from Linux.
+13. Complete one real Kendall Vnxt work cycle from Linux.
 
 ## Step 1: Create The Ubuntu VM
 
-Create a new Ubuntu VM before any Kendall_Nxt bootstrap work.
+Create a new Ubuntu VM before any Kendall Vnxt bootstrap work.
 
 Required install choices:
 
 - Ubuntu 26.04 LTS.
-- VM/display name: `Kendall_vNxt`.
-- Linux username: `slaw_dawg`.
+- VM/display name: `<vm-display-name>`.
+- Linux username: `<linux-user>`.
 - OpenSSH server enabled during install when the installer offers it.
 - Network mode that allows the Windows operator host to SSH into the VM.
 - Sufficient disk and memory for repo install, dashboard build, supervisor
@@ -70,11 +76,11 @@ Do not do these during OS install:
 
 - Do not copy a private SSH key into the VM.
 - Do not authenticate GitHub.
-- Do not clone Kendall_Nxt yet unless the playbook step explicitly says to.
+- Do not clone Kendall Vnxt yet unless the playbook step explicitly says to.
 - Do not disable password login until key-based SSH has been proven and a
   separate hardening step is approved.
 
-After install, boot the VM and sign in as `slaw_dawg` once through the VM
+After install, boot the VM and sign in as `<linux-user>` once through the VM
 console. Confirm the OS is usable before setting up SSH from Windows.
 
 ## Step 2: Enable SSH And Install The Public Key
@@ -85,21 +91,21 @@ console. This is an operator action, not an automated bootstrap step yet.
 Install only the public key from the Windows operator host:
 
 ```text
-C:\Users\slaw_dawg\.ssh\kendall_linux_vm_eval_ed25519.pub
+<operator-public-key-path>
 ```
 
 The target file is:
 
 ```bash
-/home/slaw_dawg/.ssh/authorized_keys
+$HOME/.ssh/authorized_keys
 ```
 
 Required permissions:
 
 ```text
-/home/slaw_dawg/.ssh                 700
-/home/slaw_dawg/.ssh/authorized_keys 600
-owner                                slaw_dawg:slaw_dawg
+$HOME/.ssh                 700
+$HOME/.ssh/authorized_keys 600
+owner                      <linux-user>:<linux-user>
 ```
 
 Stop if the file would be overwritten. Append the public key only if it is not
@@ -110,52 +116,52 @@ already present.
 The IP address may change. Treat any raw IP address as a current observation,
 not the permanent target identity.
 
-Use `kendall-linux` as the durable operator target. On the current operator
+Use `<ssh-alias>` as the durable operator target. On the current operator
 host, ensure this file exists:
 
 ```text
-C:\Users\slaw_dawg\.ssh\config
+<operator-ssh-config-path>
 ```
 
 Add this entry if it is not already present:
 
 ```sshconfig
-Host kendall-linux
+Host <ssh-alias>
   HostName <current-vm-ip-or-stable-local-name>
-  User slaw_dawg
-  IdentityFile ~/.ssh/kendall_linux_vm_eval_ed25519
+  User <linux-user>
+  IdentityFile ~/.ssh/<ssh-key-name>
   IdentitiesOnly yes
 ```
 
 First, accept the new VM host key only after confirming the address belongs to
-the `Kendall_vNxt` VM:
+the intended VM:
 
 ```powershell
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes kendall-linux 'hostname; hostnamectl --static 2>/dev/null || true; whoami'
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes <ssh-alias> 'hostname; hostnamectl --static 2>/dev/null || true; whoami'
 ```
 
 This first connection records the VM host key in `known_hosts`. After the host
 key is recorded, verify with the normal alias:
 
 ```powershell
-ssh kendall-linux 'hostname; hostnamectl --static 2>/dev/null || true; whoami'
+ssh <ssh-alias> 'hostname; hostnamectl --static 2>/dev/null || true; whoami'
 ```
 
 Expected identity:
 
 ```text
 OS hostname: current Linux hostname, for example kendallvnxt
-VM/display identity: Kendall_vNxt
-slaw_dawg
+VM/display identity: <vm-display-name>
+<linux-user>
 ```
 
-Stop if SSH fails, `whoami` is not `slaw_dawg`, the first connection would
+Stop if SSH fails, `whoami` is not `<linux-user>`, the first connection would
 replace an existing host key, the SSH host key changes unexpectedly, or the OS
-hostname/display identity cannot be tied back to the expected `Kendall_vNxt`
+hostname/display identity cannot be tied back to the expected `<vm-display-name>`
 VM.
 
 If the Linux OS reports a normalized hostname such as `kendallvnxt`, record
-that as the OS hostname but keep `Kendall_vNxt` as the VM/display identity in
+that as the OS hostname but keep `<vm-display-name>` as the VM/display identity in
 this playbook. Avoid relying on the underscore form as a DNS hostname unless
 the local network explicitly supports it.
 
@@ -166,7 +172,7 @@ to use raw IP addresses.
 Preferred long-term fixes, in order:
 
 1. DHCP reservation for the Linux VM MAC address.
-2. Local DNS name, such as `kendall-linux.lan`.
+2. Local DNS name, such as `<ssh-alias>.lan`.
 3. Tailscale machine name, if Tailscale becomes part of the approved network
    model.
 
@@ -178,7 +184,7 @@ Docker images, repo files, logs, screenshots, or evidence.
 Only this public key may be installed on targets:
 
 ```text
-C:\Users\slaw_dawg\.ssh\kendall_linux_vm_eval_ed25519.pub
+<operator-public-key-path>
 ```
 
 If a new Linux target needs access, append the public key only if it is absent.
@@ -188,15 +194,15 @@ it, and stop if ownership or permissions cannot be set exactly.
 Install into:
 
 ```bash
-/home/slaw_dawg/.ssh/authorized_keys
+$HOME/.ssh/authorized_keys
 ```
 
 with:
 
 ```text
-/home/slaw_dawg/.ssh                 700
-/home/slaw_dawg/.ssh/authorized_keys 600
-owner                                slaw_dawg:slaw_dawg
+$HOME/.ssh                 700
+$HOME/.ssh/authorized_keys 600
+owner                      <linux-user>:<linux-user>
 ```
 
 ## Step 5: Approve Contract-First Work
@@ -216,11 +222,17 @@ scripts/linux-bootstrap.mjs
 This first milestone is verify-only. It must not install packages, mutate the
 remote VM, reboot anything, copy secrets, or authenticate GitHub.
 
-The long-term operator target is one command with internal gates:
+The long-term operator target is one command with internal gates. This is a
+future target command surface, not a command that exists in the current
+milestone:
 
 ```powershell
-pnpm run linux:bootstrap -- --target kendall-linux --user slaw_dawg --apply
+pnpm run linux:bootstrap -- --target <ssh-alias> --user <linux-user> --apply
 ```
+
+Current milestone note: `linux:bootstrap --apply` is not implemented yet. Use
+the generic on-host playbook path until a future apply mode is explicitly
+implemented and approved.
 
 That command must still run as:
 
@@ -240,7 +252,7 @@ Before any install/apply automation exists, review
 Confirm it says:
 
 - Ubuntu 26.04 only for v1.
-- Existing `slaw_dawg` user only.
+- Existing intended Linux user only.
 - No user creation in v1.
 - No private key transfer.
 - No scripted GitHub token handling.
@@ -257,7 +269,7 @@ streaming it over SSH. This avoids assuming the repo has already been cloned to
 the fresh VM:
 
 ```powershell
-Get-Content -Raw scripts\validate-linux-install.sh | ssh kendall-linux 'bash -s -- --verify-only --user slaw_dawg --hostname Kendall_vNxt --skip-repo'
+Get-Content -Raw scripts\validate-linux-install.sh | ssh <ssh-alias> 'bash -s -- --verify-only --skip-repo'
 ```
 
 On a brand-new VM, missing Node, pnpm, uv, gh, and repo checks are expected
@@ -269,8 +281,8 @@ apply mode is approved.
 Expected:
 
 - Ubuntu 26.04 detected.
-- user `slaw_dawg` detected.
-- hostname/display identity is tied back to `Kendall_vNxt`.
+- current remote user detected.
+- hostname/display identity is recorded.
 - missing tools and repo are reported without mutation.
 - no broad environment or credential data is printed.
 
@@ -280,7 +292,7 @@ After a future approved apply mode installs tools and clones the repo, rerun
 verify-only without `--skip-preflight`:
 
 ```powershell
-Get-Content -Raw scripts\validate-linux-install.sh | ssh kendall-linux 'bash -s -- --verify-only --user slaw_dawg --hostname Kendall_vNxt'
+Get-Content -Raw scripts\validate-linux-install.sh | ssh <ssh-alias> 'bash -s -- --verify-only'
 ```
 
 ## Step 8: Confirm Evidence Packet
@@ -355,7 +367,7 @@ Remote mutation requires a named approval packet.
 Do not approve remote apply unless the packet names:
 
 - target host
-- target alias or stable name, preferably `kendall-linux`
+- target alias or stable name, preferably `<ssh-alias>`
 - target user
 - operation family
 - exact command or script
@@ -378,20 +390,22 @@ credential helper configuration.
 Example remote approval packet:
 
 ```text
-Approval: Linux install remote-write
-Target alias: kendall-linux
+Approval: Kendall Vnxt Ubuntu deployment remote-write
+Target alias: <ssh-alias>
 Current observed address: discovery value from SSH config or VM manager
-Target user: slaw_dawg
-VM/display identity: Kendall_vNxt
+Target user: <linux-user>
+VM/display identity: <vm-display-name>
 Operation family: remote-write
-Command/script: node ./scripts/linux-bootstrap.mjs --target kendall-linux --user slaw_dawg --apply
+Command/script: node ./scripts/linux-bootstrap.mjs --target <ssh-alias> --user <linux-user> --apply
+Current milestone note: this apply command is a future approval-template
+example, not a currently implemented command.
 Expected file changes: repo clone/config only as listed by --plan; no private key writes
 Packages/config/services: only those listed by --plan; no service enable/start unless separately approved
 Credential/auth changes: install gh allowed; GitHub/provider/Tailscale login and token handling are not part of base bootstrap
 Reboot/session requirements: reboot not approved in this packet
-Rollback/recovery path: stop on failure; preserve evidence; restore from Git, VM snapshot, or fresh Linux install path
+Rollback/recovery path: stop on failure; preserve evidence; restore from Git, VM snapshot, or fresh Kendall Vnxt Ubuntu deployment path
 Rollback limits: package installs may require manual package removal; no destructive cleanup approved
-Evidence destination: redacted packet under approved Linux install evidence path
+Evidence destination: redacted packet under approved Kendall Vnxt Ubuntu deployment evidence path
 ```
 
 ## Step 12: Run Reboot Proof
@@ -417,7 +431,7 @@ send the sudo password through chat or scripts.
 Then from Windows:
 
 ```powershell
-ssh kendall-linux 'cd /home/slaw_dawg/Kendall_Nxt && node --version && pnpm --version && uv --version && gh --version && pnpm run preflight'
+ssh <ssh-alias> 'cd "$HOME/Kendall_Nxt" && node --version && pnpm --version && uv --version && gh --version && pnpm run preflight'
 ```
 
 Expected:
@@ -442,12 +456,12 @@ Current pre-reboot evidence already captured:
 
 ## Step 13: Complete First Real Linux Work Cycle
 
-Use Linux for one small real Kendall_Nxt task.
+Use Linux for one small real Kendall Vnxt task.
 
 Minimum cycle:
 
 ```bash
-cd /home/slaw_dawg/Kendall_Nxt
+cd "$HOME/Kendall_Nxt"
 git status --short --branch
 pnpm run preflight
 pnpm run check
@@ -461,33 +475,62 @@ Then complete a small docs or script change from Linux, verify it, and record:
 - result
 - whether cleanup was needed
 
-Only after this passes should the Linux install path be treated as the active
+Only after this passes should the Kendall Vnxt Ubuntu deployment path be treated as the active
 development baseline.
 
-## Step 14: Snapshot And Fallback
+## Step 14: Optional Post-Install Tasks
+
+These are not base bootstrap requirements. Do them only when a selected
+workflow needs them.
+
+GitHub/private repo access:
+
+- Bob runs `gh auth login` interactively inside the VM.
+- Codex may run redacted status/private-repo probes after login.
+- Missing GitHub auth is not a base bootstrap failure.
+
+Provider CLIs:
+
+- Bob logs in to Codex or Claude interactively only when that workflow needs
+  provider access.
+- Provider calls, paid usage, token handling, and agent execution still require
+  separate approval.
+- Do not store API keys, device codes, auth URLs, or token output in docs,
+  scripts, chat, or evidence.
+
+Tailscale/MagicDNS:
+
+- Bob performs Tailnet enrollment after install only if stable Tailscale access
+  is desired.
+- `tailscale ip -4` returning `NeedsLogin` is not a base bootstrap failure.
+- Treat Tailscale/MagicDNS as proven only after the `<ssh-alias>` SSH alias
+  is tested through the approved stable name.
+
+## Step 15: Snapshot And Fallback
 
 Before relying on Linux as the active development baseline:
 
 - take a VMware snapshot of the Linux VM
 - confirm repo work is pushed or otherwise preserved
-- record how to recover if SSH, GitHub auth, disk, or networking fails
+- record how to recover if SSH, post-deployment repo auth, disk, or networking
+  fails
 
 Fallback trigger examples:
 
 - SSH outage
 - unknown host-key change
-- GitHub auth failure that cannot be recovered safely
+- post-deployment repo auth failure that cannot be recovered safely
 - repeated platform-caused `pnpm run check` failure
 - ambiguous worktree state
 - VM disk or snapshot issue
 
 ## Current Next Action
 
-Linux baseline proof complete:
+Kendall Vnxt Ubuntu deployment proof complete:
 
 ```text
-Target alias: kendall-linux
-Target user: slaw_dawg
+Target alias: <ssh-alias>
+Target user: <linux-user>
 Toolchain: verified
 GitHub auth: manually completed post-deployment for repo access
 Repo clone/setup/preflight: verified
@@ -499,5 +542,5 @@ VM snapshot: taken
 Codex CLI and Claude Code: verified
 BMAD Method CLI: verified
 Provider login policy: documented
-Decision: kendall-linux is primary Kendall_Nxt development baseline
+Decision: <ssh-alias> is primary Kendall Vnxt development baseline
 ```

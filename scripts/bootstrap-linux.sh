@@ -2,16 +2,18 @@
 set -euo pipefail
 
 mode=""
-expected_user="slaw_dawg"
-expected_os_version="26.04"
+expected_user="$(id -un 2>/dev/null || printf unknown)"
+minimum_os_version="26.04"
 install_pnpm_version="11.5.2"
 install_uv="yes"
+minimum_node_major="22"
+maximum_node_major_exclusive="25"
 
 usage() {
   cat <<'USAGE'
 Usage: scripts/bootstrap-linux.sh --dry-run|--verify-only|--install-toolchain|--install-agent-clis [options]
 
-Interactive Ubuntu toolchain bootstrap for Kendall_Nxt.
+Interactive Ubuntu toolchain bootstrap for Kendall Vnxt.
 
 Modes:
   --dry-run              Print planned actions and exit.
@@ -20,8 +22,9 @@ Modes:
   --install-agent-clis   Install Codex CLI, Claude Code, and BMAD Method through npm.
 
 Options:
-  --user <name>          Expected Linux user. Default: slaw_dawg.
-  --os-version <ver>     Expected Ubuntu VERSION_ID. Default: 26.04.
+  --user <name>          Expected Linux user. Default: current user.
+  --min-os-version <ver> Minimum Ubuntu VERSION_ID. Default: 26.04.
+  --os-version <ver>     Alias for --min-os-version.
   --pnpm-version <ver>   pnpm version to install globally. Default: 11.5.2.
   --skip-uv              Do not install uv.
   -h, --help             Show this help.
@@ -41,7 +44,34 @@ fail() {
   exit 1
 }
 
+version_at_least() {
+  current="$1"
+  minimum="$2"
+  first="$(printf '%s\n%s\n' "$minimum" "$current" | sort -V | head -n 1)"
+  [ "$first" = "$minimum" ]
+}
+
+node_major_version() {
+  node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1
+}
+
+check_node_range() {
+  major="$(node_major_version || true)"
+  if [ -z "$major" ]; then
+    return 1
+  fi
+  [ "$major" -ge "$minimum_node_major" ] && [ "$major" -lt "$maximum_node_major_exclusive" ]
+}
+
 require_supported_target() {
+  if [ "$(id -u)" = "0" ]; then
+    fail "root is not a supported bootstrap user. Run as the intended non-root Linux user."
+  fi
+
+  if [ "$expected_user" = "root" ]; then
+    fail "expected user must be a non-root Linux user"
+  fi
+
   if [ "$(id -un)" != "$expected_user" ]; then
     fail "expected user $expected_user but found $(id -un)"
   fi
@@ -52,8 +82,8 @@ require_supported_target() {
 
   # shellcheck disable=SC1091
   . /etc/os-release
-  if [ "${ID:-}" != "ubuntu" ] || [ "${VERSION_ID:-}" != "$expected_os_version" ]; then
-    fail "expected Ubuntu $expected_os_version but found ${ID:-unknown} ${VERSION_ID:-unknown}"
+  if [ "${ID:-}" != "ubuntu" ] || ! version_at_least "${VERSION_ID:-0}" "$minimum_os_version"; then
+    fail "expected Ubuntu $minimum_os_version or later but found ${ID:-unknown} ${VERSION_ID:-unknown}"
   fi
 }
 
@@ -66,18 +96,25 @@ require_interactive_sudo() {
     fail "sudo requires a password, but this session is not interactive. Run through an interactive SSH terminal."
   fi
 
-  log "sudo requires authentication. Enter the VM password if prompted."
+  log "sudo requires authentication. Enter the Linux user password if prompted."
   sudo -v
 }
 
 print_versions() {
   result=0
-  for tool in git node npm pnpm uv gh codex claude bmad-method; do
+  if [ "$#" -eq 0 ]; then
+    set -- git node npm pnpm uv gh codex claude bmad-method
+  fi
+
+  for tool in "$@"; do
     if command -v "$tool" >/dev/null 2>&1; then
       if version_output="$("$tool" --version 2>/dev/null)"; then
         version="$(printf '%s\n' "$version_output" | head -n 1)"
         if [ -n "$version" ]; then
-          if [ "$tool" = "pnpm" ] && [ "$version" != "$install_pnpm_version" ]; then
+          if [ "$tool" = "node" ] && ! check_node_range; then
+            printf '%s version mismatch: expected >=%s < %s but found %s\n' "$tool" "$minimum_node_major" "$maximum_node_major_exclusive" "$version"
+            result=1
+          elif [ "$tool" = "pnpm" ] && [ "$version" != "$install_pnpm_version" ]; then
             printf '%s version mismatch: expected %s but found %s\n' "$tool" "$install_pnpm_version" "$version"
             result=1
           else
@@ -138,6 +175,10 @@ install_toolchain() {
   log "Installing Ubuntu packages: nodejs npm gh build-essential python3-venv curl ca-certificates git."
   sudo apt-get install -y nodejs npm gh build-essential python3-venv curl ca-certificates git
 
+  if ! check_node_range; then
+    fail "node must be >=$minimum_node_major < $maximum_node_major_exclusive for Kendall Vnxt. Install a supported Node channel before continuing."
+  fi
+
   log "Installing pnpm@$install_pnpm_version globally through npm."
   sudo npm install -g "pnpm@$install_pnpm_version"
 
@@ -157,7 +198,11 @@ install_toolchain() {
   fi
 
   log "Toolchain install complete. Versions:"
-  print_versions
+  if [ "$install_uv" = "yes" ]; then
+    print_versions git node npm pnpm uv gh
+  else
+    print_versions git node npm pnpm gh
+  fi
 }
 
 while [ "$#" -gt 0 ]; do
@@ -171,9 +216,9 @@ while [ "$#" -gt 0 ]; do
       expected_user="$2"
       shift 2
       ;;
-    --os-version)
+    --min-os-version|--os-version)
       require_option_value "$1" "${2-}"
-      expected_os_version="$2"
+      minimum_os_version="$2"
       shift 2
       ;;
     --pnpm-version)
@@ -200,10 +245,11 @@ case "$mode" in
     require_supported_target
     cat <<EOF
 Planned actions:
-- Verify Ubuntu $expected_os_version and user $expected_user.
+- Verify Ubuntu $minimum_os_version or later and user $expected_user.
 - Prompt for sudo if required.
 - apt-get update.
 - apt-get install -y nodejs npm gh build-essential python3-venv curl ca-certificates git.
+- Verify node is >=$minimum_node_major < $maximum_node_major_exclusive.
 - sudo npm install -g pnpm@$install_pnpm_version.
 - Install uv for the current user unless --skip-uv is set.
 - Add /usr/local/bin uv/uvx symlinks if needed.
@@ -215,7 +261,11 @@ EOF
     ;;
   --verify-only)
     require_supported_target
-    print_versions
+    if [ "$install_uv" = "yes" ]; then
+      print_versions git node npm pnpm uv gh codex claude bmad-method
+    else
+      print_versions git node npm pnpm gh codex claude bmad-method
+    fi
     ;;
   --install-toolchain)
     install_toolchain

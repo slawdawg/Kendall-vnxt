@@ -1,4 +1,4 @@
-# Linux Install Troubleshooting
+# Kendall Vnxt Ubuntu Deployment Troubleshooting
 
 Status: draft v1
 
@@ -6,32 +6,33 @@ Use symptom-first checks. Avoid broad diagnostics that leak secrets, such as
 full environment dumps, shell history, full SSH debug logs, credential helper
 output, or full home-directory listings.
 
-## VM Does Not Exist Yet
+## Ubuntu Host Does Not Exist Yet
 
-Symptom: SSH target cannot be verified because no VM has been created.
+Symptom: SSH target cannot be verified because no Ubuntu host has been
+prepared.
 
 Fix:
 
-- Create the Ubuntu VM using `install-playbook.md`.
-- Set VM/display name to `Kendall_vNxt`.
-- Create or confirm user `slaw_dawg`.
+- Prepare a physical machine, VM, or cloud host using `install-playbook.md`.
+- Record the host identity, OS hostname, and SSH target alias or host name.
+- Create or confirm the intended non-root Linux user.
 - Enable SSH.
 - Install only the public key.
-- Configure `kendall-linux`.
+- Configure a stable SSH alias or host name for routine commands.
 
 ## SSH Alias Fails
 
-Symptom: `ssh kendall-linux` cannot resolve or connect.
+Symptom: `ssh <ssh-alias>` cannot resolve or connect.
 
 Check:
 
 ```powershell
-ssh -G kendall-linux
+ssh -G <ssh-alias>
 ```
 
 Fix:
 
-- Update only the `HostName` field in `C:\Users\slaw_dawg\.ssh\config`.
+- Update only the `HostName` field in the operator host SSH config.
 - Prefer a DHCP reservation, local DNS name, or approved stable network name.
 - Do not rewrite playbook commands to use raw IP addresses.
 
@@ -42,26 +43,28 @@ Symptom: SSH warns that the host identification changed.
 Fix:
 
 - Stop automation.
-- Confirm whether the VM was recreated, reinstalled, or assigned a different
+- Confirm whether the host was recreated, reinstalled, or assigned a different
   address.
-- Verify the target through the VM console or hypervisor before changing
+- Verify the target through the console, host manager, cloud console, or router
+  before changing
   `known_hosts`.
 
 ## First SSH Connection Hangs Or Prompts
 
-Symptom: the first non-interactive `ssh kendall-linux ...` command hangs or
+Symptom: the first non-interactive `ssh <ssh-alias> ...` command hangs or
 waits for host-key confirmation.
 
 Fix:
 
-- Confirm the VM IP or stable local name belongs to `Kendall_vNxt`.
+- Confirm the IP, DNS name, or stable local name belongs to the intended
+  Ubuntu host.
 - Run the first trust command:
 
 ```powershell
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes kendall-linux 'whoami; hostname; cat /etc/os-release'
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes <ssh-alias> 'whoami; hostname; cat /etc/os-release'
 ```
 
-- Use normal `ssh kendall-linux ...` commands after the host key is recorded.
+- Use normal `ssh <ssh-alias> ...` commands after the host key is recorded.
 - Stop if SSH reports a changed host key instead of a new host key.
 
 ## PowerShell Rejects Script Redirection
@@ -79,40 +82,40 @@ Fix:
 - Stream the script with `Get-Content -Raw`:
 
 ```powershell
-Get-Content -Raw scripts\validate-linux-install.sh | ssh kendall-linux 'bash -s -- --verify-only --user slaw_dawg --hostname Kendall_vNxt --skip-repo'
+Get-Content -Raw scripts\validate-linux-install.sh | ssh <ssh-alias> 'bash -s -- --verify-only --skip-repo'
 ```
 
 - Use Bash redirection only inside a Bash shell, not in PowerShell examples.
 
 ## Wrong User
 
-Symptom: `whoami` is not `slaw_dawg`.
+Symptom: `whoami` is not the intended Linux user.
 
 Fix:
 
 - Stop automation.
-- Correct the `User` field under `Host kendall-linux`.
+- Correct the `User` field under the SSH alias.
 - Do not let bootstrap create users in v1.
 
 ## Wrong Ubuntu Version
 
-Symptom: `/etc/os-release` is not Ubuntu 26.04.
+Symptom: `/etc/os-release` is older than Ubuntu 26.04.
 
 Fix:
 
 - Stop the v1 path.
-- Recreate the VM with Ubuntu 26.04 LTS or create a new contract for the other
-  distro/version.
+- Recreate or upgrade the host to Ubuntu 26.04 LTS or later, or create a new
+  contract for the other distro/version.
 
 ## Public Key Login Fails
 
 Symptom: SSH prompts for a password or rejects the key.
 
-Check from the VM console:
+Check from the host console:
 
 ```bash
-ls -ld /home/slaw_dawg/.ssh
-ls -l /home/slaw_dawg/.ssh/authorized_keys
+ls -ld "$HOME/.ssh"
+ls -l "$HOME/.ssh/authorized_keys"
 ```
 
 Fix:
@@ -120,8 +123,8 @@ Fix:
 - Confirm the public key was appended, not overwritten.
 - Set `.ssh` to `700`.
 - Set `authorized_keys` to `600`.
-- Set owner to `slaw_dawg:slaw_dawg`.
-- Do not copy the private key into the VM.
+- Set owner to the intended Linux user.
+- Do not copy the private key into the Ubuntu host.
 
 ## GitHub Auth Missing
 
@@ -132,7 +135,7 @@ Fix:
 - Do not treat this as a base bootstrap failure.
 - Treat this as a post-deployment user step only when the current workflow
   needs private GitHub access.
-- Run GitHub auth interactively only by Bob from the VM terminal.
+- Run GitHub auth interactively only by the user from the Ubuntu host terminal.
 - Do not paste tokens into bootstrap scripts or evidence.
 
 Verify after login with:
@@ -146,7 +149,7 @@ Stop before clone if the private repo probe fails.
 
 ## Clone Target Already Exists
 
-Symptom: `/home/slaw_dawg/Kendall_Nxt` already exists before clone.
+Symptom: `$HOME/Kendall_Nxt` already exists before clone.
 
 Fix:
 
@@ -154,9 +157,9 @@ Fix:
 - Inspect with:
 
 ```bash
-ls -ld /home/slaw_dawg/Kendall_Nxt
-git -C /home/slaw_dawg/Kendall_Nxt remote -v
-git -C /home/slaw_dawg/Kendall_Nxt status --short --branch
+ls -ld "$HOME/Kendall_Nxt"
+git -C "$HOME/Kendall_Nxt" remote -v
+git -C "$HOME/Kendall_Nxt" status --short --branch
 ```
 
 - Do not delete or overwrite the path without a separate cleanup approval.
@@ -176,7 +179,7 @@ Fix:
 
 - Stop before package mutation.
 - Choose one approved path:
-  - Run the apt install command manually in the VM console.
+  - Run the apt install command manually in the host console.
   - Open an interactive SSH terminal and enter the sudo password there.
   - Stage and run `scripts/bootstrap-linux.sh --install-toolchain` through
     `ssh -t`.
@@ -199,13 +202,13 @@ when attempting reboot proof.
 Fix:
 
 - Stop automation.
-- Run the reboot from the VM console or an interactive SSH session:
+- Run the reboot from the host console or an interactive SSH session:
 
 ```bash
 sudo reboot
 ```
 
-- After the VM comes back, run the post-reboot verification from the Windows
+- After the host comes back, run the post-reboot verification from the Windows
   operator host.
 
 ## Can Sudo Be Non-Interactive?

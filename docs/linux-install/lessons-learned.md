@@ -1,9 +1,9 @@
-# Linux Install Lessons Learned
+# Kendall Vnxt Ubuntu Deployment Lessons Learned
 
 Status: living notes
 
-This file captures mistakes and corrections during the Linux install work so
-the playbook does not regress.
+This file captures mistakes and corrections during the Kendall Vnxt Ubuntu
+deployment work so the playbook does not regress.
 
 ## 2026-06-16: Do Not Assume The VM Exists
 
@@ -26,7 +26,7 @@ Correction:
 - First connection uses:
 
 ```powershell
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes kendall-linux 'whoami; hostname; cat /etc/os-release'
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes <ssh-alias> 'whoami; hostname; cat /etc/os-release'
 ```
 
 - This may add a new host key to `known_hosts`.
@@ -37,7 +37,7 @@ ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes kendall-linux 'whoami; 
 Problem: Bash-style input redirection failed on Windows PowerShell:
 
 ```powershell
-ssh kendall-linux 'bash -s -- ...' < scripts/validate-linux-install.sh
+ssh <ssh-alias> 'bash -s -- ...' < scripts/validate-linux-install.sh
 ```
 
 Correction:
@@ -45,7 +45,7 @@ Correction:
 - Use PowerShell-compatible streaming:
 
 ```powershell
-Get-Content -Raw scripts\validate-linux-install.sh | ssh kendall-linux 'bash -s -- --verify-only --user slaw_dawg --hostname Kendall_vNxt --skip-repo'
+Get-Content -Raw scripts\validate-linux-install.sh | ssh <ssh-alias> 'bash -s -- --verify-only --skip-repo'
 ```
 
 - Any host-side command examples for Bob should be written and tested as
@@ -53,12 +53,12 @@ Get-Content -Raw scripts\validate-linux-install.sh | ssh kendall-linux 'bash -s 
 
 ## 2026-06-16: Hostname And VM Display Identity Can Differ
 
-Problem: Ubuntu normalized the OS hostname to `kendallvnxt`, while the desired
-VM/display identity is `Kendall_vNxt`.
+Problem: Ubuntu may normalize the OS hostname, while the desired VM/display
+identity may preserve different casing or characters.
 
 Correction:
 
-- Treat `Kendall_vNxt` as the VM/display identity.
+- Treat the chosen VM/display name as display identity.
 - Treat the Linux OS hostname as evidence and allow normalized forms.
 - Do not fail the install solely because the OS hostname cannot preserve the
   underscore form.
@@ -67,7 +67,7 @@ Correction:
 
 Problem: the fresh VM allowed SSH login but `sudo -n true` failed with
 interactive authentication required. Non-interactive remote package install
-cannot proceed through apt unless Bob enters the sudo password or approves a
+cannot proceed through apt unless the user enters the sudo password or approves a
 different privilege model.
 
 Correction:
@@ -75,25 +75,26 @@ Correction:
 - Check `sudo -n true` before remote-write package installation.
 - If sudo requires a password, stop before apt mutation.
 - Next safe choices are:
-  - Bob runs the approved apt install command in an interactive VM terminal.
-  - Bob opens an interactive SSH session and enters the sudo password there.
-  - Bob stages and runs `scripts/bootstrap-linux.sh --install-toolchain` through
+  - The user runs the approved apt install command in an interactive VM terminal.
+  - The user opens an interactive SSH session and enters the sudo password there.
+  - The user stages and runs `scripts/bootstrap-linux.sh --install-toolchain` through
     an interactive SSH terminal.
   - The playbook uses a user-local toolchain path for tools that do not require
     system packages, with any limitations documented.
-  - Bob explicitly approves a temporary privilege change, then removes it after
+  - The user explicitly approves a temporary privilege change, then removes it after
     bootstrap verification.
 
 ## 2026-06-16: GitHub Auth Is A Separate Manual Milestone
 
 Problem: toolchain readiness does not imply private repo readiness. The VM can
-have `gh` installed while clone/fetch still fails until Bob completes
+have `gh` installed while clone/fetch still fails until the user completes
 interactive GitHub auth.
 
 Correction:
 
-- Treat `gh auth login` as a separate post-deployment user milestone, not part
-  of base VM bootstrap.
+- Treat `gh auth login` as a separate manual user milestone. It can happen
+  before clone when the repo is private, but it is not part of base toolchain
+  bootstrap.
 - Do not fail base bootstrap because GitHub auth is absent.
 - Redacted status probes may report `valid`, `pending`, or `not configured`
   before login, but they must not start login flows or retain raw auth output.
@@ -120,7 +121,7 @@ unrelated directory.
 
 Correction:
 
-- Check `/home/slaw_dawg/Kendall_Nxt` before cloning.
+- Check `$HOME/Kendall_Nxt` before cloning.
 - Clone only when the path is missing.
 - If the path exists, inspect whether it is the expected repo and stop before
   destructive cleanup or replacement.
@@ -135,7 +136,7 @@ Correction:
 - After setup and verify-only pass, run:
 
 ```bash
-cd /home/slaw_dawg/Kendall_Nxt && pnpm run check
+cd "$HOME/Kendall_Nxt" && pnpm run check
 ```
 
 - Record full-check evidence separately from toolchain and repo-setup evidence.
@@ -183,7 +184,7 @@ Correction:
 ```powershell
 @'
 content
-'@ | ssh kendall-linux "cd /path/to/worktree && tee docs/file.md >/dev/null"
+'@ | ssh <ssh-alias> "cd /path/to/worktree && tee docs/file.md >/dev/null"
 ```
 
 - Prefer repo scripts for durable automation instead of complex inline remote
@@ -236,7 +237,7 @@ Correction:
 
 - During cutover, replace evaluation-state values with fresh baseline evidence.
 - Keep raw IP addresses as current observations only.
-- Prefer the stable `kendall-linux` SSH alias in routine commands.
+- Prefer the stable `<ssh-alias>` SSH alias in routine commands.
 - Update version rows for Node, pnpm, uv, gh, Codex CLI, and Claude Code from
   current VM checks.
 
@@ -347,7 +348,7 @@ Correction:
 - Bootstrap verify-only returns non-zero when any required tool is missing or
   has a failed version command.
 
-## 2026-06-16: Tailscale Installed Does Not Mean Tailscale Ready
+## 2026-06-16: Tailscale Auth Is Post-Install
 
 Problem: the VM has the Tailscale package and an active `tailscaled` service,
 but `tailscale ip -4` reported `NeedsLogin`.
@@ -355,8 +356,30 @@ but `tailscale ip -4` reported `NeedsLogin`.
 Correction:
 
 - Treat package install and daemon state as prerequisites only.
+- Treat Tailnet login/enrollment as a post-install user task, not base
+  bootstrap work.
+- Do not fail base bootstrap because Tailscale reports `NeedsLogin`.
 - Do not use Tailscale or MagicDNS as the durable SSH target until `tailscale
-  ip -4` returns a Tailscale address and the `kendall-linux` SSH alias has been
+  ip -4` returns a Tailscale address and the `<ssh-alias>` SSH alias has been
   tested through the approved stable name.
 - Keep the current LAN SSH alias working until Tailscale authentication and
   name resolution are proven.
+
+## 2026-06-16: Generic Install Defaults Must Stay Generic
+
+Problem: the first Kendall Vnxt Ubuntu deployment package grew out of a
+successful lab VM, so some active docs and scripts accidentally treated the lab
+SSH alias, username, hostname, repo path, and IP address as universal defaults.
+
+Correction:
+
+- Generic install docs target any Ubuntu 26.04-or-later physical machine, VM,
+  or cloud host with an existing non-root Linux user.
+- The default repo path is `$HOME/Kendall_Nxt`.
+- The validator accepts the current remote user by default and enforces a user
+  only when `--user` is provided.
+- Hostname enforcement is optional; if omitted, the observed hostname is
+  recorded but not treated as a failure.
+- Lab-specific values belong only in current-instance notes or historical
+  evidence, never in the generic install contract, playbook, policy, or script
+  defaults.

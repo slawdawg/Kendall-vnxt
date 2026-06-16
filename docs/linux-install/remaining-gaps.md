@@ -3,7 +3,7 @@
 Status: open review list
 Date: 2026-06-16
 
-The Linux VM is proven for normal repo setup, full `pnpm run check`, reboot,
+The current Linux host is proven for normal repo setup, full `pnpm run check`, reboot,
 workspace lifecycle, Codex CLI, Claude Code, BMAD Method CLI, and dashboard
 Playwright e2e execution. Remaining items are either runtime hardening work or
 policy-only post-deployment boundaries.
@@ -41,8 +41,8 @@ pnpm dlx playwright@1.61.0 install chromium
 - The repo needed `@playwright/test` updated to `1.61.0`.
 - After the update, browser launch still needs system libraries, starting with
   `libatk-1.0.so.0`.
-- After Bob ran the Playwright dependency installer interactively, the e2e suite
-  launched successfully and reached app assertions.
+- After the operator ran the Playwright dependency installer interactively, the
+  e2e suite launched successfully and reached app assertions.
 - The brittle dashboard assertions were fixed to avoid shared-state and strict
   locator ambiguity.
 - Latest result: `25 passed`.
@@ -50,7 +50,7 @@ pnpm dlx playwright@1.61.0 install chromium
 Proof command:
 
 ```bash
-cd /home/slaw_dawg/Kendall_Nxt
+cd "$HOME/Kendall_Nxt"
 PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright pnpm run test:e2e:dashboard
 ```
 
@@ -63,8 +63,8 @@ and run the browser dependency step interactively if sudo is required.
 ## Post-Deployment Provider Login Boundary
 
 Provider and repository-service login is intentionally excluded from base Linux
-VM bootstrap. Bob performs login after deployment only when a selected workflow
-needs that service.
+bootstrap. The user performs login after deployment only when a selected
+workflow needs that service.
 
 Current boundary:
 
@@ -85,9 +85,29 @@ Current boundary:
 - Project BMAD files are not rewritten.
 - Any BMAD install/upgrade command needs a separate diff preview and approval.
 
+## Global Tool Supply-Chain Hardening
+
+The current bootstrap installs some global tools from package registries or
+vendor install scripts:
+
+- `pnpm` through npm, pinned to the repo package-manager version.
+- Codex CLI, Claude Code, and BMAD Method through npm without dedicated global
+  tool version pins.
+- `uv` through the Astral install script.
+
+Current boundary:
+
+- The bootstrap proves the tools resolve and reports versions.
+- It does not yet prove package integrity, registry provenance, or a locked
+  global CLI version set.
+- Before claiming supply-chain certification, add a pinned global-tool
+  manifest, installer checksum/provenance policy where available, and evidence
+  that the resolved versions match that manifest.
+
 ## Backup Restore Proof
 
-A VM snapshot exists, but restore from snapshot has not been tested.
+A recovery snapshot exists for the current VM-based host, but restore from
+snapshot has not been tested.
 
 Current boundary:
 
@@ -96,20 +116,28 @@ Current boundary:
 
 ## Network Stability
 
-The current observed VM address is `192.168.1.8`, but the durable target is the
-SSH alias `kendall-linux`.
+The current observed VM address is discovery-only, but the durable target is the
+SSH alias or approved stable name.
 
 Remaining hardening:
 
 - DHCP reservation, local DNS, or approved Tailscale name.
 - Update only `HostName` in SSH config when the address changes.
 
-Current Tailscale state:
+Current Tailscale package state:
 
 - `tailscale` is installed at `/usr/bin/tailscale`.
 - `tailscaled` is active.
-- `tailscale ip -4` reports `NeedsLogin`, so Tailscale/MagicDNS is not yet a
-  proven access path for `kendall-linux`.
+- `tailscale ip -4` reports `NeedsLogin`.
+
+Boundary:
+
+- Tailscale auth/enrollment is a post-install user task, not part of base Linux
+  bootstrap.
+- `NeedsLogin` is not a bootstrap failure.
+- Tailscale/MagicDNS becomes a proven access path only after the user completes
+  post-install Tailnet enrollment and the SSH alias is tested through the
+  approved stable name.
 
 ## Maintenance Policy
 
