@@ -1,6 +1,16 @@
 # Remote Approval Template
 
-Status: draft v1
+Status: historical/superseded
+
+Superseded by:
+
+- [one-command-bootstrap-plan.md](one-command-bootstrap-plan.md)
+- [install-contract.md](install-contract.md)
+
+This document is retained as planning history only. Remote apply is not part of
+the supported v1 Kendall Vnxt installer. The only supported v1 install method
+is a local Ubuntu 26.04-or-later non-root sudo user running the single Kendall
+Vnxt bootstrap command from that Ubuntu terminal.
 
 Use this packet before any remote apply, reboot, cleanup, SSH mutation, package
 installation, service change, or credential-related change.

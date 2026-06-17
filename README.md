@@ -1,28 +1,92 @@
-# Kendall_Nxt
+# Kendall Vnxt
 
-Codex-first BMAD supervisor prototype with:
+Kendall Vnxt is a local-first development control plane for coordinating
+Codex/BMAD work, reviewing execution evidence, and running the dashboard and
+supervisor services that support the Kendall workflow.
+
+It is intended to make an Ubuntu machine a repeatable Kendall Vnxt workstation:
+the installer prepares the required developer toolchain, clones or validates
+the repo, runs setup, and writes local evidence that the host is ready.
+
+## What Is Included
 
 - `apps/dashboard` for the operator control plane
 - `services/supervisor` for queue/state/orchestration
 - `packages/contracts` for shared transport vocabulary
 - `packages/workflow-core` for workflow semantics support
 
-## Local run
+## Install On Ubuntu
 
-1. Use Node `22.13.0+` by default (`.node-version` is included for toolchains that honor it).
-2. One-time on a fresh machine: `corepack enable`
-3. `pnpm run setup`
-4. `pnpm run preflight`
-5. Copy `.env.example` to `.env` if you want to override defaults.
-6. `pnpm run dev:supervisor`
-7. `pnpm run dev:dashboard`
+The only supported install method is a local Ubuntu terminal session:
+
+1. Log in to Ubuntu 26.04 or later as a non-root user with sudo permissions.
+2. Run the Kendall Vnxt bootstrap command from that Ubuntu session.
+3. The script installs approved tools, clones or validates the repo, runs setup,
+   and verifies the install.
+
+No SSH-driven install, remote operator install, staged script workflow, manual
+fallback install, or Windows-to-Linux orchestration is supported.
+
+Run this command from the local Ubuntu terminal:
+
+```bash
+tmp=/tmp/kendall-vnxt-bootstrap.sh; url=https://raw.githubusercontent.com/slawdawg/Kendall-vnxt/main/scripts/bootstrap-linux.sh; if command -v curl >/dev/null 2>&1; then curl -fsSL "$url" -o "$tmp"; elif command -v wget >/dev/null 2>&1; then wget -qO "$tmp" "$url"; else sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsSL "$url" -o "$tmp"; fi && bash "$tmp" --install-kendall-vnxt
+```
+
+This command requires the bootstrap script URL to be reachable by the installer.
+If this repository is private, publish an equivalent bootstrap script release
+asset or complete the documented pre-authenticated download path before using
+the README command as final install proof.
+
+The bootstrap script:
+
+- verifies Ubuntu 26.04 or later and refuses root;
+- prompts for sudo normally when needed;
+- installs the approved Linux toolchain;
+- installs Codex CLI, Claude Code, and BMAD Method CLI;
+- clones Kendall Vnxt to `$HOME/Kendall_Nxt` if missing;
+- runs `pnpm run setup`;
+- runs Linux install validation;
+- writes install evidence under
+  `$HOME/Kendall_Nxt/docs/linux-install/evidence/`.
+
+If neither `curl` nor `wget` is present, the one-line command installs only
+`curl` and `ca-certificates` first so it can download the bootstrap script.
+
+Base install does not log in to GitHub, OpenAI/Codex, Anthropic/Claude, or
+Tailscale. If private repo access is required, complete GitHub authentication
+manually as the local Ubuntu user and rerun the same bootstrap command.
+
+Detailed install docs are in
+[docs/linux-install/install-playbook.md](docs/linux-install/install-playbook.md).
+
+## Getting Started
+
+After the bootstrap completes, open a terminal on the Ubuntu host:
+
+```bash
+cd "$HOME/Kendall_Nxt"
+pnpm run preflight
+```
+
+Start the local services in separate terminals:
+
+```bash
+pnpm run dev:supervisor
+```
+
+```bash
+pnpm run dev:dashboard
+```
 
 Default local URLs:
 
 - dashboard: `http://localhost:3000`
 - supervisor API: `http://localhost:8000`
 
-By default, the dev and start commands bind to `0.0.0.0`, so the dashboard is reachable from the VM's LAN IP and Tailscale IP as well as localhost.
+By default, the dev and start commands bind to `0.0.0.0`, so the dashboard is
+reachable from localhost and approved network interfaces configured after base
+install.
 
 Important environment variables:
 
@@ -32,9 +96,26 @@ Important environment variables:
 - `SUPERVISOR_CORS_ORIGINS`: comma-separated allowed dashboard origins for browser calls and SSE
 - `SUPERVISOR_CORS_ORIGIN_REGEX`: regex fallback for browser origins such as LAN IPs or Tailscale hostnames on port `3000`
 
-## Verification
+## Post-Install Authentication
+
+Authentication is intentionally outside the base install. After the local
+bootstrap succeeds, log in only to the services you plan to use:
+
+```bash
+gh auth login
+codex login
+claude auth login
+tailscale up
+```
+
+Those commands may vary by provider version and account policy. Keep secrets in
+the local user's normal credential stores; do not commit them to the repo or
+embed them in bootstrap scripts.
+
+## Developer Checks
 
 - `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
+- `pnpm run check:linux-bootstrap` verifies the Linux bootstrap contract, shell syntax, install docs, and focused bootstrap tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - `pnpm run check:documentation-authority` verifies documentation authority report contract/schema/service/dashboard/story alignment
 - `pnpm run check:verification-readiness` verifies verification readiness report contract/schema/service/dashboard/story alignment
@@ -63,8 +144,9 @@ Important environment variables:
 
 Playwright starts the dashboard with `next dev` for faster browser-test startup. `pnpm run check` remains the production-build gate. Supervisor tests launched from package scripts use a repo-local uv cache wrapper so Windows user-cache state does not decide whether verification can start.
 
-## Planning
+## Project Docs
 
+- Linux install docs: [docs/linux-install/index.md](docs/linux-install/index.md)
 - Current architecture index: [docs/architecture/index.md](docs/architecture/index.md)
 - Current PRD index: [docs/prds/index.md](docs/prds/index.md)
 - Current story index: [docs/stories/index.md](docs/stories/index.md)
@@ -81,15 +163,6 @@ This repo uses a `pnpm` workspace so JS dependencies come from a shared global s
 - `pnpm run setup:py` syncs the supervisor virtualenv only
 - `pnpm run setup:e2e` installs the Chromium browser used by Playwright
 - `pnpm run doctor` confirms the local Node/dependency/runtime setup is usable
-
-## Windows startup
-
-- `scripts/windows/Install-KendallNxtStartup.ps1` registers per-user logon tasks for the dashboard, supervisor, and an interactive Codex session.
-- `scripts/windows/Start-KendallNxtDashboard.ps1` serves the built dashboard on `0.0.0.0:3000`.
-- `scripts/windows/Start-KendallNxtSupervisor.ps1` serves the supervisor API on `0.0.0.0:8000`.
-- `scripts/windows/Start-KendallNxtCodex.ps1` starts Codex from the repo root and points the terminal at `docs/handoffs/current.md`.
-- `scripts/windows/Launch-KendallNxtAtLogon.vbs` is suitable for the Windows Startup folder when you want a hidden per-user logon launcher.
-- Logs are written to `.data/logs/`.
 
 ## Container stack
 

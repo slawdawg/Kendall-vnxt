@@ -1,13 +1,13 @@
 # Kendall Vnxt Ubuntu Deployment Contract
 
 Status: draft v1
-Target v1: Ubuntu 26.04 LTS or later, existing non-root Linux user
+Target v1: Ubuntu 26.04 LTS or later, existing non-root Linux user with sudo
 
 ## Purpose
 
-This contract defines the boundary for a repeatable Kendall Vnxt deployment
-and bootstrap flow on Ubuntu 26.04 or later. It is the authority layer for the
-playbook, scripts, and future one-command bootstrap.
+This contract defines the boundary for a repeatable Kendall Vnxt deployment on
+Ubuntu 26.04 or later. It is the authority layer for the README, playbook,
+scripts, validation matrix, and evidence.
 
 ## Supported Target
 
@@ -15,59 +15,49 @@ Version 1 supports this target shape:
 
 - Ubuntu 26.04 LTS or later.
 - Physical machine, VM, or cloud host.
-- Existing non-root Linux user.
-- Direct console/local terminal access, or a stable SSH target alias or host
-  name when using the remote operator path.
-- Optional expected hostname when the operator wants to enforce it.
-- Public-key SSH access only when SSH is used.
-- No provider login is required for the base bootstrap.
+- Existing non-root Linux user with sudo permissions.
+- Local interactive terminal access as that Linux user.
 - Private GitHub repository access may require manual user-performed GitHub
   auth before clone.
 
-Raw IP addresses can change and are not durable install targets.
+There is only one supported install method: the local Linux user runs the
+single Kendall Vnxt bootstrap script from the Ubuntu session. No SSH-driven
+install, remote operator install, staged script workflow, manual fallback
+install, or Windows-to-Linux orchestration is supported.
 
 ## Authority Levels
 
 | Level | Scope | Allowed now |
 | --- | --- | --- |
 | Plan | Print intended checks and stop lines | Yes |
-| Verify | Read-only local or remote checks | Yes after target is named |
+| Verify | Read-only local checks | Yes |
 | Evidence write | Write redacted evidence under approved repo evidence paths | Yes when explicit |
 | Manual repo auth | User-performed GitHub auth for private repo clone | Yes when repo access requires it |
-| Apply | Install packages, edit files, change services, change SSH state | No |
-| Reboot | Restart the VM or host | No |
-| Cleanup | Remove files, keys, packages, or evidence | No |
+| Apply | Install approved packages/tools, clone or validate repo, run setup, and write evidence | Yes only through the single local bootstrap command |
+| Reboot | Restart the host | No, separate local user approval |
+| Cleanup | Remove files, keys, packages, or evidence | No, separate approval |
 
-Apply, reboot, and cleanup require a separate approval packet from
-[remote-approval-template.md](remote-approval-template.md).
-
-Machine creation is an operator prerequisite for v1. The bootstrap scripts do
-not create VMs, create Linux users, provision cloud hosts, or modify hypervisor
-settings.
+Machine creation is a prerequisite for v1. The bootstrap script does not create
+VMs, create Linux users, provision cloud hosts, or modify hypervisor settings.
 
 ## Hard Stop Lines
 
 Automation must stop before:
 
-- Installing, upgrading, or removing packages.
-- Editing SSH server configuration.
-- Replacing `authorized_keys`.
-- Copying, reading, printing, or moving a private key.
+- Running as `root`.
+- Continuing on a non-Ubuntu or pre-26.04 host.
+- Continuing when sudo is missing.
+- Continuing when the repo path exists but is not a Git checkout.
+- Continuing when the repo path has no `origin` remote or its `origin` remote
+  does not match the expected Kendall Vnxt repo URL.
 - Automating `gh auth login`, device-code flows, browser auth, token imports,
   or credential helper writes.
+- Authenticating OpenAI/Codex, Anthropic/Claude, Tailscale, or any provider.
+- Copying, reading, printing, or moving private keys.
 - Rebooting or shutting down the machine.
-- Using a raw IP address as the durable target identity.
-- Continuing after host-key or target-user mismatch.
-- Replacing an existing SSH host key without manual investigation.
+- Starting persistent services or workers.
 - Writing evidence that includes secrets, raw credential output, shell history,
   broad environment dumps, or broad home-directory listings.
-
-## SSH Key Contract
-
-The private key stays on the operator host. The Linux target may receive only a
-public key line. Any future key install mode must append to `authorized_keys`,
-preserve a backup, verify permissions, and prove a new SSH login succeeds before
-any optional password-login hardening is considered.
 
 ## Auth Contract
 
@@ -79,42 +69,49 @@ user-performed post-deployment steps only when a workflow actually needs that
 service.
 
 Scripts may report whether an auth check is valid, pending, or not configured,
-but missing auth must not fail the base bootstrap. Evidence must not print
-raw auth output, token scopes, auth URLs, device codes, credential helper
-output, or token values.
+but missing auth must not start auth flows. Evidence must not print raw auth
+output, token scopes, auth URLs, device codes, credential helper output, or
+token values.
 
 ## Evidence Contract
 
-Evidence must follow [evidence/schema.md](evidence/schema.md). The default
-behavior for first-milestone scripts is stdout-only redacted evidence. File
-evidence requires an explicit path and must stay inside repo-approved evidence
-storage.
+Evidence must follow [evidence/schema.md](evidence/schema.md). File evidence
+requires an explicit or generated path under repo-approved evidence storage and
+must stay inside `docs/linux-install/evidence/`.
+
+Once the repo is validated and the approved evidence directory is known, setup
+or validation failures must write schema-compliant failure evidence before the
+bootstrap exits. Failures that happen before the repo evidence directory exists
+may stop without file evidence, but repo-access blocked stops must emit
+schema-compliant stdout evidence and must still print a clear recovery message.
+Bootstrap progress logs must go to stderr so stdout evidence can be captured
+and validated.
 
 ## Completion Criteria
 
 A Kendall Vnxt Ubuntu deployment is considered proven only when:
 
-- The machine exists with Ubuntu 26.04 or later and the intended non-root Linux
-  user.
-- Direct local-terminal access is available, or the target identity is resolved
-  through the operator's chosen stable SSH alias or host name when using SSH.
-- First SSH trust has recorded a new host key or matched an existing trusted
-  host key without replacement when using SSH.
-- The remote user matches the operator-provided `--user` when that flag is
-  used; otherwise the current remote user is accepted.
+- The install was run locally inside Ubuntu as the intended non-root sudo user.
 - Ubuntu release is 26.04 or later.
+- The single local bootstrap script completed successfully.
 - Node satisfies the repo engine range, pnpm matches the repo-pinned version,
-  and required tools such as uv, gh, and git pass version checks.
-- The Kendall Vnxt repo checkout is present and passes the agreed verification
-  command.
+  and required tools such as uv, gh, git, Codex CLI, Claude Code, and BMAD
+  Method pass version checks.
+- The Kendall Vnxt repo checkout is present at `$HOME/Kendall_Nxt` unless an
+  approved local repo path override was used.
+- The checkout `origin` remote matches the expected Kendall Vnxt repository URL
+  before setup or final validation is treated as successful.
+- `pnpm run setup` completed.
+- `scripts/validate-linux-install.sh --verify-only` passes.
+- Bootstrap evidence is redacted and validates.
 - Any provider or repository-service auth is either absent or user-configured
-  after deployment; auth absence does not fail the base bootstrap.
-- Evidence is redacted and linked from the playbook.
-- No stop line was crossed without a matching approval packet.
+  outside the bootstrap; auth absence does not fail the base bootstrap unless
+  repo clone itself requires it.
+- No stop line was crossed without matching local user authority.
 
 ## Documentation Feedback Loop
 
-When a command, assumption, or operator step fails during the install, update
-the playbook or [lessons-learned.md](lessons-learned.md) in the same work pass.
-The install path is not considered repeatable if known mistakes remain only in
-chat history.
+When a command, assumption, or user step fails during the install, update the
+playbook or [lessons-learned.md](lessons-learned.md) in the same work pass. The
+install path is not considered repeatable if known mistakes remain only in chat
+history.

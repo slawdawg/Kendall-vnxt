@@ -9,8 +9,9 @@ expected_pnpm_version="11.5.2"
 minimum_node_major="22"
 maximum_node_major_exclusive="25"
 repo_path="${HOME:-/home/$expected_user}/Kendall_Nxt"
-target_alias="ubuntu-target"
-address_source="operator-input"
+repo_url="https://github.com/slawdawg/Kendall-vnxt.git"
+target_alias="local"
+address_source="local-session"
 run_preflight="yes"
 json="no"
 evidence_path=""
@@ -35,11 +36,13 @@ Options:
   --min-os-version <ver>    Minimum Ubuntu VERSION_ID. Default: 26.04.
   --os-version <version>    Alias for --min-os-version.
   --hostname <name>         Optional expected target hostname.
-  --alias <name>            Target alias for evidence. Default: ubuntu-target.
+  --alias <name>            Target alias for evidence. Default: local.
   --address-source <source> Target address source for evidence.
-                            Default: operator-input.
+                            Default: local-session.
   --pnpm-version <version>  Expected pnpm version. Default: 11.5.2.
   --repo <path>             Kendall_Nxt repo path. Default: $HOME/Kendall_Nxt.
+  --repo-url <url>          Expected repo origin URL.
+                            Default: Kendall Vnxt HTTPS repo.
   --skip-repo               Skip repo presence and preflight checks.
   --skip-preflight          Check repo presence but skip pnpm preflight.
   --json                    Emit a compact JSON summary.
@@ -97,6 +100,56 @@ check_node_range() {
   [ "$major" -ge "$minimum_node_major" ] && [ "$major" -lt "$maximum_node_major_exclusive" ]
 }
 
+github_repo_slug() {
+  url="$1"
+  slug="$url"
+
+  case "$slug" in
+    git@github.com:*)
+      slug="${slug#git@github.com:}"
+      ;;
+    https://github.com/*)
+      slug="${slug#https://github.com/}"
+      ;;
+    http://github.com/*)
+      slug="${slug#http://github.com/}"
+      ;;
+    ssh://git@github.com/*)
+      slug="${slug#ssh://git@github.com/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  slug="${slug%.git}"
+  case "$slug" in
+    */*)
+      printf '%s' "$slug"
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+repo_url_matches_expected() {
+  expected_url="$1"
+  actual_url="$2"
+
+  if [ "$actual_url" = "$expected_url" ]; then
+    return 0
+  fi
+
+  if expected_slug="$(github_repo_slug "$expected_url")" && actual_slug="$(github_repo_slug "$actual_url")"; then
+    [ "$expected_slug" = "$actual_slug" ]
+    return
+  fi
+
+  return 1
+}
+
 repo_root() {
   if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -136,6 +189,11 @@ validate_evidence_path() {
 
   if [ "$evidence_dir_real" != "$allowed_dir_real" ]; then
     printf 'Evidence path must be under this checkout docs/linux-install/evidence: %s\n' "$path" >&2
+    exit 2
+  fi
+
+  if [ -e "$path" ]; then
+    printf 'Evidence file already exists: %s\n' "$path" >&2
     exit 2
   fi
 }
@@ -213,6 +271,11 @@ while [ "$#" -gt 0 ]; do
     --repo)
       require_option_value "$1" "${2-}"
       repo_path="$2"
+      shift 2
+      ;;
+    --repo-url)
+      require_option_value "$1" "${2-}"
+      repo_url="$2"
       shift 2
       ;;
     --skip-repo)
@@ -302,6 +365,14 @@ fi
 
 if [ -n "$repo_path" ]; then
   if [ -d "$repo_path/.git" ]; then
+    existing_origin="$(git -C "$repo_path" remote get-url origin 2>/dev/null || true)"
+    if [ -z "$existing_origin" ]; then
+      record fail repo-origin "repo at $repo_path has no origin remote"
+    elif repo_url_matches_expected "$repo_url" "$existing_origin"; then
+      record pass repo-origin "origin matches expected Kendall Vnxt repo"
+    else
+      record fail repo-origin "repo origin $existing_origin does not match expected $repo_url"
+    fi
     branch="$(git -C "$repo_path" branch --show-current 2>/dev/null || printf unknown)"
     record pass repo "repo found at $repo_path on branch $branch"
     if [ "$run_preflight" = "yes" ]; then
@@ -322,8 +393,10 @@ fi
 
 if [ "$checks_failed" -eq 0 ]; then
   result="pass"
+  rerun_guidance="Safe to rerun. Successful reruns should verify existing state without destructive changes."
 else
   result="fail"
+  rerun_guidance="Fix failed checks, then rerun the local bootstrap command."
 fi
 
 authority_level="verify"
@@ -338,13 +411,17 @@ evidence_hostname="$expected_hostname"
 if [ -z "$evidence_hostname" ]; then
   evidence_hostname="$current_hostname"
 fi
+manual_tasks_json='[{"id":"tailscale-login","status":"manual-post-install","summary":"Enroll or log in to Tailscale only after base bootstrap if the workflow needs Tailnet access."},{"id":"codex-login","status":"manual-post-install","summary":"Run Codex login manually only after deployment if an interactive Codex workflow needs it."},{"id":"claude-login","status":"manual-post-install","summary":"Run Claude login manually only after deployment if a Claude workflow needs it."},{"id":"provider-auth","status":"manual-post-install","summary":"Configure provider authentication manually only after a separately approved workflow needs provider calls."}]'
+auth_boundary_json='{"performed_provider_login":false,"performed_tailscale_login":false,"performed_codex_login":false,"performed_claude_login":false,"performed_browser_auth":false,"read_or_wrote_provider_tokens":false}'
 
-summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","generated_at":"%s","mode":"verify","target":{"alias":"%s","user":"%s","hostname":"%s","repo":"%s","minimumOsVersion":"%s","nodeRange":">=%s <%s","address_source":"%s"},"authority":{"level":"%s","approval_id":null},"checks":[%s],"checks_summary":{"pass":%s,"fail":%s,"warn":%s},"mutations":%s,"redactions":["gh-auth-output","environment","authorized-keys"],"result":"%s"}\n' \
+summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","generated_at":"%s","mode":"verify","command":{"mode":"verify","invoked":"%s"},"target":{"alias":"%s","user":"%s","hostname":"%s","repo":"%s","repo_url":"%s","minimumOsVersion":"%s","nodeRange":">=%s <%s","address_source":"%s"},"authority":{"level":"%s","approval_id":null},"checks":[%s],"checks_summary":{"pass":%s,"fail":%s,"warn":%s},"mutations":%s,"redactions":["gh-auth-output","environment","authorized-keys","provider-tokens","private-keys"],"manual_tasks":%s,"auth_boundary":%s,"result":"%s","rerun_guidance":"%s"}\n' \
   "$(json_escape "$generated_at")" \
+  "$(json_escape "scripts/validate-linux-install.sh --verify-only")" \
   "$(json_escape "$target_alias")" \
   "$(json_escape "$expected_user")" \
   "$(json_escape "$evidence_hostname")" \
   "$(json_escape "$repo_path")" \
+  "$(json_escape "$repo_url")" \
   "$(json_escape "$minimum_os_version")" \
   "$(json_escape "$minimum_node_major")" \
   "$(json_escape "$maximum_node_major_exclusive")" \
@@ -355,7 +432,10 @@ summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","generated
   "$checks_failed" \
   "$checks_warned" \
   "$mutations_json" \
-  "$result")"
+  "$manual_tasks_json" \
+  "$auth_boundary_json" \
+  "$result" \
+  "$(json_escape "$rerun_guidance")")"
 
 if [ "$json" = "yes" ]; then
   printf '%s' "$summary_json"
