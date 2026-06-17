@@ -38,6 +38,7 @@ memory.
 - [Fresh VM BMAD Method evidence](evidence/fresh-vm-bmad-method-2026-06-16.md)
 - [Fresh VM Playwright e2e evidence](evidence/fresh-vm-playwright-e2e-2026-06-16.md)
 - [Current VM sync and base verification evidence](evidence/current-vm-sync-base-verify-2026-06-16.md)
+- [Fresh Ubuntu post-merge validation evidence](evidence/fresh-ubuntu-validation-20260617T145338Z.json)
 - [Existing Linux primary-development runbook](../workflows/linux-primary-development-runbook.md)
 - [Platform evaluation evidence](../platform-evaluation-sprint.md)
 

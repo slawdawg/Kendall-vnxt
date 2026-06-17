@@ -9,6 +9,8 @@ expected_pnpm_version="11.5.2"
 minimum_node_major="22"
 maximum_node_major_exclusive="25"
 repo_path="${HOME:-/home/$expected_user}/Kendall_Nxt"
+target_alias="ubuntu-target"
+address_source="operator-input"
 run_preflight="yes"
 json="no"
 evidence_path=""
@@ -16,6 +18,7 @@ evidence_path=""
 checks_passed=0
 checks_failed=0
 checks_warned=0
+checks_json=""
 
 usage() {
   cat <<'USAGE'
@@ -32,6 +35,9 @@ Options:
   --min-os-version <ver>    Minimum Ubuntu VERSION_ID. Default: 26.04.
   --os-version <version>    Alias for --min-os-version.
   --hostname <name>         Optional expected target hostname.
+  --alias <name>            Target alias for evidence. Default: ubuntu-target.
+  --address-source <source> Target address source for evidence.
+                            Default: operator-input.
   --pnpm-version <version>  Expected pnpm version. Default: 11.5.2.
   --repo <path>             Kendall_Nxt repo path. Default: $HOME/Kendall_Nxt.
   --skip-repo               Skip repo presence and preflight checks.
@@ -50,6 +56,16 @@ record() {
   status="$1"
   id="$2"
   summary="$3"
+  check_json="$(printf '{"id":"%s","status":"%s","summary":"%s"}' \
+    "$(json_escape "$id")" \
+    "$(json_escape "$status")" \
+    "$(json_escape "$summary")")"
+
+  if [ -z "$checks_json" ]; then
+    checks_json="$check_json"
+  else
+    checks_json="$checks_json,$check_json"
+  fi
 
   case "$status" in
     pass) checks_passed=$((checks_passed + 1)) ;;
@@ -177,6 +193,16 @@ while [ "$#" -gt 0 ]; do
     --hostname)
       require_option_value "$1" "${2-}"
       expected_hostname="$2"
+      shift 2
+      ;;
+    --alias)
+      require_option_value "$1" "${2-}"
+      target_alias="$2"
+      shift 2
+      ;;
+    --address-source)
+      require_option_value "$1" "${2-}"
+      address_source="$2"
       shift 2
       ;;
     --pnpm-version)
@@ -307,14 +333,24 @@ if [ -n "$evidence_path" ]; then
   mutations_json='["evidence-file"]'
 fi
 
-summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","mode":"verify","target":{"user":"%s","hostname":"%s","repo":"%s","minimumOsVersion":"%s","nodeRange":">=%s <%s"},"authority":{"level":"%s","approval_id":null},"checks_summary":{"pass":%s,"fail":%s,"warn":%s},"mutations":%s,"redactions":["gh-auth-output","environment","authorized-keys"],"result":"%s"}\n' \
+generated_at="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
+evidence_hostname="$expected_hostname"
+if [ -z "$evidence_hostname" ]; then
+  evidence_hostname="$current_hostname"
+fi
+
+summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","generated_at":"%s","mode":"verify","target":{"alias":"%s","user":"%s","hostname":"%s","repo":"%s","minimumOsVersion":"%s","nodeRange":">=%s <%s","address_source":"%s"},"authority":{"level":"%s","approval_id":null},"checks":[%s],"checks_summary":{"pass":%s,"fail":%s,"warn":%s},"mutations":%s,"redactions":["gh-auth-output","environment","authorized-keys"],"result":"%s"}\n' \
+  "$(json_escape "$generated_at")" \
+  "$(json_escape "$target_alias")" \
   "$(json_escape "$expected_user")" \
-  "$(json_escape "$expected_hostname")" \
+  "$(json_escape "$evidence_hostname")" \
   "$(json_escape "$repo_path")" \
   "$(json_escape "$minimum_os_version")" \
   "$(json_escape "$minimum_node_major")" \
   "$(json_escape "$maximum_node_major_exclusive")" \
+  "$(json_escape "$address_source")" \
   "$(json_escape "$authority_level")" \
+  "$checks_json" \
   "$checks_passed" \
   "$checks_failed" \
   "$checks_warned" \

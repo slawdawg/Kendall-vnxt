@@ -383,3 +383,20 @@ Correction:
 - Lab-specific values belong only in current-instance notes or historical
   evidence, never in the generic install contract, playbook, policy, or script
   defaults.
+
+## 2026-06-17: Post-Merge Validation Evidence Should Be Captured In-Repo
+
+Problem: after the playbook was run manually on the Linux target, the proof
+needed to be captured as durable evidence rather than left as terminal output
+on the target.
+
+Correction:
+
+- Run the validator from the Linux checkout so `--evidence` can enforce the
+  approved `docs/linux-install/evidence/` destination.
+- Let the validator write redacted JSON evidence with pass/fail/warn counts
+  instead of copying raw terminal logs.
+- Copy the evidence packet back to the operator checkout and add it to the
+  Linux install index.
+- Treat this as validation evidence only; provider and network service logins
+  remain post-install user tasks.
