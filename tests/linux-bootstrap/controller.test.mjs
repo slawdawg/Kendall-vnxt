@@ -147,6 +147,26 @@ test("plan mode emits full local gate sequence and writes no evidence", () => {
   );
 });
 
+test("doctor mode runs read-only verification and writes no evidence", () => {
+  const doctorOptions = options({ mode: "doctor", evidence: "" });
+  const evidence = buildEvidence({ repoRoot, options: doctorOptions });
+  const executor = fakeExecutor();
+
+  const result = runBootstrapController({
+    repoRoot,
+    options: doctorOptions,
+    executor,
+    evidence,
+    operatorPreflightGate: localPreflightGate,
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.wroteEvidence, false);
+  assert.deepEqual(evidence.mutations, []);
+  assert(evidence.gates.some((gate) => gate.id === "full-verify" && gate.status === "pass"));
+  assert(executor.calls.some((call) => call[0] === "command" && call[2].includes("scripts/validate-linux-install.sh")));
+});
+
 test("verify-only blocks unsupported local identity and writes failure evidence", () => {
   const verifyOptions = options();
   removeEvidence(verifyOptions.evidence);

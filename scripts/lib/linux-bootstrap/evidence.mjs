@@ -48,7 +48,7 @@ export function buildEvidence({ repoRoot, options }) {
       address_source: "local-session",
     },
     authority: {
-      level: options.mode === "apply" ? "apply" : options.mode === "verify-only" ? "verify" : "plan",
+      level: ["doctor", "verify-only"].includes(options.mode) ? "verify" : "plan",
       approval_id: options.approvalId || null,
     },
     gates: [],

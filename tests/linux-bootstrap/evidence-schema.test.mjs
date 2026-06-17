@@ -122,6 +122,34 @@ test("accepts schema-compliant passing bootstrap evidence", () => {
   assert.deepEqual(validateBootstrapEvidence(baseEvidence()), []);
 });
 
+test("accepts schema-compliant doctor evidence without evidence-file mutation", () => {
+  const evidence = baseEvidence({
+    command: {
+      mode: "doctor",
+      invoked: "node ./scripts/linux-bootstrap.mjs --doctor",
+    },
+    mutations: [],
+  });
+
+  assert.deepEqual(validateBootstrapEvidence(evidence), []);
+});
+
+test("rejects doctor evidence with write authority or mutations", () => {
+  const errors = validateBootstrapEvidence(
+    baseEvidence({
+      command: {
+        mode: "doctor",
+        invoked: "node ./scripts/linux-bootstrap.mjs --doctor",
+      },
+      authority: { level: "evidence-write", approval_id: null },
+      mutations: ["evidence-file"],
+    }),
+  );
+
+  assert(errors.includes("doctor authority must be verify"));
+  assert(errors.includes("doctor evidence must not include mutations"));
+});
+
 test("blocked result requires a blocked gate and accepts missing full verify details", () => {
   const evidence = baseEvidence({
     gates: [

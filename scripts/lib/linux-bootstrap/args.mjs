@@ -1,9 +1,10 @@
 export function usage() {
-  return `Usage: node ./scripts/linux-bootstrap.mjs --plan|--verify-only [options]
+  return `Usage: node ./scripts/linux-bootstrap.mjs --doctor|--plan|--verify-only [options]
 
 Local Kendall Vnxt Ubuntu bootstrap verifier.
 
 Modes:
+  --doctor            Diagnose local Ubuntu readiness without writing evidence.
   --plan              Print planned gates without writing evidence.
   --verify-only       Verify local Ubuntu readiness without mutation.
 
@@ -39,9 +40,13 @@ export function parseLinuxBootstrapArgs(args) {
     const arg = args[index];
     switch (arg) {
       case "--plan":
+      case "--doctor":
       case "--verify-only": {
         const mode = arg.slice(2);
-        if (options.mode && options.mode !== mode) {
+        if (options.mode) {
+          if (options.mode === mode) {
+            throw new Error(`Duplicate mode: ${arg}.`);
+          }
           throw new Error(`Conflicting modes: --${options.mode} and ${arg}.`);
         }
         options.mode = mode;
@@ -76,13 +81,13 @@ export function parseLinuxBootstrapArgs(args) {
   }
 
   if (!options.mode) {
-    throw new Error("Missing mode. Supply exactly one of --plan or --verify-only.");
+    throw new Error("Missing mode. Supply exactly one of --doctor, --plan, or --verify-only.");
   }
   if (options.hostname && !/^[A-Za-z0-9._-]+$/.test(options.hostname)) {
     throw new Error("hostname contains unsupported characters.");
   }
-  if (options.mode === "plan" && options.evidence) {
-    throw new Error("--plan does not write evidence because plan mode must not mutate local state.");
+  if (["doctor", "plan"].includes(options.mode) && options.evidence) {
+    throw new Error(`--${options.mode} does not write evidence because it must not mutate local state.`);
   }
   if (options.approvalId && !/^[A-Za-z0-9._:-]+$/.test(options.approvalId)) {
     throw new Error("approval id contains unsupported characters.");

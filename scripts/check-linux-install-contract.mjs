@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const activeDocs = [
   "README.md",
@@ -26,6 +27,13 @@ const expectedGoalRunFixtures = new Set(goalRunFixtureFiles);
 
 const expectedBootstrapUrl =
   "https://raw.githubusercontent.com/slawdawg/Kendall-vnxt/main/scripts/bootstrap-linux.sh";
+
+const expectedPublicLinuxScripts = {
+  "linux:doctor": "node ./scripts/linux-bootstrap.mjs --doctor",
+  "linux:setup": "node ./scripts/linux-bootstrap.mjs --plan",
+  "linux:smoke": "node ./scripts/check-linux-bootstrap.mjs",
+  "linux:drift": "node ./scripts/check-linux-install-contract.mjs",
+};
 
 const requiredSnippets = [
   {
@@ -224,6 +232,10 @@ const requiredSnippets = [
     path: "package.json",
     text: "\"check:linux-bootstrap-url\": \"node ./scripts/check-linux-bootstrap-url.mjs\"",
   },
+  {
+    path: "scripts/lib/linux-bootstrap/args.mjs",
+    text: "Usage: node ./scripts/linux-bootstrap.mjs --doctor|--plan|--verify-only [options]",
+  },
 ];
 
 const forbiddenPatterns = [
@@ -259,6 +271,21 @@ function hasString(value, field) {
 
 function hasArray(value, field) {
   return Array.isArray(value[field]);
+}
+
+export function validatePublicLinuxScripts(packageJson) {
+  const scriptFailures = [];
+  if (!isRecord(packageJson) || !isRecord(packageJson.scripts)) {
+    return ["package.json must include scripts object."];
+  }
+
+  for (const [name, command] of Object.entries(expectedPublicLinuxScripts)) {
+    if (packageJson.scripts[name] !== command) {
+      scriptFailures.push(`package.json scripts.${name} must be: ${command}`);
+    }
+  }
+
+  return scriptFailures;
 }
 
 function validateGoalRunFixture(path, fixture) {
@@ -327,6 +354,7 @@ function validateGoalRunFixture(path, fixture) {
   }
 }
 
+function main() {
 for (const path of activeDocs) {
   const text = readFileSync(path, "utf8");
   for (const pattern of forbiddenPatterns) {
@@ -341,6 +369,13 @@ for (const requirement of requiredSnippets) {
   if (!text.includes(requirement.text)) {
     failures.push(`${requirement.path} must include: ${requirement.text}`);
   }
+}
+
+try {
+  const packageJson = JSON.parse(readFileSync(process.env.KENDALL_PACKAGE_JSON || "package.json", "utf8"));
+  failures.push(...validatePublicLinuxScripts(packageJson));
+} catch (error) {
+  failures.push(`package.json must be readable JSON: ${error.message}`);
 }
 
 for (const path of goalRunFixtureFiles) {
@@ -385,3 +420,8 @@ if (failures.length > 0) {
 }
 
 console.log("Linux install contract check passed.");
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main();
+}
