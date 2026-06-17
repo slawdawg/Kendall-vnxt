@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 const activeDocs = [
   "README.md",
@@ -8,10 +8,21 @@ const activeDocs = [
   "docs/linux-install/install-contract.md",
   "docs/linux-install/one-command-bootstrap-plan.md",
   "docs/linux-install/fresh-host-proof-procedure.md",
+  "docs/linux-install/goal-run-contract.md",
+  "docs/linux-install/release-gate-traceability.md",
   "docs/linux-install/validation-matrix.md",
   "docs/linux-install/troubleshooting.md",
   "docs/linux-install/index.md",
 ];
+
+const goalRunFixtureFiles = [
+  "docs/linux-install/fixtures/goal-run/blocked-continuation.json",
+  "docs/linux-install/fixtures/goal-run/invalid-preauthorization.json",
+  "docs/linux-install/fixtures/goal-run/missing-evidence.json",
+];
+
+const goalRunFixtureDir = "docs/linux-install/fixtures/goal-run";
+const expectedGoalRunFixtures = new Set(goalRunFixtureFiles);
 
 const expectedBootstrapUrl =
   "https://raw.githubusercontent.com/slawdawg/Kendall-vnxt/main/scripts/bootstrap-linux.sh";
@@ -56,6 +67,46 @@ const requiredSnippets = [
   {
     path: "docs/linux-install/index.md",
     text: "They are not the generic installer entry point and must not override the\nsingle-method v1 boundary above.",
+  },
+  {
+    path: "docs/linux-install/index.md",
+    text: "[Goal run contract](goal-run-contract.md)",
+  },
+  {
+    path: "docs/linux-install/index.md",
+    text: "[Release gate traceability](release-gate-traceability.md)",
+  },
+  {
+    path: "docs/linux-install/goal-run-contract.md",
+    text: "## Terminal Delivery Rule",
+  },
+  {
+    path: "docs/linux-install/goal-run-contract.md",
+    text: "PR creation, merge, and workspace cleanup are final delivery-phase operations.",
+  },
+  {
+    path: "docs/linux-install/release-gate-traceability.md",
+    text: "| LG-16 | PR creation, merge, and cleanup are final delivery operations.",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Goal run contract readiness | `docs/linux-install/goal-run-contract.md`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Invalid preauthorization fixture | `docs/linux-install/fixtures/goal-run/invalid-preauthorization.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Blocked continuation fixture | `docs/linux-install/fixtures/goal-run/blocked-continuation.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Missing evidence fixture | `docs/linux-install/fixtures/goal-run/missing-evidence.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "A `/goal` run creates a PR, merges, or cleans workspaces before the current\n  bounded implementation milestone is otherwise complete or blocked.",
   },
   {
     path: "docs/linux-install/fresh-host-proof-procedure.md",
@@ -198,6 +249,84 @@ const forbiddenScriptPatterns = [
 
 const failures = [];
 
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasString(value, field) {
+  return typeof value[field] === "string" && value[field].length > 0;
+}
+
+function hasArray(value, field) {
+  return Array.isArray(value[field]);
+}
+
+function validateGoalRunFixture(path, fixture) {
+  if (!isRecord(fixture)) {
+    failures.push(`${path} must be a JSON object.`);
+    return;
+  }
+
+  if (path.endsWith("/invalid-preauthorization.json")) {
+    if (fixture.schema !== "kendall-linux-goal-authority/v1") {
+      failures.push(`${path} must use kendall-linux-goal-authority/v1.`);
+    }
+    if (fixture.fixture !== "invalid-preauthorization") {
+      failures.push(`${path} must identify fixture invalid-preauthorization.`);
+    }
+    if (!isRecord(fixture.input) || typeof fixture.input.approval_text !== "string") {
+      failures.push(`${path} must include input.approval_text.`);
+    }
+    if (fixture.expected_result !== "reject") {
+      failures.push(`${path} must expect broad preauthorization rejection.`);
+    }
+    if (!hasString(fixture, "expected_reason")) {
+      failures.push(`${path} must include expected_reason.`);
+    }
+    return;
+  }
+
+  if (path.endsWith("/blocked-continuation.json")) {
+    if (fixture.schema !== "kendall-linux-goal-fixture/v1") {
+      failures.push(`${path} must use kendall-linux-goal-fixture/v1.`);
+    }
+    if (fixture.fixture !== "blocked-continuation") {
+      failures.push(`${path} must identify fixture blocked-continuation.`);
+    }
+    if (!hasArray(fixture, "tasks")) {
+      failures.push(`${path} must include tasks.`);
+    }
+    if (!isRecord(fixture.expected_result)) {
+      failures.push(`${path} must include expected_result object.`);
+    } else {
+      for (const field of ["continue", "pause_dependency_blocked", "pause_authority_blocked"]) {
+        if (!Array.isArray(fixture.expected_result[field])) {
+          failures.push(`${path} must include expected_result.${field}.`);
+        }
+      }
+    }
+    return;
+  }
+
+  if (path.endsWith("/missing-evidence.json")) {
+    if (fixture.schema !== "kendall-linux-goal-fixture/v1") {
+      failures.push(`${path} must use kendall-linux-goal-fixture/v1.`);
+    }
+    if (fixture.fixture !== "missing-evidence") {
+      failures.push(`${path} must identify fixture missing-evidence.`);
+    }
+    if (!hasArray(fixture, "required_evidence") || fixture.required_evidence.length === 0) {
+      failures.push(`${path} must list required_evidence.`);
+    }
+    if (!hasArray(fixture, "present_evidence") || fixture.present_evidence.length !== 0) {
+      failures.push(`${path} must keep present_evidence empty.`);
+    }
+    if (fixture.expected_completion_status !== "not_complete") {
+      failures.push(`${path} must expect not_complete completion status.`);
+    }
+  }
+}
+
 for (const path of activeDocs) {
   const text = readFileSync(path, "utf8");
   for (const pattern of forbiddenPatterns) {
@@ -211,6 +340,30 @@ for (const requirement of requiredSnippets) {
   const text = readFileSync(requirement.path, "utf8");
   if (!text.includes(requirement.text)) {
     failures.push(`${requirement.path} must include: ${requirement.text}`);
+  }
+}
+
+for (const path of goalRunFixtureFiles) {
+  if (!existsSync(path)) {
+    failures.push(`${path} must exist.`);
+  }
+}
+
+const discoveredGoalRunFixtureFiles = readdirSync(goalRunFixtureDir)
+  .filter((name) => name.endsWith(".json"))
+  .map((name) => `${goalRunFixtureDir}/${name}`)
+  .sort();
+
+for (const path of discoveredGoalRunFixtureFiles) {
+  if (!expectedGoalRunFixtures.has(path)) {
+    failures.push(`${path} must be added to the goal-run fixture contract check.`);
+  }
+
+  try {
+    const fixture = JSON.parse(readFileSync(path, "utf8"));
+    validateGoalRunFixture(path, fixture);
+  } catch (error) {
+    failures.push(`${path} must contain valid JSON: ${error.message}`);
   }
 }
 

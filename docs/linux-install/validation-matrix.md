@@ -27,6 +27,11 @@ Status: draft v1
 | Reboot proof | `sudo reboot`, then verify | Ubuntu host | Local verify-only, preflight, and tool probes pass after reboot | Reboot, approval required |
 | Real work cycle | Codex workspace experiment | Ubuntu host/repo checkout | create, verify, and cleanup a real repo work item | Isolated worktree mutation |
 | Snapshot/backup | Host backup or VM snapshot | Ubuntu host | Recovery point exists after all proofs pass | Recovery point |
+| Goal run contract readiness | `docs/linux-install/goal-run-contract.md` | Repo | Contract defines authority, task state, safe continuation, blocker packets, completion semantics, and terminal delivery rule | None |
+| Release gate traceability | `docs/linux-install/release-gate-traceability.md` | Repo | Every implementation task maps to FRs, LINUX-AC items, authority class, command ids, evidence, and release gates before execution | None |
+| Invalid preauthorization fixture | `docs/linux-install/fixtures/goal-run/invalid-preauthorization.json` | Repo | Broad approval such as "install whatever is needed" is rejected | None |
+| Blocked continuation fixture | `docs/linux-install/fixtures/goal-run/blocked-continuation.json` | Repo | Independent safe task continues; dependent and gated tasks pause | None |
+| Missing evidence fixture | `docs/linux-install/fixtures/goal-run/missing-evidence.json` | Repo | Passing checks without required evidence cannot report complete | None |
 
 ## Negative Checks
 
@@ -48,6 +53,11 @@ The flow must fail closed when:
   browser, or credential helper login/mutation during base bootstrap.
 - Evidence would include token scopes, auth URLs, credential helper output,
   shell history, broad environment dumps, private keys, or broad home listings.
+- A `/goal` run treats generic approval text as bounded preauthorization.
+- A `/goal` run marks complete when required evidence is missing.
+- A `/goal` run continues a task that depends on a blocked authority boundary.
+- A `/goal` run creates a PR, merges, or cleans workspaces before the current
+  bounded implementation milestone is otherwise complete or blocked.
 
 ## Container Boundary
 

@@ -16,10 +16,13 @@ memory.
 - [Fresh host proof procedure](fresh-host-proof-procedure.md)
 - [Install contract](install-contract.md)
 - [Validation matrix](validation-matrix.md)
+- [Goal run contract](goal-run-contract.md)
+- [Release gate traceability](release-gate-traceability.md)
 - [Provider login policy](provider-login-policy.md)
 - [Troubleshooting](troubleshooting.md)
 - [Lessons learned](lessons-learned.md)
 - [Evidence schema](evidence/schema.md)
+- [Goal run fixtures](fixtures/goal-run/)
 
 ## Historical And Instance-Specific Notes
 
@@ -64,3 +67,7 @@ Version 1 is intentionally narrow:
 - Local mutation only through the single bootstrap script.
 - No SSH, remote execution, staged script, or manual fallback install method is
   supported in v1.
+- Codex `/goal` development uses the Goal Run Contract for unattended
+  non-gated work and stops with a blocker packet at missing authority.
+- Pull request creation, merge, and workspace cleanup are terminal delivery
+  activities, not routine development-loop steps.

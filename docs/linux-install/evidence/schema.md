@@ -5,6 +5,9 @@ Status: draft v1
 Evidence records prove what was checked without retaining secrets or unnecessary
 machine state.
 
+Goal-run evidence extends this schema with task and authority fields so
+unattended `/goal` runs can be reviewed after the fact.
+
 ## Validator Evidence Required Fields
 
 ```json
@@ -201,6 +204,8 @@ Evidence may include:
 - Short redacted summaries.
 - Local host name.
 - Repo path, expected repo URL, origin-match status, and branch name.
+- Goal-run id, task id, command id, working directory, exit code, result
+  classification, artifact hash, and next resume point.
 
 ## Forbidden Detail
 
@@ -221,3 +226,35 @@ First-milestone scripts default to stdout-only summaries. If file evidence is
 enabled with `--evidence`, write under `docs/linux-install/evidence/` and name
 files with the local alias, mode, and UTC timestamp. File evidence uses the
 `evidence-write` authority level and records an `evidence-file` mutation.
+
+Autonomous goal-run evidence writes under:
+
+```text
+docs/linux-install/evidence/goal-runs/<run-id>/
+```
+
+Routine local run state and temporary logs are not committed unless selected as
+release evidence and validated for redaction.
+
+## Goal-Run Evidence Fields
+
+Goal-run evidence records include these additional fields where applicable:
+
+```json
+{
+  "goal_run": {
+    "run_id": "goal-run-20260617-example",
+    "task_id": "task.example",
+    "command_id": "linux.doctor",
+    "working_directory": "$HOME/Kendall_Nxt",
+    "exit_code": 0,
+    "result_classification": "pass|fail|blocked|skipped",
+    "stdout_stderr_summary": "short redacted summary or artifact pointer",
+    "artifact_hash": null,
+    "next_resume_point": null
+  },
+  "authority": {
+    "goalAuthorityClass": "allowed_unattended|requires_preauthorization|block_and_record|forbidden"
+  }
+}
+```
