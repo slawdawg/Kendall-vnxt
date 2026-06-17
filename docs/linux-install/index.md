@@ -12,22 +12,31 @@ memory.
 ## Generic Install Path
 
 - [Install playbook](install-playbook.md)
+- [One-command bootstrap plan](one-command-bootstrap-plan.md)
+- [Fresh host proof procedure](fresh-host-proof-procedure.md)
 - [Install contract](install-contract.md)
-- [Implementation plan](implementation-plan.md)
 - [Validation matrix](validation-matrix.md)
-- [SSH key policy](ssh-key-policy.md)
 - [Provider login policy](provider-login-policy.md)
-- [Remote approval template](remote-approval-template.md)
 - [Troubleshooting](troubleshooting.md)
 - [Lessons learned](lessons-learned.md)
 - [Evidence schema](evidence/schema.md)
 
-## Current Instance Notes And Evidence
+## Historical And Instance-Specific Notes
+
+The documents below are historical, lab-instance, or platform-evaluation notes.
+They are not the generic installer entry point and must not override the
+single-method v1 boundary above.
 
 - [Bob next steps](bob-next-steps.md) - current lab host notes, not the generic
   installer entry point.
 - [Remaining gaps](remaining-gaps.md) - current Linux host gaps and policy
   follow-ups, not the generic installer entry point.
+- [Historical implementation plan](implementation-plan.md) - superseded remote
+  and staged-mode planning notes, not current install instructions.
+- [Historical remote approval template](remote-approval-template.md) -
+  superseded remote-apply planning notes, not current install instructions.
+- [Historical SSH key policy](ssh-key-policy.md) - SSH policy history, not part
+  of the supported v1 installer.
 - [Fresh VM toolchain evidence](evidence/fresh-vm-toolchain-2026-06-16.md)
 - [Fresh VM repo setup evidence](evidence/fresh-vm-repo-setup-2026-06-16.md)
 - [Fresh VM full check evidence](evidence/fresh-vm-full-check-2026-06-16.md)
@@ -48,8 +57,10 @@ Version 1 is intentionally narrow:
 
 - Ubuntu 26.04 LTS or later.
 - Existing non-root Linux user.
-- Public SSH key installation only.
+- Local terminal execution by that Linux user with sudo permissions.
 - Provider authentication is post-deployment only. Private GitHub repo access
   auth is manual and allowed before clone when needed.
-- Verify-only and dry-run behavior before any installer apply mode.
-- Remote mutation only after the operator approves a named operation scope.
+- Verify-only and dry-run behavior before the single install script.
+- Local mutation only through the single bootstrap script.
+- No SSH, remote execution, staged script, or manual fallback install method is
+  supported in v1.

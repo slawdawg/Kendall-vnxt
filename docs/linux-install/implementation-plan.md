@@ -1,7 +1,19 @@
 # Kendall Vnxt Ubuntu Deployment Implementation Plan
 
 Date: 2026-06-16
-Status: reviewed plan
+Status: historical/superseded
+
+Superseded by:
+
+- [one-command-bootstrap-plan.md](one-command-bootstrap-plan.md)
+- [install-playbook.md](install-playbook.md)
+- [install-contract.md](install-contract.md)
+
+This document is retained as planning history only. It contains earlier
+remote, staged, and multi-mode ideas that are not supported by the current v1
+installer. The only supported v1 install method is a local Ubuntu 26.04-or-later
+non-root sudo user running the single Kendall Vnxt bootstrap command from that
+Ubuntu terminal.
 
 ## Goal
 

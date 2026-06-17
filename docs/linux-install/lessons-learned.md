@@ -400,3 +400,345 @@ Correction:
   Linux install index.
 - Treat this as validation evidence only; provider and network service logins
   remain post-install user tasks.
+
+## 2026-06-17: Avoid PowerShell Pipes Into Inline Node Parsers
+
+Problem: while verifying the one-command bootstrap plan output, a PowerShell
+pipeline into `node -e` failed twice because PowerShell consumed JavaScript
+quotes and `$` variables before Node received the script.
+
+Correction:
+
+- Do not retry inline `node -e` parser pipelines after a PowerShell quoting
+  failure.
+- Use direct command output, checked-in tests, or a small checked-in verifier
+  instead.
+- Treat repeated PowerShell quoting/parser failures as tool churn and follow
+  `docs/workflows/tool-churn-rca.md`.
+
+## 2026-06-17: Generic Install Must Have One Supported Method
+
+Problem: the install docs and prototype mixed several paths: SSH-driven
+controller, interactive SSH transport, staged scripts, manual fallback
+commands, and local execution. That makes a fresh-user GitHub README harder to
+trust and creates too many paths to test.
+
+Correction:
+
+- The only supported v1 install method is a local Ubuntu user with sudo
+  permissions running one bootstrap script.
+- The script is responsible for installing approved tools, cloning or
+  validating the repo, running setup, and validating the install.
+- Do not document SSH, remote execution, staged scripts, or manual fallback
+  command sequences as install methods.
+- Provider login, Tailscale enrollment, Codex login, Claude login, and GitHub
+  repo auth remain user-performed boundaries; the bootstrap may stop and ask
+  the user to complete repo auth before rerunning, but it must not automate
+  those auth flows.
+
+## 2026-06-17: The Root README Is The Public Install Entry Point
+
+Problem: install details can be correct in deep runbooks while the GitHub repo
+front page still leaves a fresh user unsure what Kendall Vnxt is, how to
+install it, or how to start using it.
+
+Correction:
+
+- Keep `README.md` aligned with the single supported Ubuntu install method.
+- Put the one-command bootstrap and post-install start commands in the root
+  README, then link to the detailed Linux install playbook.
+- Keep provider, GitHub, Codex, Claude, and Tailscale authentication clearly
+  marked as post-install user actions.
+- Do not let the root README advertise historical SSH, staged, remote, or
+  manual fallback install paths.
+
+## 2026-06-17: Final Validation Must Prove Repo Identity
+
+Problem: bootstrap could validate an existing checkout before setup, but final
+install validation still treated any Git checkout at `$HOME/Kendall_Nxt` as
+the repo if preflight passed.
+
+Correction:
+
+- `scripts/validate-linux-install.sh --verify-only` checks the checkout
+  `origin` remote against the expected Kendall Vnxt repo URL.
+- Missing or mismatched `origin` is a failed `repo-origin` check.
+- Evidence records the expected repo URL and the `repo-origin` result so a
+  passing install cannot silently prove the wrong repository.
+
+## 2026-06-17: Internal Steps Must Not Become Public Install Modes
+
+Problem: the shell bootstrap still exposed old staged modes for toolchain,
+agent CLI install, dry-run, and verify-only behavior even though the v1
+contract only supports one local install command.
+
+Correction:
+
+- `scripts/bootstrap-linux.sh` publicly accepts only
+  `--install-kendall-vnxt`.
+- Toolchain and agent CLI steps remain internal implementation details of the
+  one supported bootstrap command.
+- The contract checker fails if staged mode flags such as `--install-toolchain`
+  or `--install-agent-clis` reappear in the shell bootstrap script.
+
+## 2026-06-17: Failure Evidence Starts After Repo Evidence Exists
+
+Problem: setup could fail after the repo was already cloned or validated, but
+before final validation wrote evidence. That left an important failed install
+state visible only in terminal output.
+
+Correction:
+
+- The bootstrap allocates a collision-safe evidence path immediately after the
+  repo and approved evidence directory are available.
+- If `pnpm run setup` fails, the bootstrap writes schema-compliant install
+  failure evidence with `result: "fail"` and a `project-setup` check.
+- Failures before the repo evidence directory exists still print clear recovery
+  messages, but cannot reliably write repo-local file evidence.
+
+## 2026-06-17: Remove Dead Mutating Controller Branches
+
+Problem: after narrowing `scripts/bootstrap-linux.sh` to the single public
+`--install-kendall-vnxt` mode, the Node controller still contained dead apply
+branches that referenced staged toolchain, agent CLI, repo clone, and setup
+commands.
+
+Correction:
+
+- `scripts/linux-bootstrap.mjs` remains plan/verify-only.
+- Controller gates for base tools, repo mutation, and setup now skip in
+  non-mutating modes and point recovery to the single supported shell
+  bootstrap command.
+- Contract and bootstrap checks scan active implementation paths so stale
+  staged modes cannot quietly reappear.
+
+## 2026-06-17: Historical Docs Need Explicit Superseded Banners
+
+Problem: older planning documents still lived beside the active Linux install
+playbook and contained remote, SSH, staged, or multi-mode ideas. Even if not
+linked as the generic install path, they could confuse a repo reader.
+
+Correction:
+
+- Mark superseded planning documents as historical at the top of the file.
+- Link from those banners to the current one-command plan, playbook, and
+  contract.
+- List historical files in the Linux install index under historical notes so
+  they are discoverable as history, not current instructions.
+
+## 2026-06-17: Bootstrap URL Must Be A Checked Contract
+
+Problem: the public README command, detailed playbook, one-command plan, and
+URL reachability checker can drift if each one hardcodes the raw bootstrap URL
+independently.
+
+Correction:
+
+- The Linux install contract checker now requires the same raw GitHub
+  bootstrap URL in README, playbook, one-command plan, and URL checker source.
+- The URL checker still proves network reachability separately after the
+  installer is published.
+- Feature-complete proof must use the same URL that the README gives to users.
+
+## 2026-06-17: Repo URL Overrides Must Reach Final Validation
+
+Problem: the bootstrap could accept a `--repo-url` override for clone and
+existing-origin validation, but final validation could still use the default
+Kendall Vnxt repo URL.
+
+Correction:
+
+- Pass the same `--repo-url` value from `scripts/bootstrap-linux.sh` into
+  `scripts/validate-linux-install.sh`.
+- Contract tests require that propagation.
+- Pre-merge proof using a branch or alternate repo URL must produce evidence
+  against the same source that the bootstrap actually installed.
+
+## 2026-06-17: Evidence Result Must Match Checks
+
+Problem: install evidence could be structurally valid while saying
+`result: "pass"` even if a check reported `fail`, or saying `fail` without a
+failed check explaining why.
+
+Correction:
+
+- Install evidence validation now enforces result/check consistency.
+- Passing install evidence cannot include failed checks.
+- Failed or blocked install evidence must include a failed check and rerun or
+  recovery guidance.
+
+## 2026-06-17: Evidence Summary Counts Must Be Verified
+
+Problem: install evidence could provide a `checks_summary` object that did not
+match the actual `checks` rows.
+
+Correction:
+
+- Install evidence validation now requires non-negative integer `pass`, `fail`,
+  and `warn` counts.
+- Those counts must match the actual check rows with matching statuses.
+- Skipped checks may appear in `checks`, but they are not counted in the
+  pass/fail/warn summary.
+
+## 2026-06-17: Manual Auth Tasks Need Strong Evidence Semantics
+
+Problem: evidence validation required manual task IDs but did not require the
+rows to say those tasks are still post-install user actions.
+
+Correction:
+
+- Manual task evidence rows must be objects with non-empty `id` and `summary`.
+- Each row must use `status: "manual-post-install"`.
+- Required manual task IDs remain Tailscale login, Codex login, Claude login,
+  and provider auth.
+
+## 2026-06-17: Redaction Evidence Must Name Secret Categories
+
+Problem: evidence validation accepted any `redactions` array, including one
+that omitted important secret-bearing categories.
+
+Correction:
+
+- Evidence must declare redaction categories for GitHub auth output,
+  environment data, authorized keys, provider tokens, and private keys.
+- Each redaction entry must be a non-empty string.
+- This proves the evidence packet intentionally excludes the sensitive classes
+  named in the install contract.
+
+## 2026-06-17: Evidence-Write Must Declare The Evidence File Mutation
+
+Problem: evidence validation accepted any `mutations` array, so a packet could
+claim `authority.level: "evidence-write"` without declaring that it wrote an
+evidence file.
+
+Correction:
+
+- Mutation entries must be non-empty strings.
+- Evidence with `authority.level: "evidence-write"` must include
+  `evidence-file` in `mutations`.
+- Read-only summaries may still use an empty mutation list when they do not
+  write a file.
+
+## 2026-06-17: Evidence Authority Levels Must Be Closed Sets
+
+Problem: evidence validation accepted any non-empty `authority.level`, so a
+packet could claim unsupported authority such as remote apply or reboot and
+still pass schema checks.
+
+Correction:
+
+- Bootstrap controller evidence accepts only `plan`, `verify`, or
+  `evidence-write`.
+- Install evidence accepts only `verify` or `evidence-write`.
+- Reboot, cleanup, remote apply, provider auth, and similar authority families
+  remain outside the base installer evidence contract.
+
+## 2026-06-17: Bootstrap Action Rows Need Shape Validation
+
+Problem: bootstrap evidence validated `tool_changes`, `project_actions`, and
+`skipped` only as arrays, so malformed rows could pass schema checks.
+
+Correction:
+
+- `tool_changes` and `project_actions` rows must include non-empty `id`,
+  `status`, and `summary`.
+- `skipped` rows must include non-empty `id` and `reason`, and status must be
+  `skip` or `blocked`.
+- Empty arrays remain valid when the plan/verify-only path does not perform
+  those actions.
+
+## 2026-06-17: Blocked Install Evidence Should Use Blocked Checks
+
+Problem: install evidence supported `result: "blocked"` but required a failed
+check to explain the stop. That blurred user-recoverable stop conditions, such
+as missing manual repo auth, with actual operation failures.
+
+Correction:
+
+- Install check statuses now allow `blocked`.
+- `result: "blocked"` requires at least one blocked check explaining the stop.
+- Pass/fail/warn summary counts still count only pass, fail, and warn rows;
+  blocked and skipped rows are represented by their check status and recovery
+  guidance.
+
+## 2026-06-17: Install Evidence Must Preserve Local Target Boundary
+
+Problem: install evidence validation required `target.address_source:
+"local-session"` but still allowed arbitrary target aliases that could imply a
+remote or named host install.
+
+Correction:
+
+- Install evidence must use `target.alias: "local"`.
+- Install evidence must use `target.address_source: "local-session"`.
+- Standalone validator packets that use other aliases are not promotable as
+  supported one-command install evidence.
+
+## 2026-06-17: Bootstrap Must Invoke Validator With Promotable Evidence Target
+
+Problem: `scripts/validate-linux-install.sh` supports standalone aliases and
+address sources for diagnostics, but supported install evidence must prove the
+single local-session bootstrap path.
+
+Correction:
+
+- The bootstrap final validation command must pass `--alias local`.
+- The bootstrap final validation command must pass
+  `--address-source local-session`.
+- Contract tests pin those arguments so stricter install evidence validation
+  continues to accept bootstrap-produced evidence.
+
+## 2026-06-17: Validator Defaults Should Match Supported Local Evidence
+
+Problem: `scripts/validate-linux-install.sh` defaulted evidence identity to a
+generic target alias and operator-input address source even though supported
+install evidence is local-session only.
+
+Correction:
+
+- Validator defaults are now `--alias local` and
+  `--address-source local-session`.
+- Standalone validator evidence uses the same target boundary as the supported
+  bootstrap path unless explicitly overridden for diagnostics.
+- Evidence promotion still requires the stricter schema checks.
+
+## 2026-06-17: Pre-Repo Blocked Stops Need Stdout Evidence
+
+Problem: missing private repo access can block the install before the Kendall
+Vnxt checkout and approved evidence directory exist, so the bootstrap cannot
+write repo-local file evidence yet.
+
+Correction:
+
+- Repo-access blocked stops emit schema-compliant install evidence to stdout.
+- The stdout packet uses `authority.level: "verify"` and no `evidence-file`
+  mutation because no file is written.
+- The stdout packet records completed mutation families, such as approved
+  package/tool install or agent CLI install, when those steps already ran.
+- Once the repo evidence directory exists, later setup or validation failures
+  write file evidence under `docs/linux-install/evidence/`.
+
+## 2026-06-17: Stdout Evidence Requires Stderr Logs
+
+Problem: pre-repo blocked evidence is emitted to stdout, but normal progress
+logs on stdout would make that JSON hard to capture and validate.
+
+Correction:
+
+- Bootstrap progress logs now go to stderr.
+- Stdout is reserved for machine-readable evidence when the script emits
+  pre-repo blocked evidence.
+- Recovery errors still go to stderr.
+
+## 2026-06-17: Install Evidence Needs Command Provenance
+
+Problem: install evidence recorded `mode: "verify"` but did not name the
+command that produced the evidence packet.
+
+Correction:
+
+- Install evidence now includes `command.mode: "verify"`.
+- Install evidence now includes a non-empty `command.invoked` string.
+- Bootstrap-generated failure or blocked evidence records the supported
+  bootstrap command, while validator-generated evidence records the validator
+  command.

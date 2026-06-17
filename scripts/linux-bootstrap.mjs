@@ -1,174 +1,110 @@
 #!/usr/bin/env node
 
-const args = process.argv.slice(2);
+import { spawnSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-function usage() {
-  return `Usage: node ./scripts/linux-bootstrap.mjs --plan [options]
+import { parseLinuxBootstrapArgs, usage } from "./lib/linux-bootstrap/args.mjs";
+import { buildEvidence, printSummary } from "./lib/linux-bootstrap/evidence.mjs";
+import { createExecutor } from "./lib/linux-bootstrap/executor.mjs";
+import { runBootstrapController } from "./lib/linux-bootstrap/controller.mjs";
 
-First-milestone Linux bootstrap orchestrator.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(__dirname, "..");
 
-Options:
-  --plan              Print the staged plan. This is the only supported mode.
-  --target <alias>    SSH target alias or host. Default: ubuntu-target.
-  --user <name>       Optional expected Linux user. Defaults to remote current user.
-  --hostname <name>   Optional expected target hostname.
-  -h, --help          Show this help.
-
-Apply, remote verification, package install, SSH key install, provider auth,
-Tailnet enrollment, and reboot modes are intentionally unavailable in this
-milestone.`;
-}
-
-function fail(message, code = 2) {
+function failUsage(message) {
   console.error(message);
   console.error("");
   console.error(usage());
-  process.exit(code);
+  process.exit(2);
 }
 
-let mode = null;
-let target = "ubuntu-target";
-let user = "";
-let hostname = "";
-
-function optionValue(option, index) {
-  const value = args[index + 1];
-  if (!value || value.startsWith("--")) {
-    fail(`Missing value for ${option}.`);
-  }
-  return value;
+function runLocal(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    input: options.input,
+    shell: false,
+  });
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? result.error?.message ?? "",
+  };
 }
 
-function validateCommandToken(name, value, pattern = /^[A-Za-z0-9._@%+=:,-]+$/) {
-  if (!value) {
-    return;
+function commandAvailable(command) {
+  const result = runLocal(process.platform === "win32" ? "where.exe" : "which", [command]);
+  return result.status === 0;
+}
+
+function localSyntaxGate() {
+  const nodeCheck = runLocal("node", ["--check", "scripts/linux-bootstrap.mjs"]);
+  if (nodeCheck.status !== 0) {
+    return {
+      id: "operator-preflight",
+      status: "fail",
+      summary: "linux bootstrap entrypoint failed node syntax check",
+      recovery: "Fix scripts/linux-bootstrap.mjs syntax before running bootstrap.",
+      command: "node --check scripts/linux-bootstrap.mjs",
+    };
   }
-  if (value.startsWith("-")) {
-    fail(`${name} must not start with '-'.`);
+
+  const shellCheck = runLocal("bash", ["-n", "scripts/bootstrap-linux.sh", "scripts/validate-linux-install.sh"]);
+  if (shellCheck.status !== 0) {
+    return {
+      id: "operator-preflight",
+      status: "fail",
+      summary: "Linux shell scripts failed bash syntax check",
+      recovery: "Fix bootstrap-linux.sh or validate-linux-install.sh syntax before running bootstrap.",
+      command: "bash -n scripts/bootstrap-linux.sh scripts/validate-linux-install.sh",
+    };
   }
-  if (!pattern.test(value)) {
-    fail(`${name} contains unsupported characters for generated shell commands.`);
+
+  for (const tool of ["node", "pnpm", "bash"]) {
+    if (!commandAvailable(tool)) {
+      return {
+        id: "local-preflight",
+        status: "fail",
+        summary: `${tool} is not available in the local environment`,
+        recovery: `Install ${tool} or fix PATH before running bootstrap.`,
+        command: `check ${tool} availability`,
+      };
+    }
+  }
+
+  return {
+    id: "local-preflight",
+    status: "pass",
+    summary: "local tools and script syntax are ready",
+    recovery: "none",
+    command: "node --check, bash -n, and tool availability checks",
+  };
+}
+
+function run() {
+  let options;
+  try {
+    options = parseLinuxBootstrapArgs(process.argv.slice(2));
+  } catch (error) {
+    failUsage(error.message);
+  }
+
+  const evidence = buildEvidence({ repoRoot, options });
+  const executor = createExecutor({ runLocal });
+  const result = runBootstrapController({
+    repoRoot,
+    options,
+    executor,
+    evidence,
+    operatorPreflightGate: localSyntaxGate,
+  });
+
+  printSummary(evidence);
+
+  if (result.exitCode !== 0) {
+    process.exit(result.exitCode);
   }
 }
 
-for (let index = 0; index < args.length; index += 1) {
-  const arg = args[index];
-  switch (arg) {
-    case "--plan":
-      mode = "plan";
-      break;
-    case "--target":
-      target = optionValue(arg, index);
-      index += 1;
-      break;
-    case "--user":
-      user = optionValue(arg, index);
-      index += 1;
-      break;
-    case "--hostname":
-      hostname = optionValue(arg, index);
-      index += 1;
-      break;
-    case "--verify-only":
-    case "--apply":
-    case "--install-key":
-    case "--reboot":
-      fail(`${arg} is gated and not implemented in the first milestone.`);
-      break;
-    case "-h":
-    case "--help":
-      console.log(usage());
-      process.exit(0);
-      break;
-    default:
-      fail(`Unsupported argument: ${arg}`);
-  }
-}
-
-if (mode !== "plan") {
-  fail("This first-milestone orchestrator only supports --plan.");
-}
-
-for (const [name, value] of Object.entries({ target })) {
-  if (!value || value.startsWith("--")) {
-    fail(`Missing value for ${name}.`);
-  }
-}
-
-validateCommandToken("target", target);
-validateCommandToken("user", user, /^[A-Za-z0-9._-]+$/);
-validateCommandToken("hostname", hostname, /^[A-Za-z0-9._-]+$/);
-
-function verifyArgs({ includeRepo = false } = {}) {
-  const scriptArgs = ["--verify-only"];
-  if (user) {
-    scriptArgs.push("--user", user);
-  }
-  if (hostname) {
-    scriptArgs.push("--hostname", hostname);
-  }
-  if (!includeRepo) {
-    scriptArgs.push("--skip-repo");
-  }
-  return scriptArgs.join(" ");
-}
-
-const plan = {
-  schema: "kendall-linux-bootstrap-plan/v1",
-  mode: "plan",
-  target: {
-    alias: target,
-    user: user || "remote-current-user",
-    hostname: hostname || "not-enforced",
-    durableIdentity: "ssh-alias",
-    rawIpPolicy: "discovery-only",
-  },
-  stages: [
-    {
-      id: "local-syntax",
-      command: "node --check scripts/linux-bootstrap.mjs && bash -n scripts/bootstrap-linux.sh scripts/validate-linux-install.sh",
-      mutation: "none",
-    },
-    {
-      id: "first-ssh-trust",
-      command: `ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes ${target} 'whoami; hostname; cat /etc/os-release'`,
-      mutation: "known_hosts add only",
-      status: "run-once-for-new-host",
-    },
-    {
-      id: "remote-baseline-verify",
-      command: `Get-Content -Raw scripts\\validate-linux-install.sh | ssh ${target} 'bash -s -- ${verifyArgs()}'`,
-      mutation: "none",
-      status: "future-gated",
-    },
-    {
-      id: "remote-apply",
-      command: "not implemented",
-      mutation: "requires explicit approval packet",
-      status: "blocked",
-    },
-    {
-      id: "remote-post-apply-verify",
-      command: `Get-Content -Raw scripts\\validate-linux-install.sh | ssh ${target} 'bash -s -- ${verifyArgs({ includeRepo: true })}'`,
-      mutation: "none",
-      status: "blocked-until-apply-exists",
-    },
-  ],
-  stopLines: [
-    "host-key mismatch",
-    "target alias mismatch",
-    "remote user does not match --user when --user is provided",
-    "Ubuntu release is older than 26.04",
-    "private key input",
-    "authorized_keys overwrite",
-    "automated provider, repository-service, or Tailnet auth",
-    "unexpected package/file/service mutation",
-    "reboot request without separate approval",
-  ],
-  evidence: {
-    default: "stdout redacted summary",
-    fileEvidence: "requires explicit path and approved evidence location",
-  },
-};
-
-console.log(JSON.stringify(plan, null, 2));
+run();

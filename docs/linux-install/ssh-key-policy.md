@@ -1,6 +1,17 @@
 # SSH Key Policy
 
-Status: draft v1
+Status: historical/superseded for installer scope
+
+Superseded for Kendall Vnxt install by:
+
+- [one-command-bootstrap-plan.md](one-command-bootstrap-plan.md)
+- [install-contract.md](install-contract.md)
+
+This document is retained as SSH policy history only. SSH setup, remote
+execution, terminal transport, and SSH host-key management are not part of the
+supported v1 Kendall Vnxt installer. The only supported v1 install method is a
+local Ubuntu 26.04-or-later non-root sudo user running the single Kendall Vnxt
+bootstrap command from that Ubuntu terminal.
 
 ## Principle
 
