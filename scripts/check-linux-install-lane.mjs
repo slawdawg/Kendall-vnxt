@@ -852,10 +852,14 @@ if (existingFiles.has("docs/linux-install/planning/reviews/pr-144-delivery-recor
     "no unresolved review threads",
     "remote branch `codex/continue-linux-install-work` was deleted",
     "Authority And Evidence",
-    "Approval record: user message on 2026-06-18, \"merge",
-    "Approval record: user message on 2026-06-18, \"proceed\"",
+    "Approval record: user message on 2026-06-18 approving terminal delivery",
+    "approving primary-worktree",
     "Authority family: terminal delivery",
     "Authority family: primary-worktree maintenance",
+    "Operations: PR merge and remote PR branch deletion",
+    "Operations: discard one obsolete untracked local evidence packet",
+    "Scope: PR #144 and branch `codex/continue-linux-install-work`",
+    "Evidence required: GitHub PR state, CI state, review-thread state",
     "Command:",
     "Exit:",
     "Output excerpt:",
@@ -882,11 +886,14 @@ if (existingFiles.has("docs/linux-install/planning/reviews/pr-144-delivery-recor
 if (existingFiles.has("docs/linux-install/planning/reviews/linux-install-mvp-retrospective-2026-06-18.md")) {
   const retrospective = read("docs/linux-install/planning/reviews/linux-install-mvp-retrospective-2026-06-18.md");
   for (const expected of [
+    "# Linux Install MVP Retrospective Draft Synthesis",
     "Scope: Epics 1-5, Stories 1.1-5.6",
     "Delivery PR: https://github.com/slawdawg/Kendall-vnxt/pull/144",
+    "not completed interactive",
     "no user dialogue is fabricated",
     "Terminal delivery is its own implementation surface",
-    "The next safe workflow action is a narrow closeout PR",
+    "narrow closeout PR",
+    "formal BMAD",
   ]) {
     if (!retrospective.includes(expected)) {
       failures.push(`Linux Install MVP retrospective must include: ${expected}`);

@@ -20,14 +20,14 @@ were restored.
 
 ## Authority And Evidence
 
-- Approval record: user message on 2026-06-18, "merge, delete the remove
-  branch, and should we bring this worktree up to date as well?"
+- Approval record: user message on 2026-06-18 approving terminal delivery.
   - Authority family: terminal delivery.
   - Operations: PR merge and remote PR branch deletion.
   - Scope: PR #144 and branch `codex/continue-linux-install-work`.
   - Evidence required: GitHub PR state, CI state, review-thread state, merge
     commit, and branch deletion result.
-- Approval record: user message on 2026-06-18, "proceed".
+- Approval record: user message on 2026-06-18 approving primary-worktree
+  maintenance after obsolete-state investigation.
   - Authority family: primary-worktree maintenance.
   - Operations: discard one obsolete untracked local evidence packet, restore
     stale tracked Linux install doc edits, and fast-forward primary `main`.
