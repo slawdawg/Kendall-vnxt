@@ -53,6 +53,13 @@ test("bootstrap script rejects unsupported arguments before mutation", () => {
   assert.match(result.stderr, /unsupported argument: --target/);
 });
 
+test("bootstrap script rejects manifest pin overrides before mutation", () => {
+  const result = runBootstrap(["--pnpm-version", "11.0.0"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unsupported argument: --pnpm-version/);
+});
+
 test("bootstrap script rejects staged install modes before mutation", () => {
   for (const mode of ["--install-toolchain", "--install-agent-clis", "--dry-run"]) {
     const result = runBootstrap([mode]);
@@ -71,9 +78,12 @@ test("bootstrap script installs or verifies the approved base toolchain only thr
   assert.match(source, /sudo npm install -g "pnpm@\$install_pnpm_version"/);
   assert.match(source, /curl -LsSf https:\/\/astral\.sh\/uv\/install\.sh/);
   assert.match(source, /sudo npm install -g \$packages/);
-  assert.match(source, /@openai\/codex/);
-  assert.match(source, /@anthropic-ai\/claude-code/);
-  assert.match(source, /bmad-method/);
+  assert.match(source, /@openai\/codex@\$install_codex_version/);
+  assert.match(source, /@anthropic-ai\/claude-code@\$install_claude_version/);
+  assert.match(source, /bmad-method@\$install_bmad_version/);
+  assert.match(source, /tool_version_matches codex "\$install_codex_version"/);
+  assert.match(source, /tool_version_matches claude "\$install_claude_version"/);
+  assert.match(source, /tool_version_matches bmad-method "\$install_bmad_version"/);
 });
 
 test("bootstrap script gives recovery guidance for unresolved toolchain install states", () => {
@@ -160,10 +170,46 @@ test("blocked repo-access evidence is parseable stdout with progress kept off st
 test("bootstrap script skips agent CLI reinstall when commands already exist", () => {
   const source = readFileSync("scripts/bootstrap-linux.sh", "utf8");
 
-  assert.match(source, /command -v codex/);
-  assert.match(source, /command -v claude/);
-  assert.match(source, /command -v bmad-method/);
+  assert.match(source, /tool_version_matches codex "\$install_codex_version" "\$codex_before"/);
+  assert.match(source, /tool_version_matches claude "\$install_claude_version" "\$claude_before"/);
+  assert.match(source, /tool_version_matches bmad-method "\$install_bmad_version" "\$bmad_before"/);
   assert.match(source, /already exist; skipping npm global install/);
+});
+
+test("bootstrap script pins agent CLI package versions and fails closed on drift", () => {
+  const source = readFileSync("scripts/bootstrap-linux.sh", "utf8");
+
+  assert.match(source, /install_codex_version="0\.141\.0"/);
+  assert.match(source, /install_claude_version="2\.1\.179"/);
+  assert.match(source, /install_bmad_version="6\.8\.0"/);
+  assert.match(source, /Codex CLI version must be \$install_codex_version/);
+  assert.match(source, /Claude Code version must be \$install_claude_version/);
+  assert.match(source, /BMAD Method version must be \$install_bmad_version/);
+});
+
+test("bootstrap script version matcher accepts pinned CLI output shapes", () => {
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      [
+        "set --",
+        "source scripts/bootstrap-linux.sh",
+        'tool_version_matches codex "0.141.0" "codex-cli 0.141.0"',
+        'tool_version_matches claude "2.1.179" "2.1.179"',
+        'tool_version_matches claude "2.1.179" "2.1.179 (Claude Code)"',
+        'tool_version_matches bmad-method "6.8.0" "6.8.0"',
+        '! tool_version_matches codex "0.141.0" "codex-cli 0.140.0"',
+      ].join("\n"),
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      shell: false,
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("bootstrap script skips pnpm reinstall when pinned version already exists", () => {
@@ -253,4 +299,15 @@ test("bootstrap script passes per-tool change evidence to final validation", () 
   assert.match(source, /--tool-changes-json "\$\(tool_changes_json\)"/);
   assert.match(validator, /--tool-changes-json <json>/);
   assert.match(validator, /"tool_changes":%s/);
+});
+
+test("verify-only validator enforces pinned global CLI versions", () => {
+  const validator = readFileSync("scripts/validate-linux-install.sh", "utf8");
+
+  assert.match(validator, /expected_codex_version="codex-cli 0\.141\.0"/);
+  assert.match(validator, /expected_claude_version="2\.1\.179"/);
+  assert.match(validator, /expected_bmad_version="6\.8\.0"/);
+  assert.match(validator, /run_version_check codex "codex --version" "\$expected_codex_version"/);
+  assert.match(validator, /run_version_check claude "claude --version" "\$expected_claude_version"/);
+  assert.match(validator, /run_version_check bmad-method "bmad-method --version" "\$expected_bmad_version"/);
 });

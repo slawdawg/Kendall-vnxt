@@ -185,6 +185,9 @@ that closeout is delivered or intentionally abandoned.
   `docs/linux-install/planning/reviews/pr-144-delivery-record.md`.
 - Completed BMAD lane retrospective:
   `docs/linux-install/planning/reviews/linux-install-mvp-retrospective-2026-06-18.md`.
+- Added post-delivery supply-chain hardening by pinning global npm-installed
+  CLIs in `docs/linux-install/global-tool-manifest.json` and enforcing those
+  pins in `scripts/bootstrap-linux.sh` and the Linux install contract checker.
 
 ## Verification State
 
@@ -199,7 +202,8 @@ Latest focused checks:
 
 ## Open Work
 
-- Deliver the post-merge closeout diff as a narrow PR.
+- Deliver the post-merge closeout and supply-chain hardening diff as a
+  substantive Linux install lane PR.
 - Clean up the completed Codex worktree after post-merge closeout changes are
   delivered or intentionally abandoned.
 

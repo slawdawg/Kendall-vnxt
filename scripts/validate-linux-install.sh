@@ -6,6 +6,9 @@ expected_user="$(id -un 2>/dev/null || printf unknown)"
 minimum_os_version="26.04"
 expected_hostname=""
 expected_pnpm_version="11.5.2"
+expected_codex_version="codex-cli 0.141.0"
+expected_claude_version="2.1.179"
+expected_bmad_version="6.8.0"
 minimum_node_major="22"
 maximum_node_major_exclusive="25"
 repo_path="${HOME:-/home/$expected_user}/Kendall_Nxt"
@@ -40,7 +43,6 @@ Options:
   --alias <name>            Target alias for evidence. Default: local.
   --address-source <source> Target address source for evidence.
                             Default: local-session.
-  --pnpm-version <version>  Expected pnpm version. Default: 11.5.2.
   --repo <path>             Kendall_Nxt repo path. Default: $HOME/Kendall_Nxt.
   --repo-url <url>          Expected repo origin URL.
                             Default: Kendall Vnxt HTTPS repo.
@@ -266,11 +268,6 @@ while [ "$#" -gt 0 ]; do
       address_source="$2"
       shift 2
       ;;
-    --pnpm-version)
-      require_option_value "$1" "${2-}"
-      expected_pnpm_version="$2"
-      shift 2
-      ;;
     --repo)
       require_option_value "$1" "${2-}"
       repo_path="$2"
@@ -359,9 +356,9 @@ run_version_check node "node --version"
 run_version_check pnpm "pnpm --version" "$expected_pnpm_version"
 run_version_check uv "uv --version"
 run_version_check gh "gh --version"
-run_version_check codex "codex --version"
-run_version_check claude "claude --version"
-run_version_check bmad-method "bmad-method --version"
+run_version_check codex "codex --version" "$expected_codex_version"
+run_version_check claude "claude --version" "$expected_claude_version"
+run_version_check bmad-method "bmad-method --version" "$expected_bmad_version"
 
 if command -v gh >/dev/null 2>&1; then
   if gh auth status >/dev/null 2>&1; then

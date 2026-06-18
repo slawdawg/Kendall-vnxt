@@ -91,18 +91,21 @@ The current bootstrap installs some global tools from package registries or
 vendor install scripts:
 
 - `pnpm` through npm, pinned to the repo package-manager version.
-- Codex CLI, Claude Code, and BMAD Method through npm without dedicated global
-  tool version pins.
+- Codex CLI, Claude Code, and BMAD Method through npm using the pinned versions
+  in `docs/linux-install/global-tool-manifest.json`.
 - `uv` through the Astral install script.
 
 Current boundary:
 
 - The bootstrap proves the tools resolve and reports versions.
-- It does not yet prove package integrity, registry provenance, or a locked
-  global CLI version set.
-- Before claiming supply-chain certification, add a pinned global-tool
-  manifest, installer checksum/provenance policy where available, and evidence
-  that the resolved versions match that manifest.
+- Verify-only fails if pnpm, Codex CLI, Claude Code, or BMAD Method version
+  drift is detected. Install mode may reinstall the pinned npm package for
+  Codex CLI, Claude Code, or BMAD Method through the single supported bootstrap.
+- It does not yet prove package integrity, registry provenance, installer
+  checksums, or vendor binary provenance.
+- Before claiming supply-chain certification, add installer checksum/provenance
+  policy where available and evidence that registry-resolved artifacts match
+  that policy.
 
 ## Backup Restore Proof
 

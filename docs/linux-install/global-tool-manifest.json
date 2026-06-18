@@ -1,0 +1,47 @@
+{
+  "schema": "kendall-linux-global-tools/v1",
+  "description": "Pinned global tools installed or verified by the supported Linux bootstrap.",
+  "npm": [
+    {
+      "id": "pnpm",
+      "package": "pnpm",
+      "version": "11.5.2",
+      "command": "pnpm",
+      "version_output": "11.5.2"
+    },
+    {
+      "id": "codex",
+      "package": "@openai/codex",
+      "version": "0.141.0",
+      "command": "codex",
+      "version_output": "codex-cli 0.141.0"
+    },
+    {
+      "id": "claude",
+      "package": "@anthropic-ai/claude-code",
+      "version": "2.1.179",
+      "command": "claude",
+      "version_output": "2.1.179"
+    },
+    {
+      "id": "bmad-method",
+      "package": "bmad-method",
+      "version": "6.8.0",
+      "command": "bmad-method",
+      "version_output": "6.8.0"
+    }
+  ],
+  "external_installers": [
+    {
+      "id": "uv",
+      "source": "https://astral.sh/uv/install.sh",
+      "command": "uv",
+      "policy": "installer script remains source-pinned by URL only; checksum or locked binary provenance is not yet claimed"
+    }
+  ],
+  "policy": {
+    "floating_npm_global_installs_allowed": false,
+    "version_drift_behavior": "verify-only fails on drift; install mode may reinstall the pinned package through the single supported bootstrap; post-install mismatch fails",
+    "certification_boundary": "This manifest pins global npm package versions. It does not claim registry integrity, checksum verification, or vendor installer provenance."
+  }
+}

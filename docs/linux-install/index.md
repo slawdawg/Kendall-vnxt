@@ -23,6 +23,7 @@ memory.
 - [Lessons learned](lessons-learned.md)
 - [Evidence schema](evidence/schema.md)
 - [Goal run fixtures](fixtures/goal-run/)
+- [Global tool manifest](global-tool-manifest.json)
 
 ## Active Planning Artifacts
 
