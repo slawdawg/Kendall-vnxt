@@ -40,8 +40,9 @@ Current state: baseline managed-worktree readiness is measured. The
 the trial. The original result was to defer tracked `mise` adoption because
 setup and preflight failed under mise-managed pnpm in the then-current repo
 scripts. A later local retry after pnpm shim command-resolution hardening passed
-setup, preflight, and workspace doctor, but tracked `mise` adoption remains
-deferred until that hardening is merged and rerun from a clean `main` baseline.
+setup, preflight, and workspace doctor with `--skip-tools` against the existing
+scoped/offline tool install, but tracked `mise` adoption remains deferred until
+that hardening is merged and rerun from a clean `main` baseline.
 
 ## Acceptance Criteria
 
@@ -195,18 +196,18 @@ track a mise config.
 | AC | Status |
 | --- | --- |
 | AC1 | Complete: baseline setup/preflight evidence recorded. |
-| AC2 | Complete: controlled `mise` install/run evidence recorded; setup and preflight failed under mise-managed pnpm. |
+| AC2 | Complete: controlled `mise` install/run evidence recorded; original setup/preflight failed under mise-managed pnpm, and local scoped/offline `--skip-tools` retry passed after pnpm shim hardening. |
 | AC3 | Complete: `mise_missing` recorded and install stopped. |
 | AC4 | Complete: mise activated Node `22.13.0`, pnpm `11.5.2`, and Python `3.12.13`; baseline drift recorded. |
 | AC5 | Complete: temp tasks delegated to existing package scripts. |
 | AC6 | Complete for trial evidence: no dotenv copy; env-name check printed no secret values and found only `GH_PAGER`. |
-| AC7 | Complete: measured trial supports deferring tracked mise adoption pending repo script compatibility work. |
+| AC7 | Complete: measured trial and follow-up retry support deferring tracked mise adoption until pnpm shim hardening is merged and rerun from `main`. |
 | AC8 | Complete: stop lines preserved. |
 
 Follow-up note: after local pnpm shim hardening on branch `research/brainstorming`,
-the scoped `mise` retry passed setup, preflight, and workspace doctor. This
-updates the technical blocker evidence but does not reopen the completed story
-or approve tracked `mise` adoption.
+the scoped/offline `mise run --skip-tools` retry passed setup, preflight, and
+workspace doctor. This updates the technical blocker evidence but does not
+reopen the completed story or approve tracked `mise` adoption.
 
 ### Review Findings
 
@@ -252,6 +253,9 @@ GPT-5 Codex
   validate pnpm availability under mise-managed pnpm
 - `mise run workspace-doctor` passed in `0:10.42`
 - env-name secret check printed no secret values and found only `GH_PAGER`
+- follow-up retry after local pnpm shim hardening:
+  `mise run --skip-tools setup`, `mise run --skip-tools preflight`, and
+  `mise run --skip-tools workspace-doctor` passed in the scoped offline trial
 
 ### Completion Notes List
 
@@ -269,12 +273,14 @@ GPT-5 Codex
 - uv selected CPython `3.12.13` for supervisor setup, satisfying the shared
   Python default recommendation.
 - Party-mode architecture, development, and test perspectives agreed to defer
-  `mise` adoption pending explicit install/use approval.
+  `mise` adoption until the local script compatibility fix is merged and a clean
+  post-merge trial passes from `main`.
 - BMAD code review found overclaiming in the original evidence language. The
   story now separates complete baseline evidence from blocked `mise` evidence.
-- Controlled `mise` trial result: direct version activation works, but current
-  repo setup/preflight paths fail under mise-managed pnpm. Tracked `mise` config
-  adoption is deferred.
+- Controlled `mise` trial result: direct version activation works. The original
+  repo setup/preflight paths failed under mise-managed pnpm, but the local
+  follow-up retry passed after pnpm shim hardening. Tracked `mise` config
+  adoption remains deferred pending merge and clean post-merge validation.
 - BMAD code-review findings were patched and resolved; story is complete with
   tracked `mise` adoption deferred.
 

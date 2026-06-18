@@ -353,4 +353,4 @@ Stories in this epic do not approve PR merges, cleanup, branch deletion, local c
 | Story | Summary |
 | --- | --- |
 | `22-1-workspace-coordination-report.md` | Done story for a workspace coordination report workflow and drift check that classifies active lanes, merge gates, local-only commits, cleanup candidates, and stop lines. |
-| `22-2-evaluate-mise-managed-worktree-readiness.md` | Done story with baseline and controlled `mise` trial evidence; tracked `mise` adoption is deferred because setup/preflight fail under mise-managed pnpm. |
+| `22-2-evaluate-mise-managed-worktree-readiness.md` | Done story with baseline and controlled `mise` trial evidence; original setup/preflight failed under mise-managed pnpm, local scoped/offline `--skip-tools` retry passed after pnpm shim hardening, and tracked `mise` adoption remains deferred pending clean post-merge validation. |

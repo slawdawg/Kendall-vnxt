@@ -132,20 +132,27 @@ active_versions:
 
 setup_result:
   - baseline: pass after approved uv cache access
-  - mise: fail
-  - failure reason: repo setup runs under `pnpm run setup`; mise-managed pnpm
+  - mise original trial: fail
+  - original failure reason: repo setup runs under `pnpm run setup`; mise-managed pnpm
     exposes `npm_execpath` in a way that makes `scripts/setup.mjs` resolve
     pnpm through `node ./pnpm`, producing `Cannot find module .../pnpm`
+  - mise follow-up retry after local pnpm shim hardening: pass with
+    `mise run --skip-tools setup` in the existing scoped/offline mise install
 
 preflight_result:
   - baseline: pass
-  - mise: fail
-  - failure reason: `pnpm run preflight` under mise-managed pnpm fails the repo
-    preflight pnpm availability check
+  - mise original trial: fail
+  - original failure reason: `pnpm run preflight` under mise-managed pnpm fails
+    the repo preflight pnpm availability check
+  - mise follow-up retry after local pnpm shim hardening: pass with
+    `mise run --skip-tools preflight` in the existing scoped/offline mise
+    install
 
 workspace_doctor_result:
   - baseline: pass
-  - mise: pass with Node v22.13.0
+  - mise original trial: pass with Node v22.13.0
+  - mise follow-up retry after local pnpm shim hardening: pass with
+    `mise run --skip-tools workspace-doctor`
   - note: mise-scoped HOME changes the local codex state root observation,
     causing doctor to warn that the state root does not exist yet
 
@@ -175,21 +182,24 @@ friction_delta:
   - baseline setup friction is low once uv cache access is available
   - mise adds a one-time 555M scoped tool/cache footprint in this trial
   - mise fixes Node drift for direct `mise exec` and workspace doctor
-  - mise-managed `pnpm run setup` and `pnpm run preflight` fail against current
-    repo scripts, so it does not reduce friction yet
+  - original mise-managed `pnpm run setup` and `pnpm run preflight` failed
+    against the then-current repo scripts
+  - follow-up retry passed after local pnpm shim hardening, but used
+    `--skip-tools` against the existing scoped/offline install; final friction
+    reduction still requires a clean post-merge trial from `main`
 
 recommendation:
   - defer tracked mise config adoption
   - do not add committed mise.toml yet
-  - future work should either harden repo scripts for mise-managed pnpm or
-    evaluate a task shape that avoids the npm_execpath resolver issue
+  - merge the local pnpm shim hardening as part of a coherent delivery batch,
+    then rerun the scoped trial from a clean `main` baseline
 
 remaining_gaps:
-  - decide whether to support mise-managed pnpm in `scripts/setup.mjs` and
-    `scripts/preflight.mjs`
-  - decide whether a future tracked mise config should manage only Node/Python
+  - validate the pnpm shim hardening after it is merged to `main`
+  - decide whether a tracked mise config should manage pnpm or only Node/Python
     while leaving pnpm to packageManager/corepack
-  - rerun Story 22.2 only after the repo script compatibility gap is addressed
+  - decide whether the measured friction reduction justifies adding `mise` as
+    another developer prerequisite
 ```
 
 ## Follow-Up Retry Evidence After Local Hardening
@@ -254,22 +264,23 @@ Updated interpretation:
 | AC | Evidence |
 | --- | --- |
 | AC1 baseline setup workflow evidence | Satisfied: setup/preflight commands, elapsed time, manual approval for uv cache, and pass results recorded. |
-| AC2 mise trial evidence | Satisfied: controlled install, setup, preflight, and workspace-doctor results recorded; setup/preflight failed under mise-managed pnpm. |
+| AC2 mise trial evidence | Satisfied: controlled install, setup, preflight, and workspace-doctor results recorded; original setup/preflight failed under mise-managed pnpm, then local scoped/offline `--skip-tools` retry passed after pnpm shim hardening. |
 | AC3 mise unavailable stop line | Satisfied: initial missing state recorded; resumed only after Bob unblocked controlled install/use. |
 | AC4 version source of truth | Satisfied: mise activated Node `22.13.0`, pnpm `11.5.2`, and Python `3.12.13`; baseline host drift recorded. |
 | AC5 task delegation | Satisfied: temp mise tasks delegated to existing `pnpm run setup`, `pnpm run preflight`, and `pnpm run codex:workspace:doctor`. |
 | AC6 secret boundary | Satisfied for trial evidence: no dotenv copy; env-name check printed no secret values and found only `GH_PAGER`. |
-| AC7 adoption decision | Satisfied: measured trial supports deferring tracked mise adoption until repo script compatibility is addressed. |
+| AC7 adoption decision | Satisfied: measured trial and follow-up retry support deferring tracked mise adoption until pnpm shim hardening is merged and a clean post-merge trial passes from `main`. |
 | AC8 stop lines | Satisfied: no global install, no provider calls, no paid calls, no worker launch, no GitHub mutation, no cleanup, no branch deletion, no worktree removal. |
 
 ## Party Mode Notes
 
 Party-mode architecture, development, and test perspectives agreed:
 
-- Treat `mise` as unavailable evidence, not a failed technical trial.
+- Treat `mise` as optional readiness evidence, not a mandatory rollout.
 - Record the Node version drift as a non-blocking readiness risk.
 - Complete the baseline readiness evidence.
-- Defer tracked `mise` adoption until repo script compatibility is addressed.
+- Defer tracked `mise` adoption until the local repo script compatibility fix is
+  merged and validated from `main`.
 - Do not mutate global tooling, shell profiles, Node versions, package-manager
   installs, credentials, worktrees, branches, or remotes in this story run.
 
@@ -281,8 +292,9 @@ Party-mode architecture, development, and test perspectives agreed:
 
 ## Next Follow-Up Gate
 
-To make tracked `mise` adoption viable, a future story should choose one of:
+To make tracked `mise` adoption viable, a future story should:
 
-- update repo scripts to handle mise-managed pnpm's `npm_execpath` behavior;
-- keep pnpm outside mise and use mise only for Node/Python/task aliases;
-- reject tracked mise config and keep the existing baseline workflow.
+- merge the pnpm shim hardening as part of a coherent delivery batch;
+- rerun the scoped trial from a clean `main` baseline;
+- decide whether tracked `mise` reduces repeated worktree friction enough to
+  justify adding another developer prerequisite.
