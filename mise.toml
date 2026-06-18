@@ -1,0 +1,20 @@
+[tools]
+node = "22.13.0"
+pnpm = "11.5.2"
+python = "3.12"
+
+[tasks.setup]
+description = "Install/update repo dependencies and validate the workspace."
+run = "pnpm run setup"
+
+[tasks.preflight]
+description = "Validate local JavaScript and Python workspace readiness."
+run = "pnpm run preflight"
+
+[tasks.workspace-doctor]
+description = "Inspect Codex workspace protocol readiness."
+run = "pnpm run codex:workspace:doctor"
+
+[tasks.check]
+description = "Run the full local verification chain."
+run = "pnpm run check"

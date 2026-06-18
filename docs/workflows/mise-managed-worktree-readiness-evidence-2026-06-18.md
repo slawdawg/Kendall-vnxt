@@ -1,8 +1,7 @@
 # Mise Managed Worktree Readiness Evidence
 
 Date: 2026-06-18
-Status: complete evaluation, tracked mise adoption deferred; follow-up retry
-passed after local pnpm shim hardening
+Status: complete evaluation; superseded by tracked mise workflow implementation
 Story: `docs/stories/22-2-evaluate-mise-managed-worktree-readiness.md`
 Workflow: `docs/workflows/mise-managed-worktree-readiness-evaluation.md`
 
@@ -14,12 +13,11 @@ activate the pinned tool versions in a scoped `/tmp` location. The original
 trial failed under mise-managed pnpm because repo scripts mishandled pnpm
 wrapper/shim command resolution.
 
-Decision:
+Historical decision:
 
 ```text
-defer tracked mise adoption. Do not add a committed mise config until the
-repo's pnpm/npm_execpath compatibility issue is resolved or the trial task shape
-is changed by a future story.
+defer tracked mise adoption until the repo's pnpm/npm_execpath compatibility
+issue is resolved and a clean post-merge trial passes.
 ```
 
 Follow-up retry:
@@ -30,6 +28,14 @@ the scoped mise retry passed setup, preflight, and workspace doctor. This
 resolves the observed setup/preflight blocker locally, but tracked mise adoption
 should still wait until the fix is merged to main and rerun from a clean merged
 baseline.
+```
+
+Implementation follow-up:
+
+```text
+Story 22.3 implemented tracked `mise.toml` after PR #146 merged the pnpm shim
+hardening to main and a clean post-merge mise trial passed without
+`--skip-tools`.
 ```
 
 ## Baseline Evidence
@@ -185,21 +191,19 @@ friction_delta:
   - original mise-managed `pnpm run setup` and `pnpm run preflight` failed
     against the then-current repo scripts
   - follow-up retry passed after local pnpm shim hardening, but used
-    `--skip-tools` against the existing scoped/offline install; final friction
-    reduction still requires a clean post-merge trial from `main`
+    `--skip-tools` against the existing scoped/offline install
+  - Story 22.3 later validated the same workflow from merged `main` without
+    `--skip-tools`
 
 recommendation:
-  - defer tracked mise config adoption
-  - do not add committed mise.toml yet
-  - merge the local pnpm shim hardening as part of a coherent delivery batch,
-    then rerun the scoped trial from a clean `main` baseline
+  - historical recommendation was to defer tracked mise config adoption
+  - current recommendation is recorded in Story 22.3 and
+    `docs/workflows/mise-normal-workflow-implementation-evidence-2026-06-18.md`
 
 remaining_gaps:
-  - validate the pnpm shim hardening after it is merged to `main`
-  - decide whether a tracked mise config should manage pnpm or only Node/Python
-    while leaving pnpm to packageManager/corepack
-  - decide whether the measured friction reduction justifies adding `mise` as
-    another developer prerequisite
+  - historical gaps were closed by Story 22.3 for the minimal tracked workflow
+  - future expansion beyond tool pins and package-script task aliases needs
+    separate approval and evidence
 ```
 
 ## Follow-Up Retry Evidence After Local Hardening
@@ -250,11 +254,10 @@ Updated interpretation:
 
 - The original `mise` blocker is no longer reproduced after the local pnpm shim
   hardening.
-- The hardening should be merged before Kendall_Nxt treats `mise` readiness as
-  viable from `main`.
-- A tracked `mise` config is still deferred until a clean post-merge trial
-  proves the same path from `main` and confirms that it reduces friction enough
-  to justify adding `mise` as another developer prerequisite.
+- PR #146 merged the hardening to `main` as
+  `c08e563 Harden research workflow readiness`.
+- Story 22.3 later proved the same path from merged `main` and implemented the
+  minimal tracked `mise.toml` workflow.
 - No provider/API secrets, dotenv files, PR delivery, branch cleanup, worktree
   cleanup, worker launch, provider call, or paid call was performed during this
   retry.
@@ -269,18 +272,20 @@ Updated interpretation:
 | AC4 version source of truth | Satisfied: mise activated Node `22.13.0`, pnpm `11.5.2`, and Python `3.12.13`; baseline host drift recorded. |
 | AC5 task delegation | Satisfied: temp mise tasks delegated to existing `pnpm run setup`, `pnpm run preflight`, and `pnpm run codex:workspace:doctor`. |
 | AC6 secret boundary | Satisfied for trial evidence: no dotenv copy; env-name check printed no secret values and found only `GH_PAGER`. |
-| AC7 adoption decision | Satisfied: measured trial and follow-up retry support deferring tracked mise adoption until pnpm shim hardening is merged and a clean post-merge trial passes from `main`. |
+| AC7 adoption decision | Satisfied historically: measured trial and follow-up retry supported deferring tracked mise adoption until pnpm shim hardening was merged and a clean post-merge trial passed from `main`; Story 22.3 records the later adoption decision. |
 | AC8 stop lines | Satisfied: no global install, no provider calls, no paid calls, no worker launch, no GitHub mutation, no cleanup, no branch deletion, no worktree removal. |
 
 ## Party Mode Notes
 
 Party-mode architecture, development, and test perspectives agreed:
 
-- Treat `mise` as optional readiness evidence, not a mandatory rollout.
+- Treat `mise` as optional readiness evidence during Story 22.2, not a mandatory
+  rollout from that evaluation story.
 - Record the Node version drift as a non-blocking readiness risk.
 - Complete the baseline readiness evidence.
-- Defer tracked `mise` adoption until the local repo script compatibility fix is
-  merged and validated from `main`.
+- Defer tracked `mise` adoption from Story 22.2 until the local repo script
+  compatibility fix is merged and validated from `main`; Story 22.3 later
+  completed that follow-up.
 - Do not mutate global tooling, shell profiles, Node versions, package-manager
   installs, credentials, worktrees, branches, or remotes in this story run.
 
@@ -292,9 +297,10 @@ Party-mode architecture, development, and test perspectives agreed:
 
 ## Next Follow-Up Gate
 
-To make tracked `mise` adoption viable, a future story should:
+Tracked `mise` adoption is implemented by:
 
-- merge the pnpm shim hardening as part of a coherent delivery batch;
-- rerun the scoped trial from a clean `main` baseline;
-- decide whether tracked `mise` reduces repeated worktree friction enough to
-  justify adding another developer prerequisite.
+- `docs/stories/22-3-implement-mise-normal-workflow.md`
+- `docs/workflows/mise-normal-workflow-implementation-evidence-2026-06-18.md`
+
+Future work should only expand beyond this minimal workflow with separate
+approval and evidence.
