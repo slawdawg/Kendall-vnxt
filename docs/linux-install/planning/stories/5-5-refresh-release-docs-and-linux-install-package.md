@@ -4,7 +4,7 @@ baseline_commit: 83235d523a8b178ccfcc45723d4e8773269d976a
 
 # Story 5.5: Refresh Release Docs And Linux Install Package
 
-Status: review
+Status: done
 
 ## Story
 
@@ -32,7 +32,7 @@ so that distributed artifacts match the proven install path.
   - [x] `node ./scripts/check-linux-bootstrap.mjs`
   - [x] `node ./scripts/check-linux-bootstrap-evidence.mjs docs/linux-install/evidence/local-verify-only-20260618T181400Z.json`
 - [x] Refresh `docs/linux-install.zip` after release evidence and review are complete. (AC: 1)
-  - [x] Story is ready for review after package refresh.
+  - [x] Package refresh was completed after published-source, first-install, rerun, and review evidence existed.
 
 ## Dev Notes
 
@@ -77,7 +77,7 @@ Codex GPT-5
 - Added `package-refresh-gated.json` to prevent premature Linux install package refresh.
 - Extended contract validation so `docs/linux-install.zip` records package refresh only after release evidence is available.
 - Refreshed `docs/linux-install.zip` from current Linux install docs, evidence, and fixtures after first-install and rerun validation evidence was recorded.
-- Story is ready for review.
+- Story delivered through PR #144 after package refresh, review, and CI passed.
 - Verification passed:
   - `node ./scripts/check-linux-install-contract.mjs`
   - `node ./scripts/check-linux-install-lane.mjs`

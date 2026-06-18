@@ -5,6 +5,9 @@ mode=""
 expected_user="$(id -un 2>/dev/null || printf unknown)"
 minimum_os_version="26.04"
 install_pnpm_version="11.5.2"
+install_codex_version="0.141.0"
+install_claude_version="2.1.179"
+install_bmad_version="6.8.0"
 install_uv="yes"
 minimum_node_major="22"
 maximum_node_major_exclusive="25"
@@ -26,7 +29,6 @@ Options:
   --user <name>          Expected Linux user. Default: current user.
   --min-os-version <ver> Minimum Ubuntu VERSION_ID. Default: 26.04.
   --os-version <ver>     Alias for --min-os-version.
-  --pnpm-version <ver>   pnpm version to install globally. Default: 11.5.2.
   --repo-url <url>        Git repository URL. Default: Kendall Vnxt HTTPS repo.
   --repo-path <path>      Repo checkout path. Default: $HOME/Kendall_Nxt.
   --skip-uv              Do not install uv.
@@ -134,6 +136,30 @@ tool_version() {
   fi
 }
 
+tool_version_matches() {
+  tool="$1"
+  expected="$2"
+  version_output="$3"
+
+  case "$tool" in
+    pnpm)
+      [ "$version_output" = "$expected" ]
+      ;;
+    codex)
+      [ "$version_output" = "codex-cli $expected" ] || [ "$version_output" = "$expected" ]
+      ;;
+    claude)
+      [ "$version_output" = "$expected" ] || [ "$version_output" = "$expected (Claude Code)" ]
+      ;;
+    bmad-method)
+      [ "$version_output" = "$expected" ]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 record_command_tool_change() {
   id="$1"
   before="$2"
@@ -222,6 +248,15 @@ print_versions() {
             result=1
           elif [ "$tool" = "pnpm" ] && [ "$version" != "$install_pnpm_version" ]; then
             printf '%s version mismatch: expected %s but found %s\n' "$tool" "$install_pnpm_version" "$version"
+            result=1
+          elif [ "$tool" = "codex" ] && ! tool_version_matches codex "$install_codex_version" "$version"; then
+            printf '%s version mismatch: expected %s but found %s\n' "$tool" "$install_codex_version" "$version"
+            result=1
+          elif [ "$tool" = "claude" ] && ! tool_version_matches claude "$install_claude_version" "$version"; then
+            printf '%s version mismatch: expected %s but found %s\n' "$tool" "$install_claude_version" "$version"
+            result=1
+          elif [ "$tool" = "bmad-method" ] && ! tool_version_matches bmad-method "$install_bmad_version" "$version"; then
+            printf '%s version mismatch: expected %s but found %s\n' "$tool" "$install_bmad_version" "$version"
             result=1
           else
             printf '%s\n' "$version"
@@ -380,14 +415,14 @@ install_agent_clis() {
   fi
 
   packages=""
-  if ! command -v codex >/dev/null 2>&1; then
-    packages="$packages @openai/codex"
+  if ! tool_version_matches codex "$install_codex_version" "$codex_before"; then
+    packages="$packages @openai/codex@$install_codex_version"
   fi
-  if ! command -v claude >/dev/null 2>&1; then
-    packages="$packages @anthropic-ai/claude-code"
+  if ! tool_version_matches claude "$install_claude_version" "$claude_before"; then
+    packages="$packages @anthropic-ai/claude-code@$install_claude_version"
   fi
-  if ! command -v bmad-method >/dev/null 2>&1; then
-    packages="$packages bmad-method"
+  if ! tool_version_matches bmad-method "$install_bmad_version" "$bmad_before"; then
+    packages="$packages bmad-method@$install_bmad_version"
   fi
 
   if [ -n "$packages" ]; then
@@ -407,6 +442,16 @@ install_agent_clis() {
   record_command_tool_change "codex" "$codex_before" "$codex_after"
   record_command_tool_change "claude" "$claude_before" "$claude_after"
   record_command_tool_change "bmad-method" "$bmad_before" "$bmad_after"
+
+  if ! tool_version_matches codex "$install_codex_version" "$codex_after"; then
+    fail "Codex CLI version must be $install_codex_version but found ${codex_after:-missing}. Resolve npm package availability, then rerun the same single install command."
+  fi
+  if ! tool_version_matches claude "$install_claude_version" "$claude_after"; then
+    fail "Claude Code version must be $install_claude_version but found ${claude_after:-missing}. Resolve npm package availability, then rerun the same single install command."
+  fi
+  if ! tool_version_matches bmad-method "$install_bmad_version" "$bmad_after"; then
+    fail "BMAD Method version must be $install_bmad_version but found ${bmad_after:-missing}. Resolve npm package availability, then rerun the same single install command."
+  fi
 
   log "Agent CLI install complete. Versions:"
   for tool in codex claude bmad-method; do
@@ -620,11 +665,6 @@ main() {
       --min-os-version|--os-version)
         require_option_value "$1" "${2-}"
         minimum_os_version="$2"
-        shift 2
-        ;;
-      --pnpm-version)
-        require_option_value "$1" "${2-}"
-        install_pnpm_version="$2"
         shift 2
         ;;
       --repo-url)

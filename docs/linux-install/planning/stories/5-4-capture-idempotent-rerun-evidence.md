@@ -4,7 +4,7 @@ baseline_commit: 83235d523a8b178ccfcc45723d4e8773269d976a
 
 # Story 5.4: Capture Idempotent Rerun Evidence
 
-Status: review
+Status: done
 
 ## Story
 
@@ -32,7 +32,7 @@ so that the installer can be safely repeated after initial setup.
   - [x] `node ./scripts/check-linux-bootstrap.mjs`
   - [x] `node ./scripts/check-linux-bootstrap-evidence.mjs docs/linux-install/evidence/local-verify-only-20260618T181400Z.json`
 - [x] Capture real same-host rerun evidence after first-install evidence passes. (AC: 1-2)
-  - [x] Story remains blocked until first-install evidence passes.
+  - [x] Transcript-backed same-host rerun evidence was captured from host `ubuntutest`.
 
 ## Dev Notes
 
@@ -77,7 +77,7 @@ Codex GPT-5
 - Added `idempotent-rerun-evidence-required.json` to keep rerun proof explicit.
 - Extended contract validation so idempotency requires first-install evidence and same-host rerun assertions.
 - Captured transcript-backed rerun validation evidence at `docs/linux-install/evidence/goal-runs/20260618T201830Z/fresh-install-and-rerun-validation-transcript.md`.
-- Story is ready for review.
+- Story delivered through PR #144 after same-host rerun evidence, review, and CI passed.
 - Verification passed:
   - `node ./scripts/check-linux-install-contract.mjs`
   - `node ./scripts/check-linux-install-lane.mjs`

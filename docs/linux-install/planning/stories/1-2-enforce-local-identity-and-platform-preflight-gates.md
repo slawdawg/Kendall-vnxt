@@ -4,7 +4,7 @@ baseline_commit: 83235d523a8b178ccfcc45723d4e8773269d976a
 
 # Story 1.2: Enforce Local Identity And Platform Preflight Gates
 
-Status: review
+Status: done
 
 ## Story
 

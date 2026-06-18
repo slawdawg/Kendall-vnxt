@@ -14,6 +14,7 @@ const activeDocs = [
   "docs/linux-install/validation-matrix.md",
   "docs/linux-install/troubleshooting.md",
   "docs/linux-install/index.md",
+  "docs/linux-install/global-tool-manifest.json",
 ];
 
 const goalRunFixtureFiles = [
@@ -130,7 +131,19 @@ const requiredSnippets = [
   },
   {
     path: "docs/linux-install/index.md",
+    text: "[Global tool manifest](global-tool-manifest.json)",
+  },
+  {
+    path: "docs/linux-install/index.md",
     text: "[Release gate traceability](release-gate-traceability.md)",
+  },
+  {
+    path: "docs/linux-install/install-contract.md",
+    text: "[global-tool-manifest.json](global-tool-manifest.json)",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Global tool manifest | `docs/linux-install/global-tool-manifest.json`, `scripts/bootstrap-linux.sh`, and `scripts/validate-linux-install.sh`",
   },
   {
     path: "docs/linux-install/goal-run-contract.md",
@@ -282,6 +295,30 @@ const requiredSnippets = [
   },
   {
     path: "scripts/bootstrap-linux.sh",
+    text: "@openai/codex@$install_codex_version",
+  },
+  {
+    path: "scripts/bootstrap-linux.sh",
+    text: "@anthropic-ai/claude-code@$install_claude_version",
+  },
+  {
+    path: "scripts/bootstrap-linux.sh",
+    text: "bmad-method@$install_bmad_version",
+  },
+  {
+    path: "scripts/bootstrap-linux.sh",
+    text: "Codex CLI version must be $install_codex_version",
+  },
+  {
+    path: "scripts/bootstrap-linux.sh",
+    text: "Claude Code version must be $install_claude_version",
+  },
+  {
+    path: "scripts/bootstrap-linux.sh",
+    text: "BMAD Method version must be $install_bmad_version",
+  },
+  {
+    path: "scripts/bootstrap-linux.sh",
     text: "uv and uvx already exist; skipping uv installer.",
   },
   {
@@ -307,6 +344,22 @@ const requiredSnippets = [
   {
     path: "scripts/validate-linux-install.sh",
     text: "repo-origin",
+  },
+  {
+    path: "scripts/validate-linux-install.sh",
+    text: "expected_codex_version=\"codex-cli 0.141.0\"",
+  },
+  {
+    path: "scripts/validate-linux-install.sh",
+    text: "run_version_check codex \"codex --version\" \"$expected_codex_version\"",
+  },
+  {
+    path: "scripts/validate-linux-install.sh",
+    text: "run_version_check claude \"claude --version\" \"$expected_claude_version\"",
+  },
+  {
+    path: "scripts/validate-linux-install.sh",
+    text: "run_version_check bmad-method \"bmad-method --version\" \"$expected_bmad_version\"",
   },
   {
     path: "scripts/validate-linux-install.sh",
@@ -352,6 +405,13 @@ const forbiddenScriptPatterns = [
 ];
 
 const failures = [];
+
+const expectedGlobalNpmTools = new Map([
+  ["pnpm", { package: "pnpm", version: "11.5.2", command: "pnpm", versionOutput: "11.5.2" }],
+  ["codex", { package: "@openai/codex", version: "0.141.0", command: "codex", versionOutput: "codex-cli 0.141.0" }],
+  ["claude", { package: "@anthropic-ai/claude-code", version: "2.1.179", command: "claude", versionOutput: "2.1.179" }],
+  ["bmad-method", { package: "bmad-method", version: "6.8.0", command: "bmad-method", versionOutput: "6.8.0" }],
+]);
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -854,6 +914,88 @@ function validateCommandContractFixture(path, fixture) {
   }
 }
 
+function validateGlobalToolManifest(manifest) {
+  if (!isRecord(manifest)) {
+    failures.push("docs/linux-install/global-tool-manifest.json must be a JSON object.");
+    return;
+  }
+  if (manifest.schema !== "kendall-linux-global-tools/v1") {
+    failures.push("docs/linux-install/global-tool-manifest.json must use kendall-linux-global-tools/v1.");
+  }
+  if (!Array.isArray(manifest.npm)) {
+    failures.push("docs/linux-install/global-tool-manifest.json must include npm tool entries.");
+    return;
+  }
+
+  const entriesById = new Map();
+  for (const entry of manifest.npm) {
+    if (!isRecord(entry) || !hasString(entry, "id")) {
+      failures.push("docs/linux-install/global-tool-manifest.json npm entries must be objects with id.");
+      continue;
+    }
+    if (entriesById.has(entry.id)) {
+      failures.push(`docs/linux-install/global-tool-manifest.json must not duplicate npm tool ${entry.id}.`);
+      continue;
+    }
+    entriesById.set(entry.id, entry);
+  }
+
+  for (const [id, expected] of expectedGlobalNpmTools.entries()) {
+    const entry = entriesById.get(id);
+    if (!entry) {
+      failures.push(`docs/linux-install/global-tool-manifest.json must include npm tool ${id}.`);
+      continue;
+    }
+    for (const [field, value] of Object.entries(expected)) {
+      if (field === "versionOutput") {
+        continue;
+      }
+      if (entry[field] !== value) {
+        failures.push(`docs/linux-install/global-tool-manifest.json ${id}.${field} must be ${value}.`);
+      }
+    }
+    if (entry.version_output !== expected.versionOutput) {
+      failures.push(`docs/linux-install/global-tool-manifest.json ${id}.version_output must be ${expected.versionOutput}.`);
+    }
+  }
+
+  if (!isRecord(manifest.policy)) {
+    failures.push("docs/linux-install/global-tool-manifest.json must include policy.");
+  } else {
+    if (manifest.policy.floating_npm_global_installs_allowed !== false) {
+      failures.push("docs/linux-install/global-tool-manifest.json must forbid floating npm global installs.");
+    }
+    if (manifest.policy.version_drift_behavior !== "verify-only fails on drift; install mode may reinstall the pinned package through the single supported bootstrap; post-install mismatch fails") {
+      failures.push("docs/linux-install/global-tool-manifest.json must define explicit verify/install drift behavior.");
+    }
+  }
+
+  if (
+    !Array.isArray(manifest.external_installers) ||
+    !manifest.external_installers.some((entry) => isRecord(entry) && entry.id === "uv" && entry.source === "https://astral.sh/uv/install.sh")
+  ) {
+    failures.push("docs/linux-install/global-tool-manifest.json must record the uv installer boundary.");
+  }
+}
+
+function validateBootstrapManifestSync(script) {
+  const constants = {
+    pnpm: /install_pnpm_version="([^"]+)"/,
+    codex: /install_codex_version="([^"]+)"/,
+    claude: /install_claude_version="([^"]+)"/,
+    "bmad-method": /install_bmad_version="([^"]+)"/,
+  };
+
+  for (const [id, expected] of expectedGlobalNpmTools.entries()) {
+    const match = script.match(constants[id]);
+    if (!match) {
+      failures.push(`scripts/bootstrap-linux.sh must define a pinned ${id} version constant.`);
+    } else if (match[1] !== expected.version) {
+      failures.push(`scripts/bootstrap-linux.sh ${id} pin must match global-tool-manifest.json: ${expected.version}.`);
+    }
+  }
+}
+
 function main() {
 const activeDocTexts = new Map();
 for (const path of activeDocs) {
@@ -862,6 +1004,16 @@ for (const path of activeDocs) {
   for (const pattern of forbiddenPatterns) {
     if (pattern.test(text)) {
       failures.push(`${path} contains forbidden install-method language: ${pattern}`);
+    }
+  }
+  for (const pattern of [
+    /npm\s+install\s+-g\s+@openai\/codex(?!@)/,
+    /npm\s+install\s+-g\s+@anthropic-ai\/claude-code(?!@)/,
+    /npm\s+install\s+-g\s+bmad-method(?!@)/,
+    /npm\s+install\s+-g\s+pnpm(?!@)/,
+  ]) {
+    if (pattern.test(text)) {
+      failures.push(`${path} contains floating global npm install guidance: ${pattern}`);
     }
   }
 }
@@ -906,8 +1058,15 @@ for (const path of discoveredGoalRunFixtureFiles) {
   }
 }
 
+try {
+  validateGlobalToolManifest(JSON.parse(readFileSync("docs/linux-install/global-tool-manifest.json", "utf8")));
+} catch (error) {
+  failures.push(`docs/linux-install/global-tool-manifest.json must contain valid JSON: ${error.message}`);
+}
+
 {
   const script = readFileSync("scripts/bootstrap-linux.sh", "utf8");
+  validateBootstrapManifestSync(script);
   for (const pattern of forbiddenScriptPatterns) {
     if (pattern.test(script)) {
       failures.push(`scripts/bootstrap-linux.sh exposes forbidden staged install mode: ${pattern}`);

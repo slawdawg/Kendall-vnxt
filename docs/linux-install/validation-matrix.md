@@ -17,6 +17,7 @@ Status: draft v1
 | Bootstrap evidence schema | `pnpm run check:linux-bootstrap-evidence -- <evidence.json>` | Repo checkout | Captured bootstrap evidence satisfies the local evidence contract | None |
 | Toolchain | `scripts/validate-linux-install.sh --verify-only` | Ubuntu host/repo checkout | node satisfies `>=22 <25`, pnpm is `11.5.2`, and uv, gh, git are available | None |
 | Agent CLIs | `scripts/validate-linux-install.sh --verify-only` | Ubuntu host/repo checkout | `codex`, `claude`, and `bmad-method` are available | None |
+| Global tool manifest | `docs/linux-install/global-tool-manifest.json`, `scripts/bootstrap-linux.sh`, and `scripts/validate-linux-install.sh` | Repo and Ubuntu host | Static contract checks prove bootstrap pins match the manifest; verify-only fails version drift; install mode may correct drift only through the single bootstrap | None until install authority |
 | Repo readiness | `scripts/validate-linux-install.sh --verify-only` | Ubuntu host/repo checkout | repo exists, `origin` matches the expected Kendall Vnxt repo URL, and requested read-only checks pass | None |
 | Post-deployment GitHub readiness | `gh auth status`, only after the user logs in | Ubuntu host | Auth succeeds when a selected workflow needs private GitHub access | User auth state |
 | Private repo probe | `git ls-remote ... HEAD`, only after the user logs in | Ubuntu host | Private repo HEAD resolves without prompting | None |

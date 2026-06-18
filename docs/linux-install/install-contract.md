@@ -97,6 +97,12 @@ A Kendall Vnxt Ubuntu deployment is considered proven only when:
 - Node satisfies the repo engine range, pnpm matches the repo-pinned version,
   and required tools such as uv, gh, git, Codex CLI, Claude Code, and BMAD
   Method pass version checks.
+- Global npm-installed tools match
+  [global-tool-manifest.json](global-tool-manifest.json). Floating global npm
+  installs are not allowed for pnpm, Codex CLI, Claude Code, or BMAD Method.
+  Verify-only must fail on version drift. Install mode may remediate drift only
+  through `scripts/bootstrap-linux.sh --install-kendall-vnxt`; post-install
+  mismatch must fail.
 - The Kendall Vnxt repo checkout is present at `$HOME/Kendall_Nxt` unless an
   approved local repo path override was used.
 - The checkout `origin` remote matches the expected Kendall Vnxt repository URL
