@@ -118,11 +118,12 @@ function removeEvidence(path) {
 test("plan mode emits full local gate sequence and writes no evidence", () => {
   const planOptions = options({ mode: "plan", evidence: "" });
   const evidence = buildEvidence({ repoRoot, options: planOptions });
+  const executor = fakeExecutor();
 
   const result = runBootstrapController({
     repoRoot,
     options: planOptions,
-    executor: fakeExecutor(),
+    executor,
     evidence,
     operatorPreflightGate: localPreflightGate,
   });
@@ -145,6 +146,9 @@ test("plan mode emits full local gate sequence and writes no evidence", () => {
       "manual-auth-summary",
     ],
   );
+  assert(evidence.gates.some((gate) => gate.command === "scripts/bootstrap-linux.sh --install-kendall-vnxt"));
+  assert.equal(evidence.gates.find((gate) => gate.id === "evidence-path").status, "skip");
+  assert.deepEqual(executor.calls, []);
 });
 
 test("doctor mode runs read-only verification and writes no evidence", () => {
@@ -185,6 +189,7 @@ test("verify-only blocks unsupported local identity and writes failure evidence"
   const parsed = JSON.parse(readFileSync(join(repoRoot, verifyOptions.evidence), "utf8"));
   assert.equal(parsed.result, "fail");
   assert(parsed.gates.some((gate) => gate.id === "local-identity" && gate.status === "fail"));
+  assert.deepEqual(parsed.mutations, ["evidence-file"]);
   assert.equal(parsed.manual_tasks.find((task) => task.id === "tailscale-login").status, "manual-post-install");
   assert.deepEqual(validateBootstrapEvidence(parsed), []);
   removeEvidence(verifyOptions.evidence);
@@ -215,11 +220,12 @@ test("verify-only records tool versions and repo state from validator output", (
   removeEvidence(verifyOptions.evidence);
   mkdirSync(join(repoRoot, "docs", "linux-install", "evidence"), { recursive: true });
   const evidence = buildEvidence({ repoRoot, options: verifyOptions });
+  const executor = fakeExecutor();
 
   const result = runBootstrapController({
     repoRoot,
     options: verifyOptions,
-    executor: fakeExecutor(),
+    executor,
     evidence,
     operatorPreflightGate: localPreflightGate,
   });
@@ -230,6 +236,11 @@ test("verify-only records tool versions and repo state from validator output", (
   assert.equal(parsed.repo_state.id, "repo");
   assert.equal(parsed.validation_summary.pass, 4);
   assert.equal(parsed.target.address_source, "local-session");
+  assert.deepEqual(parsed.mutations, ["evidence-file"]);
+  assert(!evidence.gates.some((gate) => gate.command === "scripts/bootstrap-linux.sh --install-kendall-vnxt" && gate.status !== "skip"));
+  assert(!executor.calls.some((call) => call[0] === "shell" && call[1].includes("git clone")));
+  assert(!executor.calls.some((call) => call[0] === "shell" && call[1].includes("pnpm run setup")));
+  assert(!executor.calls.some((call) => call[0] === "command" && call[1] === "bash" && call[2][0] === "-s"));
   assert.deepEqual(validateBootstrapEvidence(parsed), []);
   removeEvidence(verifyOptions.evidence);
 });

@@ -10,6 +10,7 @@ Status: current navigation index
 | `local-provider-ollama-disabled-to-limited-execution.md` | Draft, reviewed | Stories 4.1-4.3 are done as non-executing no-call preparation; Story 4.4 is implemented only for the approved VM-to-host endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`; broader provider expansion remains blocked pending successor approval. |
 | `subscription-agent-launch-disabled-to-supervised-execution.md` | Draft, reviewed | Stories 5.1-5.4 completed as non-executing prep; Story 8.5 completed the exact-approved artifact-only fixture launch path; direct supervised process launch remains blocked pending explicit process-launch approval. |
 | `kendall-vnxt-orchestrator-epic-6.md` | Draft | Story 6.1 is complete for fake-worker orchestration; Story 7.4 later exercised one bounded supervised Codex launch within its exact approval; any successor Codex launch outside that exact approval, all Claude process launch, and live GitHub automation remain blocked pending explicit successor approval. |
+| `linux-install-mvp.md` | Draft, recovered | Linux Install MVP planning, implementation docs, and verify-only evidence are combined in the active Linux install lane; install mutation, fresh-host proof, PR delivery, merge, and cleanup remain bounded by their documented authority gates. |
 
 ## PRD Review Records
 
@@ -30,6 +31,7 @@ Status: current navigation index
 
 - `supervisor-dynamic-routing-mvp-1-decision-log.md`
 - `supervisor-execution-authority-expansion-decision-log.md`
+- `linux-install-mvp-decision-log.md`
 
 ## Current Stop Line
 

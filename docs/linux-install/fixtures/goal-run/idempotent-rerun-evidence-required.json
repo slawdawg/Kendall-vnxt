@@ -1,0 +1,18 @@
+{
+  "schema": "kendall-linux-goal-fixture/v1",
+  "fixture": "idempotent-rerun-evidence-required",
+  "run_id": "fixture-idempotent-rerun-evidence-required",
+  "requires_first_install_evidence": "docs/linux-install/evidence/goal-runs/<run-id>/first-install/install-outcome.json",
+  "approved_single_bootstrap_command": "scripts/bootstrap-linux.sh --install-kendall-vnxt",
+  "required_rerun_evidence": [
+    "docs/linux-install/evidence/goal-runs/<run-id>/rerun/install-outcome.json"
+  ],
+  "idempotency_assertions": [
+    "same-host",
+    "no-destructive-cleanup",
+    "safe-rerun-guidance"
+  ],
+  "current_status": "blocked_until_first_install_passes",
+  "expected_completion_status": "not_complete",
+  "expected_reason": "Rerun proof requires successful first-install evidence and validated same-host rerun evidence before idempotency can be claimed."
+}

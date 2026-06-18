@@ -14,6 +14,9 @@
     "docs/linux-install/evidence/goal-runs/fixture-missing-evidence/evidence/linux-smoke.json"
   ],
   "present_evidence": [],
+  "release_gate_status": "open",
+  "open_blockers": ["blocker-fixture-manual-auth-github"],
+  "terminal_delivery_authority_required": ["pr-create", "merge", "workspace-cleanup"],
   "expected_completion_status": "not_complete",
-  "expected_reason": "A passing command without required evidence cannot satisfy the release gate."
+  "expected_reason": "A passing command without required evidence, closed release gates, resolved blockers, and terminal delivery authority cannot satisfy the release gate."
 }

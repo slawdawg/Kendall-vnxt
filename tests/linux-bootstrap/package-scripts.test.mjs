@@ -21,3 +21,41 @@ test("install contract checker validation fails when a canonical Linux script is
 
   assert(validatePublicLinuxScripts(modified).some((failure) => failure.includes("scripts.linux:doctor")));
 });
+
+test("install contract checker rejects alternate mutating install commands in active docs", async () => {
+  const { validateSingleMutatingInstallBoundary } = await import("../../scripts/check-linux-install-contract.mjs");
+
+  const failures = validateSingleMutatingInstallBoundary(
+    new Map([
+      [
+        "docs/linux-install/install-playbook.md",
+        [
+          "There is only one supported v1 install method:",
+          "scripts/bootstrap-linux.sh --install-kendall-vnxt",
+          "Historical notes are not the generic installer entry point and must not override the single-method v1 boundary.",
+          "The Node controller can mutate with node ./scripts/linux-bootstrap.mjs --apply.",
+        ].join("\n"),
+      ],
+    ]),
+  );
+
+  assert(failures.some((failure) => failure.includes("alternate mutating install command")));
+});
+
+test("install contract checker requires historical notes to stay fenced from v1 install authority", async () => {
+  const { validateSingleMutatingInstallBoundary } = await import("../../scripts/check-linux-install-contract.mjs");
+
+  const failures = validateSingleMutatingInstallBoundary(
+    new Map([
+      [
+        "docs/linux-install/index.md",
+        [
+          "scripts/bootstrap-linux.sh --install-kendall-vnxt",
+          "Historical remote approval template is available.",
+        ].join("\n"),
+      ],
+    ]),
+  );
+
+  assert(failures.some((failure) => failure.includes("historical or lab notes")));
+});

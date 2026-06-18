@@ -1,0 +1,23 @@
+{
+  "schema": "kendall-linux-goal-fixture/v1",
+  "fixture": "fresh-first-install-evidence-required",
+  "run_id": "fixture-fresh-first-install-evidence-required",
+  "host_requirements": {
+    "distribution": "Ubuntu",
+    "version": "26.04 or later",
+    "user": "non-root local sudo user",
+    "sudo": "available and user-approved"
+  },
+  "approved_single_bootstrap_command": "scripts/bootstrap-linux.sh --install-kendall-vnxt",
+  "required_evidence": [
+    "docs/linux-install/evidence/goal-runs/<run-id>/first-install/install-outcome.json"
+  ],
+  "forbidden_substitutes": [
+    "local-verify-only",
+    "pre-merge-url-reachability-only",
+    "hand-written-completion-claim"
+  ],
+  "current_status": "blocked_no_real_host_evidence",
+  "expected_completion_status": "not_complete",
+  "expected_reason": "Fresh Ubuntu first-install release proof requires validated evidence from the approved single bootstrap command on a fresh or reset host."
+}

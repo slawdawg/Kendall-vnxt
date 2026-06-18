@@ -64,8 +64,8 @@ The repo-owned controller may still expose local planning and verification
 commands for development evidence:
 
 ```bash
-pnpm run linux:bootstrap -- --plan
-pnpm run linux:bootstrap -- --verify-only
+pnpm run linux:bootstrap --plan
+pnpm run linux:bootstrap --verify-only
 ```
 
 Those controller commands must preserve the same local-only install contract.

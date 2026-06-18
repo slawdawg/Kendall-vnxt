@@ -7,6 +7,16 @@ const bootstrapAuthorityLevels = new Set(["plan", "verify", "evidence-write"]);
 const installAuthorityLevels = new Set(["verify", "evidence-write"]);
 const manualTaskIds = new Set(["tailscale-login", "codex-login", "claude-login", "provider-auth"]);
 const requiredRedactions = new Set(["gh-auth-output", "environment", "authorized-keys", "provider-tokens", "private-keys"]);
+const forbiddenEvidenceTextPatterns = [
+  { label: "private key material", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/i },
+  { label: "GitHub token", pattern: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/ },
+  { label: "provider token", pattern: /\b(?:sk|sk-proj|sk-ant)-[A-Za-z0-9_-]{12,}\b/ },
+  { label: "auth URL", pattern: /https?:\/\/\S*(?:oauth|device|authorize)\S*/i },
+  { label: "device code", pattern: /\bdevice[-_ ]?code\b\s*[:=]/i },
+  { label: "credential helper output", pattern: /\bcredential helper output\b/i },
+  { label: "shell history", pattern: /\b(?:\.bash_history|shell history)\b/i },
+  { label: "environment dump", pattern: /\b(?:PATH=|HOME=|SHELL=|env dump|environment dump)\b/ },
+];
 
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -137,6 +147,41 @@ function validateSkippedRows(errors, rows) {
   }
 }
 
+function collectEvidenceText(value, path = "", entries = []) {
+  if (typeof value === "string") {
+    entries.push([path, value]);
+    return entries;
+  }
+
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      collectEvidenceText(item, `${path}[${index}]`, entries);
+    }
+    return entries;
+  }
+
+  if (isObject(value)) {
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "redactions") {
+        continue;
+      }
+      collectEvidenceText(item, path ? `${path}.${key}` : key, entries);
+    }
+  }
+
+  return entries;
+}
+
+function validateForbiddenEvidenceText(errors, evidence) {
+  for (const [path, text] of collectEvidenceText(evidence)) {
+    for (const { label, pattern } of forbiddenEvidenceTextPatterns) {
+      if (pattern.test(text)) {
+        errors.push(`${path} must not include ${label}`);
+      }
+    }
+  }
+}
+
 function validateAuthority(errors, authority, allowedLevels) {
   if (!isObject(authority)) {
     errors.push("authority must be an object");
@@ -155,6 +200,7 @@ export function validateBootstrapEvidence(evidence) {
   if (!isObject(evidence)) {
     return ["evidence must be an object"];
   }
+  validateForbiddenEvidenceText(errors, evidence);
   if (evidence.schema !== "kendall-linux-bootstrap-evidence/v1") {
     errors.push("schema must be kendall-linux-bootstrap-evidence/v1");
   }
@@ -282,6 +328,7 @@ export function validateInstallEvidence(evidence) {
   if (!isObject(evidence)) {
     return ["evidence must be an object"];
   }
+  validateForbiddenEvidenceText(errors, evidence);
   if (evidence.schema !== "kendall-linux-install-evidence/v1") {
     errors.push("schema must be kendall-linux-install-evidence/v1");
   }
@@ -337,9 +384,15 @@ export function validateInstallEvidence(evidence) {
     for (const key of ["pass", "fail", "warn"]) {
       requireNumber(errors, evidence.checks_summary[key], `checks_summary.${key}`);
     }
+    if (evidence.checks_summary.blocked !== undefined) {
+      requireNumber(errors, evidence.checks_summary.blocked, "checks_summary.blocked");
+    }
   }
   validateMutations(errors, evidence.mutations, evidence.authority?.level);
   validateRedactions(errors, evidence.redactions);
+  if (evidence.tool_changes !== undefined) {
+    validateActionRows(errors, evidence.tool_changes, "tool_changes");
+  }
 
   validateManualTasks(errors, evidence.manual_tasks);
 
@@ -370,17 +423,20 @@ export function validateInstallEvidence(evidence) {
   if (isObject(evidence.checks_summary) && Array.isArray(evidence.checks)) {
     const actualSummary = evidence.checks.reduce(
       (summary, check) => {
-        if (check.status === "pass" || check.status === "fail" || check.status === "warn") {
+        if (check.status === "pass" || check.status === "fail" || check.status === "warn" || check.status === "blocked") {
           summary[check.status] += 1;
         }
         return summary;
       },
-      { pass: 0, fail: 0, warn: 0 },
+      { pass: 0, fail: 0, warn: 0, blocked: 0 },
     );
     for (const key of ["pass", "fail", "warn"]) {
       if (evidence.checks_summary[key] !== actualSummary[key]) {
         errors.push(`checks_summary.${key} must equal actual ${key} check count`);
       }
+    }
+    if (evidence.checks_summary.blocked !== undefined && evidence.checks_summary.blocked !== actualSummary.blocked) {
+      errors.push("checks_summary.blocked must equal actual blocked check count");
     }
   }
   if (evidence.result === "blocked" && !checkStatusesSeen.has("blocked")) {

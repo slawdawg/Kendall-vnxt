@@ -218,6 +218,7 @@ Required fields:
   "evidence_paths": [],
   "dependency_impact": ["task.private-repo-probe"],
   "safe_tasks_still_attempted": ["task.docs.drift"],
+  "blocked_task_status": "authority-blocked-not-complete",
   "secrets_exclusion": "confirmed"
 }
 ```

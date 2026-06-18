@@ -15,6 +15,7 @@ address_source="local-session"
 run_preflight="yes"
 json="no"
 evidence_path=""
+tool_changes_json="[]"
 
 checks_passed=0
 checks_failed=0
@@ -47,6 +48,8 @@ Options:
   --skip-preflight          Check repo presence but skip pnpm preflight.
   --json                    Emit a compact JSON summary.
   --evidence <path>         Write the same redacted JSON summary to this path.
+  --tool-changes-json <json>
+                            Optional bootstrap-supplied tool change rows.
   -h, --help                Show this help.
 USAGE
 }
@@ -296,6 +299,11 @@ while [ "$#" -gt 0 ]; do
       json="yes"
       shift 2
       ;;
+    --tool-changes-json)
+      require_option_value "$1" "${2-}"
+      tool_changes_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -414,7 +422,7 @@ fi
 manual_tasks_json='[{"id":"tailscale-login","status":"manual-post-install","summary":"Enroll or log in to Tailscale only after base bootstrap if the workflow needs Tailnet access."},{"id":"codex-login","status":"manual-post-install","summary":"Run Codex login manually only after deployment if an interactive Codex workflow needs it."},{"id":"claude-login","status":"manual-post-install","summary":"Run Claude login manually only after deployment if a Claude workflow needs it."},{"id":"provider-auth","status":"manual-post-install","summary":"Configure provider authentication manually only after a separately approved workflow needs provider calls."}]'
 auth_boundary_json='{"performed_provider_login":false,"performed_tailscale_login":false,"performed_codex_login":false,"performed_claude_login":false,"performed_browser_auth":false,"read_or_wrote_provider_tokens":false}'
 
-summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","generated_at":"%s","mode":"verify","command":{"mode":"verify","invoked":"%s"},"target":{"alias":"%s","user":"%s","hostname":"%s","repo":"%s","repo_url":"%s","minimumOsVersion":"%s","nodeRange":">=%s <%s","address_source":"%s"},"authority":{"level":"%s","approval_id":null},"checks":[%s],"checks_summary":{"pass":%s,"fail":%s,"warn":%s},"mutations":%s,"redactions":["gh-auth-output","environment","authorized-keys","provider-tokens","private-keys"],"manual_tasks":%s,"auth_boundary":%s,"result":"%s","rerun_guidance":"%s"}\n' \
+summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","generated_at":"%s","mode":"verify","command":{"mode":"verify","invoked":"%s"},"target":{"alias":"%s","user":"%s","hostname":"%s","repo":"%s","repo_url":"%s","minimumOsVersion":"%s","nodeRange":">=%s <%s","address_source":"%s"},"authority":{"level":"%s","approval_id":null},"checks":[%s],"checks_summary":{"pass":%s,"fail":%s,"warn":%s},"tool_changes":%s,"mutations":%s,"redactions":["gh-auth-output","environment","authorized-keys","provider-tokens","private-keys"],"manual_tasks":%s,"auth_boundary":%s,"result":"%s","rerun_guidance":"%s"}\n' \
   "$(json_escape "$generated_at")" \
   "$(json_escape "scripts/validate-linux-install.sh --verify-only")" \
   "$(json_escape "$target_alias")" \
@@ -431,6 +439,7 @@ summary_json="$(printf '{"schema":"kendall-linux-install-evidence/v1","generated
   "$checks_passed" \
   "$checks_failed" \
   "$checks_warned" \
+  "$tool_changes_json" \
   "$mutations_json" \
   "$manual_tasks_json" \
   "$auth_boundary_json" \

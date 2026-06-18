@@ -192,6 +192,46 @@ Fix:
 - Fix the schema mismatch or missing field in the script.
 - Rerun the same single bootstrap command and validate the new evidence file.
 
+## Evidence Path Is Rejected
+
+Symptom:
+
+```text
+Evidence path must be under this checkout docs/linux-install/evidence
+```
+
+Fix:
+
+- Use a file path directly under `docs/linux-install/evidence/` in the current
+  checkout.
+- Do not use absolute paths, path traversal, symlinks, or parent directories for
+  retained install evidence.
+- If the file already exists, choose a new evidence filename. Do not overwrite
+  existing proof packets.
+
+Command family:
+
+```bash
+scripts/validate-linux-install.sh --verify-only --evidence docs/linux-install/evidence/<new-file>.json
+```
+
+## Blocked Repo Access Evidence Is Not Parseable
+
+Symptom: repo access is blocked before checkout availability, but stdout cannot
+be parsed as a single JSON evidence packet.
+
+Fix:
+
+- Keep progress logs on stderr.
+- Keep blocked evidence as the only stdout payload for the blocked helper path.
+- Validate the blocked packet with:
+
+```bash
+node ./scripts/check-linux-bootstrap-evidence.mjs <captured-blocked-evidence>.json
+```
+
+Command family: `scripts/bootstrap-linux.sh --install-kendall-vnxt`.
+
 ## Evidence Contains Sensitive Data
 
 Symptom: output includes tokens, auth URLs, shell history, environment dumps,
@@ -203,6 +243,18 @@ Fix:
 - Redact or delete the sensitive artifact according to the approved retention
   policy.
 - Fix the script before running it again.
+
+## Final Validation Fails After Setup
+
+Symptom: `scripts/bootstrap-linux.sh --install-kendall-vnxt` reaches final
+validation but exits with a message pointing at an evidence file.
+
+Fix:
+
+- Inspect the evidence packet named in the error.
+- Fix the failed checks reported by `scripts/validate-linux-install.sh`.
+- Rerun the same single bootstrap command.
+- Do not report install success until final validation passes.
 
 ## Provider Or Tailscale Login Is Missing
 

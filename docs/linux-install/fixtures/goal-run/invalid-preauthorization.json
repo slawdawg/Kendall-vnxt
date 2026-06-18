@@ -3,9 +3,13 @@
   "fixture": "invalid-preauthorization",
   "authority_id": "auth-invalid-broad-continue",
   "input": {
-    "approval_text": "Install whatever is needed and continue until setup works."
+    "approval_text": "Install whatever is needed and continue until setup works.",
+    "generic_approval_examples": [
+      "continue",
+      "do whatever is needed",
+      "finish it"
+    ]
   },
   "expected_result": "reject",
   "expected_reason": "Preauthorization must name authority family, operation, scope, command ids or command pattern, allowed targets, maximum impact, expiration, required evidence, recovery note, approval reference, and stop lines."
 }
-

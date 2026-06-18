@@ -9,9 +9,9 @@ Status: draft v1
 | Host preparation | Local checklist | Ubuntu host | Ubuntu 26.04+ host exists with an intended non-root sudo user and local terminal access | User-created host |
 | Single install command | `bash /tmp/kendall-vnxt-bootstrap.sh --install-kendall-vnxt` | Ubuntu host | Approved tools install, repo is cloned or validated, setup runs, validation passes, and local install evidence is written | Mutating, local sudo approval plus evidence file |
 | Local script syntax | `node --check`, `bash -n` | Repo checkout | Bootstrap scripts parse | None |
-| Local plan | `pnpm run linux:bootstrap -- --plan` | Ubuntu host/repo checkout | Prints local gate plan, auth boundary, and manual next steps | None |
-| Local verify-only | `pnpm run linux:bootstrap -- --verify-only` | Ubuntu host/repo checkout | Local identity, OS, sudo availability, disk, DNS, repo, tool versions, and validation pass or fail closed | Evidence file only |
-| Evidence path | `pnpm run linux:bootstrap -- --verify-only --evidence <path>` | Ubuntu host/repo checkout | Evidence path is under `docs/linux-install/evidence/` and does not overwrite an existing packet before verification work continues | None until evidence-write |
+| Local plan | `pnpm run linux:bootstrap --plan` | Ubuntu host/repo checkout | Prints local gate plan, auth boundary, and manual next steps | None |
+| Local verify-only | `pnpm run linux:bootstrap --verify-only` | Ubuntu host/repo checkout | Local identity, OS, sudo availability, disk, DNS, repo, tool versions, and validation pass or fail closed | Evidence file only |
+| Evidence path | `pnpm run linux:bootstrap --verify-only --evidence <path>` | Ubuntu host/repo checkout | Evidence path is under `docs/linux-install/evidence/` and does not overwrite an existing packet before verification work continues | None until evidence-write |
 | Bootstrap tests | `pnpm run test:linux-bootstrap` | Repo checkout | Parser, gate, evidence, executor, and auth-boundary tests pass | Temporary test evidence only |
 | Bootstrap quality gate | `pnpm run check:linux-bootstrap` | Repo checkout | Entrypoint syntax, controller syntax, evidence-schema syntax, shell syntax, and Linux bootstrap tests pass | Temporary test evidence only |
 | Bootstrap evidence schema | `pnpm run check:linux-bootstrap-evidence -- <evidence.json>` | Repo checkout | Captured bootstrap evidence satisfies the local evidence contract | None |
@@ -21,7 +21,7 @@ Status: draft v1
 | Post-deployment GitHub readiness | `gh auth status`, only after the user logs in | Ubuntu host | Auth succeeds when a selected workflow needs private GitHub access | User auth state |
 | Private repo probe | `git ls-remote ... HEAD`, only after the user logs in | Ubuntu host | Private repo HEAD resolves without prompting | None |
 | Install evidence | `bash /tmp/kendall-vnxt-bootstrap.sh --install-kendall-vnxt` | Ubuntu host | Only approved packages/tools, repo clone/validate, setup, verification, and evidence actions run; local-session evidence is written | Mutating, local sudo approval plus evidence file |
-| Post-apply verify | `pnpm run linux:bootstrap -- --verify-only` | Ubuntu host/repo checkout | Same baseline and repo checks pass after apply | Evidence file only |
+| Post-apply verify | `pnpm run linux:bootstrap --verify-only` | Ubuntu host/repo checkout | Same baseline and repo checks pass after apply | Evidence file only |
 | Full check | `pnpm run check` | Ubuntu host/repo checkout | Docs checks, dashboard build, and supervisor tests pass | Repo build/test artifacts only |
 | Playwright e2e | `pnpm run test:e2e:dashboard` | Ubuntu host/repo checkout | Chromium launches and dashboard e2e tests pass | Browser cache/test artifacts; dependency install is mutating |
 | Reboot proof | `sudo reboot`, then verify | Ubuntu host | Local verify-only, preflight, and tool probes pass after reboot | Reboot, approval required |
@@ -37,6 +37,9 @@ Status: draft v1
 | Destructive cleanup blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-destructive-cleanup.json` | Repo | Cleanup blocker records dry-run first behavior and exact cleanup approval requirement | None |
 | Tailnet enrollment blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-tailnet-enrollment.json` | Repo | Tailnet blocker records external enrollment boundary and resume point | None |
 | Missing evidence fixture | `docs/linux-install/fixtures/goal-run/missing-evidence.json` | Repo | Passing checks without required evidence cannot report complete | None |
+| Fresh first-install evidence fixture | `docs/linux-install/fixtures/goal-run/fresh-first-install-evidence-required.json` | Repo | Release readiness remains incomplete until a fresh or reset Ubuntu 26.04+ host produces validated first-install pass evidence | None |
+| Idempotent rerun evidence fixture | `docs/linux-install/fixtures/goal-run/idempotent-rerun-evidence-required.json` | Repo | Release readiness remains incomplete until the same host has first-install pass evidence and validated safe-rerun evidence | None |
+| Package refresh gate fixture | `docs/linux-install/fixtures/goal-run/package-refresh-gated.json` | Repo | Linux install package refresh remains blocked until published source, first-install, rerun, docs, troubleshooting, lessons, and validation evidence are ready | None |
 | Command contract fixture | `docs/linux-install/fixtures/goal-run/command-contracts.json` | Repo | Command definitions are bounded, non-interactive, timeout-scoped, authority-classed, evidence-producing, and typed on failure | None |
 
 ## Negative Checks
