@@ -104,6 +104,12 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   requires them. Prefer targeted edits that keep diffs reviewable.
 - When adding durable agent behavior, update this `AGENTS.md` rather than
   relying only on a one-off chat reminder.
+- Do not default to opening a PR for every small local improvement. Treat PRs
+  as reviewable product or workflow delivery units that should be merged into
+  `main`, such as completed stories, user-visible features, safety/CI fixes,
+  docs/research deliverables, or changes that unblock another lane. Batch small
+  helper fixes, test hardening, docs polish, and implementation prep locally
+  until they form a coherent story-sized change or Bob explicitly asks for a PR.
 - Use the matching BMAD-method skill for BMAD work instead of doing an
   informal shortcut. Before creating or changing epics, stories, PRDs,
   architecture notes, sprint plans, retrospectives, reviews, or BMAD-driven
