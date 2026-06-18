@@ -2,46 +2,11 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const target = (process.argv[2] ?? "all").toLowerCase();
 const supportedNodeMajors = new Set([22, 23, 24]);
-
-function resolveCommand(command) {
-  if (command === "pnpm" && process.env.npm_execpath) {
-    return process.execPath;
-  }
-
-  if (process.platform === "win32" && command === "pnpm") {
-    return process.env.ComSpec || "cmd.exe";
-  }
-
-  if (process.platform === "win32" && command === "uv") {
-    for (const candidate of [
-      process.env.UV_EXE,
-      join(process.env.USERPROFILE ?? "", ".local", "bin", "uv.exe"),
-      join(process.env.USERPROFILE ?? "", ".cargo", "bin", "uv.exe"),
-    ]) {
-      if (candidate && existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return command;
-}
-
-function resolveArgs(command, args) {
-  if (command === "pnpm" && process.env.npm_execpath) {
-    return [process.env.npm_execpath, ...args];
-  }
-
-  if (process.platform === "win32" && command === "pnpm") {
-    return ["/d", "/s", "/c", "pnpm", ...args];
-  }
-
-  return args;
-}
 
 const supportedTargets = new Set(["all", "js", "python"]);
 if (!supportedTargets.has(target)) {
@@ -61,9 +26,11 @@ function recordFailure(message) {
 }
 
 function commandExists(command, args = ["--version"]) {
-  const result = spawnSync(resolveCommand(command), resolveArgs(command, args), {
+  const resolved = resolveWorkspaceCommand(command, args);
+  const result = spawnSync(resolved.command, resolved.args, {
     cwd: rootDir,
     encoding: "utf8",
+    env: resolved.env ?? process.env,
     stdio: "pipe",
   });
 

@@ -182,11 +182,15 @@ Overall verdict: **limited value for Workflow 2 code-only run**.
 
 ## Next Options
 
-1. Run Workflow 3 as a documentation/context update only if Bob approves a
+1. Historical option: run Workflow 3 as a documentation/context update only if Bob approves a
    doc-inclusive/provider boundary.
 2. Run another no-provider code-only workflow using a multi-file implementation
    area instead of a one-file drift checker.
 3. Stop the technical trial and summarize current evidence.
 
-Recommended next step: summarize current evidence before approving any
-provider-backed or wider-corpus run.
+Historical recommended next step: summarize current evidence before approving
+any provider-backed or wider-corpus run.
+
+Current note: this recommendation was later superseded by Workflow 3 and the
+final recommendation. The current durable decision is
+`docs/research/graphify-final-recommendation-2026-06-18.md`.

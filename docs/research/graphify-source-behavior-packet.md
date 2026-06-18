@@ -1,13 +1,14 @@
 # Graphify Source Behavior Packet
 
 Date: 2026-06-18
-Status: source behavior packet
+Status: source behavior packet; trial completed and adoption deferred
 
 ## Purpose
 
 Capture primary-source facts about Graphify before Kendall_Nxt installs, runs,
-or adopts it. This packet supports the Graphify Guided Trial plan and blocks
-implementation until Bob explicitly approves any install or file-writing step.
+or adopts it. This packet supported the Graphify Guided Trial plan and still
+blocks future implementation until Bob explicitly approves any new install,
+run, provider, integration, or file-writing step.
 
 ## Sources Checked
 
@@ -246,8 +247,14 @@ Stop and ask Bob before:
 - Reading credentials, sessions, raw provider payloads, prompt/completion logs,
   reasoning traces, or secrets.
 
-## Next Work
+## Current Next Work
 
-1. Create a one-page Bob-readable Graphify explainer from this packet.
-2. Review `docs/research/graphify-first-run-boundary.md`.
-3. Ask Bob whether to approve installation and a limited local trial.
+Do not start another Graphify run from this source packet. Bob approved stopping
+technical Graphify runs and preserving evidence. Use
+`docs/research/graphify-current-evidence-decision-packet-2026-06-18.md` and
+`docs/research/graphify-final-recommendation-2026-06-18.md` as the current
+decision records.
+
+Any future Graphify run, provider-backed extraction, assistant install, hook,
+MCP/HTTP serving, repo write, cleanup, or uninstall requires a new explicit
+approval packet.

@@ -214,5 +214,9 @@ Verdict:
 3. Stop the technical trial and classify Graphify as safe for code-only graph
    generation but not yet proven useful.
 
-Recommended next step: inspect whether `graphify cluster-only --help` documents
-provider behavior before deciding whether to run it.
+Historical recommended next step: inspect whether `graphify cluster-only --help`
+documents provider behavior before deciding whether to run it.
+
+Current note: this recommendation was later superseded by approved cluster-only
+and workflow evidence. The current durable decision is
+`docs/research/graphify-final-recommendation-2026-06-18.md`.

@@ -1,24 +1,25 @@
 # Graphify First-Run Boundary Proposal
 
 Date: 2026-06-18
-Status: draft proposal, not approved for execution
+Status: historical first-run boundary; superseded by completed trial evidence
 
 ## Purpose
 
 Define the narrowest safe first technical trial for Graphify in Kendall_Nxt.
 
-This document does not approve installing Graphify, running Graphify, creating
+This document did not approve installing Graphify, running Graphify, creating
 `.graphifyignore`, writing `graphify-out/`, installing hooks, or changing
-assistant behavior. It is the proposal Bob should review before any execution
-approval.
+assistant behavior. It was the proposal Bob reviewed before bounded execution
+approval. The current recommendation is now recorded in
+`docs/research/graphify-final-recommendation-2026-06-18.md`.
 
-## Recommended First Run
+## Historical Recommended First Run
 
-Start with a deliberately small, code/config-focused run that avoids docs and
-provider-backed semantic extraction if Graphify supports a useful code-only
-mode.
+The historical first-run recommendation was to start with a deliberately small,
+code/config-focused run that avoided docs and provider-backed semantic
+extraction if Graphify supported a useful code-only mode.
 
-Recommended first boundary:
+Historical first boundary:
 
 - Install only after explicit Bob approval.
 - Run only after explicit Bob approval.
@@ -52,10 +53,10 @@ Can Graphify provide any useful orientation from code and config only?
 If yes, Kendall_Nxt can evaluate that output before deciding whether a later
 doc-inclusive run is worth a separate provider-boundary approval.
 
-## Candidate Corpus
+## Historical Candidate Corpus
 
-The first run should use a small, intentionally selected corpus instead of the
-whole repo.
+The first run used a small, intentionally selected corpus instead of the whole
+repo.
 
 Candidate include set:
 
@@ -74,8 +75,7 @@ Candidate exclude set:
 - Build artifacts.
 - Secrets, credentials, sessions, provider payloads, logs, and caches.
 
-The exact corpus should be selected only after choosing the first scorecard
-workflow.
+Future corpora must be selected only through a new approval packet.
 
 ## Candidate `.graphifyignore` For Review
 
@@ -175,7 +175,7 @@ the first run.
 
 Preferred first-run output handling:
 
-- Allow `graphify-out/` only if Bob approves the run.
+- Historical boundary: allow `graphify-out/` only if Bob approves the run.
 - Do not stage or commit `graphify-out/`.
 - Review only summary characteristics first: file list, size, runtime, whether
   expected outputs exist, and whether unexpected files were written.
@@ -199,9 +199,9 @@ Alternative first workflow:
 Reason: likely to show value if Graphify works, but it may require broader repo
 context and therefore has a larger scope.
 
-## Approval Packet Before Execution
+## Historical Approval Packet Before Execution
 
-Before any install or run, present Bob with:
+Before any install or run, this proposal required presenting Bob with:
 
 ```text
 Graphify First-Run Approval Packet
@@ -230,10 +230,11 @@ Stop and ask Bob before:
   install`.
 - Staging or committing generated output.
 
-## Recommendation
+## Current Recommendation
 
-Do not run Graphify yet.
+Do not run more Graphify commands from this historical proposal.
 
-Next, pick the first scorecard workflow and convert this proposal into a
-specific approval packet with exact command, corpus, expected writes, and
-rollback path.
+The first-run boundary was exercised, the initial corpus triggered the provider
+stop line, stricter code-only retries later succeeded, and Bob approved stopping
+technical Graphify runs while preserving evidence. Any future run needs a new
+approval packet.

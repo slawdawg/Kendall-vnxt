@@ -1,18 +1,21 @@
 # Graphify Workflow 2 Approval Packet
 
 Date: 2026-06-18
-Status: draft approval packet, not approved for execution
+Status: approved, executed, and closed with evidence
 
 ## Purpose
 
 Define the next bounded Graphify trial for a more realistic code-navigation /
 BMAD story orientation task.
 
-This packet does not approve execution until Bob explicitly approves it.
+This packet did not approve execution until Bob explicitly approved it. The
+approved run was executed and recorded in
+`docs/research/graphify-workflow-2-evidence-2026-06-18.md`.
 
-## Decision Requested
+## Historical Decision Requested
 
-Approve or reject a second bounded Graphify run with these limits:
+Bob was asked to approve or reject a second bounded Graphify run with these
+limits:
 
 - Reuse the already installed `graphifyy==0.8.41`.
 - Create a temporary corpus under `/tmp/kendall-nxt-graphify-workflow-2`.
@@ -60,7 +63,7 @@ The Graphify path may read:
 
 ## Proposed Commands
 
-These commands are not approved until Bob says so explicitly.
+These commands were not approved until Bob said so explicitly.
 
 ```bash
 rm -rf /tmp/kendall-nxt-graphify-workflow-2
@@ -202,10 +205,16 @@ Capture:
 
 ## Recommendation
 
-Approve this only if Bob wants to continue the technical trial without
-provider-backed doc extraction.
+Historical recommendation: approve this only if Bob wants to continue the
+technical trial without provider-backed doc extraction.
 
 This run can test whether Graphify helps with code structure inside the
 token-economy drift-check script. It cannot test whether Graphify connects the
 story and research docs unless Bob separately approves provider-backed or
 doc-inclusive behavior.
+
+## Execution Evidence
+
+The approved run was completed within the code-only boundary. The evidence
+showed limited usefulness for a one-file drift checker and did not support
+adoption. See `docs/research/graphify-workflow-2-evidence-2026-06-18.md`.

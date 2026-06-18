@@ -1,27 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
-
-function resolveCommand(command) {
-  if (command === "pnpm" && process.env.npm_execpath) {
-    return process.execPath;
-  }
-
-  if (process.platform === "win32" && command === "pnpm") {
-    return "pnpm.cmd";
-  }
-
-  return command;
-}
-
-function resolveArgs(command, args) {
-  if (command === "pnpm" && process.env.npm_execpath) {
-    return [process.env.npm_execpath, ...args];
-  }
-
-  return args;
-}
 
 const commands = [
   {
@@ -43,8 +24,10 @@ const commands = [
 
 for (const step of commands) {
   console.log(`\n==> ${step.label}`);
-  const result = spawnSync(resolveCommand(step.command), resolveArgs(step.command, step.args), {
+  const resolved = resolveWorkspaceCommand(step.command, step.args);
+  const result = spawnSync(resolved.command, resolved.args, {
     cwd: rootDir,
+    env: resolved.env ?? process.env,
     stdio: "inherit",
   });
 
