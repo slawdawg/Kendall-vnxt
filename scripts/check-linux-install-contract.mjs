@@ -18,6 +18,11 @@ const activeDocs = [
 
 const goalRunFixtureFiles = [
   "docs/linux-install/fixtures/goal-run/blocked-continuation.json",
+  "docs/linux-install/fixtures/goal-run/blocker-destructive-cleanup.json",
+  "docs/linux-install/fixtures/goal-run/blocker-manual-auth.json",
+  "docs/linux-install/fixtures/goal-run/blocker-paid-provider-usage.json",
+  "docs/linux-install/fixtures/goal-run/blocker-tailnet-enrollment.json",
+  "docs/linux-install/fixtures/goal-run/command-contracts.json",
   "docs/linux-install/fixtures/goal-run/invalid-preauthorization.json",
   "docs/linux-install/fixtures/goal-run/missing-evidence.json",
   "docs/linux-install/fixtures/goal-run/valid-preauthorization.json",
@@ -115,7 +120,27 @@ const requiredSnippets = [
   },
   {
     path: "docs/linux-install/validation-matrix.md",
+    text: "| Manual Auth blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-manual-auth.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Paid provider blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-paid-provider-usage.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Destructive cleanup blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-destructive-cleanup.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Tailnet enrollment blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-tailnet-enrollment.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
     text: "| Missing evidence fixture | `docs/linux-install/fixtures/goal-run/missing-evidence.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Command contract fixture | `docs/linux-install/fixtures/goal-run/command-contracts.json`",
   },
   {
     path: "docs/linux-install/validation-matrix.md",
@@ -278,6 +303,10 @@ function hasArray(value, field) {
   return Array.isArray(value[field]);
 }
 
+function hasNonEmptyArray(value, field) {
+  return Array.isArray(value[field]) && value[field].length > 0;
+}
+
 export function validatePublicLinuxScripts(packageJson) {
   const scriptFailures = [];
   if (!isRecord(packageJson) || !isRecord(packageJson.scripts)) {
@@ -375,6 +404,16 @@ function validateGoalRunFixture(path, fixture) {
     return;
   }
 
+  if (path.includes("/blocker-")) {
+    validateBlockerFixture(path, fixture);
+    return;
+  }
+
+  if (path.endsWith("/command-contracts.json")) {
+    validateCommandContractFixture(path, fixture);
+    return;
+  }
+
   if (path.endsWith("/missing-evidence.json")) {
     if (fixture.schema !== "kendall-linux-goal-fixture/v1") {
       failures.push(`${path} must use kendall-linux-goal-fixture/v1.`);
@@ -391,6 +430,106 @@ function validateGoalRunFixture(path, fixture) {
     if (fixture.expected_completion_status !== "not_complete") {
       failures.push(`${path} must expect not_complete completion status.`);
     }
+  }
+}
+
+function validateBlockerFixture(path, fixture) {
+  if (fixture.schema !== "kendall-linux-goal-blocker/v1") {
+    failures.push(`${path} must use kendall-linux-goal-blocker/v1.`);
+  }
+  for (const field of [
+    "blocker_id",
+    "run_id",
+    "task_id",
+    "authority_class",
+    "blocked_operation",
+    "reason",
+    "last_safe_command",
+    "proposed_next_command",
+    "required_bob_action",
+    "resume_command",
+    "secrets_exclusion",
+  ]) {
+    if (!hasString(fixture, field)) {
+      failures.push(`${path} must include ${field}.`);
+    }
+  }
+  if (fixture.authority_class !== "block_and_record") {
+    failures.push(`${path} must use block_and_record authority_class.`);
+  }
+  if (!hasArray(fixture, "evidence_paths")) {
+    failures.push(`${path} must include evidence_paths.`);
+  }
+  for (const field of ["dependency_impact", "safe_tasks_still_attempted"]) {
+    if (!hasNonEmptyArray(fixture, field)) {
+      failures.push(`${path} must include non-empty ${field}.`);
+    }
+  }
+  if (fixture.secrets_exclusion !== "confirmed") {
+    failures.push(`${path} must confirm secrets_exclusion.`);
+  }
+  if (!fixture.resume_command?.includes("/goal resume")) {
+    failures.push(`${path} must include an exact /goal resume command.`);
+  }
+  const redactionScanFixture = { ...fixture, secrets_exclusion: "" };
+  if (JSON.stringify(redactionScanFixture).match(/token|device_code|oauth_url/i)) {
+    failures.push(`${path} must not include token, secret, device-code, or OAuth URL content.`);
+  }
+}
+
+function validateCommandContractFixture(path, fixture) {
+  if (fixture.schema !== "kendall-linux-goal-command-contracts/v1") {
+    failures.push(`${path} must use kendall-linux-goal-command-contracts/v1.`);
+  }
+  if (fixture.fixture !== "command-contracts") {
+    failures.push(`${path} must identify fixture command-contracts.`);
+  }
+  if (!hasNonEmptyArray(fixture, "commands")) {
+    failures.push(`${path} must include non-empty commands.`);
+    return;
+  }
+
+  for (const [index, command] of fixture.commands.entries()) {
+    const label = `${path} commands[${index}]`;
+    if (!isRecord(command)) {
+      failures.push(`${label} must be a JSON object.`);
+      continue;
+    }
+    for (const field of [
+      "command_id",
+      "purpose",
+      "working_directory",
+      "authority_requirement",
+      "evidence_output",
+      "structured_exit_behavior",
+      "failure_type",
+    ]) {
+      if (!hasString(command, field)) {
+        failures.push(`${label} must include ${field}.`);
+      }
+    }
+    if (!hasNonEmptyArray(command, "argv")) {
+      failures.push(`${label} must include non-empty argv.`);
+    }
+    if (!hasArray(command, "allowed_write_paths")) {
+      failures.push(`${label} must include allowed_write_paths.`);
+    }
+    if (!Number.isInteger(command.timeout_seconds) || command.timeout_seconds <= 0 || command.timeout_seconds > 1800) {
+      failures.push(`${label} must include timeout_seconds between 1 and 1800.`);
+    }
+    if (command.stdin !== "closed") {
+      failures.push(`${label} must close stdin.`);
+    }
+    if (command.interactive !== false) {
+      failures.push(`${label} must be non-interactive.`);
+    }
+    if (!["allowed_unattended", "requires_preauthorization", "block_and_record"].includes(command.authority_requirement)) {
+      failures.push(`${label} must use a recognized authority_requirement.`);
+    }
+  }
+
+  if (fixture.expected_result !== "accept") {
+    failures.push(`${path} must expect bounded command contract acceptance.`);
   }
 }
 

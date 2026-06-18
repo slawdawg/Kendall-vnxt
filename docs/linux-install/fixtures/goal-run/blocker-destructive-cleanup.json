@@ -1,0 +1,18 @@
+{
+  "schema": "kendall-linux-goal-blocker/v1",
+  "blocker_id": "blocker-fixture-destructive-cleanup",
+  "run_id": "fixture-blocker-destructive-cleanup",
+  "task_id": "task.cleanup.workspace",
+  "authority_class": "block_and_record",
+  "blocked_operation": "destructive-cleanup",
+  "reason": "Workspace or filesystem cleanup can remove review evidence and requires explicit cleanup authority.",
+  "attempted_command": null,
+  "last_safe_command": "node ./scripts/codex-workspace.mjs cleanup-merged",
+  "proposed_next_command": "node ./scripts/codex-workspace.mjs cleanup-merged --apply",
+  "required_bob_action": "Review the dry-run output and approve the exact cleanup target before resume.",
+  "resume_command": "codex /goal resume linux-setup-mvp",
+  "evidence_paths": [],
+  "dependency_impact": ["task.cleanup.workspace"],
+  "safe_tasks_still_attempted": ["task.docs.drift"],
+  "secrets_exclusion": "confirmed"
+}

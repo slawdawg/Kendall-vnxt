@@ -1,0 +1,18 @@
+{
+  "schema": "kendall-linux-goal-blocker/v1",
+  "blocker_id": "blocker-fixture-manual-auth-github",
+  "run_id": "fixture-blocker-manual-auth",
+  "task_id": "task.manual-auth.github",
+  "authority_class": "block_and_record",
+  "blocked_operation": "manual-github-auth",
+  "reason": "GitHub authentication is required for the selected workflow and must be completed by Bob, not automated by Codex.",
+  "attempted_command": null,
+  "last_safe_command": "pnpm linux:doctor",
+  "proposed_next_command": "gh auth status",
+  "required_bob_action": "Complete GitHub CLI authentication manually, then rerun the resume command.",
+  "resume_command": "codex /goal resume linux-setup-mvp",
+  "evidence_paths": [],
+  "dependency_impact": ["task.private-repo-probe"],
+  "safe_tasks_still_attempted": ["task.docs.drift"],
+  "secrets_exclusion": "confirmed"
+}

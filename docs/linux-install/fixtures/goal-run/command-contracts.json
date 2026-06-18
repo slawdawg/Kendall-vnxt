@@ -1,0 +1,50 @@
+{
+  "schema": "kendall-linux-goal-command-contracts/v1",
+  "fixture": "command-contracts",
+  "commands": [
+    {
+      "command_id": "linux.drift",
+      "purpose": "Validate Linux setup documentation, fixtures, and contract drift.",
+      "working_directory": "repo-root",
+      "argv": ["node", "./scripts/check-linux-install-contract.mjs"],
+      "timeout_seconds": 120,
+      "authority_requirement": "allowed_unattended",
+      "allowed_write_paths": [],
+      "evidence_output": "console summary and exit code",
+      "structured_exit_behavior": "0 when all contract checks pass; 1 with per-field failures when drift is detected",
+      "failure_type": "verification",
+      "stdin": "closed",
+      "interactive": false
+    },
+    {
+      "command_id": "linux.goal.blocker.manual-auth",
+      "purpose": "Record a Manual Auth blocker packet without attempting provider login.",
+      "working_directory": "repo-root",
+      "argv": ["write-fixture", "docs/linux-install/evidence/goal-runs/<run-id>/blockers/<blocker-id>.json"],
+      "timeout_seconds": 60,
+      "authority_requirement": "block_and_record",
+      "allowed_write_paths": ["docs/linux-install/evidence/goal-runs/<run-id>/blockers/"],
+      "evidence_output": "redacted blocker packet",
+      "structured_exit_behavior": "0 when blocker packet is written; 1 when required fields or redaction checks fail",
+      "failure_type": "blocked_authority",
+      "stdin": "closed",
+      "interactive": false
+    },
+    {
+      "command_id": "linux.setup.apply.browser-deps",
+      "purpose": "Install approved browser dependency packages after bounded host-package-install authority.",
+      "working_directory": "repo-root",
+      "argv": ["sudo", "apt-get", "install", "--no-install-recommends", "<approved-browser-packages>"],
+      "timeout_seconds": 1800,
+      "authority_requirement": "requires_preauthorization",
+      "allowed_write_paths": ["system-package-database", "docs/linux-install/evidence/"],
+      "evidence_output": "dry-run preview, requested package list, and post-verify result",
+      "structured_exit_behavior": "0 when packages and post-verify pass; non-zero typed failure before retry guidance",
+      "failure_type": "host_mutation",
+      "stdin": "closed",
+      "interactive": false
+    }
+  ],
+  "expected_result": "accept",
+  "expected_reason": "Commands define id, purpose, cwd, argv, timeout, authority, writes, evidence, structured exits, failure type, closed stdin, and non-interactive execution."
+}

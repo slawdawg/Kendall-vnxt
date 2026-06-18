@@ -32,7 +32,12 @@ Status: draft v1
 | Invalid preauthorization fixture | `docs/linux-install/fixtures/goal-run/invalid-preauthorization.json` | Repo | Broad approval such as "install whatever is needed" is rejected | None |
 | Valid preauthorization fixture | `docs/linux-install/fixtures/goal-run/valid-preauthorization.json` | Repo | Bounded approval with authority family, operation, scope, command ids, targets, impact, evidence, recovery, approval reference, and stop lines is accepted as fixture-only evidence | None |
 | Blocked continuation fixture | `docs/linux-install/fixtures/goal-run/blocked-continuation.json` | Repo | Independent safe task continues; dependent and gated tasks pause | None |
+| Manual Auth blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-manual-auth.json` | Repo | Manual Auth blocker records exact Bob action, resume command, dependency impact, continued safe task, and secrets exclusion | None |
+| Paid provider blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-paid-provider-usage.json` | Repo | Paid provider blocker records spend authority requirement before provider execution | None |
+| Destructive cleanup blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-destructive-cleanup.json` | Repo | Cleanup blocker records dry-run first behavior and exact cleanup approval requirement | None |
+| Tailnet enrollment blocker fixture | `docs/linux-install/fixtures/goal-run/blocker-tailnet-enrollment.json` | Repo | Tailnet blocker records external enrollment boundary and resume point | None |
 | Missing evidence fixture | `docs/linux-install/fixtures/goal-run/missing-evidence.json` | Repo | Passing checks without required evidence cannot report complete | None |
+| Command contract fixture | `docs/linux-install/fixtures/goal-run/command-contracts.json` | Repo | Command definitions are bounded, non-interactive, timeout-scoped, authority-classed, evidence-producing, and typed on failure | None |
 
 ## Negative Checks
 
