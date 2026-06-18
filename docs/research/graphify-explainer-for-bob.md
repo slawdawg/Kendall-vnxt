@@ -1,7 +1,7 @@
 # Graphify Explainer For Bob
 
 Date: 2026-06-18
-Status: draft explainer
+Status: current explainer with completed-trial decision
 
 ## Short Version
 
@@ -9,11 +9,14 @@ Graphify is a tool that tries to turn a project folder into a relationship map.
 Instead of an agent only searching files one at a time, Graphify can create a
 graph that shows related files, concepts, code symbols, docs, and questions.
 
-The reason Kendall_Nxt is considering it is simple:
+The reason Kendall_Nxt considered it is simple:
 
 Can Graphify help Codex understand this repo faster and use less context?
 
-That is not proven yet. The next step is a guided trial, not adoption.
+The guided trial produced a bounded result: Graphify is promising for optional
+strict code-only orientation, but it is not adoption-ready and should not be
+installed into repo workflow, hooks, assistant configuration, or committed
+generated artifacts.
 
 ## What A "Graph" Means Here
 
@@ -88,8 +91,10 @@ For Codex, Graphify docs say install behavior may write:
 That means assistant installation is repo mutation. It should not happen during
 source review or the first explainer step.
 
-The current approved work does not install Graphify, run Graphify, add hooks, or
-write generated graph output.
+The completed approved work installed Graphify as a uv tool and ran bounded
+temporary code-only trials under `/tmp`. It did not install assistant
+integration, add hooks, serve MCP/HTTP, perform provider-backed extraction,
+write repo files from Graphify, or commit generated graph output.
 
 ## Why It Might Help Kendall_Nxt
 
@@ -126,7 +131,7 @@ Graphify must not:
 
 ## Proposed Safe Trial Boundary
 
-If Bob later approves a technical trial, the safest first boundary is:
+If Bob later approves another technical trial, the safest boundary remains:
 
 - No assistant install.
 - No hooks.
@@ -139,23 +144,18 @@ If Bob later approves a technical trial, the safest first boundary is:
 - Treat all Graphify output as orientation evidence that still needs source
   confirmation.
 
-## What Bob Should Decide Later
+## Current Decision
 
-After the guided trial, Bob should choose one outcome:
+After the guided trial, Bob chose to stop technical Graphify runs for now and
+preserve the evidence. The current durable recommendation is:
 
-- Reject Graphify.
-- Retry later.
-- Allow optional use.
-- Use only for specific workflow types.
-- Adopt a check-or-explain rule for Graphify-relevant workflows.
-
-The likely adoption candidate, if Graphify proves useful, is:
-
-For Graphify-relevant workflows, agents check Graphify or briefly explain why
-they skipped it.
-
-That keeps Graphify baked into serious orientation work without forcing it onto
-tiny localized tasks.
+- do not adopt Graphify yet;
+- keep it as a promising optional code-only orientation tool for future
+  explicitly approved trials;
+- do not install assistant integration, hooks, provider-backed extraction, or
+  committed `graphify-out/`;
+- treat Graphify output as orientation evidence only, with source files
+  remaining authoritative.
 
 ## Glossary
 
@@ -175,6 +175,6 @@ tiny localized tasks.
 Graphify might be useful, but it has enough power to change workflow behavior
 that Kendall_Nxt should not adopt it casually.
 
-The right next move is a guided trial: understand it first, control what it can
-read and write, measure whether it saves speed or tokens, then decide whether it
-belongs in normal Kendall_Nxt work.
+The right next move is not more technical running by default. Preserve the
+current evidence, use the final recommendation as the decision record, and
+require a new approval packet for any future Graphify command.

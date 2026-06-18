@@ -1,22 +1,26 @@
 # Graphify Trial Workflows And Scorecards
 
 Date: 2026-06-18
-Status: draft workflow candidates, not approved for execution
+Status: historical workflow candidates; technical runs stopped and evidence preserved
 
 ## Purpose
 
 Select concrete Kendall_Nxt workflow candidates for the Graphify Guided Trial
 and define the scorecard format for each run.
 
-This document does not approve installing Graphify, running Graphify, creating
+This document did not approve installing Graphify, running Graphify, creating
 `.graphifyignore`, writing generated outputs, or changing assistant behavior.
+The trial evidence has since been collected and summarized in
+`docs/research/graphify-current-evidence-decision-packet-2026-06-18.md` and
+`docs/research/graphify-final-recommendation-2026-06-18.md`.
 
-## Trial Order Recommendation
+## Historical Trial Order Recommendation
 
-Start with the likely non-fit localized task. This gives Kendall_Nxt evidence
-about when Graphify should be skipped and keeps the first technical trial small.
+The historical recommendation was to start with the likely non-fit localized
+task. This gave Kendall_Nxt evidence about when Graphify should be skipped and
+kept the first technical trial small.
 
-Recommended order:
+Historical recommended order:
 
 1. Likely non-fit localized task.
 2. Code-navigation or BMAD story implementation.
@@ -178,9 +182,9 @@ Verdict: pass / fail / inconclusive
 Notes:
 ```
 
-## Approval Packet Template
+## Historical Approval Packet Template
 
-Before any install or run, fill this out for the specific workflow.
+This was the approval packet template before any install or run.
 
 ```text
 Graphify First-Run Approval Packet
@@ -199,10 +203,11 @@ Rollback/cleanup path:
 Scorecard file or section:
 ```
 
-## Recommended First Approval Packet Draft
+## Historical First Approval Packet Draft
 
-This is a draft only. It should be reviewed and converted into an explicit
-approval request before execution.
+This draft was historical planning material only. Do not use it for future
+Graphify runs; future runs need a new approval packet scoped to `/tmp` output
+and the current final recommendation.
 
 ```text
 Graphify First-Run Approval Packet
@@ -214,7 +219,8 @@ Command proposed:
 - Not final. Must be confirmed after install docs and local tool help are available.
 
 Working directory:
-- Repo root.
+- Historical draft only. Future runs must not use repo root as the Graphify
+  working directory without a new explicit approval.
 
 Corpus included:
 - Candidate Graphify research docs only if provider boundary is explicitly approved, or a narrower code/config-only substitute if no provider-backed extraction is approved.
@@ -229,7 +235,8 @@ Query logging setting:
 - Disable query logging with `GRAPHIFY_QUERY_LOG_DISABLE=1` unless a local evidence log is explicitly approved.
 
 Expected writes:
-- `graphify-out/` only if Bob approves the run.
+- Historical draft only. Future runs must keep generated output under an
+  explicitly approved `/tmp` path unless a new approval says otherwise.
 - No committed generated output.
 
 Explicitly blocked behaviors:
@@ -246,9 +253,11 @@ Scorecard file or section:
 - Use this document's scorecard template under Workflow 1.
 ```
 
-## Next Work
+## Current Next Work
 
-1. Decide whether Workflow 1 is the first approved scorecard target.
-2. If yes, review `docs/research/graphify-first-run-approval-packet.md`.
-3. Ask Bob explicitly before installing Graphify or creating any active
-   `.graphifyignore`.
+Do not continue these workflow candidates without a new approval packet.
+
+Bob approved stopping technical Graphify runs and preserving evidence. The
+current recommendation is to keep Graphify optional for future explicitly
+approved, strict code-only trials and not adopt any repo integration or
+check-or-explain policy yet.

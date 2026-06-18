@@ -188,6 +188,10 @@ Overall verdict: **continue trial, no adoption yet**.
 
 ## Next Work
 
-Run Workflow 2, a more realistic code-navigation or BMAD story implementation
-orientation test, only after Bob approves the next exact corpus and command
-boundary.
+Historical next work: run Workflow 2, a more realistic code-navigation or BMAD
+story implementation orientation test, only after Bob approves the next exact
+corpus and command boundary.
+
+Current note: this recommendation was later superseded by Workflow 2, Workflow
+3, and the final recommendation. The current durable decision is
+`docs/research/graphify-final-recommendation-2026-06-18.md`.

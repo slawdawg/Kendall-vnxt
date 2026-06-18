@@ -1,7 +1,8 @@
 # Graphify First-Run Evidence
 
 Date: 2026-06-18
-Status: blocked at provider-boundary stop line
+Status: historical first-run evidence; provider-boundary stop line triggered
+and later superseded by code-only retries
 
 ## Approval Scope
 
@@ -172,4 +173,9 @@ Verdict:
 2. Approve provider-backed semantic extraction for selected docs.
 3. Stop the technical trial and keep Graphify as planning-only research.
 
-Recommended next step: retry only after Bob approves a revised corpus.
+Historical recommended next step: retry only after Bob approves a revised
+corpus.
+
+Current note: this recommendation was later superseded by approved code-only
+retry and workflow evidence. The current durable decision is
+`docs/research/graphify-final-recommendation-2026-06-18.md`.

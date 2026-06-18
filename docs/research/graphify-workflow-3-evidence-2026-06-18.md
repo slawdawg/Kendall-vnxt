@@ -210,5 +210,9 @@ yet**.
 3. Prepare a doc-inclusive/provider-boundary packet for documentation/context
    workflows.
 
-Recommended next step: stop technical runs and summarize evidence before any
-larger or provider-backed decision.
+Historical recommended next step: stop technical runs and summarize evidence
+before any larger or provider-backed decision.
+
+Current note: this recommendation was carried into
+`docs/research/graphify-current-evidence-decision-packet-2026-06-18.md` and
+`docs/research/graphify-final-recommendation-2026-06-18.md`.

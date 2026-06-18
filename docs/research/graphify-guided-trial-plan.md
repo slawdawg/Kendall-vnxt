@@ -1,17 +1,22 @@
 # Graphify Guided Trial Plan
 
 Date: 2026-06-18
-Status: draft trial plan
+Status: completed guided trial plan; technical runs stopped and evidence preserved
 
 ## Purpose
 
 Define a Bob-readable, evidence-first trial for deciding whether Graphify should
 become part of Kendall_Nxt's normal orientation workflow.
 
-This plan does not adopt Graphify. It creates a controlled path to understand
+This plan did not adopt Graphify. It created a controlled path to understand
 what Graphify does, verify current tool behavior from primary sources, compare
 Graphify-assisted work against Kendall_Nxt's current baseline, and decide
 whether any later implementation is justified.
+
+Current result: the guided trial is complete enough for a durable decision.
+Bob approved stopping technical Graphify runs and preserving evidence. The
+current recommendation is recorded in
+`docs/research/graphify-final-recommendation-2026-06-18.md`.
 
 ## Plain-English Starting Point
 
@@ -61,9 +66,9 @@ workflow:
 Graphify should not be compared against an unstructured or intentionally weak
 baseline.
 
-## Trial Scope
+## Historical Trial Scope
 
-The guided trial should test four workflow types:
+The guided trial was designed to test four workflow types:
 
 | Workflow | Why it is included | Expected Graphify fit |
 | --- | --- | --- |
@@ -90,17 +95,17 @@ The trial does not approve:
 
 Any scope expansion requires a separate explicit approval.
 
-## Trial Method
+## Historical Trial Method
 
-For each workflow, run or reconstruct two comparable paths:
+For each workflow, the plan was to run or reconstruct two comparable paths:
 
 1. **Baseline path:** Use `docs/ai-context/index.md`, targeted `rg`, and narrow
    source reads.
 2. **Graphify-assisted path:** Use Graphify orientation first, then confirm any
    important claim against source files.
 
-The Graphify-assisted path may win only if it improves understanding, speed, or
-token/context use without reducing decision quality or hiding authority
+The Graphify-assisted path could win only if it improved understanding, speed,
+or token/context use without reducing decision quality or hiding authority
 boundaries.
 
 ## Trial-Only Scorecard
@@ -154,9 +159,9 @@ Decision Card
 - Stop or rollback line:
 ```
 
-## Final Decision Options
+## Historical Final Decision Options
 
-After all four scorecards are reviewed, choose one outcome:
+The original plan considered these possible outcomes after scorecard review:
 
 - **Reject:** Graphify does not improve understanding, speed, or token use
   enough to justify adoption.
@@ -168,26 +173,30 @@ After all four scorecards are reviewed, choose one outcome:
 - **Check-or-explain adoption:** For Graphify-relevant workflows, agents check
   Graphify or briefly explain why they skipped it.
 
-## Candidate Final Policy If Trial Passes
+## Historical Candidate Final Policy If Trial Passes
 
-If the evidence supports adoption, the preferred policy candidate is:
+If the evidence had supported adoption, the preferred policy candidate was:
 
 For Graphify-relevant workflows, agents must either check Graphify for
 orientation or briefly explain why they skipped it.
 
-This should apply only when relationship mapping, context discovery, dependency
-tracing, documentation freshness, or safety-boundary orientation matters. Tiny
-localized tasks should remain eligible for direct source reads without Graphify.
+The trial evidence did not support adopting this policy. Graphify remains
+optional for future explicitly approved code-only trials.
 
-## Next Work
+## Current Next Work
 
-1. Review `docs/research/graphify-source-behavior-packet.md`.
-2. Review `docs/research/graphify-explainer-for-bob.md`.
-3. Review `docs/research/graphify-first-run-boundary.md`.
-4. Review `docs/research/graphify-trial-workflows-and-scorecards.md`.
-5. Review `docs/research/graphify-first-run-approval-packet.md`.
-6. Ask Bob for explicit approval before installing Graphify, running it, or
-   allowing it to write any files.
+Do not run additional Graphify commands from this plan. The current durable
+decision is:
+
+- do not adopt Graphify yet;
+- keep it optional for future explicit code-only trials;
+- do not install assistant integration, hooks, MCP, HTTP serving, provider-backed
+  extraction, or committed `graphify-out/`;
+- use `docs/research/graphify-final-recommendation-2026-06-18.md` and
+  `docs/research/graphify-current-evidence-decision-packet-2026-06-18.md` as
+  the current decision records.
+
+Any future technical run needs a new approval packet.
 
 ## References
 

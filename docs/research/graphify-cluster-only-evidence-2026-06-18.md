@@ -149,5 +149,9 @@ Verdict:
 3. Stop here and classify Graphify as safe for code-only local report
    generation but not yet proven valuable.
 
-Recommended next step: do the manual baseline comparison before using more
-Graphify commands.
+Historical recommended next step: do the manual baseline comparison before
+using more Graphify commands.
+
+Current note: this recommendation was later superseded by baseline comparison
+and workflow evidence. The current durable decision is
+`docs/research/graphify-final-recommendation-2026-06-18.md`.

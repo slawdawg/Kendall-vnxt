@@ -1,18 +1,20 @@
 # Graphify Workflow 3 Approval Packet
 
 Date: 2026-06-18
-Status: draft approval packet, not approved for execution
+Status: approved, executed, and closed with evidence
 
 ## Purpose
 
 Define a third Graphify trial that gives the tool a fairer code-only test on a
 multi-file implementation slice.
 
-This packet does not approve execution until Bob explicitly approves it.
+This packet did not approve execution until Bob explicitly approved it. The
+approved run was executed and recorded in
+`docs/research/graphify-workflow-3-evidence-2026-06-18.md`.
 
-## Decision Requested
+## Historical Decision Requested
 
-Approve or reject a bounded Graphify run with these limits:
+Bob was asked to approve or reject a bounded Graphify run with these limits:
 
 - Reuse the already installed `graphifyy==0.8.41`.
 - Create a temporary corpus under `/tmp/kendall-nxt-graphify-workflow-3`.
@@ -71,7 +73,7 @@ Everything else, including:
 
 ## Proposed Commands
 
-These commands are not approved until Bob says so explicitly.
+These commands were not approved until Bob said so explicitly.
 
 ```bash
 rm -rf /tmp/kendall-nxt-graphify-workflow-3
@@ -208,8 +210,15 @@ Capture:
 
 ## Recommendation
 
-Approve this if Bob wants one more no-provider trial before considering
-doc-inclusive/provider-backed Graphify use.
+Historical recommendation: approve this if Bob wants one more no-provider trial
+before considering doc-inclusive/provider-backed Graphify use.
 
 This is the fairest local-only test so far because it gives Graphify a
 multi-file code relationship problem without crossing into Markdown semantics.
+
+## Execution Evidence
+
+The approved run was completed within the code-only boundary. The evidence was
+positive for multi-file code orientation but still did not support adoption or
+repo integration. See
+`docs/research/graphify-workflow-3-evidence-2026-06-18.md`.

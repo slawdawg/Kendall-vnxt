@@ -1,7 +1,8 @@
 # Graphify First-Run Approval Packet
 
 Date: 2026-06-18
-Status: approved and attempted; blocked at provider-boundary stop line
+Status: approved and attempted; historical provider-boundary stop line evidence
+later superseded by code-only retries
 
 ## Purpose
 
@@ -10,9 +11,10 @@ deliberately narrower than the full Graphify Guided Trial because the first run
 should prove basic behavior without touching repo instructions, hooks, docs, or
 provider-backed extraction.
 
-## Decision Requested
+## Historical Decision Requested
 
-Approve or reject a limited Graphify first run with these boundaries:
+Bob was asked to approve or reject a limited Graphify first run with these
+boundaries:
 
 - Install Graphify with `uv tool install graphifyy`.
 - Create a temporary code/config corpus under `/tmp`.
@@ -48,7 +50,7 @@ first-run blast radius.
 
 ## Proposed Commands
 
-These commands are not approved until Bob says so explicitly.
+These commands were not approved until Bob said so explicitly.
 
 ```bash
 uv tool install graphifyy
@@ -203,13 +205,15 @@ Capture a concise evidence packet:
 - brief summary of `GRAPH_REPORT.md`.
 - Workflow 1 scorecard verdict.
 
-## Recommendation
+## Historical Recommendation
 
-Approve only if Bob is comfortable installing a Python tool with network access
-and allowing local generated output under `/tmp`.
+Historical approval condition: approve only if Bob is comfortable installing a
+Python tool with network access and allowing local generated output under
+`/tmp`.
 
-If approved, run this as a bounded first technical trial. If rejected, stop
-before install and keep the Graphify work as planning-only research.
+The run was approved and attempted. It stopped at the provider-boundary stop
+line before output generation. Do not use this packet as current approval for a
+future run.
 
 ## Execution Evidence
 
