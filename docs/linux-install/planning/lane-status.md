@@ -15,7 +15,8 @@ The Linux Install MVP lane combines:
 - durable autonomous goal prompt.
 
 Ignored `_bmad-output/planning-artifacts/` files are provenance only. The
-tracked files under `docs/` are the source of truth.
+tracked files under `docs/` are the source of truth. Post-merge closeout has
+also been delivered through PR #145.
 
 ## Current Step
 
@@ -26,9 +27,10 @@ reachability, fresh Ubuntu first-install, and same-host rerun validation
 evidence have been captured. `docs/linux-install.zip` has been refreshed after
 release evidence was recorded. PR #144 passed CI, had no unresolved review
 threads, merged into `main`, and the remote PR branch was deleted. The BMAD
-retrospective is complete. The next workflow step is the narrow post-merge
-closeout PR, followed by cleanup of the completed local Codex worktree after
-that closeout is delivered or intentionally abandoned.
+retrospective is complete. PR #145 delivered the narrow post-merge closeout and
+supply-chain hardening diff into `main`. The stale merged remote branch for PR
+#140, `codex/continue-linux-setup-prd-goal-run-contract-lane`, was deleted on
+2026-06-18.
 
 ## Completed Recovery
 
@@ -190,6 +192,10 @@ that closeout is delivered or intentionally abandoned.
 - Added post-delivery supply-chain hardening by pinning global npm-installed
   CLIs in `docs/linux-install/global-tool-manifest.json` and enforcing those
   pins in `scripts/bootstrap-linux.sh` and the Linux install contract checker.
+- Delivered the post-merge closeout through PR #145:
+  `https://github.com/slawdawg/Kendall-vnxt/pull/145`.
+- Deleted the stale merged remote branch for PR #140:
+  `codex/continue-linux-setup-prd-goal-run-contract-lane`.
 
 ## Verification State
 
@@ -206,10 +212,9 @@ Latest focused checks:
 
 ## Open Work
 
-- Deliver the post-merge closeout and supply-chain hardening diff as a
-  substantive Linux install lane PR.
-- Clean up the completed Codex worktree after post-merge closeout changes are
-  delivered or intentionally abandoned.
+- No tracked Linux Install MVP delivery work remains open. Local Codex
+  workspace cleanup can proceed separately where it does not delete the active
+  `linux-install` working directory.
 
 ## Stop Lines
 
