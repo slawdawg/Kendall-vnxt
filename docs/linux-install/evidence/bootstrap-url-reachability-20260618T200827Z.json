@@ -1,0 +1,20 @@
+{
+  "schema": "kendall-linux-url-reachability-evidence/v1",
+  "captured_at": "2026-06-18T20:08:27Z",
+  "command": "node ./scripts/check-linux-bootstrap-url.mjs",
+  "url": "https://raw.githubusercontent.com/slawdawg/Kendall-vnxt/main/scripts/bootstrap-linux.sh",
+  "result": "pass",
+  "http_status": 200,
+  "content_check": "--install-kendall-vnxt present",
+  "network_context": "rerun outside restricted sandbox after initial sandbox DNS failure",
+  "initial_sandbox_result": {
+    "result": "inconclusive",
+    "error": "getaddrinfo EAI_AGAIN raw.githubusercontent.com"
+  },
+  "authority": {
+    "class": "allowed_unattended",
+    "operation": "read-only published bootstrap URL reachability check",
+    "scope": "GitHub raw bootstrap URL content check only",
+    "mutation": "none"
+  }
+}

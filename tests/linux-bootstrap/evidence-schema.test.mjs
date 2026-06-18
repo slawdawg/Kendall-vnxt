@@ -222,6 +222,27 @@ test("evidence must include required redaction categories", () => {
   assert(installErrors.includes("redactions must include private-keys"));
 });
 
+test("evidence rejects retained secret and auth-flow text while allowing redaction labels", () => {
+  const clean = installEvidence({
+    redactions: ["gh-auth-output", "environment", "authorized-keys", "provider-tokens", "private-keys"],
+  });
+  assert.deepEqual(validateInstallEvidence(clean), []);
+
+  const leaked = installEvidence({
+    checks: [
+      { id: "repo-access", status: "fail", summary: "token gho_abcdefghijklmnopqrstuvwxyz leaked" },
+      { id: "auth-url", status: "fail", summary: "open https://example.test/oauth/device to continue" },
+    ],
+    checks_summary: { pass: 0, fail: 2, warn: 0 },
+    result: "fail",
+    rerun_guidance: "Do not paste -----BEGIN OPENSSH PRIVATE KEY----- into evidence.",
+  });
+  const errors = validateInstallEvidence(leaked);
+  assert(errors.includes("checks[0].summary must not include GitHub token"));
+  assert(errors.includes("checks[1].summary must not include auth URL"));
+  assert(errors.includes("rerun_guidance must not include private key material"));
+});
+
 test("evidence-write authority requires evidence-file mutation", () => {
   const bootstrapErrors = validateBootstrapEvidence(
     baseEvidence({
@@ -333,7 +354,7 @@ test("install evidence result must match failed checks", () => {
 
   const blockedEvidence = installEvidence({
     checks: [{ id: "repo-access", status: "blocked", summary: "manual GitHub auth required" }],
-    checks_summary: { pass: 0, fail: 0, warn: 0 },
+    checks_summary: { pass: 0, fail: 0, warn: 0, blocked: 1 },
     result: "blocked",
     rerun_guidance: "Complete manual repo auth and rerun.",
   });
@@ -370,6 +391,46 @@ test("install evidence checks summary must match actual check counts", () => {
   assert(typeErrors.includes("checks_summary.pass must be a non-negative integer"));
   assert(typeErrors.includes("checks_summary.fail must be a non-negative integer"));
   assert(typeErrors.includes("checks_summary.warn must be a non-negative integer"));
+});
+
+test("install evidence blocked summary must match blocked checks when supplied", () => {
+  const mismatch = installEvidence({
+    checks: [{ id: "repo-access", status: "blocked", summary: "manual GitHub auth required" }],
+    checks_summary: { pass: 0, fail: 0, warn: 0, blocked: 0 },
+    result: "blocked",
+    rerun_guidance: "Complete manual repo auth and rerun.",
+  });
+
+  assert(validateInstallEvidence(mismatch).includes("checks_summary.blocked must equal actual blocked check count"));
+});
+
+test("install evidence validates optional tool change rows when supplied", () => {
+  const evidence = installEvidence({
+    tool_changes: [
+      { id: "node", status: "existing", summary: "v22.22.1 already present" },
+      { id: "pnpm", status: "installed", summary: "installed pnpm 11.5.2" },
+      { id: "uv", status: "changed", summary: "" },
+      "codex",
+    ],
+  });
+
+  const errors = validateInstallEvidence(evidence);
+  assert(errors.includes("tool_changes[2].summary must be a non-empty string"));
+  assert(errors.includes("tool_changes[3] must be an object"));
+});
+
+test("accepts install evidence with existing installed changed skipped and failed tool changes", () => {
+  const evidence = installEvidence({
+    tool_changes: [
+      { id: "node", status: "existing", summary: "v22.22.1 already present" },
+      { id: "pnpm", status: "installed", summary: "installed pnpm 11.5.2" },
+      { id: "uv", status: "changed", summary: "exposed uv on PATH" },
+      { id: "codex", status: "skipped", summary: "Codex CLI already exists" },
+      { id: "claude", status: "failed", summary: "npm install failed before retry" },
+    ],
+  });
+
+  assert.deepEqual(validateInstallEvidence(evidence), []);
 });
 
 test("rejects install evidence without local-session target boundary", () => {

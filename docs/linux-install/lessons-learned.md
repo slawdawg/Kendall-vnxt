@@ -218,6 +218,44 @@ Correction:
 
 - Update `docs/workflows/linux-primary-development-runbook.md` when Bob
   approves cutover.
+
+## 2026-06-18: Evidence Helpers Need Runtime Tests, Not Only Source Scans
+
+Problem: source scans proved that blocked repo-access evidence was intended for
+stdout, but they did not prove the emitted payload was parseable, schema-valid
+JSON with progress logs kept off stdout.
+
+Correction:
+
+- Keep shell helper functions source-safe behind a `main "$@"` guard.
+- Runtime-test `write_install_blocked_stdout_evidence` by sourcing
+  `scripts/bootstrap-linux.sh`, parsing stdout, and validating the evidence
+  schema.
+- Treat stdout parseability as part of the evidence contract, not just a logging
+  convention.
+
+## 2026-06-18: Evidence Summaries Must Count Blocked Outcomes Explicitly
+
+Problem: blocked evidence had a blocked check and blocked result, but the
+summary only counted pass/fail/warn rows.
+
+Correction:
+
+- Emit `checks_summary.blocked` for shell install outcome evidence.
+- Validate the blocked count when supplied.
+- Keep older evidence without `checks_summary.blocked` readable, but require
+  new blocked outcome helpers to emit the count.
+
+## 2026-06-18: Evidence Path Validation Must Cover Traversal And Absolute Paths
+
+Problem: overwrite protection was covered, but outside-path and path-traversal
+cases needed direct validator command coverage.
+
+Correction:
+
+- Test absolute paths outside the checkout.
+- Test traversal out of `docs/linux-install/evidence/`.
+- Continue rejecting existing evidence files before verification work proceeds.
 - Mark the Linux target status as the active primary-development baseline.
 - Record the current target identity, tool versions, completed proofs, and
   snapshot state.

@@ -23,13 +23,17 @@ const goalRunFixtureFiles = [
   "docs/linux-install/fixtures/goal-run/blocker-paid-provider-usage.json",
   "docs/linux-install/fixtures/goal-run/blocker-tailnet-enrollment.json",
   "docs/linux-install/fixtures/goal-run/command-contracts.json",
+  "docs/linux-install/fixtures/goal-run/fresh-first-install-evidence-required.json",
+  "docs/linux-install/fixtures/goal-run/idempotent-rerun-evidence-required.json",
   "docs/linux-install/fixtures/goal-run/invalid-preauthorization.json",
   "docs/linux-install/fixtures/goal-run/missing-evidence.json",
+  "docs/linux-install/fixtures/goal-run/package-refresh-gated.json",
   "docs/linux-install/fixtures/goal-run/valid-preauthorization.json",
 ];
 
 const goalRunFixtureDir = "docs/linux-install/fixtures/goal-run";
 const expectedGoalRunFixtures = new Set(goalRunFixtureFiles);
+const broadPreauthorizationPhrases = ["continue", "do whatever is needed", "finish it"];
 
 const expectedBootstrapUrl =
   "https://raw.githubusercontent.com/slawdawg/Kendall-vnxt/main/scripts/bootstrap-linux.sh";
@@ -40,6 +44,28 @@ const expectedPublicLinuxScripts = {
   "linux:smoke": "node ./scripts/check-linux-bootstrap.mjs",
   "linux:drift": "node ./scripts/check-linux-install-contract.mjs",
 };
+
+const canonicalMutatingInstallCommand = "scripts/bootstrap-linux.sh --install-kendall-vnxt";
+
+const alternateMutatingInstallCommandPatterns = [
+  /node\s+\.\/scripts\/linux-bootstrap\.mjs[^\n]*(?:--apply|--install|mutat)/i,
+  /pnpm\s+run\s+linux:bootstrap[^\n]*(?:--\s+--apply|--apply|--install|mutat)/i,
+  /scripts\/validate-linux-install\.sh[^\n]*(?:--apply|--install|mutat)/i,
+  /StrictHostKeyChecking=accept-new/i,
+];
+
+const historicalBoundarySnippets = [
+  "The documents below are historical, lab-instance, or platform-evaluation notes.",
+  "They are not the generic installer entry point and must not override the\nsingle-method v1 boundary above.",
+];
+
+const historicalIndexEntrySnippets = [
+  "[Bob next steps](bob-next-steps.md) - current lab host notes, not the generic",
+  "[Remaining gaps](remaining-gaps.md) - current Linux host gaps and policy",
+  "[Historical implementation plan](implementation-plan.md) - superseded remote",
+  "[Historical remote approval template](remote-approval-template.md) -",
+  "[Historical SSH key policy](ssh-key-policy.md) - SSH policy history, not part",
+];
 
 const requiredSnippets = [
   {
@@ -73,6 +99,22 @@ const requiredSnippets = [
   {
     path: "scripts/check-linux-bootstrap-url.mjs",
     text: expectedBootstrapUrl,
+  },
+  {
+    path: "docs/linux-install/fresh-host-proof-procedure.md",
+    text: "Do not claim the\npublished GitHub `main` command is proven until:",
+  },
+  {
+    path: "docs/linux-install/fresh-host-proof-procedure.md",
+    text: "pnpm run check:linux-bootstrap-url",
+  },
+  {
+    path: "docs/linux-install/one-command-bootstrap-plan.md",
+    text: "pre-merge proof is not confused with published\n  README-command proof.",
+  },
+  {
+    path: "docs/linux-install/one-command-bootstrap-plan.md",
+    text: "`pnpm run check:linux-bootstrap-url` currently fails with HTTP 404 for the\n  raw GitHub `main` bootstrap URL",
   },
   {
     path: "docs/linux-install/index.md",
@@ -145,6 +187,18 @@ const requiredSnippets = [
   {
     path: "docs/linux-install/validation-matrix.md",
     text: "| Missing evidence fixture | `docs/linux-install/fixtures/goal-run/missing-evidence.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Fresh first-install evidence fixture | `docs/linux-install/fixtures/goal-run/fresh-first-install-evidence-required.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Idempotent rerun evidence fixture | `docs/linux-install/fixtures/goal-run/idempotent-rerun-evidence-required.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Package refresh gate fixture | `docs/linux-install/fixtures/goal-run/package-refresh-gated.json`",
   },
   {
     path: "docs/linux-install/validation-matrix.md",
@@ -330,6 +384,46 @@ export function validatePublicLinuxScripts(packageJson) {
   return scriptFailures;
 }
 
+export function validateSingleMutatingInstallBoundary(documents) {
+  const boundaryFailures = [];
+  let canonicalCommandCount = 0;
+
+  for (const [path, text] of documents.entries()) {
+    const canonicalMatches = text.matchAll(new RegExp(escapeRegExp(canonicalMutatingInstallCommand), "g"));
+    canonicalCommandCount += Array.from(canonicalMatches).length;
+
+    for (const pattern of alternateMutatingInstallCommandPatterns) {
+      if (pattern.test(text)) {
+        boundaryFailures.push(`${path} contains alternate mutating install command language: ${pattern}`);
+      }
+    }
+  }
+
+  if (canonicalCommandCount === 0) {
+    boundaryFailures.push(`active docs must name the canonical mutating command: ${canonicalMutatingInstallCommand}`);
+  }
+
+  const indexText = documents.get("docs/linux-install/index.md");
+  if (indexText !== undefined) {
+    for (const snippet of historicalBoundarySnippets) {
+      if (!indexText.includes(snippet)) {
+        boundaryFailures.push("docs/linux-install/index.md must fence historical or lab notes from v1 install authority.");
+      }
+    }
+    for (const snippet of historicalIndexEntrySnippets) {
+      if (!indexText.includes(snippet)) {
+        boundaryFailures.push(`docs/linux-install/index.md must label non-authoritative historical/lab entry: ${snippet}`);
+      }
+    }
+  }
+
+  return boundaryFailures;
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function validateGoalRunFixture(path, fixture) {
   if (!isRecord(fixture)) {
     failures.push(`${path} must be a JSON object.`);
@@ -345,6 +439,22 @@ function validateGoalRunFixture(path, fixture) {
     }
     if (!isRecord(fixture.input) || typeof fixture.input.approval_text !== "string") {
       failures.push(`${path} must include input.approval_text.`);
+    } else {
+      const approvalText = fixture.input.approval_text.toLowerCase();
+      for (const phrase of ["continue", "whatever is needed"]) {
+        if (!approvalText.includes(phrase)) {
+          failures.push(`${path} approval_text must demonstrate rejection of broad phrase: ${phrase}.`);
+        }
+      }
+    }
+    if (!hasNonEmptyArray(fixture.input, "generic_approval_examples")) {
+      failures.push(`${path} must include generic_approval_examples.`);
+    } else {
+      for (const phrase of broadPreauthorizationPhrases) {
+        if (!fixture.input.generic_approval_examples.includes(phrase)) {
+          failures.push(`${path} generic_approval_examples must include ${phrase}.`);
+        }
+      }
     }
     if (fixture.expected_result !== "reject") {
       failures.push(`${path} must expect broad preauthorization rejection.`);
@@ -377,15 +487,22 @@ function validateGoalRunFixture(path, fixture) {
       }
     }
     for (const field of ["command_ids", "allowed_targets", "evidence_required", "stop_lines"]) {
-      if (!hasArray(fixture, field) || fixture[field].length === 0) {
+      if (!hasNonEmptyArray(fixture, field)) {
         failures.push(`${path} must include non-empty ${field}.`);
+      } else if (!fixture[field].every((entry) => typeof entry === "string" && entry.length > 0)) {
+        failures.push(`${path} ${field} entries must be non-empty strings.`);
       }
+    }
+    if (!fixture.command_ids.includes("linux.setup.apply.browser-deps")) {
+      failures.push(`${path} must authorize the matching command id linux.setup.apply.browser-deps.`);
     }
     if (fixture.expected_result !== "accept") {
       failures.push(`${path} must expect bounded preauthorization acceptance.`);
     }
     if (!hasString(fixture, "expected_reason")) {
       failures.push(`${path} must include expected_reason.`);
+    } else if (!fixture.expected_reason.includes("authority family") || !fixture.expected_reason.includes("stop lines")) {
+      failures.push(`${path} expected_reason must summarize bounded authority fields.`);
     }
     return;
   }
@@ -397,8 +514,43 @@ function validateGoalRunFixture(path, fixture) {
     if (fixture.fixture !== "blocked-continuation") {
       failures.push(`${path} must identify fixture blocked-continuation.`);
     }
+    let tasksById = new Map();
     if (!hasArray(fixture, "tasks")) {
       failures.push(`${path} must include tasks.`);
+    } else {
+      tasksById = new Map(fixture.tasks.filter(isRecord).map((task) => [task.task_id, task]));
+      for (const [index, task] of fixture.tasks.entries()) {
+        const label = `${path} tasks[${index}]`;
+        if (!isRecord(task)) {
+          failures.push(`${label} must be an object.`);
+          continue;
+        }
+        for (const field of [
+          "task_id",
+          "authority_class",
+          "state",
+          "allowed_mode",
+          "next_command",
+          "completion_condition",
+          "blocked_condition",
+          "resume_command",
+        ]) {
+          if (!hasString(task, field)) {
+            failures.push(`${label} must include ${field}.`);
+          }
+        }
+        for (const field of ["mapped_requirements", "dependencies", "evidence_paths"]) {
+          if (!hasArray(task, field)) {
+            failures.push(`${label} must include ${field}.`);
+          }
+        }
+        if (task.last_command !== null && typeof task.last_command !== "string") {
+          failures.push(`${label} last_command must be a string or null.`);
+        }
+        if (!task.resume_command?.includes("/goal resume")) {
+          failures.push(`${label} must include an exact /goal resume command.`);
+        }
+      }
     }
     if (!isRecord(fixture.expected_result)) {
       failures.push(`${path} must include expected_result object.`);
@@ -407,6 +559,45 @@ function validateGoalRunFixture(path, fixture) {
         if (!Array.isArray(fixture.expected_result[field])) {
           failures.push(`${path} must include expected_result.${field}.`);
         }
+      }
+      for (const taskId of ["task.docs.drift", "task.private-repo-probe", "task.tailnet-enroll"]) {
+        if (!tasksById.has(taskId)) {
+          failures.push(`${path} must include ${taskId}.`);
+        }
+      }
+      if (!fixture.expected_result.continue?.includes("task.docs.drift")) {
+        failures.push(`${path} must continue only independent safe docs drift work.`);
+      }
+      if (!fixture.expected_result.pause_dependency_blocked?.includes("task.private-repo-probe")) {
+        failures.push(`${path} must pause the private repo probe as dependency-blocked.`);
+      }
+      if (!fixture.expected_result.pause_authority_blocked?.includes("task.tailnet-enroll")) {
+        failures.push(`${path} must pause Tailnet enrollment as authority-blocked.`);
+      }
+      const docsTask = tasksById.get("task.docs.drift");
+      if (
+        docsTask &&
+        (docsTask.state !== "ready" ||
+          docsTask.authority_class !== "allowed_unattended" ||
+          !Array.isArray(docsTask.dependencies) ||
+          docsTask.dependencies.length !== 0)
+      ) {
+        failures.push(`${path} task.docs.drift must be ready, independent, and allowed unattended.`);
+      }
+      const repoProbeTask = tasksById.get("task.private-repo-probe");
+      if (
+        repoProbeTask &&
+        (repoProbeTask.state !== "dependency_blocked" ||
+          !Array.isArray(repoProbeTask.dependencies) ||
+          !repoProbeTask.dependencies.includes("task.manual-auth.github") ||
+          repoProbeTask.state === "complete" ||
+          repoProbeTask.state === "skipped")
+      ) {
+        failures.push(`${path} task.private-repo-probe must be dependency_blocked by manual auth, not complete or skipped.`);
+      }
+      const tailnetTask = tasksById.get("task.tailnet-enroll");
+      if (tailnetTask && tailnetTask.authority_class !== "block_and_record") {
+        failures.push(`${path} task.tailnet-enroll must remain authority blocked.`);
       }
     }
     return;
@@ -435,8 +626,126 @@ function validateGoalRunFixture(path, fixture) {
     if (!hasArray(fixture, "present_evidence") || fixture.present_evidence.length !== 0) {
       failures.push(`${path} must keep present_evidence empty.`);
     }
+    if (fixture.release_gate_status !== "open") {
+      failures.push(`${path} must keep release_gate_status open.`);
+    }
+    if (!hasNonEmptyArray(fixture, "open_blockers")) {
+      failures.push(`${path} must list open_blockers.`);
+    }
+    if (!hasNonEmptyArray(fixture, "terminal_delivery_authority_required")) {
+      failures.push(`${path} must list terminal_delivery_authority_required.`);
+    } else {
+      for (const terminalAction of ["pr-create", "merge", "workspace-cleanup"]) {
+        if (!fixture.terminal_delivery_authority_required.includes(terminalAction)) {
+          failures.push(`${path} must require terminal delivery authority for ${terminalAction}.`);
+        }
+      }
+    }
     if (fixture.expected_completion_status !== "not_complete") {
       failures.push(`${path} must expect not_complete completion status.`);
+    }
+    if (
+      !hasString(fixture, "expected_reason") ||
+      !fixture.expected_reason.includes("required evidence") ||
+      !fixture.expected_reason.includes("terminal delivery authority")
+    ) {
+      failures.push(`${path} must explain missing evidence and terminal delivery authority in expected_reason.`);
+    }
+  }
+
+  if (path.endsWith("/fresh-first-install-evidence-required.json")) {
+    if (fixture.schema !== "kendall-linux-goal-fixture/v1") {
+      failures.push(`${path} must use kendall-linux-goal-fixture/v1.`);
+    }
+    if (fixture.fixture !== "fresh-first-install-evidence-required") {
+      failures.push(`${path} must identify fixture fresh-first-install-evidence-required.`);
+    }
+    if (!isRecord(fixture.host_requirements)) {
+      failures.push(`${path} must include host_requirements.`);
+    } else {
+      for (const field of ["distribution", "version", "user", "sudo"]) {
+        if (!hasString(fixture.host_requirements, field)) {
+          failures.push(`${path} host_requirements must include ${field}.`);
+        }
+      }
+    }
+    if (fixture.approved_single_bootstrap_command !== canonicalMutatingInstallCommand) {
+      failures.push(`${path} must require the canonical single bootstrap command.`);
+    }
+    if (!hasNonEmptyArray(fixture, "required_evidence")) {
+      failures.push(`${path} must list required_evidence.`);
+    }
+    if (!hasNonEmptyArray(fixture, "forbidden_substitutes") || !fixture.forbidden_substitutes.includes("local-verify-only")) {
+      failures.push(`${path} must forbid local-verify-only as first-install evidence.`);
+    }
+    if (fixture.current_status !== "blocked_no_real_host_evidence") {
+      failures.push(`${path} must stay blocked until real first-install evidence exists.`);
+    }
+    if (fixture.expected_completion_status !== "not_complete") {
+      failures.push(`${path} must expect not_complete completion status.`);
+    }
+  }
+
+  if (path.endsWith("/idempotent-rerun-evidence-required.json")) {
+    if (fixture.schema !== "kendall-linux-goal-fixture/v1") {
+      failures.push(`${path} must use kendall-linux-goal-fixture/v1.`);
+    }
+    if (fixture.fixture !== "idempotent-rerun-evidence-required") {
+      failures.push(`${path} must identify fixture idempotent-rerun-evidence-required.`);
+    }
+    if (!hasString(fixture, "requires_first_install_evidence")) {
+      failures.push(`${path} must name requires_first_install_evidence.`);
+    }
+    if (!hasNonEmptyArray(fixture, "required_rerun_evidence")) {
+      failures.push(`${path} must list required_rerun_evidence.`);
+    }
+    if (!hasNonEmptyArray(fixture, "idempotency_assertions")) {
+      failures.push(`${path} must list idempotency_assertions.`);
+    } else {
+      for (const assertion of ["same-host", "no-destructive-cleanup", "safe-rerun-guidance"]) {
+        if (!fixture.idempotency_assertions.includes(assertion)) {
+          failures.push(`${path} must include idempotency assertion ${assertion}.`);
+        }
+      }
+    }
+    if (fixture.current_status !== "blocked_until_first_install_passes") {
+      failures.push(`${path} must stay blocked until first-install evidence passes.`);
+    }
+    if (fixture.expected_completion_status !== "not_complete") {
+      failures.push(`${path} must expect not_complete completion status.`);
+    }
+  }
+
+  if (path.endsWith("/package-refresh-gated.json")) {
+    if (fixture.schema !== "kendall-linux-goal-fixture/v1") {
+      failures.push(`${path} must use kendall-linux-goal-fixture/v1.`);
+    }
+    if (fixture.fixture !== "package-refresh-gated") {
+      failures.push(`${path} must identify fixture package-refresh-gated.`);
+    }
+    if (fixture.package_artifact !== "docs/linux-install.zip") {
+      failures.push(`${path} must gate docs/linux-install.zip.`);
+    }
+    if (!hasNonEmptyArray(fixture, "required_before_refresh")) {
+      failures.push(`${path} must list required_before_refresh.`);
+    } else {
+      for (const requirement of ["published-bootstrap-reachability", "first-install-pass-evidence", "idempotent-rerun-evidence"]) {
+        if (!fixture.required_before_refresh.includes(requirement)) {
+          failures.push(`${path} must require ${requirement} before refresh.`);
+        }
+      }
+    }
+    if (fixture.current_status !== "refreshed_after_release_evidence") {
+      failures.push(`${path} must record refreshed_after_release_evidence after release proof is available.`);
+    }
+    if (fixture.expected_action !== "package_refreshed") {
+      failures.push(`${path} must expect package_refreshed.`);
+    }
+    if (fixture.refreshed_artifact !== "docs/linux-install.zip") {
+      failures.push(`${path} must record refreshed artifact docs/linux-install.zip.`);
+    }
+    if (!hasNonEmptyArray(fixture, "evidence_used")) {
+      failures.push(`${path} must list evidence_used for package refresh.`);
     }
   }
 }
@@ -456,6 +765,7 @@ function validateBlockerFixture(path, fixture) {
     "proposed_next_command",
     "required_bob_action",
     "resume_command",
+    "blocked_task_status",
     "secrets_exclusion",
   ]) {
     if (!hasString(fixture, field)) {
@@ -475,6 +785,9 @@ function validateBlockerFixture(path, fixture) {
   }
   if (fixture.secrets_exclusion !== "confirmed") {
     failures.push(`${path} must confirm secrets_exclusion.`);
+  }
+  if (fixture.blocked_task_status !== "authority-blocked-not-complete") {
+    failures.push(`${path} must keep blocked task status authority-blocked-not-complete.`);
   }
   if (!fixture.resume_command?.includes("/goal resume")) {
     failures.push(`${path} must include an exact /goal resume command.`);
@@ -542,14 +855,18 @@ function validateCommandContractFixture(path, fixture) {
 }
 
 function main() {
+const activeDocTexts = new Map();
 for (const path of activeDocs) {
   const text = readFileSync(path, "utf8");
+  activeDocTexts.set(path, text);
   for (const pattern of forbiddenPatterns) {
     if (pattern.test(text)) {
       failures.push(`${path} contains forbidden install-method language: ${pattern}`);
     }
   }
 }
+
+failures.push(...validateSingleMutatingInstallBoundary(activeDocTexts));
 
 for (const requirement of requiredSnippets) {
   const text = readFileSync(requirement.path, "utf8");

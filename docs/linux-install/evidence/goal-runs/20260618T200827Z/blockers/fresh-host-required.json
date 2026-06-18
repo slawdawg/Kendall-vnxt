@@ -1,0 +1,27 @@
+{
+  "schema": "kendall-linux-goal-blocker/v1",
+  "blocker_id": "blocker-20260618-fresh-host-required",
+  "run_id": "20260618T200827Z",
+  "task_id": "story.5.3.capture-fresh-ubuntu-first-install-evidence",
+  "authority_class": "block_and_record",
+  "blocked_operation": "fresh-ubuntu-first-install-evidence-capture",
+  "reason": "The current host is Ubuntu 26.04 with a non-root user, but it is not a fresh or reset install target because it already contains an active dirty Kendall_Nxt worktree and existing project state.",
+  "attempted_command": null,
+  "last_safe_command": "whoami && id -u && uname -a && sed -n '1,12p' /etc/os-release && git status --short",
+  "proposed_next_command": "scripts/bootstrap-linux.sh --install-kendall-vnxt",
+  "required_bob_action": "Provide a fresh or reset Ubuntu 26.04+ host with a non-root sudo user, or explicitly identify an approved reset target before first-install evidence capture.",
+  "resume_command": "codex /goal resume linux-setup-mvp",
+  "evidence_paths": [
+    "docs/linux-install/evidence/bootstrap-url-reachability-20260618T200827Z.json"
+  ],
+  "dependency_impact": [
+    "story.5.3.capture-fresh-ubuntu-first-install-evidence",
+    "story.5.4.capture-idempotent-rerun-evidence",
+    "story.5.5.refresh-release-docs-and-linux-install-package"
+  ],
+  "safe_tasks_still_attempted": [
+    "story.5.2.prove-published-bootstrap-source-reachability"
+  ],
+  "blocked_task_status": "authority-blocked-not-complete",
+  "secrets_exclusion": "confirmed"
+}

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import { parseLinuxBootstrapArgs } from "../../scripts/lib/linux-bootstrap/args.mjs";
@@ -46,4 +47,20 @@ test("node verifier rejects apply mutation options", () => {
     () => parseLinuxBootstrapArgs(["--verify-only", "--approval-id", "linux-bootstrap-apply-20260617-01"]),
     /--approval-id is not supported/,
   );
+});
+
+test("linux bootstrap entrypoint rejects unsupported remote and apply arguments before evidence output", () => {
+  for (const args of [["--apply"], ["--plan", "--target", "ubuntu-target"], ["--plan", "--user", "ubuntu"]]) {
+    const result = spawnSync(process.execPath, ["./scripts/linux-bootstrap.mjs", ...args], {
+      encoding: "utf8",
+      shell: false,
+    });
+
+    if (result.error?.code === "EPERM") {
+      continue;
+    }
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /Usage: node \.\/scripts\/linux-bootstrap\.mjs/);
+    assert.doesNotMatch(result.stdout, /kendall-linux-bootstrap-evidence/);
+  }
 });

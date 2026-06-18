@@ -117,7 +117,7 @@ After the script completes, verify from the local repo checkout:
 ```bash
 cd "$HOME/Kendall_Nxt"
 bash scripts/validate-linux-install.sh --verify-only
-pnpm run linux:bootstrap -- --verify-only
+pnpm run linux:bootstrap --verify-only
 ```
 
 Bootstrap evidence is valid only if it:
@@ -206,7 +206,7 @@ probe:
 
 ```bash
 cd "$HOME/Kendall_Nxt"
-pnpm run linux:bootstrap -- --verify-only
+pnpm run linux:bootstrap --verify-only
 pnpm run preflight
 node ./scripts/codex-workspace.mjs doctor
 codex --version
