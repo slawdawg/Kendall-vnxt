@@ -27,6 +27,8 @@ arrays. The checker now validates type first and reports structured failures.
 
 ## Delivery State
 
-No PR created in this review step. Published bootstrap reachability, fresh
-Ubuntu first-install validation, same-host rerun validation, and package refresh
-evidence are now recorded. The lane is ready for terminal PR delivery.
+PR #144 was later created, passed CI, had no unresolved review threads, and was
+merged into `main`. Published bootstrap reachability, fresh Ubuntu first-install
+validation, same-host rerun validation, and package refresh evidence are
+recorded. See `docs/linux-install/planning/reviews/pr-144-delivery-record.md`
+for terminal delivery evidence.

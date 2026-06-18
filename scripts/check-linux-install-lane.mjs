@@ -40,6 +40,8 @@ const requiredFiles = [
   "docs/linux-install/planning/stories/5-5-refresh-release-docs-and-linux-install-package.md",
   "docs/linux-install/planning/stories/5-6-run-final-verification-and-code-review-before-delivery.md",
   "docs/linux-install/planning/reviews/pre-pr-code-review-2026-06-18.md",
+  "docs/linux-install/planning/reviews/pr-144-delivery-record.md",
+  "docs/linux-install/planning/reviews/linux-install-mvp-retrospective-2026-06-18.md",
   "docs/linux-install/evidence/local-verify-only-20260618T181400Z.json",
 ];
 
@@ -192,6 +194,14 @@ const requiredLinks = [
     path: "docs/linux-install/index.md",
     text: "planning/reviews/pre-pr-code-review-2026-06-18.md",
   },
+  {
+    path: "docs/linux-install/index.md",
+    text: "planning/reviews/pr-144-delivery-record.md",
+  },
+  {
+    path: "docs/linux-install/index.md",
+    text: "planning/reviews/linux-install-mvp-retrospective-2026-06-18.md",
+  },
 ];
 
 const stalePatterns = [
@@ -240,6 +250,10 @@ function read(path) {
   return readFileSync(path, "utf8");
 }
 
+function firstStatus(text) {
+  return text.match(/^Status: ([^\n]+)$/m)?.[1] ?? "";
+}
+
 for (const path of requiredFiles) {
   try {
     const stats = statSync(path);
@@ -271,6 +285,55 @@ for (const { path, pattern } of stalePatterns) {
   } catch {
     failures.push(`${path} is missing.`);
   }
+}
+
+const laneStatusPath = "docs/linux-install/planning/lane-status.md";
+const laneStatus = existingFiles.has(laneStatusPath) ? read(laneStatusPath) : "";
+const laneDelivered = /^Status: delivered$/m.test(laneStatus);
+
+if (existingFiles.has(laneStatusPath)) {
+  for (const expected of [
+    "Status: delivered",
+    "PR #144 passed CI",
+    "no unresolved review",
+    "remote PR branch was deleted",
+    "pr-144-delivery-record.md",
+  ]) {
+    if (!laneStatus.includes(expected)) {
+      failures.push(`Linux install lane status must record delivered closeout evidence: ${expected}`);
+    }
+  }
+}
+
+if (laneDelivered) {
+  for (const storyPath of requiredFiles.filter((path) => path.startsWith("docs/linux-install/planning/stories/"))) {
+    const story = read(storyPath);
+    if (firstStatus(story) !== "done") {
+      failures.push(`${storyPath} must be Status: done after lane delivery.`);
+    }
+  }
+}
+
+if (existingFiles.has("docs/linux-install/index.md")) {
+  const index = read("docs/linux-install/index.md");
+  if (!/^Status: delivered$/m.test(index)) {
+    failures.push("docs/linux-install/index.md must mark the Linux install lane delivered.");
+  }
+  if (!index.includes("delivered through PR #144")) {
+    failures.push("docs/linux-install/index.md must reference PR #144 delivery.");
+  }
+}
+
+try {
+  const prdIndex = read("docs/prds/index.md");
+  if (!prdIndex.includes("Delivered lane") || !prdIndex.includes("completed through PR #144")) {
+    failures.push("docs/prds/index.md must reflect Linux Install MVP PR #144 delivery.");
+  }
+  if (!prdIndex.includes("source PRD file intentionally retains draft metadata")) {
+    failures.push("docs/prds/index.md must clarify that Linux Install MVP PRD metadata remains draft.");
+  }
+} catch {
+  failures.push("docs/prds/index.md is missing.");
 }
 
 if (existingFiles.has("docs/prds/linux-install-mvp.md")) {
@@ -708,7 +771,8 @@ if (existingFiles.has("docs/linux-install/planning/stories/5-3-capture-fresh-ubu
   for (const expected of [
     "Fresh first-install evidence fixture forbids local-verify-only as release proof",
     "Contract validation requires blocked_no_real_host_evidence until real first-install evidence exists",
-    "Story remains blocked on fresh Ubuntu host evidence",
+    "Transcript-backed first-install evidence was captured from host `ubuntutest`",
+    "Story delivered through PR #144",
   ]) {
     if (!story.includes(expected)) {
       failures.push(`Story 5.3 must include task coverage for: ${expected}`);
@@ -724,7 +788,8 @@ if (existingFiles.has("docs/linux-install/planning/stories/5-4-capture-idempoten
   for (const expected of [
     "Idempotent rerun evidence fixture requires first-install evidence first",
     "Contract validation requires same-host, no-destructive-cleanup, and safe-rerun-guidance assertions",
-    "Story remains blocked until first-install evidence passes",
+    "Transcript-backed same-host rerun evidence was captured from host `ubuntutest`",
+    "Story delivered through PR #144",
   ]) {
     if (!story.includes(expected)) {
       failures.push(`Story 5.4 must include task coverage for: ${expected}`);
@@ -740,7 +805,8 @@ if (existingFiles.has("docs/linux-install/planning/stories/5-5-refresh-release-d
   for (const expected of [
     "Package refresh gate requires published bootstrap reachability, first-install evidence, and rerun evidence",
     "Contract validation requires package_refreshed after release evidence is available",
-    "Story is ready for review after package refresh",
+    "Package refresh was completed after published-source, first-install, rerun, and review evidence existed",
+    "Story delivered through PR #144",
   ]) {
     if (!story.includes(expected)) {
       failures.push(`Story 5.5 must include task coverage for: ${expected}`);
@@ -769,11 +835,61 @@ if (existingFiles.has("docs/linux-install/planning/reviews/pre-pr-code-review-20
   for (const expected of [
     "Finding fixed",
     "contract checker could throw",
-    "No PR created",
-    "ready for terminal PR delivery",
+    "PR #144",
+    "merged into `main`",
   ]) {
     if (!review.includes(expected)) {
       failures.push(`pre-pr code review must record: ${expected}`);
+    }
+  }
+}
+
+if (existingFiles.has("docs/linux-install/planning/reviews/pr-144-delivery-record.md")) {
+  const delivery = read("docs/linux-install/planning/reviews/pr-144-delivery-record.md");
+  for (const expected of [
+    "PR #144 merged into `main`",
+    "CI `check` passed",
+    "no unresolved review threads",
+    "remote branch `codex/continue-linux-install-work` was deleted",
+    "Authority And Evidence",
+    "Approval record: user message on 2026-06-18, \"merge",
+    "Approval record: user message on 2026-06-18, \"proceed\"",
+    "Authority family: terminal delivery",
+    "Authority family: primary-worktree maintenance",
+    "Command:",
+    "Exit:",
+    "Output excerpt:",
+    "git status --short --untracked-files=all",
+    "Discarded path:",
+    "local-verify-only-20260618T161354Z.json",
+    "git rev-parse HEAD",
+    "git rev-parse origin/main",
+    "reviewThreads.nodes",
+  ]) {
+    if (!delivery.includes(expected)) {
+      failures.push(`PR 144 delivery record must include: ${expected}`);
+    }
+  }
+  const shaPattern = /`[0-9a-f]{40}`/g;
+  if ((delivery.match(shaPattern) ?? []).length < 2) {
+    failures.push("PR 144 delivery record must include merge and delivery commit SHAs.");
+  }
+  if (!/PR: https:\/\/github\.com\/slawdawg\/Kendall-vnxt\/pull\/144/.test(delivery)) {
+    failures.push("PR 144 delivery record must include the PR URL.");
+  }
+}
+
+if (existingFiles.has("docs/linux-install/planning/reviews/linux-install-mvp-retrospective-2026-06-18.md")) {
+  const retrospective = read("docs/linux-install/planning/reviews/linux-install-mvp-retrospective-2026-06-18.md");
+  for (const expected of [
+    "Scope: Epics 1-5, Stories 1.1-5.6",
+    "Delivery PR: https://github.com/slawdawg/Kendall-vnxt/pull/144",
+    "no user dialogue is fabricated",
+    "Terminal delivery is its own implementation surface",
+    "The next safe workflow action is a narrow closeout PR",
+  ]) {
+    if (!retrospective.includes(expected)) {
+      failures.push(`Linux Install MVP retrospective must include: ${expected}`);
     }
   }
 }

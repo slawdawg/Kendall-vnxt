@@ -4,7 +4,7 @@ baseline_commit: 83235d523a8b178ccfcc45723d4e8773269d976a
 
 # Story 2.3: Clone Or Validate Kendall_Nxt Repo State
 
-Status: review
+Status: done
 
 ## Story
 

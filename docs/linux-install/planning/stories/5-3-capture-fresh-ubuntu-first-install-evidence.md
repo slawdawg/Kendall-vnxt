@@ -4,7 +4,7 @@ baseline_commit: 83235d523a8b178ccfcc45723d4e8773269d976a
 
 # Story 5.3: Capture Fresh Ubuntu First-Install Evidence
 
-Status: review
+Status: done
 
 ## Story
 
@@ -32,7 +32,7 @@ so that release readiness is backed by real host proof.
   - [x] `node ./scripts/check-linux-bootstrap.mjs`
   - [x] `node ./scripts/check-linux-bootstrap-evidence.mjs docs/linux-install/evidence/local-verify-only-20260618T181400Z.json`
 - [x] Capture real first-install evidence on a fresh or reset Ubuntu 26.04+ host. (AC: 1)
-  - [x] Story remains blocked on fresh Ubuntu host evidence.
+  - [x] Transcript-backed first-install evidence was captured from host `ubuntutest`.
 
 ## Dev Notes
 
@@ -78,7 +78,7 @@ Codex GPT-5
 - Extended contract validation so local verify-only evidence cannot substitute for fresh-host first-install evidence.
 - Recorded blocker `docs/linux-install/evidence/goal-runs/20260618T200827Z/blockers/fresh-host-required.json` because the current host is not a fresh or reset install target.
 - Captured transcript-backed first-install validation evidence at `docs/linux-install/evidence/goal-runs/20260618T201830Z/fresh-install-and-rerun-validation-transcript.md`.
-- Story is ready for review.
+- Story delivered through PR #144 after first-install evidence, review, and CI passed.
 - Verification passed:
   - `node ./scripts/check-linux-install-contract.mjs`
   - `node ./scripts/check-linux-install-lane.mjs`

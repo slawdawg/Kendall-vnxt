@@ -4,7 +4,7 @@ baseline_commit: 83235d523a8b178ccfcc45723d4e8773269d976a
 
 # Story 5.6: Run Final Verification And Code Review Before Delivery
 
-Status: review
+Status: done
 
 ## Story
 

@@ -1,6 +1,6 @@
 # Kendall Vnxt Ubuntu Deployment Playbook
 
-Status: planned
+Status: delivered
 Target v1: Ubuntu 26.04 LTS or later, existing non-root Linux user
 
 ## Purpose
@@ -27,7 +27,7 @@ memory.
 ## Active Planning Artifacts
 
 These tracked artifacts combine the recovered PRD/epic lane with the Linux
-install docs and evidence lane for review:
+install docs and evidence lane delivered through PR #144:
 
 - [Linux Install MVP PRD](../prds/linux-install-mvp.md)
 - [Linux Install MVP decision log](../prds/linux-install-mvp-decision-log.md)
@@ -66,6 +66,8 @@ install docs and evidence lane for review:
 - [Story 5.5: Refresh release docs and Linux install package](planning/stories/5-5-refresh-release-docs-and-linux-install-package.md)
 - [Story 5.6: Run final verification and code review before delivery](planning/stories/5-6-run-final-verification-and-code-review-before-delivery.md)
 - [Pre-PR code review report](planning/reviews/pre-pr-code-review-2026-06-18.md)
+- [PR 144 delivery record](planning/reviews/pr-144-delivery-record.md)
+- [Linux Install MVP retrospective](planning/reviews/linux-install-mvp-retrospective-2026-06-18.md)
 
 ## Historical And Instance-Specific Notes
 

@@ -1,7 +1,7 @@
 # Linux Install MVP Lane Status
 
 Date: 2026-06-18
-Status: recovered combined lane
+Status: delivered
 
 ## Current Scope
 
@@ -21,12 +21,14 @@ tracked files under `docs/` are the source of truth.
 
 Implementation readiness has completed for the recovered combined lane.
 Sprint planning has generated local BMAD sprint status. Stories 1.1 through
-5.6 have been created. Published-source reachability, fresh Ubuntu
-first-install, and same-host rerun validation evidence have been captured.
-`docs/linux-install.zip` has been refreshed after release evidence was recorded.
-Epics 2, 3, 4, and 5 are fully implemented and ready for review. Story 5.6
-completed local verification and pre-PR review. The next workflow step is final
-verification, review refresh if needed, and PR delivery.
+5.6 have been created, implemented, reviewed, and delivered. Published-source
+reachability, fresh Ubuntu first-install, and same-host rerun validation
+evidence have been captured. `docs/linux-install.zip` has been refreshed after
+release evidence was recorded. PR #144 passed CI, had no unresolved review
+threads, merged into `main`, and the remote PR branch was deleted. The BMAD
+retrospective is complete. The next workflow step is the narrow post-merge
+closeout PR, followed by cleanup of the completed local Codex worktree after
+that closeout is delivered or intentionally abandoned.
 
 ## Completed Recovery
 
@@ -179,6 +181,10 @@ verification, review refresh if needed, and PR delivery.
   by running final local verification, performing pre-PR code review, fixing the
   contract-checker robustness finding, and recording review evidence at
   `docs/linux-install/planning/reviews/pre-pr-code-review-2026-06-18.md`.
+- Delivered the lane through PR #144:
+  `docs/linux-install/planning/reviews/pr-144-delivery-record.md`.
+- Completed BMAD lane retrospective:
+  `docs/linux-install/planning/reviews/linux-install-mvp-retrospective-2026-06-18.md`.
 
 ## Verification State
 
@@ -193,9 +199,9 @@ Latest focused checks:
 
 ## Open Work
 
-- Create the terminal PR for the completed Linux Install MVP lane.
-- After PR CI completes, resolve and mark all actionable GitHub comments before
-  merge is considered.
+- Deliver the post-merge closeout diff as a narrow PR.
+- Clean up the completed Codex worktree after post-merge closeout changes are
+  delivered or intentionally abandoned.
 
 ## Stop Lines
 
@@ -205,8 +211,7 @@ Latest focused checks:
 - No Tailscale enrollment.
 - No reboot, destructive cleanup, branch deletion, merge, or worktree cleanup
   without matching approval.
-- No PR before workflow/readiness/implementation/review are complete unless the
-  lane becomes too large or unsafe to review as one PR.
+- No new PR before post-merge closeout changes are reviewed.
 
 ## Next Safe Command
 
