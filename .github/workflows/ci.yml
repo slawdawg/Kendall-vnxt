@@ -6,8 +6,96 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  check:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      javascript: ${{ steps.filter.outputs.javascript }}
+      supervisor: ${{ steps.filter.outputs.supervisor }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed areas
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" > changed-files.txt
+
+          if grep -Eq '^(apps/dashboard/|packages/|scripts/.*e2e|package\.json|pnpm-lock\.yaml|\.github/workflows/ci\.yml)' changed-files.txt; then
+            echo "javascript=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "javascript=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if grep -Eq '^(services/supervisor/|scripts/run-supervisor-tests\.mjs|scripts/preflight\.mjs|package\.json|\.github/workflows/ci\.yml)' changed-files.txt; then
+            echo "supervisor=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "supervisor=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          cat changed-files.txt
+
+  static:
+    if: github.event_name == 'pull_request'
+    needs: changes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Run static repository checks
+        run: pnpm run check:static
+
+  javascript:
+    if: github.event_name == 'pull_request' && needs.changes.outputs.javascript == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build dashboard
+        run: pnpm run build:dashboard
+
+  supervisor:
+    if: github.event_name == 'pull_request' && needs.changes.outputs.supervisor == 'true'
+    needs: changes
     runs-on: ubuntu-latest
 
     steps:
@@ -27,6 +115,36 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          cache-dependency-glob: services/supervisor/uv.lock
+
+      - name: Sync supervisor virtualenv
+        run: uv sync --directory services/supervisor --locked
+
+      - name: Run supervisor tests with duration profile
+        run: pnpm run test:supervisor:profile
+
+  full:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/supervisor/uv.lock
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -36,3 +154,47 @@ jobs:
 
       - name: Run full check
         run: pnpm run check
+
+  check:
+    if: always()
+    needs:
+      - changes
+      - static
+      - javascript
+      - supervisor
+      - full
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verify required CI jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ needs.full.result }}" != "success" ]; then
+              echo "Full check failed or did not complete: ${{ needs.full.result }}"
+              exit 1
+            fi
+            exit 0
+          fi
+
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "Change detection failed or did not complete: ${{ needs.changes.result }}"
+            exit 1
+          fi
+
+          if [ "${{ needs.static.result }}" != "success" ]; then
+            echo "Static checks failed or did not complete: ${{ needs.static.result }}"
+            exit 1
+          fi
+
+          if [ "${{ needs.changes.outputs.javascript }}" = "true" ] && [ "${{ needs.javascript.result }}" != "success" ]; then
+            echo "JavaScript checks were required but did not pass: ${{ needs.javascript.result }}"
+            exit 1
+          fi
+
+          if [ "${{ needs.changes.outputs.supervisor }}" = "true" ] && [ "${{ needs.supervisor.result }}" != "success" ]; then
+            echo "Supervisor checks were required but did not pass: ${{ needs.supervisor.result }}"
+            exit 1
+          fi
