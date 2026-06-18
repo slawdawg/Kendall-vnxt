@@ -30,6 +30,7 @@ Status: draft v1
 | Goal run contract readiness | `docs/linux-install/goal-run-contract.md` | Repo | Contract defines authority, task state, safe continuation, blocker packets, completion semantics, and terminal delivery rule | None |
 | Release gate traceability | `docs/linux-install/release-gate-traceability.md` | Repo | Every implementation task maps to FRs, LINUX-AC items, authority class, command ids, evidence, and release gates before execution | None |
 | Invalid preauthorization fixture | `docs/linux-install/fixtures/goal-run/invalid-preauthorization.json` | Repo | Broad approval such as "install whatever is needed" is rejected | None |
+| Valid preauthorization fixture | `docs/linux-install/fixtures/goal-run/valid-preauthorization.json` | Repo | Bounded approval with authority family, operation, scope, command ids, targets, impact, evidence, recovery, approval reference, and stop lines is accepted as fixture-only evidence | None |
 | Blocked continuation fixture | `docs/linux-install/fixtures/goal-run/blocked-continuation.json` | Repo | Independent safe task continues; dependent and gated tasks pause | None |
 | Missing evidence fixture | `docs/linux-install/fixtures/goal-run/missing-evidence.json` | Repo | Passing checks without required evidence cannot report complete | None |
 

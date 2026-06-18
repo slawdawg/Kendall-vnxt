@@ -20,6 +20,7 @@ const goalRunFixtureFiles = [
   "docs/linux-install/fixtures/goal-run/blocked-continuation.json",
   "docs/linux-install/fixtures/goal-run/invalid-preauthorization.json",
   "docs/linux-install/fixtures/goal-run/missing-evidence.json",
+  "docs/linux-install/fixtures/goal-run/valid-preauthorization.json",
 ];
 
 const goalRunFixtureDir = "docs/linux-install/fixtures/goal-run";
@@ -103,6 +104,10 @@ const requiredSnippets = [
   {
     path: "docs/linux-install/validation-matrix.md",
     text: "| Invalid preauthorization fixture | `docs/linux-install/fixtures/goal-run/invalid-preauthorization.json`",
+  },
+  {
+    path: "docs/linux-install/validation-matrix.md",
+    text: "| Valid preauthorization fixture | `docs/linux-install/fixtures/goal-run/valid-preauthorization.json`",
   },
   {
     path: "docs/linux-install/validation-matrix.md",
@@ -306,6 +311,41 @@ function validateGoalRunFixture(path, fixture) {
     }
     if (fixture.expected_result !== "reject") {
       failures.push(`${path} must expect broad preauthorization rejection.`);
+    }
+    if (!hasString(fixture, "expected_reason")) {
+      failures.push(`${path} must include expected_reason.`);
+    }
+    return;
+  }
+
+  if (path.endsWith("/valid-preauthorization.json")) {
+    if (fixture.schema !== "kendall-linux-goal-authority/v1") {
+      failures.push(`${path} must use kendall-linux-goal-authority/v1.`);
+    }
+    if (fixture.fixture !== "valid-preauthorization") {
+      failures.push(`${path} must identify fixture valid-preauthorization.`);
+    }
+    for (const field of [
+      "authority_id",
+      "authority_family",
+      "operation",
+      "scope",
+      "maximum_impact",
+      "expires",
+      "rollback_or_recovery",
+      "bob_approval_reference",
+    ]) {
+      if (!hasString(fixture, field)) {
+        failures.push(`${path} must include ${field}.`);
+      }
+    }
+    for (const field of ["command_ids", "allowed_targets", "evidence_required", "stop_lines"]) {
+      if (!hasArray(fixture, field) || fixture[field].length === 0) {
+        failures.push(`${path} must include non-empty ${field}.`);
+      }
+    }
+    if (fixture.expected_result !== "accept") {
+      failures.push(`${path} must expect bounded preauthorization acceptance.`);
     }
     if (!hasString(fixture, "expected_reason")) {
       failures.push(`${path} must include expected_reason.`);
