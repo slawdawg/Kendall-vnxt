@@ -295,15 +295,19 @@ if (existingFiles.has(laneStatusPath)) {
   for (const expected of [
     "Status: delivered",
     "PR #144 passed CI",
-    "no unresolved review",
-    "remote PR branch was deleted",
-    "pr-144-delivery-record.md",
-  ]) {
-    if (!laneStatus.includes(expected)) {
-      failures.push(`Linux install lane status must record delivered closeout evidence: ${expected}`);
-    }
-  }
-}
+	    "no unresolved review",
+	    "remote PR branch was deleted",
+	    "pr-144-delivery-record.md",
+	    "retrospective draft synthesis",
+	  ]) {
+	    if (!laneStatus.includes(expected)) {
+	      failures.push(`Linux install lane status must record delivered closeout evidence: ${expected}`);
+	    }
+	  }
+	  if (/Completed BMAD lane retrospective/.test(laneStatus)) {
+	    failures.push("docs/linux-install/planning/lane-status.md must not claim the interactive BMAD retrospective is complete.");
+	  }
+	}
 
 if (laneDelivered) {
   for (const storyPath of requiredFiles.filter((path) => path.startsWith("docs/linux-install/planning/stories/"))) {
@@ -326,12 +330,18 @@ if (existingFiles.has("docs/linux-install/index.md")) {
 
 try {
   const prdIndex = read("docs/prds/index.md");
-  if (!prdIndex.includes("Delivered lane") || !prdIndex.includes("completed through PR #144")) {
-    failures.push("docs/prds/index.md must reflect Linux Install MVP PR #144 delivery.");
-  }
-  if (!prdIndex.includes("source PRD file intentionally retains draft metadata")) {
-    failures.push("docs/prds/index.md must clarify that Linux Install MVP PRD metadata remains draft.");
-  }
+	  if (!prdIndex.includes("Delivered lane") || !prdIndex.includes("completed through PR #144")) {
+	    failures.push("docs/prds/index.md must reflect Linux Install MVP PR #144 delivery.");
+	  }
+	  if (!prdIndex.includes("retrospective draft synthesis")) {
+	    failures.push("docs/prds/index.md must describe the Linux retrospective as a draft synthesis.");
+	  }
+	  if (!prdIndex.includes("source PRD file intentionally retains draft metadata")) {
+	    failures.push("docs/prds/index.md must clarify that Linux Install MVP PRD metadata remains draft.");
+	  }
+	  if (/retrospective completed/.test(prdIndex)) {
+	    failures.push("docs/prds/index.md must not claim the interactive Linux retrospective is complete.");
+	  }
 } catch {
   failures.push("docs/prds/index.md is missing.");
 }

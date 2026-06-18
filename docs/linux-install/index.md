@@ -68,7 +68,7 @@ install docs and evidence lane delivered through PR #144:
 - [Story 5.6: Run final verification and code review before delivery](planning/stories/5-6-run-final-verification-and-code-review-before-delivery.md)
 - [Pre-PR code review report](planning/reviews/pre-pr-code-review-2026-06-18.md)
 - [PR 144 delivery record](planning/reviews/pr-144-delivery-record.md)
-- [Linux Install MVP retrospective](planning/reviews/linux-install-mvp-retrospective-2026-06-18.md)
+- [Linux Install MVP retrospective draft synthesis](planning/reviews/linux-install-mvp-retrospective-2026-06-18.md)
 
 ## Historical And Instance-Specific Notes
 

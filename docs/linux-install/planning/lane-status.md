@@ -183,8 +183,10 @@ that closeout is delivered or intentionally abandoned.
   `docs/linux-install/planning/reviews/pre-pr-code-review-2026-06-18.md`.
 - Delivered the lane through PR #144:
   `docs/linux-install/planning/reviews/pr-144-delivery-record.md`.
-- Completed BMAD lane retrospective:
+- Prepared BMAD lane retrospective draft synthesis:
   `docs/linux-install/planning/reviews/linux-install-mvp-retrospective-2026-06-18.md`.
+  A formal interactive BMAD retrospective remains optional and separate from the
+  delivered implementation lane.
 - Added post-delivery supply-chain hardening by pinning global npm-installed
   CLIs in `docs/linux-install/global-tool-manifest.json` and enforcing those
   pins in `scripts/bootstrap-linux.sh` and the Linux install contract checker.
@@ -199,6 +201,8 @@ Latest focused checks:
 - `node ./scripts/check-linux-bootstrap.mjs` passed.
 - `node ./scripts/check-linux-install-lane.mjs` passed.
 - `node ./scripts/check-linux-bootstrap-evidence.mjs docs/linux-install/evidence/local-verify-only-20260618T181400Z.json` passed.
+- `node --test tests/linux-bootstrap/bootstrap-script.test.mjs tests/linux-bootstrap/package-scripts.test.mjs` passed.
+- `python3 -m zipfile -t docs/linux-install.zip` passed.
 
 ## Open Work
 
