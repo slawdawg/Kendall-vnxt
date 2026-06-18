@@ -1,0 +1,18 @@
+{
+  "schema": "kendall-linux-goal-authority/v1",
+  "fixture": "valid-preauthorization",
+  "authority_id": "auth-fixture-host-package-install-browser-deps",
+  "authority_family": "host-package-install",
+  "operation": "install-browser-dependencies",
+  "scope": "Ubuntu 26.04 certified target only",
+  "command_ids": ["linux.setup.apply.browser-deps"],
+  "allowed_targets": ["ubuntu-26.04-certified-target"],
+  "maximum_impact": "Install named apt packages required by Playwright browser dependencies only.",
+  "expires": "end-of-current-goal-run",
+  "evidence_required": ["dry-run-preview", "package-list", "post-verify"],
+  "rollback_or_recovery": "Record requested packages; automatic package removal remains gated cleanup.",
+  "bob_approval_reference": "fixture-only-no-real-approval",
+  "stop_lines": ["unexpected package removal", "provider login prompt", "unsupported distribution"],
+  "expected_result": "accept",
+  "expected_reason": "Bounded preauthorization names authority family, operation, scope, command ids, allowed targets, impact, expiration, evidence, recovery, approval reference, and stop lines."
+}

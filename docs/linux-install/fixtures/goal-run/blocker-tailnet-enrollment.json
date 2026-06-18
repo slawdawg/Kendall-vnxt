@@ -1,0 +1,18 @@
+{
+  "schema": "kendall-linux-goal-blocker/v1",
+  "blocker_id": "blocker-fixture-tailnet-enrollment",
+  "run_id": "fixture-blocker-tailnet-enrollment",
+  "task_id": "task.tailnet.enroll",
+  "authority_class": "block_and_record",
+  "blocked_operation": "tailnet-enrollment",
+  "reason": "Tailnet enrollment changes external account and network state and must be user-operated or separately preauthorized.",
+  "attempted_command": null,
+  "last_safe_command": "pnpm linux:doctor",
+  "proposed_next_command": "tailscale up",
+  "required_bob_action": "Decide whether to enroll this host in the Tailnet and complete or approve that operation explicitly.",
+  "resume_command": "codex /goal resume linux-setup-mvp",
+  "evidence_paths": [],
+  "dependency_impact": ["task.tailnet.enroll"],
+  "safe_tasks_still_attempted": ["task.docs.drift"],
+  "secrets_exclusion": "confirmed"
+}

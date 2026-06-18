@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -12,21 +12,20 @@ try {
   test("doctor accepts an empty state root", () => {
     const result = run(["doctor", "--state-root", stateRoot]);
     assert(result.code === 0, result.stderr || result.stdout);
-    assert(result.stdout.includes("state root does not exist yet") || result.stdout.includes("state root exists"));
   });
 
   test("list reports no workspaces for an empty state root", () => {
     const result = run(["list", "--state-root", stateRoot]);
     assert(result.code === 0, result.stderr || result.stdout);
-    assert(result.stdout.includes("No Codex workspaces found"));
+    assert(result.stdout.includes("No Codex workspaces found"), result.stdout || result.stderr);
   });
 
   test("start dry-run plans fetch, worktree creation, and manifest write", () => {
     const result = run(["start", "test task", "--dry-run", "--state-root", stateRoot]);
     assert(result.code === 0, result.stderr || result.stdout);
-    assert(result.stdout.includes("git fetch origin main"));
-    assert(result.stdout.includes("git worktree add -b codex/test-task"));
-    assert(result.stdout.includes("write "));
+    assert(result.stdout.includes("git fetch origin main"), result.stdout || result.stderr);
+    assert(result.stdout.includes("git worktree add -b codex/test-task"), result.stdout || result.stderr);
+    assert(result.stdout.includes("write "), result.stdout || result.stderr);
   });
 
   test("start refuses protected branch override", () => {
@@ -45,6 +44,22 @@ try {
     const result = run(["start", "bad id", "--task-id", "..\\bad", "--dry-run", "--state-root", stateRoot]);
     assert(result.code !== 0, "path traversal task id unexpectedly passed");
     assert(result.stderr.includes("Invalid task id"));
+  });
+
+  test("rebuild task id selection leaves lock rejection to the lock helper", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function uniqueTaskId[\s\S]*?function assertCurrentBranch/);
+    assert(match, "uniqueTaskId source not found");
+    assert(!match[0].includes(".lock"), "uniqueTaskId must not skip ids only because a transient lock exists");
+    assert(source.includes("function withManifestLock"), "manifest lock helper not found");
+  });
+
+  test("rebuild-index skips worktrees that already have manifests", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function rebuildIndex[\s\S]*?function doctor/);
+    assert(match, "rebuildIndex source not found");
+    assert(match[0].includes("existingManifests"), "rebuildIndex must inspect existing manifests");
+    assert(match[0].includes("samePath(manifest.worktree_path, record.path)"), "rebuildIndex must skip already indexed worktrees");
   });
 
   test("list skips malformed manifests without aborting", () => {

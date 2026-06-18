@@ -1,0 +1,18 @@
+{
+  "schema": "kendall-linux-goal-blocker/v1",
+  "blocker_id": "blocker-fixture-paid-provider-usage",
+  "run_id": "fixture-blocker-paid-provider-usage",
+  "task_id": "task.provider.smoke",
+  "authority_class": "block_and_record",
+  "blocked_operation": "paid-provider-usage",
+  "reason": "The selected task would make a paid provider call and requires explicit bounded approval before execution.",
+  "attempted_command": null,
+  "last_safe_command": "pnpm run check:linux-bootstrap",
+  "proposed_next_command": "pnpm run provider:smoke",
+  "required_bob_action": "Approve the exact provider, operation, spend boundary, and evidence requirements before resume.",
+  "resume_command": "codex /goal resume linux-setup-mvp",
+  "evidence_paths": [],
+  "dependency_impact": ["task.provider.smoke"],
+  "safe_tasks_still_attempted": ["task.docs.drift"],
+  "secrets_exclusion": "confirmed"
+}

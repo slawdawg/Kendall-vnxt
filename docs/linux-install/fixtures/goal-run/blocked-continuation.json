@@ -1,0 +1,37 @@
+{
+  "schema": "kendall-linux-goal-fixture/v1",
+  "fixture": "blocked-continuation",
+  "run_id": "fixture-blocked-continuation",
+  "tasks": [
+    {
+      "task_id": "task.manual-auth.github",
+      "authority_class": "block_and_record",
+      "state": "blocked_authority",
+      "dependencies": []
+    },
+    {
+      "task_id": "task.docs.drift",
+      "authority_class": "allowed_unattended",
+      "state": "ready",
+      "dependencies": []
+    },
+    {
+      "task_id": "task.private-repo-probe",
+      "authority_class": "allowed_unattended",
+      "state": "planned",
+      "dependencies": ["task.manual-auth.github"]
+    },
+    {
+      "task_id": "task.tailnet-enroll",
+      "authority_class": "block_and_record",
+      "state": "planned",
+      "dependencies": []
+    }
+  ],
+  "expected_result": {
+    "continue": ["task.docs.drift"],
+    "pause_dependency_blocked": ["task.private-repo-probe"],
+    "pause_authority_blocked": ["task.tailnet-enroll"]
+  }
+}
+

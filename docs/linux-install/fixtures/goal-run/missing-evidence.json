@@ -1,0 +1,19 @@
+{
+  "schema": "kendall-linux-goal-fixture/v1",
+  "fixture": "missing-evidence",
+  "run_id": "fixture-missing-evidence",
+  "release_gate": "LG-13",
+  "checks": [
+    {
+      "command_id": "linux.smoke",
+      "exit_code": 0,
+      "result": "pass"
+    }
+  ],
+  "required_evidence": [
+    "docs/linux-install/evidence/goal-runs/fixture-missing-evidence/evidence/linux-smoke.json"
+  ],
+  "present_evidence": [],
+  "expected_completion_status": "not_complete",
+  "expected_reason": "A passing command without required evidence cannot satisfy the release gate."
+}

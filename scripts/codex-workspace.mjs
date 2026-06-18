@@ -527,8 +527,17 @@ function rebuildIndex(argv) {
   }
 
   mkdirSync(state.tasksDir, { recursive: true });
+  const existingManifests = readManifests(state).map(({ manifest }) => manifest);
   for (const record of records) {
     const branch = record.branch.replace(/^refs\/heads\//, "");
+    const existingManifest = existingManifests.find(
+      (manifest) => manifest.branch === branch || samePath(manifest.worktree_path, record.path),
+    );
+    if (existingManifest) {
+      console.log(`SKIP ${existingManifest.task_id}: manifest already indexes ${record.path}.`);
+      continue;
+    }
+
     const slug = slugify(branch.replace(/^codex\//, ""));
     const taskId = uniqueTaskId(state.tasksDir, `${dateStamp()}-${slug}`);
     const manifestPath = join(state.tasksDir, `${taskId}.json`);
@@ -749,7 +758,7 @@ function uniqueTaskId(tasksDir, baseTaskId) {
   assertSafeTaskId(baseTaskId);
   let candidate = baseTaskId;
   let index = 2;
-  while (existsSync(join(tasksDir, `${candidate}.json`)) || existsSync(join(tasksDir, `${candidate}.lock`))) {
+  while (existsSync(join(tasksDir, `${candidate}.json`))) {
     candidate = `${baseTaskId}-${index}`;
     index += 1;
   }
@@ -839,7 +848,10 @@ function withManifestLock(state, taskId, fn) {
   let fd;
   try {
     fd = openSync(lockPath, "wx");
-  } catch {
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw error;
+    }
     throw new Error(`Task is locked by another session: ${lockPath}`);
   }
 

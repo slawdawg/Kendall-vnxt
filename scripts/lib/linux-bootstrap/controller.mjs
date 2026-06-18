@@ -74,7 +74,7 @@ export function baseToolsGate(options) {
 }
 
 export function repoStateGate(executor, options, evidence) {
-  if (options.mode === "verify-only") {
+  if (["doctor", "verify-only"].includes(options.mode)) {
     const result = executor.command("bash", ["scripts/validate-linux-install.sh", ...validatorArgs(options)]);
     return {
       id: "repo-state",
@@ -178,11 +178,11 @@ export function planOnlyGates() {
 }
 
 export function evidencePathGate(repoRoot, options) {
-  if (options.mode === "plan") {
+  if (["doctor", "plan"].includes(options.mode)) {
     return {
       id: "evidence-path",
       status: "skip",
-      summary: "plan mode does not write evidence",
+      summary: `${options.mode} mode does not write evidence`,
       recovery: "Use --verify-only for verifier evidence or scripts/bootstrap-linux.sh --install-kendall-vnxt for install evidence.",
       command: "validate local evidence path",
     };
@@ -264,6 +264,16 @@ export function runBootstrapController({ repoRoot, options, executor, evidence, 
   }
 
   recordGate(evidence, runLocalIdentityGate(executor, options, evidence));
+  if (options.mode === "doctor") {
+    if (!hasBlockingGate(evidence.gates)) {
+      recordGate(evidence, fullVerifyGate(executor, options, evidence));
+    }
+    recordGate(evidence, manualAuthSummaryGate());
+    recordAuthBoundary(evidence);
+    recordManualTasks(evidence);
+    return { exitCode: hasBlockingGate(evidence.gates) ? 1 : 0, wroteEvidence: false };
+  }
+
   if (!hasBlockingGate(evidence.gates)) {
     recordGate(evidence, baseToolsGate(options));
   }

@@ -2,7 +2,7 @@ const gateStatuses = new Set(["pass", "fail", "warn", "skip", "blocked"]);
 const checkStatuses = new Set(["pass", "fail", "warn", "skip"]);
 const installCheckStatuses = new Set(["pass", "fail", "warn", "skip", "blocked"]);
 const results = new Set(["pass", "fail", "blocked"]);
-const modes = new Set(["plan", "verify-only"]);
+const modes = new Set(["doctor", "plan", "verify-only"]);
 const bootstrapAuthorityLevels = new Set(["plan", "verify", "evidence-write"]);
 const installAuthorityLevels = new Set(["verify", "evidence-write"]);
 const manualTaskIds = new Set(["tailscale-login", "codex-login", "claude-login", "provider-auth"]);
@@ -164,7 +164,7 @@ export function validateBootstrapEvidence(evidence) {
     errors.push("command must be an object");
   } else {
     if (!modes.has(evidence.command.mode)) {
-      errors.push("command.mode must be plan or verify-only");
+      errors.push("command.mode must be doctor, plan, or verify-only");
     }
     requireString(errors, evidence.command.invoked, "command.invoked");
   }
@@ -178,6 +178,9 @@ export function validateBootstrapEvidence(evidence) {
   }
 
   validateAuthority(errors, evidence.authority, bootstrapAuthorityLevels);
+  if (evidence.command?.mode === "doctor" && evidence.authority?.level !== "verify") {
+    errors.push("doctor authority must be verify");
+  }
 
   if (!Array.isArray(evidence.gates) || evidence.gates.length === 0) {
     errors.push("gates must be a non-empty array");
@@ -215,6 +218,9 @@ export function validateBootstrapEvidence(evidence) {
   validateManualTasks(errors, evidence.manual_tasks);
 
   validateMutations(errors, evidence.mutations, evidence.authority?.level);
+  if (evidence.command?.mode === "doctor" && Array.isArray(evidence.mutations) && evidence.mutations.length > 0) {
+    errors.push("doctor evidence must not include mutations");
+  }
   validateActionRows(errors, evidence.project_actions, "project_actions");
   validateActionRows(errors, evidence.tool_changes, "tool_changes");
   validateSkippedRows(errors, evidence.skipped);

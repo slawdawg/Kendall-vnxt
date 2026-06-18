@@ -6,6 +6,8 @@ import { parseLinuxBootstrapArgs } from "../../scripts/lib/linux-bootstrap/args.
 test("requires exactly one explicit mode", () => {
   assert.throws(() => parseLinuxBootstrapArgs([]), /Missing mode/);
   assert.throws(() => parseLinuxBootstrapArgs(["--plan", "--verify-only"]), /Conflicting modes/);
+  assert.throws(() => parseLinuxBootstrapArgs(["--doctor", "--plan"]), /Conflicting modes/);
+  assert.throws(() => parseLinuxBootstrapArgs(["--doctor", "--doctor"]), /Duplicate mode/);
 });
 
 test("rejects remote target and user arguments", () => {
@@ -26,7 +28,11 @@ test("rejects shell-unsafe hostname values", () => {
 test("plan mode refuses evidence output because it must not mutate", () => {
   assert.throws(
     () => parseLinuxBootstrapArgs(["--plan", "--evidence", "docs/linux-install/evidence/plan.json"]),
-    /plan mode must not mutate/,
+    /plan does not write evidence/,
+  );
+  assert.throws(
+    () => parseLinuxBootstrapArgs(["--doctor", "--evidence", "docs/linux-install/evidence/doctor.json"]),
+    /doctor does not write evidence/,
   );
 });
 
