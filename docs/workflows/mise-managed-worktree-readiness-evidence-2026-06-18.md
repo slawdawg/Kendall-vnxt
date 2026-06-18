@@ -1,7 +1,8 @@
 # Mise Managed Worktree Readiness Evidence
 
 Date: 2026-06-18
-Status: complete evaluation, tracked mise adoption deferred
+Status: complete evaluation, tracked mise adoption deferred; follow-up retry
+passed after local pnpm shim hardening
 Story: `docs/stories/22-2-evaluate-mise-managed-worktree-readiness.md`
 Workflow: `docs/workflows/mise-managed-worktree-readiness-evaluation.md`
 
@@ -9,8 +10,9 @@ Workflow: `docs/workflows/mise-managed-worktree-readiness-evaluation.md`
 
 The current managed worktree baseline is ready using the existing Kendall_Nxt
 tooling path. The controlled `mise` trial proved that `mise` can install and
-activate the pinned tool versions in a scoped `/tmp` location, but the repo's
-current `pnpm run ...` workflow does not pass under mise-managed pnpm.
+activate the pinned tool versions in a scoped `/tmp` location. The original
+trial failed under mise-managed pnpm because repo scripts mishandled pnpm
+wrapper/shim command resolution.
 
 Decision:
 
@@ -18,6 +20,16 @@ Decision:
 defer tracked mise adoption. Do not add a committed mise config until the
 repo's pnpm/npm_execpath compatibility issue is resolved or the trial task shape
 is changed by a future story.
+```
+
+Follow-up retry:
+
+```text
+after local command-resolution hardening on branch research/brainstorming,
+the scoped mise retry passed setup, preflight, and workspace doctor. This
+resolves the observed setup/preflight blocker locally, but tracked mise adoption
+should still wait until the fix is merged to main and rerun from a clean merged
+baseline.
 ```
 
 ## Baseline Evidence
@@ -179,6 +191,63 @@ remaining_gaps:
     while leaving pnpm to packageManager/corepack
   - rerun Story 22.2 only after the repo script compatibility gap is addressed
 ```
+
+## Follow-Up Retry Evidence After Local Hardening
+
+This retry was run from branch `research/brainstorming` after the local commit
+`b9e12c9 Harden workspace command resolution for pnpm shims`. It is follow-up
+evidence for the earlier blocker, not a tracked `mise` adoption decision.
+
+Scoped environment:
+
+```text
+MISE_OFFLINE=1
+MISE_NO_UPDATE_NOTIFIER=1
+MISE_INSTALL_PATH=/tmp/kendall-mise-trial/bin/mise
+MISE_DATA_DIR=/tmp/kendall-mise-trial/data
+MISE_CACHE_DIR=/tmp/kendall-mise-trial/cache
+MISE_STATE_DIR=/tmp/kendall-mise-trial/state
+MISE_CONFIG_DIR=/tmp/kendall-mise-trial/config
+HOME=/tmp/kendall-mise-trial/home
+```
+
+Retry results:
+
+```text
+mise version: 2026.6.11 linux-x64 (2026-06-16)
+mise exec -- node --version: v22.13.0
+mise exec -- pnpm --version: 11.5.2
+mise exec -- python --version: Python 3.12.13
+mise run --skip-tools preflight: pass
+mise run --skip-tools setup: pass
+mise run --skip-tools workspace-doctor: pass with expected scoped-HOME state-root warning
+```
+
+The workspace-doctor retry reported:
+
+```text
+OK: git: git version 2.53.0
+OK: node: v22.13.0
+OK: gh: gh version 2.46.0 (2025-12-13 Ubuntu 2.46.0-4)
+OK: Repository worktree detected.
+OK: origin remote configured.
+OK: core.hooksPath is .githooks.
+OK: pre-push guard exists.
+WARN: state root does not exist yet; it will be created by the first `start` command.
+```
+
+Updated interpretation:
+
+- The original `mise` blocker is no longer reproduced after the local pnpm shim
+  hardening.
+- The hardening should be merged before Kendall_Nxt treats `mise` readiness as
+  viable from `main`.
+- A tracked `mise` config is still deferred until a clean post-merge trial
+  proves the same path from `main` and confirms that it reduces friction enough
+  to justify adding `mise` as another developer prerequisite.
+- No provider/API secrets, dotenv files, PR delivery, branch cleanup, worktree
+  cleanup, worker launch, provider call, or paid call was performed during this
+  retry.
 
 ## Acceptance Criteria Mapping
 

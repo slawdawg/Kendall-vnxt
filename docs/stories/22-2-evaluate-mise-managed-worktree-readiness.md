@@ -37,8 +37,11 @@ rollout or a custom readiness checker.
 
 Current state: baseline managed-worktree readiness is measured. The
 `mise`-managed trial was completed in a scoped `/tmp` install after Bob unblocked
-the trial. The result is to defer tracked `mise` adoption because setup and
-preflight fail under mise-managed pnpm in the current repo scripts.
+the trial. The original result was to defer tracked `mise` adoption because
+setup and preflight failed under mise-managed pnpm in the then-current repo
+scripts. A later local retry after pnpm shim command-resolution hardening passed
+setup, preflight, and workspace doctor, but tracked `mise` adoption remains
+deferred until that hardening is merged and rerun from a clean `main` baseline.
 
 ## Acceptance Criteria
 
@@ -174,14 +177,17 @@ Owner: Bob.
 Result:
 
 ```text
-Do not adopt a tracked mise config yet.
+Do not adopt a tracked mise config yet. The local follow-up retry removes the
+observed setup/preflight blocker, but adoption still needs a clean post-merge
+trial from main.
 ```
 
 Next safe action:
 
 ```text
-Choose whether a future story should harden repo scripts for mise-managed pnpm,
-try mise for Node/Python only, or reject tracked mise config for now.
+Merge the pnpm shim hardening when it is part of a coherent delivery batch,
+then rerun the scoped mise readiness trial from main before deciding whether to
+track a mise config.
 ```
 
 ### Acceptance Status
@@ -196,6 +202,11 @@ try mise for Node/Python only, or reject tracked mise config for now.
 | AC6 | Complete for trial evidence: no dotenv copy; env-name check printed no secret values and found only `GH_PAGER`. |
 | AC7 | Complete: measured trial supports deferring tracked mise adoption pending repo script compatibility work. |
 | AC8 | Complete: stop lines preserved. |
+
+Follow-up note: after local pnpm shim hardening on branch `research/brainstorming`,
+the scoped `mise` retry passed setup, preflight, and workspace doctor. This
+updates the technical blocker evidence but does not reopen the completed story
+or approve tracked `mise` adoption.
 
 ### Review Findings
 
