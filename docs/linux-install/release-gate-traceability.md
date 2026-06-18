@@ -18,14 +18,14 @@ implementation-ready for autonomous `/goal` execution.
 | LG-06 | Manual Auth is user-operated only. | auth negative fixtures | No automated login; handoff packet examples pass redaction. | Draft |
 | LG-07 | Evidence Receipt is redacted and includes result, next action, and artifact path. | evidence validator | Evidence schema validation and seeded-secret scan. | Draft |
 | LG-08 | Unsupported distro blocks mutation. | OS fixture tests | Unsupported distro evidence with no writes. | Draft |
-| LG-09 | Goal Run Contract exists and is referenced by stories. | `docs/linux-install/goal-run-contract.md` | Contract review plus story references. | Draft |
-| LG-10 | Authority Ledger rejects broad approval and accepts only bounded matching authority. | preauthorization fixtures | Invalid and valid fixture results. | Draft |
-| LG-11 | Blocker Packet records gated operations and exact resume points. | blocker fixtures | Manual Auth, paid provider, destructive mutation, Tailnet examples. | Draft |
-| LG-12 | Safe continuation is deterministic after a blocker. | task-graph fixture | Independent task continues; dependent/gated tasks pause. | Draft |
-| LG-13 | Completion cannot report complete with missing required evidence. | missing-evidence fixture | Completion report rejected. | Draft |
-| LG-14 | Commands are bounded and non-interactive. | command contract tests | Timeout, no-stdin, typed failure, allowed-write-path checks. | Draft |
+| LG-09 | Goal Run Contract exists and is referenced by stories. | `docs/linux-install/goal-run-contract.md` | Contract review plus story references. | Static check wired |
+| LG-10 | Authority Ledger rejects broad approval and accepts only bounded matching authority. | preauthorization fixtures | Invalid and valid fixture results. | Static check wired |
+| LG-11 | Blocker Packet records gated operations and exact resume points. | blocker fixtures | Manual Auth, paid provider, destructive mutation, Tailnet examples. | Static check wired |
+| LG-12 | Safe continuation is deterministic after a blocker. | task-graph fixture | Independent task continues; dependent/gated tasks pause. | Static check wired |
+| LG-13 | Completion cannot report complete with missing required evidence. | missing-evidence fixture | Completion report rejected. | Static check wired |
+| LG-14 | Commands are bounded and non-interactive. | command contract tests | Timeout, no-stdin, typed failure, allowed-write-path checks. | Static check wired |
 | LG-15 | Fresh Ubuntu 26.04 setup passes twice and interruption recovery is proven. | fresh-host run evidence | Clean run, idempotent rerun, interruption-recovery run. | Draft |
-| LG-16 | PR creation, merge, and cleanup are final delivery operations. | Goal Run Contract and delivery checklist | No intermediate PR/merge/cleanup in story plan. | Draft |
+| LG-16 | PR creation, merge, and cleanup are final delivery operations. | Goal Run Contract and delivery checklist | No intermediate PR/merge/cleanup in story plan. | Static check wired |
 
 ## Pre-Execution Traceability Row Template
 
@@ -41,4 +41,3 @@ The MVP cannot be marked complete unless every required gate is passed or
 explicitly deferred by approved scope. Missing evidence, stale evidence, failed
 redaction, unsupported platform overclaim, or open gated blocker prevents a
 complete status.
-

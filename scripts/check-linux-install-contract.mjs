@@ -103,6 +103,14 @@ const requiredSnippets = [
     text: "| LG-16 | PR creation, merge, and cleanup are final delivery operations.",
   },
   {
+    path: "docs/linux-install/release-gate-traceability.md",
+    text: "| LG-11 | Blocker Packet records gated operations and exact resume points. | blocker fixtures | Manual Auth, paid provider, destructive mutation, Tailnet examples. | Static check wired |",
+  },
+  {
+    path: "docs/linux-install/release-gate-traceability.md",
+    text: "| LG-14 | Commands are bounded and non-interactive. | command contract tests | Timeout, no-stdin, typed failure, allowed-write-path checks. | Static check wired |",
+  },
+  {
     path: "docs/linux-install/validation-matrix.md",
     text: "| Goal run contract readiness | `docs/linux-install/goal-run-contract.md`",
   },
