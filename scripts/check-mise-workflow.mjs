@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
-const rootDir = new URL("..", import.meta.url).pathname;
+const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const miseToml = readFileSync(join(rootDir, "mise.toml"), "utf8");
 const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
 const evidence = readFileSync(
