@@ -26,13 +26,20 @@ Last updated: 2026-06-02
 - Latest validator validation report: [../../skills/reports/module-validation-ksev-2026-06-01.md](../../skills/reports/module-validation-ksev-2026-06-01.md)
 - Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
 - Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
-- Latest handoff: [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md)
+- Latest promoted handoff/runtime summary:
+  [KNX runtime promoted evidence](../../../docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md).
+  Historical local provenance remains in
+  [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md).
 - Latest substantive KNX governance commit: `e5adf45 Refresh KNX records after squash rewrite`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
-- Latest source inventory evidence: [runtime/source-inventory/source-inventory-2026-06-01.md](runtime/source-inventory/source-inventory-2026-06-01.md)
-- Latest source inventory validation evidence: [runtime/source-inventory/validation-source-inventory-2026-06-01.json](runtime/source-inventory/validation-source-inventory-2026-06-01.json)
+- Latest promoted source inventory evidence:
+  [KNX runtime promoted evidence](../../../docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md).
+  Historical local provenance remains in
+  [runtime/source-inventory/source-inventory-2026-06-01.md](runtime/source-inventory/source-inventory-2026-06-01.md)
+  and
+  [runtime/source-inventory/validation-source-inventory-2026-06-01.json](runtime/source-inventory/validation-source-inventory-2026-06-01.json).
 - Latest source packet class decision: [decisions/source-packet-classes-2026-06-01.md](decisions/source-packet-classes-2026-06-01.md)
 - Latest source mutation posture decision: [decisions/source-mutation-posture-2026-06-01.md](decisions/source-mutation-posture-2026-06-01.md)
 - Latest scoped source mutation approval: [decisions/scoped-source-mutation-knx-2026-06-01.md](decisions/scoped-source-mutation-knx-2026-06-01.md)
@@ -54,8 +61,12 @@ Last updated: 2026-06-02
 - Latest approval gate flow decision: [decisions/approval-gate-flow-2026-06-01.md](decisions/approval-gate-flow-2026-06-01.md)
 - Latest fast-lane local governance profile: [decisions/fast-lane-local-governance-2026-06-01.md](decisions/fast-lane-local-governance-2026-06-01.md)
 - Latest default-proceed local workflow: [decisions/default-proceed-local-workflow-2026-06-01.md](decisions/default-proceed-local-workflow-2026-06-01.md)
-- Latest runtime evidence inventory: [runtime/runtime-inventory/runtime-inventory-2026-06-01.md](runtime/runtime-inventory/runtime-inventory-2026-06-01.md)
-- Latest runtime evidence inventory validation: [runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json](runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json)
+- Latest promoted runtime evidence inventory:
+  [KNX runtime promoted evidence](../../../docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md).
+  Historical local provenance remains in
+  [runtime/runtime-inventory/runtime-inventory-2026-06-01.md](runtime/runtime-inventory/runtime-inventory-2026-06-01.md)
+  and
+  [runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json](runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json).
 - Latest `ksev` private-repo distribution plan: [decisions/ksev-private-repo-distribution-plan-2026-06-01.md](decisions/ksev-private-repo-distribution-plan-2026-06-01.md)
 - Latest `ksev` distribution metadata posture: [decisions/ksev-distribution-metadata-posture-2026-06-01.md](decisions/ksev-distribution-metadata-posture-2026-06-01.md)
 - Latest company commercial license posture: [decisions/company-commercial-license-posture-2026-06-01.md](decisions/company-commercial-license-posture-2026-06-01.md)
@@ -84,12 +95,17 @@ Last updated: 2026-06-02
 - Latest coordinator decision: [decisions/governance-coordinator-2026-06-01.md](decisions/governance-coordinator-2026-06-01.md)
 - Latest data-boundary decision: [decisions/data-boundary-2026-06-01.md](decisions/data-boundary-2026-06-01.md)
 - Current recommended operating posture: treat the greenfield initial local development lane as complete for local-only closure as of 2026-06-02. Use the approved local-only lane only for concrete scoped maintenance, validation refresh, report/handoff/index alignment, and local commit work. Use `bmad-module-builder` only for named packaging or validation changes, `knx-source-evidence-contract` for fixture/evidence changes, `knx-mature-tool-review` before any new tooling or source inventory materialization workflow, and `knx-safety-validation-review` before any new optional pack, public release path, external send, source mutation, or operational source intake.
-- First-pass source inventory evidence is materialized. It excludes runtime evidence paths and is limited to governance/validator source and report artifacts. Next routing should be by concrete capability.
+- First-pass source inventory evidence is promoted into durable docs. The
+  historical local runtime copy excluded runtime evidence paths and was limited
+  to governance/validator source and report artifacts. Next routing should be
+  by concrete capability.
 - First real source packet classes are selected: `user-authored-planning-document`, `public-or-synthetic-sample-data`, and `generated-report`.
 - Source mutation remains blocked by default outside the accepted scoped KNX module/governance exception. Future mutation beyond that exception requires a named workflow, exact target paths, rollback/recovery plan, validation plan, safety review, and explicit approval.
 - Source/evidence contract open questions for the current governance/local-evidence scope are resolved.
 - Data-boundary and execution-policy open questions for the current governance/local-evidence scope are resolved.
-- Runtime evidence inventory is materialized. It is metadata-only and excludes `_bmad/memory/knx/runtime/runtime-inventory/**` to avoid self-inclusion.
+- Runtime evidence inventory conclusions are promoted into durable docs. The
+  historical local runtime copy was metadata-only and excluded
+  `_bmad/memory/knx/runtime/runtime-inventory/**` to avoid self-inclusion.
 - Gate flow: for hard gates, present summary and why gated, execute after approval, then immediately present the next gate details.
 - Default-proceed local workflow is accepted: eligible local KNX governance/evidence/validation/packaging/handoff/local commit work should proceed without per-step user interaction. Hard gates still stop for explicit approval.
 - `ksev` public-distribution readiness planning is active. Current manifest remains local-only; distribution metadata posture is accepted.
