@@ -118,7 +118,8 @@ unless Bob separately approves the named file list.
 The first sanitized-promotion artifact is:
 
 - `docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md`
+- `docs/workflows/knx-greenfield-evaluation-promoted-evidence-2026-06-19.md`
 
-It promotes generic conclusions from the first cleanup slice and names the
-future cleanup candidates. It does not delete, untrack, sanitize in place,
-regenerate, or rewrite runtime files.
+These artifacts promote generic conclusions from cleanup slices and name future
+cleanup candidates. They do not delete, untrack, sanitize in place, regenerate,
+or rewrite runtime files.
