@@ -1,6 +1,6 @@
 ---
 date: 2026-06-19
-status: decision research
+status: experimental decision research
 topic: BMAD workflow compression
 input_documents:
   - docs/handoffs/codex-handoff-2026-06-19-non-orchestrator-backlog.md
@@ -9,13 +9,13 @@ input_documents:
   - AGENTS.md
 ---
 
-# BMAD Workflow Compression Decision Packet
+# BMAD Workflow Compression Experimental Decision Packet
 
 ## Executive Summary
 
-BMAD workflow compression should reduce ceremony for small, low-risk changes
-without weakening Kendall_Nxt's safety, authority, evidence, or delivery
-guardrails.
+This packet is experimental research, not approved operating policy. BMAD
+workflow compression should reduce ceremony for small, low-risk changes without
+weakening Kendall_Nxt's safety, authority, evidence, or delivery guardrails.
 
 Recommended decision:
 

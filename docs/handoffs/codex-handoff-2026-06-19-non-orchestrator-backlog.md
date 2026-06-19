@@ -40,6 +40,23 @@ worktree from `origin/main` before continuing backlog research.
 
 Updated: 2026-06-19T02:04:48Z follow-up local research slice.
 
+### Start Here
+
+Read this section before opening the individual research packets. The slice is
+advisory research, not execution authority or implementation approval.
+
+| Read Order | Artifact | Decision It Supports |
+| --- | --- | --- |
+| 1 | `docs/research/non-orchestrator-backlog-decision-matrix-2026-06-19.md` | Which backlog items should be promoted first. |
+| 2 | `docs/research/developer-readiness-dashboard-research-packet-2026-06-19.md` | Whether the dashboard is the top product candidate and what must exist first. |
+| 3 | `docs/research/bmad-workflow-compression-decision-packet-2026-06-19.md` | How to think about ceremony reduction without making a governance change yet. |
+| 4 | `docs/research/ci-supervisor-profiling-spike-packet-2026-06-19.md` | How to measure CI/supervisor runtime before proposing changes. |
+
+Top candidate: Developer Readiness Dashboard.
+
+Current blocker: read-only worktree visibility foundation must be shaped before
+dashboard implementation or mini-PRD promotion.
+
 This lane now has local-only research commits for the non-orchestrator backlog
 slice:
 
@@ -50,11 +67,12 @@ slice:
 
 Current slice recommendation:
 
-1. Keep Developer Readiness Dashboard as the top product candidate.
+1. Keep Developer Readiness Dashboard as the top product candidate, blocked on
+   read-only worktree visibility foundation.
 2. Promote it to a mini-PRD only after the read-only worktree visibility
    foundation is available.
-3. Treat BMAD Workflow Compression as an experimental threshold proposal until
-   Bob approves a governance update.
+3. Treat BMAD Workflow Compression as an experimental threshold proposal, not
+   operating policy, until Bob approves a governance update.
 4. Treat CI Speed And Signal / Supervisor Test Performance as a profiling spike
    that should measure first and restructure only after evidence exists.
 

@@ -26,8 +26,9 @@ existing evidence from Git, managed worktree manifests, `mise` readiness tasks,
 PR/CI status, and explicit stop lines. Its value is synthesis: reduce command
 memory and context switching while preserving the current governance model.
 
-Recommended next artifact: a mini-PRD after the read-only worktree visibility
-foundation is available.
+Recommended next artifact: read-only worktree visibility foundation. Promote the
+dashboard to a mini-PRD only after that foundation is shaped, and treat the
+mini-PRD as planning input rather than implementation approval.
 
 ## Problem
 
@@ -201,6 +202,7 @@ A useful first product slice should:
 
 ## Recommended Next Step
 
-Create a mini-PRD for the Developer Readiness Dashboard after the read-only
-worktree visibility foundation is available. Until then, keep this packet as
-research input and avoid adding dashboard scope to the orchestrator branch.
+Shape the read-only worktree visibility foundation first. After that foundation
+exists, create a mini-PRD for the Developer Readiness Dashboard. Until then,
+keep this packet as research input and avoid adding dashboard scope to the
+orchestrator branch.

@@ -74,7 +74,9 @@ The spike should answer:
 
 ## Measurement Plan
 
-Run from a clean worktree when possible:
+Run from a clean worktree when possible. These commands are observational for
+the spike: they should collect timing and test evidence, not edit CI, scheduler
+state, services, credentials, workers, providers, or persistent runtime state.
 
 ```text
 node --version
@@ -100,6 +102,16 @@ For GitHub timing, collect:
 
 Do not use GitHub timing as the only evidence. Compare it with local profiling
 so the recommendation can distinguish test slowness from CI overhead.
+
+Stop the spike and write down the blocker instead of retrying blindly when:
+
+- a command fails twice with the same tool or environment failure;
+- a command would require provider, worker, credential, cleanup, scheduler, or
+  service mutation authority;
+- profiling output suggests a CI or test change before a baseline evidence file
+  exists;
+- GitHub timing cannot be collected without expanding scope beyond read-only
+  metadata inspection.
 
 ## Evidence To Capture
 

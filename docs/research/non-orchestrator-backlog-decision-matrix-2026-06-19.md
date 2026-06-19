@@ -23,8 +23,9 @@ Recommended near-term order:
 
 The first item is the strongest product-value candidate because it can connect
 existing readiness, worktree, PR/CI, and next-action evidence into one operator
-view. It should wait for the orchestrated worktree visibility foundation before
-implementation, but the product research can start now.
+view. It is also blocked on read-only worktree visibility foundation. Do not
+promote dashboard implementation, and do not treat a mini-PRD as implementation
+approval, until that foundation is shaped.
 
 The second item is the highest leverage governance item because it can reduce
 process friction across every future lane. It should be handled carefully: the
@@ -48,8 +49,8 @@ Scores use `High`, `Medium`, or `Low`. Lower effort and lower risk are better.
 
 | Rank | Backlog Item | Value | Effort | Risk | Dependency | Promotion Path | Recommendation |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Developer Readiness Dashboard | High | Medium | Medium | Read-only worktree visibility foundation | Mini-PRD | Research now; implement after visibility foundation exists. |
-| 2 | BMAD Workflow Compression | High | Medium | High | Governance agreement | Decision packet, then mini-PRD if rules change | Define thresholds and examples before changing process. |
+| 1 | Developer Readiness Dashboard | High | Medium | Medium | Read-only worktree visibility foundation | Mini-PRD | Top candidate; blocked on visibility foundation. |
+| 2 | BMAD Workflow Compression | High | Medium | High | Governance agreement | Experimental decision packet, then mini-PRD if rules change | Define thresholds and examples before changing process. |
 | 3 | CI Speed And Signal | High | Medium | Low | Current CI timing evidence | Story or profiling spike | Profile first; split fast/slow only with evidence. |
 | 4 | Supervisor Test Performance | Medium | Low | Low | Same as CI speed | Story or profiling spike | Pair with CI speed; avoid duplicating work. |
 | 5 | Workspace UX Polish | Medium | Low | Medium | Local skill durability decision | Story | Improve docs/wrappers after deciding repo-owned vs personal skill support. |
