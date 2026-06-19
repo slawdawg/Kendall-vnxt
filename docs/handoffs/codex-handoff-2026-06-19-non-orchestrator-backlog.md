@@ -36,6 +36,31 @@ Current repo state at pause:
 Next session should resume from this worktree in tmux, then refresh the
 worktree from `origin/main` before continuing backlog research.
 
+## Research Slice Update
+
+Updated: 2026-06-19T02:04:48Z follow-up local research slice.
+
+This lane now has local-only research commits for the non-orchestrator backlog
+slice:
+
+- `docs/research/non-orchestrator-backlog-decision-matrix-2026-06-19.md`
+- `docs/research/developer-readiness-dashboard-research-packet-2026-06-19.md`
+- `docs/research/bmad-workflow-compression-decision-packet-2026-06-19.md`
+- `docs/research/ci-supervisor-profiling-spike-packet-2026-06-19.md`
+
+Current slice recommendation:
+
+1. Keep Developer Readiness Dashboard as the top product candidate.
+2. Promote it to a mini-PRD only after the read-only worktree visibility
+   foundation is available.
+3. Treat BMAD Workflow Compression as an experimental threshold proposal until
+   Bob approves a governance update.
+4. Treat CI Speed And Signal / Supervisor Test Performance as a profiling spike
+   that should measure first and restructure only after evidence exists.
+
+Do not push, open a PR, merge, clean up worktrees, restructure CI, change BMAD
+governance, or add dashboard implementation scope without explicit approval.
+
 ## Purpose
 
 This handoff preserves useful non-orchestrator threads from the
