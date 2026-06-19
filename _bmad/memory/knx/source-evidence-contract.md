@@ -370,8 +370,13 @@ No open source/evidence contract questions remain for the current governance and
 - Execution-policy dependencies: execution-policy-derived.
 - Source inventory evidence fields: mature-tool-review-derived from `decisions/mature-tool-source-inventory-2026-06-01.md`.
 - First source inventory materialization plan: `decisions/source-inventory-planning-2026-06-01.md`.
-- First materialized source inventory evidence: `_bmad/memory/knx/runtime/source-inventory/source-inventory-2026-06-01.json`.
-- First materialized source inventory validation evidence: `_bmad/memory/knx/runtime/source-inventory/validation-source-inventory-2026-06-01.json`.
+- First materialized source inventory evidence is promoted for durable checkout
+  reference in
+  `docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md`.
+- Historical local provenance remains in
+  `_bmad/memory/knx/runtime/source-inventory/source-inventory-2026-06-01.json`
+  and
+  `_bmad/memory/knx/runtime/source-inventory/validation-source-inventory-2026-06-01.json`.
 - Generated-report grouping rule: user-approved on 2026-06-01 and recorded in `decisions/source-inventory-planning-2026-06-01.md`.
 - Checksum rule: deferred by default because checksums require file-content reads; user-approved on 2026-06-01 and recorded in `decisions/source-inventory-planning-2026-06-01.md`.
 - First source packet class decision: `decisions/source-packet-classes-2026-06-01.md`.
