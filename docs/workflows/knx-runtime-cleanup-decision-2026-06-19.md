@@ -124,3 +124,12 @@ The first sanitized-promotion artifact is:
 These artifacts promote generic conclusions from cleanup slices and name future
 cleanup candidates. They do not delete, untrack, sanitize in place, regenerate,
 or rewrite runtime files.
+
+## Execution Approval Packet
+
+The non-destructive approval packet for the next cleanup execution step is:
+
+- `docs/workflows/knx-runtime-cleanup-execution-approval-2026-06-19.md`
+
+It names the exact 69-file future untracking set, rollback path, excluded
+durable-source groups, and approval language required before execution.
