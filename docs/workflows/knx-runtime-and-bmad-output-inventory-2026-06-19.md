@@ -190,3 +190,4 @@ Follow-up decision record:
 Promoted evidence:
 
 - `docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md`
+- `docs/workflows/knx-greenfield-evaluation-promoted-evidence-2026-06-19.md`
