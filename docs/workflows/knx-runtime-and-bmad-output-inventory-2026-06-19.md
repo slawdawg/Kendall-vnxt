@@ -182,3 +182,7 @@ subtree as one of:
 
 That PR should still avoid deletion unless the record names exact files and the
 rollback path.
+
+Follow-up decision record:
+
+- `docs/workflows/knx-runtime-cleanup-decision-2026-06-19.md`
