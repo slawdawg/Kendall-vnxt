@@ -78,3 +78,7 @@ Before any deletion PR that touches agent or BMAD artifacts:
 Use bounded approval before running mutating BMAD install commands. The base
 Linux install path verifies `bmad-method` availability; it does not currently
 run `bmad-method install` or rewrite BMAD project files.
+
+## Related Inventories
+
+- `docs/workflows/knx-runtime-and-bmad-output-inventory-2026-06-19.md`
