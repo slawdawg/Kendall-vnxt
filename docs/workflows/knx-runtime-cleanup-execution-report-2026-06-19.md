@@ -108,6 +108,10 @@ That file is outside this approved cleanup because `source-packets/**` was
 explicitly excluded. It requires a separate source-packet review before any
 sanitization, movement, untracking, or deletion.
 
+Follow-up review:
+
+- `docs/workflows/knx-source-packet-residual-review-2026-06-19.md`
+
 ## Rollback
 
 Before commit:

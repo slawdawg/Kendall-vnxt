@@ -3,7 +3,7 @@
   "validation_target": "source-packet-examples",
   "created_at": "2026-06-03T02:32:42+00:00",
   "input_path": "_bmad\\memory\\knx\\runtime\\source-packets\\source-packet-examples-2026-06-01.json",
-  "approved_storage_root": "C:\\Users\\slaw_dawg\\.omnara\\worktrees\\Kendall_Nxt\\coagulant-sister\\_bmad\\memory\\knx\\runtime",
+  "approved_storage_root": "{project-root}\\_bmad\\memory\\knx\\runtime",
   "status": "PASS",
   "summary": {
     "source_packet_count": 3,
