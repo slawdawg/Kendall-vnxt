@@ -10,6 +10,19 @@ _bmad/custom/config.user.toml
 # Generated output
 _bmad-output/
 
+# Local KNX runtime evidence preserved outside Git
+_bmad/memory/knx/runtime/backlog/
+_bmad/memory/knx/runtime/commit-readiness/
+_bmad/memory/knx/runtime/evaluation-packet/
+_bmad/memory/knx/runtime/greenfield-implementation/
+_bmad/memory/knx/runtime/handoffs/
+_bmad/memory/knx/runtime/optional-source-evidence-pack/
+_bmad/memory/knx/runtime/optional-source-evidence-validator/
+_bmad/memory/knx/runtime/report-audits/
+_bmad/memory/knx/runtime/runtime-inventory/
+_bmad/memory/knx/runtime/source-inventory/
+_bmad/memory/knx/runtime/workflow-audits/
+
 # Environment and secret files
 .env
 .env.*

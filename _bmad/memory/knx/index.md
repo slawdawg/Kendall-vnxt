@@ -26,27 +26,23 @@ Last updated: 2026-06-02
 - Latest validator validation report: [../../skills/reports/module-validation-ksev-2026-06-01.md](../../skills/reports/module-validation-ksev-2026-06-01.md)
 - Latest promoted commit-readiness and staging summary:
   [KNX runtime tail promoted evidence](../../../docs/workflows/knx-runtime-tail-promoted-evidence-2026-06-19.md).
-  Historical local provenance remains in
-  [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
-  and
-  [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md).
+  Historical local runtime copies may exist outside Git after the runtime
+  cleanup execution.
 - Latest promoted handoff/runtime summary:
   [KNX runtime promoted evidence](../../../docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md).
-  Historical local provenance remains in
-  [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md).
+  Historical local runtime copies may exist outside Git after the runtime
+  cleanup execution.
 - Latest substantive KNX governance commit: `e5adf45 Refresh KNX records after squash rewrite`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
 - Latest promoted workflow continuation audit:
   [KNX runtime tail promoted evidence](../../../docs/workflows/knx-runtime-tail-promoted-evidence-2026-06-19.md).
-  Historical local provenance remains in
-  [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md).
+  Historical local runtime copies may exist outside Git after the runtime
+  cleanup execution.
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
 - Latest promoted source inventory evidence:
   [KNX runtime promoted evidence](../../../docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md).
-  Historical local provenance remains in
-  [runtime/source-inventory/source-inventory-2026-06-01.md](runtime/source-inventory/source-inventory-2026-06-01.md)
-  and
-  [runtime/source-inventory/validation-source-inventory-2026-06-01.json](runtime/source-inventory/validation-source-inventory-2026-06-01.json).
+  Historical local runtime copies may exist outside Git after the runtime
+  cleanup execution.
 - Latest source packet class decision: [decisions/source-packet-classes-2026-06-01.md](decisions/source-packet-classes-2026-06-01.md)
 - Latest source mutation posture decision: [decisions/source-mutation-posture-2026-06-01.md](decisions/source-mutation-posture-2026-06-01.md)
 - Latest scoped source mutation approval: [decisions/scoped-source-mutation-knx-2026-06-01.md](decisions/scoped-source-mutation-knx-2026-06-01.md)
@@ -70,10 +66,8 @@ Last updated: 2026-06-02
 - Latest default-proceed local workflow: [decisions/default-proceed-local-workflow-2026-06-01.md](decisions/default-proceed-local-workflow-2026-06-01.md)
 - Latest promoted runtime evidence inventory:
   [KNX runtime promoted evidence](../../../docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md).
-  Historical local provenance remains in
-  [runtime/runtime-inventory/runtime-inventory-2026-06-01.md](runtime/runtime-inventory/runtime-inventory-2026-06-01.md)
-  and
-  [runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json](runtime/runtime-inventory/validation-runtime-inventory-2026-06-01.json).
+  Historical local runtime copies may exist outside Git after the runtime
+  cleanup execution.
 - Latest `ksev` private-repo distribution plan: [decisions/ksev-private-repo-distribution-plan-2026-06-01.md](decisions/ksev-private-repo-distribution-plan-2026-06-01.md)
 - Latest `ksev` distribution metadata posture: [decisions/ksev-distribution-metadata-posture-2026-06-01.md](decisions/ksev-distribution-metadata-posture-2026-06-01.md)
 - Latest company commercial license posture: [decisions/company-commercial-license-posture-2026-06-01.md](decisions/company-commercial-license-posture-2026-06-01.md)
@@ -88,14 +82,14 @@ Last updated: 2026-06-02
 - Latest local backlog consolidation: [decisions/local-backlog-consolidation-2026-06-01.md](decisions/local-backlog-consolidation-2026-06-01.md)
 - Latest promoted local backlog:
   [KNX runtime tail promoted evidence](../../../docs/workflows/knx-runtime-tail-promoted-evidence-2026-06-19.md).
-  Historical local provenance remains in
-  [runtime/backlog/local-backlog-2026-06-01.md](runtime/backlog/local-backlog-2026-06-01.md).
+  Historical local runtime copies may exist outside Git after the runtime
+  cleanup execution.
 - Latest source packet examples: [runtime/source-packets/source-packet-examples-2026-06-01.md](runtime/source-packets/source-packet-examples-2026-06-01.md)
 - Latest source packet example validator report: [runtime/source-packets/validator-report/source-evidence-validation.md](runtime/source-packets/validator-report/source-evidence-validation.md)
 - Latest promoted `ksev` report pointer audit:
   [KNX runtime tail promoted evidence](../../../docs/workflows/knx-runtime-tail-promoted-evidence-2026-06-19.md).
-  Historical local provenance remains in
-  [runtime/report-audits/ksev-report-pointer-audit-2026-06-02.md](runtime/report-audits/ksev-report-pointer-audit-2026-06-02.md).
+  Historical local runtime copies may exist outside Git after the runtime
+  cleanup execution.
 - Latest pause decision: [decisions/pause-current-work-2026-06-01.md](decisions/pause-current-work-2026-06-01.md)
 - Latest greenfield implementation lane: [decisions/greenfield-implementation-lane-2026-06-01.md](decisions/greenfield-implementation-lane-2026-06-01.md)
 - Latest greenfield implementation runway: [runtime/greenfield-implementation/implementation-runway-2026-06-01.md](runtime/greenfield-implementation/implementation-runway-2026-06-01.md)

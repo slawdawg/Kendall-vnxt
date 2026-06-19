@@ -133,3 +133,7 @@ The non-destructive approval packet for the next cleanup execution step is:
 
 It names the exact 69-file future untracking set, rollback path, excluded
 durable-source groups, and approval language required before execution.
+
+Execution report:
+
+- `docs/workflows/knx-runtime-cleanup-execution-report-2026-06-19.md`
