@@ -58,8 +58,7 @@ Top candidate: Developer Readiness Dashboard.
 Current blocker: read-only worktree visibility foundation must be shaped before
 dashboard implementation or mini-PRD promotion.
 
-This lane now has local-only research commits for the non-orchestrator backlog
-slice:
+This lane now has research artifacts for the non-orchestrator backlog slice:
 
 - `docs/research/non-orchestrator-backlog-decision-matrix-2026-06-19.md`
 - `docs/research/developer-readiness-dashboard-research-packet-2026-06-19.md`
