@@ -112,3 +112,13 @@ Create the first sanitized-promotion PR for
 into `docs/workflows/` or `docs/architecture/`, then propose exact follow-up
 untracking targets. It should still avoid deleting the source runtime files
 unless Bob separately approves the named file list.
+
+## Promotion Artifact
+
+The first sanitized-promotion artifact is:
+
+- `docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md`
+
+It promotes generic conclusions from the first cleanup slice and names the
+future cleanup candidates. It does not delete, untrack, sanitize in place,
+regenerate, or rewrite runtime files.

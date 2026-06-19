@@ -186,3 +186,7 @@ rollback path.
 Follow-up decision record:
 
 - `docs/workflows/knx-runtime-cleanup-decision-2026-06-19.md`
+
+Promoted evidence:
+
+- `docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md`
