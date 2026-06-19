@@ -104,6 +104,10 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   requires them. Prefer targeted edits that keep diffs reviewable.
 - When adding durable agent behavior, update this `AGENTS.md` rather than
   relying only on a one-off chat reminder.
+- Treat generated agent artifacts according to
+  `docs/workflows/generated-agent-artifacts.md`. Do not commit personal BMAD
+  user config, and do not remove `.agents/skills`, `.claude/skills`, or `_bmad`
+  without the matching source-of-truth and regeneration review.
 - Do not default to opening a PR for every small local improvement. Treat PRs
   as reviewable product or workflow delivery units that should be merged into
   `main`, such as completed stories, user-visible features, safety/CI fixes,
