@@ -137,3 +137,7 @@ durable-source groups, and approval language required before execution.
 Execution report:
 
 - `docs/workflows/knx-runtime-cleanup-execution-report-2026-06-19.md`
+
+Source-packet residual review:
+
+- `docs/workflows/knx-source-packet-residual-review-2026-06-19.md`
