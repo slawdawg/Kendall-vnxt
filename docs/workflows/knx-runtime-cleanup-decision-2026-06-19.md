@@ -119,6 +119,7 @@ The first sanitized-promotion artifact is:
 
 - `docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md`
 - `docs/workflows/knx-greenfield-evaluation-promoted-evidence-2026-06-19.md`
+- `docs/workflows/knx-runtime-tail-promoted-evidence-2026-06-19.md`
 
 These artifacts promote generic conclusions from cleanup slices and name future
 cleanup candidates. They do not delete, untrack, sanitize in place, regenerate,

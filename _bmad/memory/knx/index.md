@@ -24,15 +24,22 @@ Last updated: 2026-06-02
 - Latest validator distribution decision: [decisions/validator-distribution-2026-06-01.md](decisions/validator-distribution-2026-06-01.md)
 - Latest local Git commit decision: [decisions/local-git-commit-2026-06-01.md](decisions/local-git-commit-2026-06-01.md)
 - Latest validator validation report: [../../skills/reports/module-validation-ksev-2026-06-01.md](../../skills/reports/module-validation-ksev-2026-06-01.md)
-- Latest local commit-readiness checkpoint: [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
-- Proposed staging plan: [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md)
+- Latest promoted commit-readiness and staging summary:
+  [KNX runtime tail promoted evidence](../../../docs/workflows/knx-runtime-tail-promoted-evidence-2026-06-19.md).
+  Historical local provenance remains in
+  [runtime/commit-readiness/reports/commit-readiness-2026-06-01.md](runtime/commit-readiness/reports/commit-readiness-2026-06-01.md)
+  and
+  [runtime/commit-readiness/reports/staging-plan-2026-06-01.md](runtime/commit-readiness/reports/staging-plan-2026-06-01.md).
 - Latest promoted handoff/runtime summary:
   [KNX runtime promoted evidence](../../../docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md).
   Historical local provenance remains in
   [runtime/handoffs/handoff-2026-06-01-current.md](runtime/handoffs/handoff-2026-06-01-current.md).
 - Latest substantive KNX governance commit: `e5adf45 Refresh KNX records after squash rewrite`
 - Prior local commit status sync: `88aa647 Record KNX local commit status`
-- Latest workflow continuation audit: [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md)
+- Latest promoted workflow continuation audit:
+  [KNX runtime tail promoted evidence](../../../docs/workflows/knx-runtime-tail-promoted-evidence-2026-06-19.md).
+  Historical local provenance remains in
+  [runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md](runtime/workflow-audits/bmad-workflow-continuation-2026-06-01.md).
 - Latest source inventory planning decision: [decisions/source-inventory-planning-2026-06-01.md](decisions/source-inventory-planning-2026-06-01.md)
 - Latest promoted source inventory evidence:
   [KNX runtime promoted evidence](../../../docs/workflows/knx-runtime-promoted-evidence-2026-06-19.md).
@@ -79,10 +86,16 @@ Last updated: 2026-06-02
 - Latest local discussion-guide draft: [runtime/evaluation-packet/discussion-guide-2026-06-01.md](runtime/evaluation-packet/discussion-guide-2026-06-01.md)
 - Latest company-facing discussion posture: [decisions/company-facing-discussion-parked-2026-06-01.md](decisions/company-facing-discussion-parked-2026-06-01.md)
 - Latest local backlog consolidation: [decisions/local-backlog-consolidation-2026-06-01.md](decisions/local-backlog-consolidation-2026-06-01.md)
-- Latest local backlog: [runtime/backlog/local-backlog-2026-06-01.md](runtime/backlog/local-backlog-2026-06-01.md)
+- Latest promoted local backlog:
+  [KNX runtime tail promoted evidence](../../../docs/workflows/knx-runtime-tail-promoted-evidence-2026-06-19.md).
+  Historical local provenance remains in
+  [runtime/backlog/local-backlog-2026-06-01.md](runtime/backlog/local-backlog-2026-06-01.md).
 - Latest source packet examples: [runtime/source-packets/source-packet-examples-2026-06-01.md](runtime/source-packets/source-packet-examples-2026-06-01.md)
 - Latest source packet example validator report: [runtime/source-packets/validator-report/source-evidence-validation.md](runtime/source-packets/validator-report/source-evidence-validation.md)
-- Latest `ksev` report pointer audit: [runtime/report-audits/ksev-report-pointer-audit-2026-06-02.md](runtime/report-audits/ksev-report-pointer-audit-2026-06-02.md)
+- Latest promoted `ksev` report pointer audit:
+  [KNX runtime tail promoted evidence](../../../docs/workflows/knx-runtime-tail-promoted-evidence-2026-06-19.md).
+  Historical local provenance remains in
+  [runtime/report-audits/ksev-report-pointer-audit-2026-06-02.md](runtime/report-audits/ksev-report-pointer-audit-2026-06-02.md).
 - Latest pause decision: [decisions/pause-current-work-2026-06-01.md](decisions/pause-current-work-2026-06-01.md)
 - Latest greenfield implementation lane: [decisions/greenfield-implementation-lane-2026-06-01.md](decisions/greenfield-implementation-lane-2026-06-01.md)
 - Latest greenfield implementation runway: [runtime/greenfield-implementation/implementation-runway-2026-06-01.md](runtime/greenfield-implementation/implementation-runway-2026-06-01.md)
