@@ -18,8 +18,9 @@ instead of turning all ten handoff threads into implementation work.
 Recommended near-term order:
 
 1. Developer Readiness Dashboard research packet.
-2. BMAD Workflow Compression decision packet.
-3. CI Speed And Signal / Supervisor Test Performance profiling spike.
+2. Read-Only Worktree Visibility Foundation proposal.
+3. BMAD Workflow Compression decision packet.
+4. CI Speed And Signal / Supervisor Test Performance profiling spike.
 
 The first item is the strongest product-value candidate because it can connect
 existing readiness, worktree, PR/CI, and next-action evidence into one operator
@@ -82,7 +83,24 @@ Boundaries:
 
 Likely output: mini-PRD or product brief after the research packet.
 
-### 2. BMAD Workflow Compression Decision Packet
+### 2. Read-Only Worktree Visibility Foundation Proposal
+
+Purpose: shape the prerequisite story before dashboard implementation.
+
+Source:
+
+- `docs/research/read-only-worktree-visibility-foundation-proposal-2026-06-19.md`
+
+Boundaries:
+
+- read-only local Git/workspace visibility first;
+- no dashboard UI;
+- no work selection, approval, execution, cleanup, merge, branch deletion,
+  provider, worker, credential, or scheduler mutation.
+
+Likely output: narrow story promoted through sprint planning.
+
+### 3. BMAD Workflow Compression Decision Packet
 
 Purpose: reduce ceremony for small changes while preserving safety.
 
@@ -105,7 +123,7 @@ Non-negotiables:
 
 Likely output: decision packet first; mini-PRD only if governance rules change.
 
-### 3. CI Speed / Supervisor Test Profiling Spike
+### 4. CI Speed / Supervisor Test Profiling Spike
 
 Purpose: identify actual slow checks before splitting or rewriting CI.
 
@@ -132,6 +150,6 @@ the existing personal `kendall-workspace` skill and document any gaps it reveals
 
 ## Recommended Immediate Next Step
 
-Create a Developer Readiness Dashboard research packet in this lane. Keep it
-strictly read-only and product-facing, with implementation deferred until the
-orchestrated worktree visibility foundation is available.
+Promote the read-only worktree visibility foundation proposal into a narrow
+story before writing dashboard code. Keep dashboard implementation deferred
+until that foundation exists.

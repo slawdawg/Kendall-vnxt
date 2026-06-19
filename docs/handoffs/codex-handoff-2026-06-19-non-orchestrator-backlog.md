@@ -49,8 +49,9 @@ advisory research, not execution authority or implementation approval.
 | --- | --- | --- |
 | 1 | `docs/research/non-orchestrator-backlog-decision-matrix-2026-06-19.md` | Which backlog items should be promoted first. |
 | 2 | `docs/research/developer-readiness-dashboard-research-packet-2026-06-19.md` | Whether the dashboard is the top product candidate and what must exist first. |
-| 3 | `docs/research/bmad-workflow-compression-decision-packet-2026-06-19.md` | How to think about ceremony reduction without making a governance change yet. |
-| 4 | `docs/research/ci-supervisor-profiling-spike-packet-2026-06-19.md` | How to measure CI/supervisor runtime before proposing changes. |
+| 3 | `docs/research/read-only-worktree-visibility-foundation-proposal-2026-06-19.md` | How to promote the dashboard blocker into a narrow read-only foundation story. |
+| 4 | `docs/research/bmad-workflow-compression-decision-packet-2026-06-19.md` | How to think about ceremony reduction without making a governance change yet. |
+| 5 | `docs/research/ci-supervisor-profiling-spike-packet-2026-06-19.md` | How to measure CI/supervisor runtime before proposing changes. |
 
 Top candidate: Developer Readiness Dashboard.
 
@@ -62,6 +63,7 @@ slice:
 
 - `docs/research/non-orchestrator-backlog-decision-matrix-2026-06-19.md`
 - `docs/research/developer-readiness-dashboard-research-packet-2026-06-19.md`
+- `docs/research/read-only-worktree-visibility-foundation-proposal-2026-06-19.md`
 - `docs/research/bmad-workflow-compression-decision-packet-2026-06-19.md`
 - `docs/research/ci-supervisor-profiling-spike-packet-2026-06-19.md`
 
@@ -69,11 +71,13 @@ Current slice recommendation:
 
 1. Keep Developer Readiness Dashboard as the top product candidate, blocked on
    read-only worktree visibility foundation.
-2. Promote it to a mini-PRD only after the read-only worktree visibility
+2. Promote `docs/research/read-only-worktree-visibility-foundation-proposal-2026-06-19.md`
+   into a narrow story before dashboard code.
+3. Promote the dashboard to a mini-PRD only after the read-only worktree visibility
    foundation is available.
-3. Treat BMAD Workflow Compression as an experimental threshold proposal, not
+4. Treat BMAD Workflow Compression as an experimental threshold proposal, not
    operating policy, until Bob approves a governance update.
-4. Treat CI Speed And Signal / Supervisor Test Performance as a profiling spike
+5. Treat CI Speed And Signal / Supervisor Test Performance as a profiling spike
    that should measure first and restructure only after evidence exists.
 
 Do not push, open a PR, merge, clean up worktrees, restructure CI, change BMAD
