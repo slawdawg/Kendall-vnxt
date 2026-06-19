@@ -1,5 +1,11 @@
 # Local/user-specific configuration
 _bmad/config.user.yaml
+_bmad/config.user.toml
+_bmad/custom/config.user.toml
+*.user.toml
+
+# Tool-generated local agent targets
+.claude/skills/
 
 # Generated output
 _bmad-output/
