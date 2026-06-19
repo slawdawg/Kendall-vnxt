@@ -196,3 +196,4 @@ Promoted evidence:
 Execution approval packet:
 
 - `docs/workflows/knx-runtime-cleanup-execution-approval-2026-06-19.md`
+- `docs/workflows/knx-runtime-cleanup-execution-report-2026-06-19.md`

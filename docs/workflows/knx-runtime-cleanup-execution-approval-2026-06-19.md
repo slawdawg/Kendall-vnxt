@@ -13,6 +13,10 @@ This packet does not approve execution. It prepares the exact file list,
 operation, rollback, evidence, and stop lines required for Bob to approve or
 reject the next cleanup step.
 
+Execution record:
+
+- `docs/workflows/knx-runtime-cleanup-execution-report-2026-06-19.md`
+
 ## Proposed Operation
 
 Preferred operation: untrack the files below with `git rm --cached`.
