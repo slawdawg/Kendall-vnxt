@@ -34,6 +34,15 @@ def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
     return TestClient(app)
 
 
+def _assert_unique_related_docs(container: dict) -> None:
+    related_docs = container["relatedDocs"]
+    assert related_docs == list(dict.fromkeys(related_docs))
+    assert "docs/handoffs/current.md" not in related_docs
+    assert all("_bmad-output" not in related_doc for related_doc in related_docs)
+    if "docs/workflows/implementation-evidence-boundary.md" in related_docs:
+        assert related_docs.count("docs/workflows/implementation-evidence-boundary.md") == 1
+
+
 def _freeze_subscription_launch_now(monkeypatch, value: datetime = STORY_8_5_APPROVAL_VALID_NOW) -> None:
     from supervisor.application.service import SupervisorService
 
@@ -1870,12 +1879,17 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
         "verification-runbook-hardening-slice",
         "authority-blocker-maintenance-slice",
     }
+    for slice_item in report["slices"]:
+        _assert_unique_related_docs(slice_item)
+        for check in slice_item["readinessChecks"]:
+            _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
     assert "safe-backlog-report-alignment" in report_slice["includedBacklogItems"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
     assert "docs/workflows/implementation-evidence-boundary.md" in report_slice["relatedDocs"]
+    assert report_slice["relatedDocs"].count("docs/workflows/implementation-evidence-boundary.md") == 1
     assert "/controls#supervisor-report-catalog" in report_slice["dashboardAnchors"]
     assert {check["checkId"] for check in report_slice["readinessChecks"]} == {
         "ready-backlog-item",
@@ -1890,6 +1904,7 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "pnpm run check:runbooks" in verification_slice["requiredVerification"]
     assert "GET /supervisor/verification-readiness-report" in verification_slice["relatedReports"]
     assert "docs/workflows/implementation-evidence-boundary.md" in verification_slice["relatedDocs"]
+    assert verification_slice["relatedDocs"].count("docs/workflows/implementation-evidence-boundary.md") == 1
     assert "docs/handoffs/current.md" not in verification_slice["relatedDocs"]
     assert {check["checkId"] for check in verification_slice["readinessChecks"]} == {
         "ready-backlog-items",
@@ -1897,6 +1912,10 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
         "full-gate-available",
     }
     handoff_coverage = next(check for check in verification_slice["readinessChecks"] if check["checkId"] == "handoff-checkpoint-coverage")
+    assert handoff_coverage["relatedDocs"] == [
+        "docs/workflows/implementation-evidence-boundary.md",
+        "docs/workflows/current-session-runbook.md",
+    ]
     assert "docs/workflows/current-session-runbook.md" in handoff_coverage["relatedDocs"]
     assert "docs/handoffs/current.md" not in handoff_coverage["relatedDocs"]
     assert any("local-development-handoff" in check["evidence"] for check in verification_slice["readinessChecks"])
@@ -1912,6 +1931,7 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "subscription-agent-launch" in authority_slice["blockedBy"]
     assert "GET /supervisor/authority-readiness-matrix-report" in authority_slice["relatedReports"]
     assert "docs/workflows/implementation-evidence-boundary.md" in authority_slice["relatedDocs"]
+    assert authority_slice["relatedDocs"].count("docs/workflows/implementation-evidence-boundary.md") == 1
     assert "pnpm run check:development-runway" in report["verificationChain"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("ready safe backlog items" in action for action in report["nextSafeActions"])
