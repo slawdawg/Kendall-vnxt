@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "policy": "Top-level BMAD planning and research work products are local-only Kendall workspace state and must not be added to the GitHub clean-install surface.",
+  "status": "active-hard-fail",
+  "owner": "operator local Kendall workspace",
+  "targetRemovalCondition": "No local planning docs remain tracked. Any tracked file under a forbidden prefix is a clean-install boundary violation.",
+  "forbiddenPrefixes": [
+    "docs/goals/",
+    "docs/handoffs/",
+    "docs/research/",
+    "docs/prds/",
+    "docs/stories/"
+  ],
+  "localOnlyEntryCount": 0,
+  "entries": []
+}

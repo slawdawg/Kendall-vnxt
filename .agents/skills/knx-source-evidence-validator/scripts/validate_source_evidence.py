@@ -178,7 +178,7 @@ VALID_SOURCE_INVENTORY_SCOPES = {
     "mixed",
 }
 VALID_SOURCE_INVENTORY_OPERATIONS = {"read-planning only", "metadata-only read-planning"}
-VALID_SOURCE_INVENTORY_TOOLS = {"git", "ripgrep", "PowerShell", "approved-custom-glue"}
+VALID_SOURCE_INVENTORY_TOOLS = {"git", "ripgrep", "approved-custom-glue"}
 VALID_BOUNDARY_RESULTS = {"PASS", "CONCERNS", "FAIL", "WAIVED"}
 VALID_RUNTIME_INVENTORY_APPROVAL_BASES = {
     "user-specified",
@@ -194,7 +194,7 @@ VALID_RUNTIME_INVENTORY_SCOPES = {
     "mixed",
 }
 VALID_RUNTIME_INVENTORY_OPERATIONS = {"metadata-only read-planning"}
-VALID_RUNTIME_INVENTORY_TOOLS = {"ripgrep", "PowerShell", "approved-custom-glue"}
+VALID_RUNTIME_INVENTORY_TOOLS = {"ripgrep", "approved-custom-glue"}
 REQUIRED_SOURCE_INVENTORY_TEXT_FIELDS = {
     "source_inventory_id",
     "source_root",
@@ -291,8 +291,12 @@ REQUIRED_EXCLUDED_SOURCE_CLASSES = {
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_APPROVED_STORAGE_ROOT = (PROJECT_ROOT / "_bmad/memory/knx/runtime").resolve()
 KNX_MEMORY_ROOT = (PROJECT_ROOT / "_bmad/memory/knx").resolve()
-SYNTHETIC_FIXTURE_ROOT = (PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic").resolve()
-DEFAULT_FIXTURE_PACK_PATH = PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
+SYNTHETIC_FIXTURE_ROOT = (
+    PROJECT_ROOT / ".agents/skills/knx-source-evidence-validator/assets/fixtures"
+).resolve()
+DEFAULT_FIXTURE_PACK_PATH = (
+    PROJECT_ROOT / ".agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json"
+)
 DEFAULT_REPORT_DIR = PROJECT_ROOT / "_bmad/memory/knx/runtime/optional-source-evidence-validator/reports"
 DEFAULT_CONFIG_USER_YAML_PATH = PROJECT_ROOT / "_bmad/config.user.yaml"
 DEFAULT_CONFIG_YAML_PATH = PROJECT_ROOT / "_bmad/config.yaml"
@@ -1018,6 +1022,7 @@ def validate_output_metadata(fixture: dict[str, Any], findings: list[Finding], a
             and storage_location != "unresolved"
             and not is_under_path(storage_location, approved_storage_root)
             and not is_under_path(storage_location, KNX_MEMORY_ROOT)
+            and not is_under_path(storage_location, SYNTHETIC_FIXTURE_ROOT)
         ):
             add_finding(
                 findings,
@@ -1774,7 +1779,7 @@ def validate_fixture_pack(path: Path, approved_storage_root: Path | None = None)
             findings,
             "error",
             "fixture-pack-outside-synthetic-root",
-            "Fixture packs must live under _bmad/memory/knx/fixtures/synthetic",
+            "Fixture packs must live under .agents/skills/knx-source-evidence-validator/assets/fixtures",
         )
 
     fixtures = validate_pack_shape(pack, findings)

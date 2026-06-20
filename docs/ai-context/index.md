@@ -7,7 +7,7 @@ Status: active guidance
 
 Help agents start with the smallest useful context for Kendall_Nxt work. This
 map reduces repeated large reads while preserving source links, safety gates,
-and Bob's ability to steer.
+and the operator's ability to steer.
 
 ## Default Reading Rule
 
@@ -27,20 +27,19 @@ enough. Keep exact file links and line references for decisions and evidence.
 | Task type | Read first | Expand when |
 | --- | --- | --- |
 | Start/list/resume/finish Codex workspace work | `AGENTS.md#codex-workspace-protocol`, `docs/workflows/workspace-coordination-report.md`, `scripts/codex-workspace.mjs` usage text | Workspace state is stale, cleanup is requested, PR delivery is needed |
-| BMAD story implementation | The story file, `AGENTS.md`, nearest similar story in `docs/stories/` | Story references architecture, PRD, UX, prior evidence, or code contracts |
+| BMAD story implementation | The local-only story artifact, `AGENTS.md`, `docs/workflows/implementation-evidence-boundary.md` | Story references architecture, product boundaries, UX, prior evidence, or code contracts |
 | BMAD planning/story/PRD/architecture work | Matching `.agents/skills/bmad-*` `SKILL.md`, then directly referenced step files | The skill requests planning artifacts or continuation state |
-| Tool or command failure | `AGENTS.md#tool-resolution-and-verification`, `AGENTS.md#windows-sandbox`, `docs/workflows/tool-churn-rca.md` | The failure repeats, requires authority, points to brittle tooling, or needs Tool Churn RCA examples from `docs/workflows/tool-churn-rca-examples.md` |
+| Tool or command failure | `AGENTS.md#tool-resolution-and-verification`, `AGENTS.md#linux-shell-commands`, `docs/workflows/tool-churn-rca.md` | The failure repeats, requires authority, points to brittle tooling, or needs Tool Churn RCA examples from `docs/workflows/tool-churn-rca-examples.md` |
 | Git/GitHub delivery | `AGENTS.md#codex-workspace-protocol`, relevant delivery/readiness story, current PR/CI evidence | Push, PR creation, merge, branch deletion, cleanup, or issue sync is requested |
-| Windows/PowerShell behavior | `AGENTS.md#windows-sandbox`, `AGENTS.md#powershell-commands` | Scheduler, ACL, PATH, or sandbox behavior remains unclear |
 | Supervisor/dashboard code changes | Relevant story, nearby tests, package scripts, target app/service files | API contracts, UI state, or cross-package behavior changes |
 | KNX governance or safety work | Matching `.agents/skills/knx-*` skill, `_bmad/memory/knx/` documents if present | Source/evidence boundaries, execution policy, or safety validation expands |
-| Research/tool evaluation | Current story/spec, `docs/research/token-economy-tool-evaluation.md`, `docs/research/token-economy-measurement-readiness.md`, `docs/research/graphify-final-recommendation-2026-06-18.md`, `docs/research/graphify-explainer-for-bob.md`, `docs/research/graphify-guided-trial-plan.md`, `docs/research/graphify-source-behavior-packet.md`, `docs/research/graphify-first-run-boundary.md`, `docs/research/graphify-trial-workflows-and-scorecards.md`, `docs/research/graphify-first-run-approval-packet.md`, `docs/research/graphify-first-run-evidence-2026-06-18.md`, `docs/research/graphify-first-run-retry-evidence-2026-06-18.md`, `docs/research/graphify-cluster-only-help-evidence-2026-06-18.md`, `docs/research/graphify-cluster-only-evidence-2026-06-18.md`, `docs/research/graphify-baseline-comparison-2026-06-18.md`, `docs/research/graphify-workflow-2-approval-packet.md`, `docs/research/graphify-workflow-2-evidence-2026-06-18.md`, `docs/research/graphify-current-evidence-decision-packet-2026-06-18.md`, `docs/research/graphify-workflow-3-approval-packet.md`, `docs/research/graphify-workflow-3-evidence-2026-06-18.md`, and `docs/research/graphify-cleanup-approval-packet-2026-06-18.md` when Graphify is in scope, official docs or primary sources | Savings claims, adoption, installation, paid usage, or networked integration are proposed |
+| Research/tool evaluation | Current story/spec, `docs/workflows/token-economy-governance.md`, official docs or primary sources; local-only tool-trial packets belong under `_bmad-output`. Rewrite repo-facing decisions as source-owned docs or policy. | Savings claims, adoption, installation, paid usage, or networked integration are proposed |
 
 ## Expansion Rules
 
 Expand context when:
 
-- A decision affects authority, safety, retention, evidence, or Bob approval.
+- A decision affects authority, safety, retention, evidence, or operator approval.
 - A file will be edited and nearby examples are needed for local style.
 - Verification failure names a specific script, package, or contract.
 - The task crosses from docs into code, from local into remote, or from read-only into mutation.

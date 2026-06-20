@@ -14,8 +14,8 @@ known local friction, not a replacement for normal implementation work.
 Enter Tool Churn RCA when any of these happen:
 
 - The same command or tool path fails twice.
-- A Windows sandbox runner timeout happens before process output.
-- A PowerShell quoting, parser, wildcard, or scriptblock error repeats.
+- A sandbox runner timeout happens before process output.
+- A shell quoting, parser, wildcard, or scriptblock error repeats.
 - A tool, executable, path, venv, package manager, or resolver is missing.
 - A permission, sandbox, safe-directory, credential, or ownership denial blocks progress.
 - A verification command fails because of environment setup rather than story behavior.
@@ -23,8 +23,8 @@ Enter Tool Churn RCA when any of these happen:
 - The agent cannot explain what a retry would prove that the previous attempt did not.
 
 Immediate RCA is allowed after one failure for known-bad patterns named in
-`AGENTS.md`, especially native Windows sandbox runner timeouts before command
-output and repeated PowerShell quoting shapes.
+`AGENTS.md`, especially sandbox runner timeouts before command output and
+repeated shell quoting shapes.
 
 ## Failure Classes
 
@@ -75,10 +75,10 @@ Stop retrying and write the RCA packet when:
 
 Choose one narrow action that can actually reduce uncertainty:
 
-- Confirm location with `Get-Location`.
+- Confirm location with `pwd`.
 - Check diff scope with `git diff --stat` or `git diff --name-only`.
 - Verify direct tool availability, for example `node --version`, `pnpm --version`, `uv --version`, or the project venv Python path.
-- Replace a complex shell shape with a simpler direct PowerShell command.
+- Replace a complex shell shape with a simpler direct shell command.
 - Read the existing script or docs before invoking package-manager indirection.
 - Request approval for the exact read-only verification command when sandbox behavior is the blocker.
 - Park the blocked lane and continue safe local/read-only work if the goal has other useful tasks.
@@ -90,7 +90,7 @@ Recommend exactly one durable fix unless the issue needs a larger story:
 - Update `AGENTS.md` with the better command shape or stop line.
 - Add or harden a wrapper script, preflight check, doctor check, or docs check.
 - Add a story/refactor task for brittle tooling.
-- Ask Bob to approve a memory note when the lesson should persist across sessions.
+- Ask the operator to approve a memory note when the lesson should persist across sessions.
 - Create an approval packet when the next action crosses authority boundaries.
 - Record the issue in the current story Dev Agent Record if it is local to the story.
 

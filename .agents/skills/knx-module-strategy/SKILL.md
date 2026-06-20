@@ -13,7 +13,7 @@ This workflow decides how KendallAI vNext capabilities should be packaged as one
 
 Load available config from `{project-root}/_bmad/config.yaml` and `{project-root}/_bmad/config.user.yaml` (root level and `knx` section). Use sensible defaults for anything not configured.
 
-Read `{project-root}/_bmad/memory/knx/profile.md`, `{project-root}/_bmad/memory/knx/execution-policy.md`, `{project-root}/_bmad/memory/knx/data-boundaries.md`, `{project-root}/_bmad/memory/knx/source-evidence-contract.md`, and `{project-root}/_bmad/memory/knx/tool-evaluation.md` if present. Read `skills/reports/kendallai-vnext-module-plan.md` when available.
+Read `{project-root}/_bmad/memory/knx/profile.md`, `{project-root}/_bmad/memory/knx/execution-policy.md`, `{project-root}/_bmad/memory/knx/data-boundaries.md`, `{project-root}/_bmad/memory/knx/source-evidence-contract.md`, and `{project-root}/_bmad/memory/knx/tool-evaluation.md` if present. Read `_bmad-output/reports/kendallai-vnext-module-plan.md` when available.
 
 If governance artifacts are missing, produce only a provisional strategy and name the missing inputs.
 
@@ -111,7 +111,7 @@ Keep a capability as ordinary project code when:
 - Do not package workflows that have unresolved safety blockers as release-ready.
 - Do not hide optional dependencies inside the core module.
 - Do not merge live deployment/runtime behavior into the governance module unless the strategy records why it is reusable and safe.
-- Do not treat Bob-specific paths, OneDrive, GitHub, Microsoft 365, local GPU, local model runtimes, or external providers as hard requirements.
+- Do not treat operator-specific paths, OneDrive, GitHub, Microsoft 365, local GPU, local model runtimes, or external providers as hard requirements.
 - Do not proceed to module scaffolding if the strategy is `blocked`.
 
 ## Next Workflow

@@ -113,9 +113,7 @@ function verifyPythonWorkspace() {
   }
 
   const venvDir = join(rootDir, "services", "supervisor", ".venv");
-  const pythonEntry = process.platform === "win32"
-    ? join(venvDir, "Scripts", "python.exe")
-    : join(venvDir, "bin", "python");
+  const pythonEntry = join(venvDir, "bin", "python");
 
   if (!existsSync(venvDir) || !existsSync(pythonEntry)) {
     recordFailure("Supervisor virtualenv is missing. Run `uv sync --directory services/supervisor` or `pnpm run setup:py`.");

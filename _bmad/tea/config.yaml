@@ -19,7 +19,7 @@ test_review_output: _bmad-output/test-artifacts/test-reviews
 trace_output: _bmad-output/test-artifacts/traceability
 
 # Core Configuration Values
-user_name: Bob
+user_name: Operator
 project_name: Kendall_Nxt
 communication_language: English
 document_output_language: English

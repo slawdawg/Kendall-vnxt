@@ -15,7 +15,7 @@ def _write_artifact(repo_root: Path, relative_path: str, content: str) -> None:
 def test_bmad_import_parser_extracts_story_metadata_without_copying_full_artifact(tmp_path) -> None:
     _write_artifact(
         tmp_path,
-        "docs/stories/6-4-bmad-import-package-parser.md",
+        "_bmad-output/planning-artifacts/stories/story-6-4.md",
         """---
 title: Story 6.4 Custom Frontmatter Title
 status: Ready
@@ -26,7 +26,7 @@ Status: Draft
 
 ## Story
 
-As Bob,
+As an operator,
 I want local BMAD artifacts converted into import packages,
 so that structured planning output can enter the Dev Console pipeline.
 
@@ -54,11 +54,11 @@ Blocked:
 """,
     )
 
-    package = parse_bmad_import_package(tmp_path, "docs/stories/6-4-bmad-import-package-parser.md")
+    package = parse_bmad_import_package(tmp_path, "_bmad-output/planning-artifacts/stories/story-6-4.md")
 
     assert package.title == "Review Story 6.4 Custom Frontmatter Title"
-    assert package.requested_outcome.startswith("As Bob,")
-    assert package.source_artifact_path == "docs/stories/6-4-bmad-import-package-parser.md"
+    assert package.requested_outcome.startswith("As an operator,")
+    assert package.source_artifact_path == "_bmad-output/planning-artifacts/stories/story-6-4.md"
     assert package.source_artifact_type == CandidateWorkArtifactType.BMAD_STORY
     assert package.artifact_title == "Story 6.4 Custom Frontmatter Title"
     assert package.story_id == "6-4"
@@ -73,11 +73,12 @@ Blocked:
     assert "Raw artifact content was not copied into the import package." in package.notes
 
 
-def test_bmad_import_parser_supports_prd_product_and_planning_roots(tmp_path) -> None:
+def test_bmad_import_parser_supports_local_planning_artifact_types(tmp_path) -> None:
     artifacts = {
-        "docs/prds/orchestrator.md": CandidateWorkArtifactType.BMAD_WORKFLOW_OUTPUT,
-        "docs/product/orchestrator-brief.md": CandidateWorkArtifactType.BMAD_RESEARCH,
-        "_bmad-output/planning-artifacts/research/orchestrator.md": CandidateWorkArtifactType.BMAD_WORKFLOW_OUTPUT,
+        "_bmad-output/planning-artifacts/prds/orchestrator.md": CandidateWorkArtifactType.BMAD_WORKFLOW_OUTPUT,
+        "_bmad-output/planning-artifacts/prds/stories/nested-story-reference.md": CandidateWorkArtifactType.BMAD_WORKFLOW_OUTPUT,
+        "_bmad-output/planning-artifacts/stories/story-6-5.md": CandidateWorkArtifactType.BMAD_STORY,
+        "_bmad-output/planning-artifacts/research/orchestrator.md": CandidateWorkArtifactType.BMAD_RESEARCH,
     }
     for relative_path in artifacts:
         _write_artifact(
@@ -101,22 +102,45 @@ Use focused checks.
 
 def test_bmad_import_parser_rejects_unsupported_paths_traversal_and_non_markdown(tmp_path) -> None:
     _write_artifact(tmp_path, "README.md", "# Root readme")
-    _write_artifact(tmp_path, "docs/stories/story.json", "{}")
+    _write_artifact(tmp_path, "_bmad-output/planning-artifacts/stories/story.json", "{}")
+    _write_artifact(tmp_path, "docs/stories/story-6-4.md", "# Tracked Story")
+    _write_artifact(tmp_path, "docs/prds/orchestrator.md", "# Tracked PRD")
+    _write_artifact(tmp_path, "docs/product/epic-6-synthetic-dev-console-label-copy.md", "# Tracked Story")
 
     with pytest.raises(BmadImportError, match="outside supported artifact roots"):
         parse_bmad_import_package(tmp_path, "README.md")
 
     with pytest.raises(BmadImportError, match="repo-relative"):
-        parse_bmad_import_package(tmp_path, "../docs/stories/6-4-bmad-import-package-parser.md")
+        parse_bmad_import_package(tmp_path, "../docs/workflows/implementation-evidence-boundary.md")
 
     with pytest.raises(BmadImportError, match="markdown"):
-        parse_bmad_import_package(tmp_path, "docs/stories/story.json")
+        parse_bmad_import_package(tmp_path, "_bmad-output/planning-artifacts/stories/story.json")
+
+    for tracked_docs_artifact in (
+        "docs/stories/story-6-4.md",
+        "docs/prds/orchestrator.md",
+        "docs/product/epic-6-synthetic-dev-console-label-copy.md",
+    ):
+        with pytest.raises(BmadImportError, match="outside supported artifact roots"):
+            parse_bmad_import_package(tmp_path, tracked_docs_artifact)
+
+
+def test_bmad_import_parser_rejects_symlink_escape_from_supported_roots(tmp_path) -> None:
+    _write_artifact(tmp_path, "docs/workflows/implementation-evidence-boundary.md", "# Source Owned Boundary")
+    artifact_dir = tmp_path / "_bmad-output/planning-artifacts/research"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "boundary-link.md").symlink_to(
+        tmp_path / "docs/workflows/implementation-evidence-boundary.md",
+    )
+
+    with pytest.raises(BmadImportError, match="symlinks"):
+        parse_bmad_import_package(tmp_path, "_bmad-output/planning-artifacts/research/boundary-link.md")
 
 
 def test_bmad_import_parser_uses_safe_fallbacks_for_sparse_artifacts(tmp_path) -> None:
-    _write_artifact(tmp_path, "docs/stories/sparse-story.md", "Sparse artifact body without headings.")
+    _write_artifact(tmp_path, "_bmad-output/planning-artifacts/stories/sparse-story.md", "Sparse artifact body without headings.")
 
-    package = parse_bmad_import_package(tmp_path, "docs/stories/sparse-story.md")
+    package = parse_bmad_import_package(tmp_path, "_bmad-output/planning-artifacts/stories/sparse-story.md")
 
     assert package.artifact_title == "Sparse Story"
     assert package.story_id is None

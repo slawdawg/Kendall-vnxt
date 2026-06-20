@@ -28,7 +28,7 @@ const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration
 const runtimeExportCheck = readWorkspaceFile("scripts/check-runtime-evidence-export.mjs");
 const reportCatalogCheck = readWorkspaceFile("scripts/check-supervisor-report-catalog.mjs");
 const verificationCheck = readWorkspaceFile("scripts/check-verification-readiness-report.mjs");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
@@ -72,8 +72,8 @@ for (const serviceText of [
   "not directly into main",
   "Merged-to-main state remains false",
   "decision_only_no_authority_granted",
-  "epic-11-next-lane-authority-decision-packet-2026-06-13",
-  "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+  "epic-11-next-lane-authority-decision-contract",
+  "docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract",
   "current-state reconciliation",
   "next-lane decision packet",
   "local-provider-execution",
@@ -87,13 +87,13 @@ for (const serviceText of [
   "evidence_ready_approval_required",
   "rollbackPath",
   "PR #103",
-  "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md",
-  "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md",
-  "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md",
-  "docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md",
-  "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
   "Authority readiness matrix entries are not execution-authority approvals.",
-  "docs/stories/3-53-authority-readiness-matrix-report.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Authority readiness matrix service must include ${serviceText}`, failures);
 }
@@ -153,7 +153,7 @@ for (const browserText of [
   "not directly into main",
   "Merged-to-main state remains false",
   "Execution blocked",
-  "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+  "docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract",
   "local-provider-execution",
   "subscription-agent-launch",
   "adaptive-scoring",
@@ -189,7 +189,7 @@ for (const testText of [
   '["rollbackPath"].strip()',
   '["requiredEvidence"]',
   '"evidence_ready_approval_required"',
-  "docs/stories/3-53-authority-readiness-matrix-report.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
 }
@@ -204,7 +204,7 @@ assertCondition(
   failures,
 );
 assertCondition(
-  runtimeExportCheck.includes("docs/stories/3-53-authority-readiness-matrix-report.md"),
+  runtimeExportCheck.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export drift check must require Story 3.53 git-backed evidence",
   failures,
 );
@@ -219,9 +219,9 @@ assertCondition(
   failures,
 );
 
-const storyPath = "docs/stories/3-53-authority-readiness-matrix-report.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing authority readiness matrix story ${storyPath}`, failures);
-const refreshedStoryPath = "docs/stories/11-2-refresh-authority-readiness-matrix-from-current-evidence.md";
+const refreshedStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, refreshedStoryPath)), `Missing refreshed authority readiness story ${refreshedStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-53-authority-readiness-matrix-report.md"),

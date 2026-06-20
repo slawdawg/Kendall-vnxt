@@ -24,7 +24,7 @@ const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx
 const backlogPanel = readWorkspaceFile("apps/dashboard/src/components/safe-development-backlog-panel.tsx");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
@@ -112,16 +112,16 @@ assertCondition(
   failures,
 );
 assertCondition(
-  supervisorTests.includes("docs/stories/3-32-safe-development-backlog-drift-check.md"),
+  supervisorTests.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Supervisor tests must assert Story 3.32 evidence",
   failures,
 );
 
-const storyPath = "docs/stories/3-32-safe-development-backlog-drift-check.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing safe backlog drift story ${storyPath}`, failures);
-const anchorStoryPath = "docs/stories/3-60-safe-backlog-report-anchors.md";
+const anchorStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, anchorStoryPath)), `Missing safe backlog report anchor story ${anchorStoryPath}`, failures);
-const deliveryStoryPath = "docs/stories/3-43-safe-delivery-hygiene.md";
+const deliveryStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, deliveryStoryPath)), `Missing safe delivery hygiene story ${deliveryStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-32-safe-development-backlog-drift-check.md"),
@@ -144,32 +144,32 @@ assertCondition(
   failures,
 );
 assertCondition(
-  serviceSource.includes("docs/stories/3-32-safe-development-backlog-drift-check.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export git-backed evidence must include Story 3.32",
   failures,
 );
 assertCondition(
-  serviceSource.includes("docs/stories/3-43-safe-delivery-hygiene.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export git-backed evidence must include Story 3.43",
   failures,
 );
 assertCondition(
-  serviceSource.includes("docs/stories/3-45-delivery-readiness-policy-drift-check.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export git-backed evidence must include Story 3.45",
   failures,
 );
 assertCondition(
-  serviceSource.includes("docs/stories/3-46-maintenance-readiness-drift-check.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export git-backed evidence must include Story 3.46",
   failures,
 );
 assertCondition(
-  serviceSource.includes("docs/stories/3-47-core-readiness-drift-checks.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export git-backed evidence must include Story 3.47",
   failures,
 );
 assertCondition(
-  serviceSource.includes("docs/stories/3-60-safe-backlog-report-anchors.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export git-backed evidence must include Story 3.60",
   failures,
 );

@@ -17,13 +17,8 @@ function assertCondition(condition, message, failures) {
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const files = {
   "README.md": readWorkspaceFile("README.md"),
-  "docs/fresh-vm-acceptance-checklist.md": readWorkspaceFile("docs/fresh-vm-acceptance-checklist.md"),
-  "docs/bootstrap-windows-vm.md": readWorkspaceFile("docs/bootstrap-windows-vm.md"),
-  "docs/handoffs/current.md": readWorkspaceFile("docs/handoffs/current.md"),
-  "docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md": readWorkspaceFile(
-    "docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md",
-  ),
-  "docs/stories/index.md": readWorkspaceFile("docs/stories/index.md"),
+  "docs/workflows/current-session-runbook.md": readWorkspaceFile("docs/workflows/current-session-runbook.md"),
+  "docs/workflows/implementation-evidence-boundary.md": readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md"),
   "services/supervisor/src/supervisor/application/service.py": readWorkspaceFile(
     "services/supervisor/src/supervisor/application/service.py",
   ),
@@ -45,10 +40,7 @@ assertCondition(
 
 const currentRunbooks = [
   "README.md",
-  "docs/fresh-vm-acceptance-checklist.md",
-  "docs/bootstrap-windows-vm.md",
-  "docs/handoffs/current.md",
-  "docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md",
+  "docs/workflows/current-session-runbook.md",
 ];
 
 for (const path of currentRunbooks) {
@@ -72,6 +64,8 @@ for (const path of currentRunbooks) {
   assertCondition(content.includes("pnpm run check:maintenance-action-plan"), `${path} must mention pnpm run check:maintenance-action-plan`, failures);
   assertCondition(content.includes("pnpm run check:development-runway"), `${path} must mention pnpm run check:development-runway`, failures);
   assertCondition(content.includes("pnpm run check:delivery-readiness"), `${path} must mention pnpm run check:delivery-readiness`, failures);
+  assertCondition(content.includes("pnpm run check:linux-install-lane"), `${path} must mention pnpm run check:linux-install-lane`, failures);
+  assertCondition(content.includes("pnpm run check:clean-install-boundary"), `${path} must mention pnpm run check:clean-install-boundary`, failures);
   assertCondition(content.includes("pnpm run check:maintenance-readiness"), `${path} must mention pnpm run check:maintenance-readiness`, failures);
   assertCondition(
     !content.includes("77 supervisor tests") && !content.includes("70 supervisor tests"),
@@ -86,22 +80,22 @@ assertCondition(
   failures,
 );
 assertCondition(
-  files["docs/handoffs/current.md"].includes("runbook verification"),
-  "current handoff must mention runbook verification",
+  files["docs/workflows/current-session-runbook.md"].includes("runbook verification"),
+  "current session runbook must mention runbook verification",
   failures,
 );
 assertCondition(
-  files["docs/stories/index.md"].includes("3-29-runbook-verification-alignment.md"),
+  files["docs/workflows/implementation-evidence-boundary.md"].includes("3-29-runbook-verification-alignment.md"),
   "Story index must reference Story 3.29 runbook verification alignment",
   failures,
 );
 assertCondition(
-  files["docs/stories/index.md"].includes("3-35-runbook-check-chain-hardening.md"),
+  files["docs/workflows/implementation-evidence-boundary.md"].includes("3-35-runbook-check-chain-hardening.md"),
   "Story index must reference Story 3.35 runbook check-chain hardening",
   failures,
 );
 assertCondition(
-  files["docs/stories/index.md"].includes("3-38-runbook-managed-recipe-check-chain.md"),
+  files["docs/workflows/implementation-evidence-boundary.md"].includes("3-38-runbook-managed-recipe-check-chain.md"),
   "Story index must reference Story 3.38 runbook managed recipe check chain",
   failures,
 );
@@ -116,8 +110,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  files["services/supervisor/src/supervisor/application/service.py"].includes("fresh-vm-handoff"),
-  "Verification readiness report must include a fresh VM handoff checkpoint",
+  files["services/supervisor/src/supervisor/application/service.py"].includes("setup-handoff"),
+  "Verification readiness report must include a supported setup handoff checkpoint",
   failures,
 );
 assertCondition(
@@ -126,7 +120,7 @@ assertCondition(
   failures,
 );
 assertCondition(
-  files["docs/stories/index.md"].includes("3-58-verification-handoff-checkpoints.md"),
+  files["docs/workflows/implementation-evidence-boundary.md"].includes("3-58-verification-handoff-checkpoints.md"),
   "Story index must reference Story 3.58 verification handoff checkpoints",
   failures,
 );

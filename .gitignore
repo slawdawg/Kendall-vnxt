@@ -6,22 +6,29 @@ _bmad/custom/config.user.toml
 
 # Tool-generated local agent targets
 .claude/skills/
+.agents/skills/.claude-plugin/
 
 # Generated output
 _bmad-output/
+skills/
 
-# Local KNX runtime evidence preserved outside Git
-_bmad/memory/knx/runtime/backlog/
-_bmad/memory/knx/runtime/commit-readiness/
-_bmad/memory/knx/runtime/evaluation-packet/
-_bmad/memory/knx/runtime/greenfield-implementation/
-_bmad/memory/knx/runtime/handoffs/
-_bmad/memory/knx/runtime/optional-source-evidence-pack/
-_bmad/memory/knx/runtime/optional-source-evidence-validator/
-_bmad/memory/knx/runtime/report-audits/
-_bmad/memory/knx/runtime/runtime-inventory/
-_bmad/memory/knx/runtime/source-inventory/
-_bmad/memory/knx/runtime/workflow-audits/
+# Local BMAD planning artifacts
+docs/goals/
+docs/handoffs/
+docs/research/
+docs/prds/
+docs/stories/
+docs/linux-install/planning/
+.agents/skills/**/.decision-log.md
+.agents/skills/**/validation-report-*.md
+docs/linux-install/evidence/*
+!docs/linux-install/evidence/
+!docs/linux-install/evidence/schema.md
+docs/workflows/knx-*-2026-06-19.md
+docs/workflows/mise-normal-workflow-implementation-evidence-2026-06-18.md
+
+# Local KNX memory and runtime evidence preserved outside Git
+_bmad/memory/knx/
 
 # Environment and secret files
 .env
@@ -45,7 +52,6 @@ __pycache__/
 
 # Test/tool caches
 .pytest_cache/
-Usersslaw_dawgKendall_Nxt.datapytest-basetemp/
 .mypy_cache/
 .ruff_cache/
 .coverage

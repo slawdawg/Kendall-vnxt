@@ -26,13 +26,13 @@ No currently blocked Ollama local-provider story remains for the approved VM-to-
 
 ### Subscription-Agent Launch
 
-- `docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md`
+- `5-5-subscription-launch-supervised-process-behind-approval.md`
 
 ### Orchestrator CLI Worker Launch
 
 Story 6.1 is done for the fake-worker orchestrator spike. It remains listed here only as the durable blocker for any future real Codex or Claude CLI worker launch.
 
-- `docs/stories/6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md`
+- `6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md`
 
 ## Approval Language Required
 

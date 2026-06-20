@@ -39,9 +39,9 @@ Read these orientation artifacts when present:
 - `{project-root}/_bmad/memory/knx/data-boundaries.md`
 - `{project-root}/_bmad/memory/knx/decisions/`
 - `{project-root}/_bmad/memory/knx/daily/`
-- `{project-root}/skills/reports/kendallai-vnext-module-plan.md`
+- `{project-root}/_bmad-output/reports/kendallai-vnext-module-plan.md`
 - `{project-root}/_bmad-output/specs/spec-kendallai-vnext/SPEC.md`
-- `{project-root}/08_Automation/State/bmad_session_handoff.md`
+- `{project-root}/_bmad-output/handoffs/bmad-session-handoff.md`
 
 If `{project-root}/_bmad/memory/knx/profile.md` is missing, make `knx-profile-setup` the first recommended workflow unless the user is explicitly asking to build or inspect module source artifacts.
 
@@ -77,7 +77,7 @@ Do not recommend downstream implementation or packaging as release-ready when th
 
 Never treat these as defaults without an explicit decision record:
 
-- Bob-specific paths or subscriptions.
+- Operator-specific paths or subscriptions.
 - OneDrive or any other sync/storage provider.
 - GitHub as live deployment/runtime state.
 - External LLM/GPT providers.

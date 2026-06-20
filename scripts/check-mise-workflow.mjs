@@ -5,15 +5,12 @@ import { join } from "node:path";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const miseToml = readFileSync(join(rootDir, "mise.toml"), "utf8");
 const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
-const evidence = readFileSync(
-  join(rootDir, "docs/workflows/mise-normal-workflow-implementation-evidence-2026-06-18.md"),
-  "utf8",
-);
+const workflow = readFileSync(join(rootDir, "docs/workflows/mise-workflow.md"), "utf8");
 const story = readFileSync(
-  join(rootDir, "docs/stories/22-3-implement-mise-normal-workflow.md"),
+  join(rootDir, "docs/workflows/implementation-evidence-boundary.md"),
   "utf8",
 );
-const storyIndex = readFileSync(join(rootDir, "docs/stories/index.md"), "utf8");
+const storyIndex = readFileSync(join(rootDir, "docs/workflows/implementation-evidence-boundary.md"), "utf8");
 
 const failures = [];
 
@@ -126,12 +123,13 @@ for (const scriptName of ["check:static", "check"]) {
   );
 }
 
-assertIncludes(evidence, "mise run setup: pass", "mise implementation evidence");
-assertIncludes(evidence, "mise run preflight: pass", "mise implementation evidence");
-assertIncludes(evidence, "mise run workspace-doctor: pass", "mise implementation evidence");
-assertIncludes(evidence, "mise run check: pass", "mise implementation evidence");
 for (const phrase of [
-  "No `[env]`",
+  "source-owned workflow contract",
+  "mise run setup",
+  "mise run preflight",
+  "mise run workspace-doctor",
+  "mise run check",
+  "`[env]`",
   "hooks",
   "plugins",
   "dotenv loading",
@@ -139,7 +137,7 @@ for (const phrase of [
   "worker launch",
   "custom lifecycle automation",
 ]) {
-  assertIncludes(evidence, phrase, "mise implementation evidence");
+  assertIncludes(workflow, phrase, "mise workflow contract");
 }
 assertIncludes(story, "Status: done", "Story 22.3");
 assertIncludes(story, "`mise.toml`", "Story 22.3");

@@ -24,7 +24,7 @@ const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx
 const documentationPanel = readWorkspaceFile("apps/dashboard/src/components/documentation-authority-report-panel.tsx");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
@@ -59,10 +59,10 @@ for (const serviceText of [
   "get_documentation_authority_report",
   "documentation-authority-report-v1",
   "docs/architecture/index.md",
-  "docs/prds/index.md",
-  "docs/stories/index.md",
+  "docs/workflows/product-requirements-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
   "blocked_pending_explicit_approval",
-  "docs/stories/3-47-core-readiness-drift-checks.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Documentation authority service must include ${serviceText}`, failures);
 }
@@ -92,20 +92,31 @@ for (const testText of [
   '"documentation-authority-report-v1"',
   '"/supervisor/documentation-authority-report"',
   '"docs/architecture/index.md"',
-  '"docs/prds/index.md"',
-  '"docs/stories/index.md"',
-  "docs/stories/3-47-core-readiness-drift-checks.md",
+  '"docs/workflows/product-requirements-boundary.md"',
+  '"docs/workflows/implementation-evidence-boundary.md"',
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
 }
 
-const storyPath = "docs/stories/3-47-core-readiness-drift-checks.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing core readiness drift story ${storyPath}`, failures);
 assertCondition(
   storyIndex.includes("3-47-core-readiness-drift-checks.md"),
   "Story index must reference Story 3.47 core readiness drift checks",
   failures,
 );
+for (const label of [
+  "4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md",
+  "5-5-subscription-launch-supervised-process-behind-approval.md",
+  "6-1-orchestrator-spike-backlog-and-acceptance-scenarios.md",
+]) {
+  assertCondition(
+    storyIndex.includes(label),
+    `Implementation evidence boundary must preserve blocked evidence label ${label}`,
+    failures,
+  );
+}
 assertCondition(
   reconciliation.includes("Documentation authority drift check"),
   "Implementation reconciliation must track the documentation authority drift check",

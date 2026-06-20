@@ -39,13 +39,12 @@ const agents = readRequiredWorkspaceFile("AGENTS.md", failures);
 const contextIndex = readRequiredWorkspaceFile("docs/ai-context/index.md", failures);
 const rcaWorkflow = readRequiredWorkspaceFile("docs/workflows/tool-churn-rca.md", failures);
 const rcaExamples = readRequiredWorkspaceFile("docs/workflows/tool-churn-rca-examples.md", failures);
-const evaluationPlan = readRequiredWorkspaceFile("docs/research/token-economy-tool-evaluation.md", failures);
-const measurementReadiness = readRequiredWorkspaceFile("docs/research/token-economy-measurement-readiness.md", failures);
-const storyIndex = readRequiredWorkspaceFile("docs/stories/index.md", failures);
-const story21_2 = readRequiredWorkspaceFile("docs/stories/21-2-operationalize-token-economy-workflow.md", failures);
-const story21_3 = readRequiredWorkspaceFile("docs/stories/21-3-harden-tool-churn-rca-drift-check.md", failures);
+const tokenEconomyGovernance = readRequiredWorkspaceFile("docs/workflows/token-economy-governance.md", failures);
+const storyIndex = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
+const story21_2 = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
+const story21_3 = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
 const rcaNonGoals = sectionBetween(rcaWorkflow, "## Non-Goals");
-const story21_4 = readRequiredWorkspaceFile("docs/stories/21-4-token-economy-measurement-readiness.md", failures);
+const story21_4 = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
 
 assertCondition(
   packageJson.scripts?.["check:token-economy"] === "node ./scripts/check-token-economy.mjs",
@@ -64,13 +63,12 @@ assertCondition(
 for (const path of [
   "docs/workflows/tool-churn-rca.md",
   "docs/workflows/tool-churn-rca-examples.md",
+  "docs/workflows/token-economy-governance.md",
   "docs/ai-context/index.md",
-  "docs/research/token-economy-tool-evaluation.md",
-  "docs/research/token-economy-measurement-readiness.md",
-  "docs/stories/21-1-token-economy-foundation.md",
-  "docs/stories/21-2-operationalize-token-economy-workflow.md",
-  "docs/stories/21-3-harden-tool-churn-rca-drift-check.md",
-  "docs/stories/21-4-token-economy-measurement-readiness.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(existsSync(join(rootDir, path)), `Missing token economy artifact ${path}`, failures);
 }
@@ -86,16 +84,15 @@ for (const requiredText of [
 
 assertCondition(
   contextIndex.includes(
-    "| Tool or command failure | `AGENTS.md#tool-resolution-and-verification`, `AGENTS.md#windows-sandbox`, `docs/workflows/tool-churn-rca.md` |",
+    "| Tool or command failure | `AGENTS.md#tool-resolution-and-verification`, `AGENTS.md#linux-shell-commands`, `docs/workflows/tool-churn-rca.md` |",
   ) && contextIndex.includes("needs Tool Churn RCA examples from `docs/workflows/tool-churn-rca-examples.md`"),
   "AI context index must keep Tool Churn RCA examples as expansion context for repeated or brittle failures",
   failures,
 );
 assertCondition(
-  contextIndex.includes("docs/research/token-economy-tool-evaluation.md") &&
-    contextIndex.includes("docs/research/token-economy-measurement-readiness.md") &&
+  contextIndex.includes("docs/workflows/token-economy-governance.md") &&
     contextIndex.includes("Savings claims, adoption, installation, paid usage, or networked integration are proposed"),
-  "AI context index must route token-economy research and savings claims to measurement readiness",
+  "AI context index must route token-economy savings claims to governance workflow",
   failures,
 );
 assertCondition(
@@ -106,8 +103,8 @@ assertCondition(
 
 for (const triggerCondition of [
   "The same command or tool path fails twice.",
-  "A Windows sandbox runner timeout happens before process output.",
-  "A PowerShell quoting, parser, wildcard, or scriptblock error repeats.",
+  "A sandbox runner timeout happens before process output.",
+  "A shell quoting, parser, wildcard, or scriptblock error repeats.",
   "A tool, executable, path, venv, package manager, or resolver is missing.",
   "A permission, sandbox, safe-directory, credential, or ownership denial blocks progress.",
   "A verification command fails because of environment setup rather than story behavior.",
@@ -141,10 +138,10 @@ for (const stopLine of [
 }
 
 for (const nextSafeAction of [
-  "Confirm location with `Get-Location`.",
+  "Confirm location with `pwd`.",
   "Check diff scope with `git diff --stat` or `git diff --name-only`.",
   "Verify direct tool availability",
-  "Replace a complex shell shape with a simpler direct PowerShell command.",
+  "Replace a complex shell shape with a simpler direct shell command.",
   "Read the existing script or docs before invoking package-manager indirection.",
   "Request approval for the exact read-only verification command when sandbox behavior is the blocker.",
   "Park the blocked lane and continue safe local/read-only work if the goal has other useful tasks.",
@@ -166,8 +163,8 @@ for (const nonGoal of [
 }
 
 const exampleHeadings = [
-  "Windows Sandbox Runner Timeout",
-  "PowerShell Quoting Or Parser Error",
+  "Sandbox Runner Timeout",
+  "Shell Quoting Or Parser Error",
   "Missing Supervisor Virtual Environment",
   "Git Safe-Directory Or Permission Denial",
 ];
@@ -198,7 +195,7 @@ for (const evaluationText of [
   "Defluffer-style cleanup can be useful as a reviewer, not an editor.",
   "Redis LangCache or another semantic cache belongs later",
 ]) {
-  assertCondition(evaluationPlan.includes(evaluationText), `Evaluation plan must preserve ${evaluationText}`, failures);
+  assertCondition(tokenEconomyGovernance.includes(evaluationText), `Token economy governance must preserve ${evaluationText}`, failures);
 }
 
 assertCondition(
@@ -221,7 +218,7 @@ for (const storyText of [
   "static drift check verifies",
   "docs/workflows/tool-churn-rca-examples.md",
   "does not install external token tools",
-  "pnpm.cmd run check:token-economy",
+  "pnpm run check:token-economy",
 ]) {
   assertCondition(story21_2.includes(storyText), `Story 21.2 must preserve ${storyText}`, failures);
 }
@@ -232,7 +229,7 @@ for (const storyText of [
   "retry stop lines",
   "next safe actions",
   "non-goals",
-  "pnpm.cmd run check:token-economy",
+  "pnpm run check:token-economy",
 ]) {
   assertCondition(story21_3.includes(storyText), `Story 21.3 must preserve ${storyText}`, failures);
 }
@@ -251,8 +248,8 @@ for (const packetField of [
   "- Follow-up recommendation:",
 ]) {
   assertCondition(
-    measurementReadiness.includes(packetField),
-    `Measurement readiness baseline packet must include ${packetField}`,
+    tokenEconomyGovernance.includes(packetField),
+    `Token economy governance baseline packet must include ${packetField}`,
     failures,
   );
 }
@@ -265,8 +262,8 @@ for (const workflowSample of [
   "PR delivery or review-comment resolution",
 ]) {
   assertCondition(
-    measurementReadiness.includes(workflowSample),
-    `Measurement readiness must include workflow sample ${workflowSample}`,
+    tokenEconomyGovernance.includes(workflowSample),
+    `Token economy governance must include workflow sample ${workflowSample}`,
     failures,
   );
 }
@@ -280,8 +277,8 @@ for (const adoptionGate of [
   "Raw prompt, completion, reasoning trace, provider payload, or secret retention.",
 ]) {
   assertCondition(
-    measurementReadiness.includes(adoptionGate),
-    `Measurement readiness must preserve adoption gate ${adoptionGate}`,
+    tokenEconomyGovernance.includes(adoptionGate),
+    `Token economy governance must preserve adoption gate ${adoptionGate}`,
     failures,
   );
 }
@@ -290,7 +287,7 @@ for (const storyText of [
   "baseline packet captures workflow type",
   "keeps them evaluation-only",
   "does not install tools, call providers, spend money",
-  "pnpm.cmd run check:token-economy",
+  "pnpm run check:token-economy",
 ]) {
   assertCondition(story21_4.includes(storyText), `Story 21.4 must preserve ${storyText}`, failures);
 }

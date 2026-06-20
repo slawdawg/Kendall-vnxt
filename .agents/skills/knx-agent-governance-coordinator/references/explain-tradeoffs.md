@@ -19,7 +19,7 @@ Cover the lenses that matter for the decision:
 - Data boundary and source exposure.
 - Cost and overage risk.
 - Local/host resource availability.
-- Installability for non-Bob users.
+- Installability for users beyond the current operator.
 - Maintenance burden.
 - Validation and rollback path.
 - Fit with BMad Method, BMad Builder, and Git/GitHub source-review boundaries.

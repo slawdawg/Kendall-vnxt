@@ -26,7 +26,7 @@
     "sourceSnapshots": "retained"
   },
   "verification": {
-    "command": "pnpm.cmd run wrong-check",
+    "command": "pnpm run wrong-check",
     "fixtureFamily": "dashboard-rendering-raw-output"
   },
   "expectedFailures": [

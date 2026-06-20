@@ -13,7 +13,8 @@ existed.
 Correction:
 
 - `install-playbook.md` starts from no VM.
-- `bob-next-steps.md` starts with VM creation.
+- Local operator checklists may start with VM creation, but they are not
+  clean-install source documents.
 - Fresh VM verification uses `--skip-repo` because the repo is not present yet.
 
 ## 2026-06-16: First SSH Trust Must Be Explicit
@@ -25,31 +26,12 @@ Correction:
 
 - First connection uses:
 
-```powershell
+```bash
 ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes <ssh-alias> 'whoami; hostname; cat /etc/os-release'
 ```
 
 - This may add a new host key to `known_hosts`.
 - Replacing an existing host key remains a stop condition.
-
-## 2026-06-16: Operator Commands Run In PowerShell
-
-Problem: Bash-style input redirection failed on Windows PowerShell:
-
-```powershell
-ssh <ssh-alias> 'bash -s -- ...' < scripts/validate-linux-install.sh
-```
-
-Correction:
-
-- Use PowerShell-compatible streaming:
-
-```powershell
-Get-Content -Raw scripts\validate-linux-install.sh | ssh <ssh-alias> 'bash -s -- --verify-only --skip-repo'
-```
-
-- Any host-side command examples for Bob should be written and tested as
-  PowerShell unless the doc explicitly says they run inside Linux.
 
 ## 2026-06-16: Hostname And VM Display Identity Can Differ
 
@@ -151,7 +133,7 @@ Correction:
 
 - Try only a non-interactive sudo reboot from automation.
 - If sudo requires a password, stop before retrying.
-- Bob should run the reboot from the VM console or an interactive SSH session.
+- The user should run the reboot from the VM console or an interactive SSH session.
 - After the VM returns, Codex can run the read-only post-reboot verification.
 
 ## 2026-06-16: Fresh Clone Needed Repo-Local Hook Configuration
@@ -169,26 +151,6 @@ git config core.hooksPath .githooks
 ```
 
 - Rerun doctor before creating a Codex workspace.
-
-## 2026-06-16: Avoid Nested PowerShell-To-SSH-To-Node Quoting For Edits
-
-Problem: a remote edit command using nested PowerShell, SSH, Bash, and
-`node -e` quoting failed before mutation.
-
-Correction:
-
-- Do not retry the same quoting shape.
-- For small remote proof files, use a PowerShell here-string piped into SSH and
-  `tee`:
-
-```powershell
-@'
-content
-'@ | ssh <ssh-alias> "cd /path/to/worktree && tee docs/file.md >/dev/null"
-```
-
-- Prefer repo scripts for durable automation instead of complex inline remote
-  commands.
 
 ## 2026-06-16: Agent CLIs And BMAD Method Are Baseline Requirements
 
@@ -216,7 +178,7 @@ provider-login boundaries.
 
 Correction:
 
-- Update `docs/workflows/linux-primary-development-runbook.md` when Bob
+- Update `docs/workflows/linux-primary-development-runbook.md` when the user
   approves cutover.
 
 ## 2026-06-18: Evidence Helpers Need Runtime Tests, Not Only Source Scans
@@ -302,7 +264,7 @@ pnpm run test:e2e:dashboard
 
 - This is remote-write because it downloads browser binaries and may install
   system packages.
-- If sudo is required, Bob must run the dependency command interactively.
+- If sudo is required, the user must run the dependency command interactively.
 
 ## 2026-06-16: Playwright Runtime And Test Correctness Are Separate
 
@@ -344,26 +306,6 @@ Correction:
   counts.
 - Keep stale/rejected launch assertions in the stale/rejected tests.
 - Use exact or first-match locators when repeated status values are expected.
-
-## 2026-06-16: Avoid Remote Grep Regex Pipes From PowerShell
-
-Problem: a focused Playwright rerun command used a `--grep` pattern with `|`
-through PowerShell-to-SSH quoting. The remote shell treated pieces of the regex
-as commands and caused an `EPIPE` in the test runner.
-
-Correction:
-
-- Do not send regex pipes through ad hoc host-to-SSH command strings.
-- Use simple exact commands, a checked-in script, or run the command inside an
-  interactive Linux shell.
-- After a failed remote test command, check for leftover exact process names:
-
-```bash
-pgrep -x node || true
-pgrep -x uv || true
-pgrep -x python || true
-pgrep -x python3 || true
-```
 
 ## 2026-06-16: Verify-Only Must Fail Closed
 
@@ -438,21 +380,6 @@ Correction:
   Linux install index.
 - Treat this as validation evidence only; provider and network service logins
   remain post-install user tasks.
-
-## 2026-06-17: Avoid PowerShell Pipes Into Inline Node Parsers
-
-Problem: while verifying the one-command bootstrap plan output, a PowerShell
-pipeline into `node -e` failed twice because PowerShell consumed JavaScript
-quotes and `$` variables before Node received the script.
-
-Correction:
-
-- Do not retry inline `node -e` parser pipelines after a PowerShell quoting
-  failure.
-- Use direct command output, checked-in tests, or a small checked-in verifier
-  instead.
-- Treat repeated PowerShell quoting/parser failures as tool churn and follow
-  `docs/workflows/tool-churn-rca.md`.
 
 ## 2026-06-17: Generic Install Must Have One Supported Method
 

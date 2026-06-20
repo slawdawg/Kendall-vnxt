@@ -24,7 +24,7 @@ const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx
 const verificationPanel = readWorkspaceFile("apps/dashboard/src/components/verification-readiness-report-panel.tsx");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
@@ -92,9 +92,9 @@ for (const serviceText of [
   "full-local-gate",
   "local-development-handoff",
   "dashboard-change-handoff",
-  "fresh-vm-handoff",
+  "setup-handoff",
   "authority-boundary-handoff",
-  "docs/stories/3-47-core-readiness-drift-checks.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Verification readiness service must include ${serviceText}`, failures);
 }
@@ -135,7 +135,7 @@ for (const browserText of [
   "Handoff checkpoints",
   "local-development-handoff",
   "dashboard-change-handoff",
-  "fresh-vm-handoff",
+  "setup-handoff",
   "authority-boundary-handoff",
   "pnpm run check:documentation-authority",
   "pnpm run check:verification-readiness",
@@ -151,9 +151,9 @@ for (const browserText of [
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert ${browserText}`, failures);
 }
 
-const storyPath = "docs/stories/3-47-core-readiness-drift-checks.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing core readiness drift story ${storyPath}`, failures);
-const handoffStoryPath = "docs/stories/3-58-verification-handoff-checkpoints.md";
+const handoffStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, handoffStoryPath)), `Missing verification handoff checkpoint story ${handoffStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-47-core-readiness-drift-checks.md"),

@@ -14,7 +14,7 @@ This spec builds on:
 - `docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md`
 - `docs/architecture/kendall-vnxt-orchestrator-mature-tool-comparison-2026-06-10.md`
 - `docs/product/kendall-vnxt-orchestrator-jtbd-and-mvp-2026-06-10.md`
-- `docs/prds/kendall-vnxt-orchestrator-epic-6.md`
+- `docs/workflows/product-requirements-boundary.md#kendall-vnxt-orchestrator-epic-6`
 
 ## Mature-Tool Posture
 
@@ -29,7 +29,7 @@ Epic 6 uses mature/self-hosted tooling before custom runtime code:
 ## Architecture Summary
 
 ```text
-Bob
+Operator
   -> Chief of Staff
   -> BMAD-method workflows and skills
   -> Draft/Candidate Work
@@ -57,7 +57,7 @@ Epic 6 should support a staged work creation model:
 3. Active Dev Console Work Item: approved or immediate-mode work in the supervisor/orchestrator pipeline.
 4. Orchestrated Execution: active work is routed, attempted, evidenced, blocked, reviewed, delivered, or completed.
 
-BMAD and Chief of Staff may create Draft or Candidate work automatically. Active work requires Bob approval or explicit immediate mode. Immediate mode does not bypass execution-authority gates.
+BMAD and Chief of Staff may create Draft or Candidate work automatically. Active work requires operator approval or explicit immediate mode. Immediate mode does not bypass execution-authority gates.
 
 ## Progressive Authority Model
 
@@ -89,7 +89,7 @@ Initial technical direction:
 - update cards, counts, details, attempts, evidence, and attention indicators in place,
 - avoid timed full-page refresh loops,
 - show stale-data status on stream disconnect,
-- preserve Windows startup/logon automation for supervisor backend and Dev Console.
+- keep startup automation aligned with the supported Linux install path for the supervisor backend and Dev Console.
 
 User-facing Dev Console language should avoid implementation jargon. Internal concepts such as execution attempts, routing decisions, blocked authority, verification failure, and selected lanes should be translated into approachable labels like Run, Why this path, Needs approval, Checks failed, and Assigned to.
 
@@ -97,7 +97,7 @@ User-facing Dev Console language should avoid implementation jargon. Internal co
 
 The orchestrator must account for work order and Git/GitHub hygiene:
 
-- Bob can manually prioritize, reorder, pause, defer, pin, approve, or reject work.
+- The operator can manually prioritize, reorder, pause, defer, pin, approve, or reject work.
 - The system can recommend or automatically adjust order based on dependencies, blockers, risk, urgency, lane scarcity, failed checks, stale branches, or CI state.
 - Automatic reordering must be visible and explainable.
 - Git/GitHub hygiene includes clean working tree checks, isolated worktrees, branch ownership, base freshness, issue/story links, PR readiness, CI status, branch protection, review gates, merge readiness, stale cleanup, completed cleanup, and abandoned work recovery.
@@ -170,7 +170,7 @@ Required controls:
 
 - explicit review prompt template
 - changed-file/diff input scope
-- no broad implementation request unless Bob approves
+- no broad implementation request unless the operator approves
 - findings retained as review artifact
 
 ### GitHub Workflow Rail
@@ -207,7 +207,7 @@ Recommended states:
 - `failed`
 - `completed`
 - `ready_for_pr`
-- `ready_for_bob`
+- `ready_for_operator`
 
 Every transition should include:
 
@@ -245,13 +245,13 @@ Every transition should include:
 
 | Failure | Required Behavior |
 | --- | --- |
-| Ollama unavailable | mark lane degraded, fall back to Bob/Codex only if policy allows |
+| Ollama unavailable | mark lane degraded, fall back to the operator/Codex only if policy allows |
 | Codex CLI unavailable | block implementation job with auth/tooling diagnostic |
-| Claude Code unavailable | block review or require Bob manual review |
-| verification fails | keep worktree, record failure, return to Codex or Bob |
-| scope expands | pause for Bob approval |
+| Claude Code unavailable | block review or require operator manual review |
+| verification fails | keep worktree, record failure, return to Codex or the operator |
+| scope expands | pause for operator approval |
 | budget exhausted | stop cleanly and record budget-exhausted reason |
-| conflicting reviews | require Bob decision |
+| conflicting reviews | require operator decision |
 
 ## Retention Rules
 
@@ -289,7 +289,7 @@ Do not retain:
 - `AC-ORCH-007`: Orchestrator has deterministic fallback or blocked behavior when a lane is unavailable.
 - `AC-ORCH-008`: No merge path exists without green verification and configured review gate satisfaction.
 - `AC-ORCH-009`: No raw prompts, completions, reasoning traces, or provider payloads are retained.
-- `AC-ORCH-010`: Bob can resume from the latest job record without relying on chat memory.
+- `AC-ORCH-010`: The operator can resume from the latest job record without relying on chat memory.
 
 ## Spike Scenarios
 
@@ -302,8 +302,8 @@ The first implementation spike should pass these scenarios:
 5. Codex CLI unavailable produces a tooling/auth blocked state.
 6. Failed verification keeps the worktree and records failure.
 7. Budget exhaustion stops cleanly.
-8. Conflicting review result requires Bob decision.
-9. Scope expansion requires Bob approval.
+8. Conflicting review result requires operator decision.
+9. Scope expansion requires operator approval.
 10. Completed job records enough metadata to resume.
 
 ## Implementation Notes

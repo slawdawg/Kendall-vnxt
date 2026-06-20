@@ -13,7 +13,7 @@ Git should track:
 - setup scripts
 - dependency manifests and lockfiles
 - configuration examples
-- durable architecture, PRD, and decision documents
+- source-owned architecture and decision documents
 - recovery/runbook documentation
 - deterministic test fixtures that are part of the product
 
@@ -42,18 +42,19 @@ scripts/                 Recoverable setup, startup, and maintenance scripts
 
 These paths should be tracked unless a nested ignore rule excludes generated content such as `.next`, `.venv`, caches, or logs.
 
-## Durable Planning And Recovery Docs
+## Durable Source And Recovery Docs
 
-Planning documents that should survive machine loss belong in tracked docs paths:
+Source-owned documents that should survive machine loss belong in tracked docs paths:
 
 ```text
 docs/                         Durable project documentation
-docs/prds/                    PRDs and planning decisions intended for Git recovery
+docs/workflows/product-requirements-boundary.md
+                              Source-owned product requirement boundaries intended for Git recovery
 docs/recovery/                Optional future runbooks and restore procedures
 docs/implementation-*.md      Implementation checkpoints and current-state handoffs
 ```
 
-BMad may create drafts under `_bmad-output/`, but approved or durable artifacts should be promoted into `docs/` when they need Git recovery.
+BMad planning, research, PRD, epic, story, handoff, review, retrospective, and party-mode artifacts are local working products. Keep them under `_bmad-output/` or another ignored local path even when they are useful for future work. If a decision from those artifacts must become repository source, rewrite it as a small source-owned contract, runbook, or architecture note instead of tracking the generated artifact.
 
 ## Local Generated And Runtime State
 
@@ -81,7 +82,8 @@ Track:
 .env.example
 _bmad/**/config.yaml
 README.md setup instructions
-scripts/windows/*.ps1
+scripts/bootstrap-linux.sh
+scripts/*.mjs
 ```
 
 Ignore:
@@ -96,9 +98,9 @@ _bmad/config.user.yaml
 *.pfx
 ```
 
-## Current PRD Promotion Pattern
+## Current BMAD Artifact Boundary
 
-When a BMad artifact becomes durable, keep the generated copy under `_bmad-output/` as local working state and promote a tracked copy into `docs/`.
+BMad artifacts stay local. Repository docs may capture the resulting source-owned decision, but not the generated planning artifact itself.
 
 Example:
 
@@ -106,14 +108,14 @@ Example:
 _bmad-output/planning-artifacts/prds/.../prd.md
   -> local generated BMad working artifact, ignored
 
-docs/prds/supervisor-dynamic-routing-mvp-1.md
-  -> durable PRD, tracked by Git
+docs/workflows/product-requirements-boundary.md#supervisor-dynamic-routing-boundary
+  -> source-owned product boundary, tracked by Git
 ```
 
-Decision logs that explain why a PRD exists should also be promoted when they matter for recovery:
+Decision logs that matter for recovery should be rewritten into source-owned docs before tracking:
 
 ```text
-docs/prds/supervisor-dynamic-routing-mvp-1-decision-log.md
+docs/workflows/product-requirements-boundary.md#supervisor-dynamic-routing-boundary
 ```
 
 ## Recovery Expectations
@@ -132,6 +134,6 @@ Runtime data may be backed up separately if needed, but it should not be mixed i
 
 ## Rule Of Thumb
 
-If losing the machine would lose important product knowledge, put it in `docs/` or source-controlled scripts/config examples.
+If losing the machine would lose important product knowledge, rewrite the decision as source-owned `docs/` content or source-controlled scripts/config examples.
 
-If the file is produced by running the app, tests, BMad workflows, package managers, or local services, keep it out of Git unless it is intentionally promoted as a durable artifact.
+If the file is produced by running the app, tests, BMad workflows, package managers, or local services, keep the generated file out of Git.

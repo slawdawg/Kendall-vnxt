@@ -1,4 +1,0 @@
-module,skill,display-name,menu-code,description,action,args,phase,after,before,required,output-location,outputs
-ksev,knx-source-evidence-validator,Setup KNX Source Evidence Validator,SU,Install or update KNX source evidence validator configuration and help registry,configure,[--headless] [inline values],anytime,,,true,_bmad/config.yaml,ksev config section and module help entries
-ksev,knx-source-evidence-validator,Validate Source Evidence,VE,Validate synthetic KNX source/evidence fixture packs and write local reports,validate,[--fixture-pack PATH] [--output-dir PATH] [--storage-root PATH] [--no-write],anytime,knx-source-evidence-validator:configure,,true,ksev_report_dir,JSON and Markdown validation reports
-ksev,knx-source-evidence-validator,Run Validator Tests,VT,Run packaged stdlib tests for the KNX source/evidence validator,test,[],anytime,knx-source-evidence-validator:configure,,false,ksev_report_dir,unittest result summary

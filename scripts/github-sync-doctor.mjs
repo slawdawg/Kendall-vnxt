@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
@@ -37,29 +36,10 @@ function run(command, commandArgs, options = {}) {
 }
 
 function resolveCommand(command) {
-  if (process.platform === "win32" && command === "pnpm") {
-    return process.env.ComSpec || "cmd.exe";
-  }
-  if (process.platform === "win32" && command === "git") {
-    for (const candidate of [
-      process.env.GIT_EXE,
-      "C:\\Program Files\\Git\\cmd\\git.exe",
-      "C:\\Program Files\\Git\\bin\\git.exe",
-      "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
-    ]) {
-      if (candidate && existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
   return command;
 }
 
 function resolveArgs(_command, commandArgs) {
-  if (process.platform === "win32" && _command === "pnpm") {
-    return ["/d", "/s", "/c", "pnpm", ...commandArgs];
-  }
-
   return commandArgs;
 }
 
@@ -87,7 +67,7 @@ function includesGhCredentialHelper(value) {
 function verifyGitAvailable() {
   const result = run("git", ["--version"]);
   if (result.code !== 0) {
-    fail("git is not available. Add Git to PATH or install Git for Windows.");
+    fail("git is not available. Install Git through the supported Linux install path and add it to PATH.");
     return false;
   }
   ok(result.stdout);
@@ -139,15 +119,6 @@ function verifyCredentialConfig() {
     ok("No GitHub-specific credential helper override is configured.");
   }
 
-  if (process.platform === "win32") {
-    if (store.toLowerCase() === "dpapi") {
-      ok("Git Credential Manager credentialStore is dpapi.");
-    } else if (store) {
-      warn(`Git Credential Manager credentialStore is ${store}; dpapi is the known-good Windows setting for this repo.`);
-    } else {
-      warn("Git Credential Manager credentialStore is not set; dpapi is the known-good Windows setting for this repo.");
-    }
-  }
 }
 
 function verifyGhStatus() {
@@ -199,8 +170,8 @@ function singleLine(value) {
 
 function remoteFailureMessage(value) {
   const message = singleLine(value);
-  if (/key not valid for use in specified state|protecteddata|dpapi|access is denied/i.test(message)) {
-    return `${message} Credential storage appears unavailable in this execution context; run \`git credential-manager diagnose\` and refresh GitHub credentials from an interactive user session.`;
+  if (/credential|authentication|access is denied|permission denied/i.test(message)) {
+    return `${message} Credential access appears unavailable in this execution context; refresh GitHub credentials from an interactive user session.`;
   }
   if (/could not read username|\/dev\/tty|terminal prompts disabled/i.test(message)) {
     return `${message} Git could not prompt for credentials; refresh credentials interactively or configure an SSH remote.`;

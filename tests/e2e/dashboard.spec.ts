@@ -212,7 +212,7 @@ async function createSubscriptionLaunchExpiredExactApprovalEvent(request: APIReq
     data: {
       ...approvalBinding,
       executionAttemptId: approvalBinding.attemptId,
-      approvalActor: "Bob",
+      approvalActor: "Operator",
       approvalTimestamp: "2026-06-12T16:20:33.2776334-05:00",
       approvalExpiry: "2026-06-12T16:50:33.2776334-05:00",
       permissionEnvelope: "approved_for_one_artifact_only_subscription_launch",
@@ -229,7 +229,7 @@ async function createSubscriptionLaunchExpiredExactApprovalEvent(request: APIReq
       runTimeoutSeconds: 30,
       cancellationTimeoutSeconds: 5,
       dashboardControls: "approval_bound_disabled_until_all_gates_green",
-      verificationCommand: "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+      verificationCommand: "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
       allowedOutputMode: "artifact-only",
       taskKind: "architecture_review",
       requestedAgent,
@@ -251,7 +251,7 @@ function seedSubscriptionLaunchVerificationEvent(workItemId: string) {
       routeDecisionId: "route-subscription-launch-fixture",
       status: "failed",
       commandId: "subscription-launch-fixture-check",
-      commandShape: "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+      commandShape: "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
       summary: "Approved subscription launch verification command exited with code 1.",
       artifactRef: "_bmad-output/subscription-launch/verification-summary.json",
       recoveryPath: "inspect retained subscription launch artifacts before retry or rollback",
@@ -260,7 +260,7 @@ function seedSubscriptionLaunchVerificationEvent(workItemId: string) {
       blockedReason: "subscription-launch-verification-failed",
       rollbackBlockedReason: "subscription_launch_rollback_triggered",
       deliveryEligible: false,
-      nextSafeAction: "Keep subscription-agent launch disabled until Bob reviews retained artifacts.",
+      nextSafeAction: "Keep subscription-agent launch disabled until the operator reviews retained artifacts.",
       rawOutputRetained: false,
     },
     outputArtifactSummary: {
@@ -284,8 +284,7 @@ function seedSubscriptionLaunchVerificationEvent(workItemId: string) {
     "conn.commit()",
     "conn.close()",
   ].join("; ");
-  const pythonPath =
-    process.platform === "win32" ? "services/supervisor/.venv/Scripts/python.exe" : "services/supervisor/.venv/bin/python";
+  const pythonPath = "services/supervisor/.venv/bin/python";
   execFileSync(pythonPath, ["-c", script, dbPath!, workItemId, JSON.stringify(payload)], {
     cwd: process.cwd(),
   });
@@ -366,8 +365,7 @@ function seedProviderRawOutputUiFixtureEvent(workItemId: string, fixture: Provid
     "conn.commit()",
     "conn.close()",
   ].join("; ");
-  const pythonPath =
-    process.platform === "win32" ? "services/supervisor/.venv/Scripts/python.exe" : "services/supervisor/.venv/bin/python";
+  const pythonPath = "services/supervisor/.venv/bin/python";
   execFileSync(pythonPath, ["-c", script, dbPath!, workItemId, JSON.stringify(payload)], {
     cwd: process.cwd(),
   });
@@ -394,7 +392,7 @@ test.describe("dashboard workflow coverage", () => {
       title: "Review Story 6.4 parser",
       requestedOutcome: "Decide whether the BMAD import parser should enter the active work pipeline.",
       source: "bmad",
-      sourceArtifactPath: "docs/stories/6-4-bmad-import-package-parser.md",
+      sourceArtifactPath: "docs/workflows/implementation-evidence-boundary.md",
       sourceArtifactType: "bmad_story",
       riskLevel: "medium",
       priority: "high",
@@ -406,7 +404,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(candidateCard.getByText("BMAD", { exact: true })).toBeVisible();
     await expect(candidateCard.getByText("Medium risk")).toBeVisible();
     await expect(candidateCard.getByText("High priority")).toBeVisible();
-    await expect(candidateCard.getByText("docs/stories/6-4-bmad-import-package-parser.md")).toBeVisible();
+    await expect(candidateCard.getByText("docs/workflows/implementation-evidence-boundary.md")).toBeVisible();
     await expect(candidateCard.getByText("Review before active work")).toBeVisible();
     await expect(page.getByRole("link", { name: /Proposed Work/ })).toBeVisible();
     await expect(candidateCard.getByRole("button", { name: "Move earlier" })).toBeVisible();
@@ -415,7 +413,7 @@ test.describe("dashboard workflow coverage", () => {
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(candidateCard).toBeVisible();
-    await expect(candidateCard.getByText("docs/stories/6-4-bmad-import-package-parser.md")).toBeVisible();
+    await expect(candidateCard.getByText("docs/workflows/implementation-evidence-boundary.md")).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
@@ -554,7 +552,7 @@ test.describe("dashboard workflow coverage", () => {
       title: "Navigation proposed count",
       requestedOutcome: "Verify proposed work count remains attached to grouped navigation.",
       source: "operator",
-      sourceArtifactPath: "docs/stories/navigation-proposed-count.md",
+      sourceArtifactPath: "docs/workflows/implementation-evidence-boundary.md",
       sourceArtifactType: "manual_note",
       riskLevel: "low",
       priority: "normal",
@@ -643,10 +641,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("Handoff checkpoints")).toBeVisible();
     await expect(verificationPanel.getByText("local-development-handoff")).toBeVisible();
     await expect(verificationPanel.getByText("dashboard-change-handoff")).toBeVisible();
-    await expect(verificationPanel.getByText("fresh-vm-handoff")).toBeVisible();
+    await expect(verificationPanel.getByText("setup-handoff")).toBeVisible();
     await expect(verificationPanel.getByText("authority-boundary-handoff")).toBeVisible();
-    await expect(verificationPanel.getByText("docs/bootstrap-windows-vm.md", { exact: true })).toBeVisible();
-    await expect(verificationPanel.getByText("docs/fresh-vm-acceptance-checklist.md", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("docs/workflows/linux-primary-development-runbook.md", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
@@ -686,7 +683,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByText("Merged-to-main state remains false")).toBeVisible();
     await expect(authorityMatrixPanel.getByRole("heading", { name: "Next-lane authority packet" })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("decision_only_no_authority_granted")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md").first()).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Execution blocked", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Do not treat the decision packet recommendation as approval.")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("local-provider-execution", { exact: true })).toBeVisible();
@@ -703,7 +700,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByText("Related reports").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Related docs").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Rollback path:").first()).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md").first()).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("docs/workflows/implementation-evidence-boundary.md").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("GET /supervisor/local-cleanup-readiness-report")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("explicit-authority-approval")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Authority readiness matrix entries are not execution-authority approvals.")).toBeVisible();
@@ -764,7 +761,7 @@ test.describe("dashboard workflow coverage", () => {
       "/controls#documentation-authority-report",
     );
     await expect(maintenancePanel.getByText("Related docs").first()).toBeVisible();
-    await expect(maintenancePanel.getByText("docs/stories/index.md", { exact: true }).first()).toBeVisible();
+    await expect(maintenancePanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true }).first()).toBeVisible();
     await expect(maintenancePanel.getByRole("link", { name: "/controls#dashboard-e2e-report" }).first()).toBeVisible();
     await expect(maintenancePanel.getByText("Maintenance work must not approve local provider/model calls.")).toBeVisible();
 
@@ -780,7 +777,7 @@ test.describe("dashboard workflow coverage", () => {
       "/controls#safe-development-backlog",
     );
     await expect(actionPlanPanel.getByText("Related docs").first()).toBeVisible();
-    await expect(actionPlanPanel.getByText("docs/stories/3-27-safe-development-backlog-report.md", { exact: true })).toBeVisible();
+    await expect(actionPlanPanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true })).toBeVisible();
     await expect(
       actionPlanPanel
         .locator("article")
@@ -809,7 +806,7 @@ test.describe("dashboard workflow coverage", () => {
       "/controls#supervisor-report-catalog",
     );
     await expect(runwayPanel.getByText("Related docs").first()).toBeVisible();
-    await expect(runwayPanel.getByText("docs/stories/3-64-development-runway-evidence-links.md", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByRole("link", { name: "/controls#safe-development-backlog" }).first()).toBeVisible();
     await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("handoff-checkpoint-coverage", { exact: true })).toBeVisible();
@@ -825,7 +822,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runtimeReviewPanel.getByRole("link", { name: "GET /supervisor/runtime-evidence-review-report" }).first()).toBeVisible();
     await expect(runtimeReviewPanel.getByText("Related reports").first()).toBeVisible();
     await expect(runtimeReviewPanel.getByText("Related docs").first()).toBeVisible();
-    await expect(runtimeReviewPanel.getByText("docs/stories/3-65-runtime-review-evidence-links.md", { exact: true }).first()).toBeVisible();
+    await expect(runtimeReviewPanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true }).first()).toBeVisible();
     await expect(runtimeReviewPanel.getByRole("link", { name: "GET /supervisor/runtime-evidence-review-report" }).first()).toHaveAttribute(
       "href",
       "/controls#runtime-evidence-review-report",
@@ -1508,7 +1505,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(launchPanel.getByText("subscription-launch-verification-failed")).toBeVisible();
     await expect(launchPanel.getByText("verification_failed")).toBeVisible();
     await expect(launchPanel.getByText("inspect retained subscription launch artifacts before retry or rollback")).toBeVisible();
-    await expect(launchPanel.getByText("Keep subscription-agent launch disabled until Bob reviews retained artifacts.")).toBeVisible();
+    await expect(launchPanel.getByText("Keep subscription-agent launch disabled until the operator reviews retained artifacts.")).toBeVisible();
     await expect(launchPanel.getByRole("button")).toHaveCount(0);
     await expect(launchPanel.getByText("rawStdout")).toHaveCount(0);
     await expect(launchPanel.getByText("rawStderr")).toHaveCount(0);
@@ -1518,7 +1515,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(exportPanel.getByRole("heading", { name: "Verification and recovery" })).toBeVisible();
     await expect(exportPanel.getByText("rollbackStatus: triggered")).toBeVisible();
     await expect(exportPanel.getByText("blockedReason: subscription-launch-verification-failed")).toBeVisible();
-    await expect(exportPanel.getByText("nextSafeAction: Keep subscription-agent launch disabled until Bob reviews retained artifacts.")).toBeVisible();
+    await expect(exportPanel.getByText("nextSafeAction: Keep subscription-agent launch disabled until the operator reviews retained artifacts.")).toBeVisible();
     await expect(exportPanel.getByText("rawStdout")).toHaveCount(0);
     await expect(exportPanel.getByText("rawStderr")).toHaveCount(0);
   });

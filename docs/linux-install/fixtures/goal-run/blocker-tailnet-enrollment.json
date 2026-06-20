@@ -9,7 +9,7 @@
   "attempted_command": null,
   "last_safe_command": "pnpm linux:doctor",
   "proposed_next_command": "tailscale up",
-  "required_bob_action": "Decide whether to enroll this host in the Tailnet and complete or approve that operation explicitly.",
+  "required_user_action": "Decide whether to enroll this host in the Tailnet and complete or approve that operation explicitly.",
   "resume_command": "codex /goal resume linux-setup-mvp",
   "evidence_paths": [],
   "dependency_impact": ["task.tailnet.enroll"],

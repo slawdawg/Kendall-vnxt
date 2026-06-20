@@ -16,11 +16,14 @@ SCRIPT_PATH = (
     PROJECT_ROOT
     / ".agents/skills/knx-source-evidence-validator/scripts/validate_source_evidence.py"
 )
-FIXTURE_PACK = PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
-SOURCE_PACKET_EXAMPLES = (
-    PROJECT_ROOT
-    / "_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json"
+FIXTURE_PACK = (
+    PROJECT_ROOT / ".agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json"
 )
+FIXTURE_PACK_RELATIVE_PATH = ".agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json"
+SOURCE_PACKET_EXAMPLES_RELATIVE_PATH = (
+    "_bmad/memory/knx/runtime/source-packets/test-source-packet-examples.json"
+)
+SOURCE_PACKET_EXAMPLES = PROJECT_ROOT / SOURCE_PACKET_EXAMPLES_RELATIVE_PATH
 
 
 spec = importlib.util.spec_from_file_location("validate_source_evidence", SCRIPT_PATH)
@@ -31,6 +34,80 @@ spec.loader.exec_module(validator)
 
 
 class SourceEvidenceValidatorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._source_packet_examples_original = (
+            SOURCE_PACKET_EXAMPLES.read_text(encoding="utf-8")
+            if SOURCE_PACKET_EXAMPLES.exists()
+            else None
+        )
+        SOURCE_PACKET_EXAMPLES.parent.mkdir(parents=True, exist_ok=True)
+        SOURCE_PACKET_EXAMPLES.write_text(
+            json.dumps(cls._source_packet_examples_fixture(), indent=2),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._source_packet_examples_original is None:
+            SOURCE_PACKET_EXAMPLES.unlink(missing_ok=True)
+        else:
+            SOURCE_PACKET_EXAMPLES.write_text(
+                cls._source_packet_examples_original,
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _source_packet_examples_fixture():
+        boundary_false_flags = {
+            flag: False
+            for flag in validator.BOUNDARY_FALSE_FLAGS
+        }
+        base_packet = {
+            "source_location_or_description": "Metadata-only source packet example fixture",
+            "source_owner_or_provider": "synthetic",
+            "approval_basis": "synthetic",
+            "source_support_level": "synthetic",
+            "permitted_processing_boundary": "deterministic-local",
+            "permitted_storage_boundary": "_bmad/memory/knx",
+            "downstream_allowed_use": "validation",
+            "source_operation": "read-planning",
+            "uncertainty": "none",
+            "forbidden_content_check": "pass",
+            "created_at": "2026-06-01",
+            "created_by": "knx-source-evidence-validator tests",
+        }
+        packets = [
+            {
+                **base_packet,
+                "source_packet_id": "sp-test-planning-001",
+                "title": "User-authored planning document example",
+                "source_class": "user-authored-planning-document",
+            },
+            {
+                **base_packet,
+                "source_packet_id": "sp-test-synthetic-001",
+                "title": "Public or synthetic sample data example",
+                "source_class": "public-or-synthetic-sample-data",
+            },
+            {
+                **base_packet,
+                "source_packet_id": "sp-test-report-001",
+                "title": "Generated report example",
+                "source_class": "generated-report",
+            },
+        ]
+        return {
+            "source_packet_example_set_id": "source-packet-examples-test-fixture",
+            "title": "Metadata-only source packet examples test fixture",
+            "created_at": "2026-06-01",
+            "created_by": "knx-source-evidence-validator tests",
+            "status": "local-metadata-only-examples",
+            "excluded_classes": sorted(validator.REQUIRED_EXCLUDED_SOURCE_CLASSES),
+            "packets": packets,
+            **boundary_false_flags,
+        }
+
     def test_boundary_constants_are_project_root_relative(self):
         self.assertEqual(
             validator.DEFAULT_APPROVED_STORAGE_ROOT,
@@ -42,7 +119,9 @@ class SourceEvidenceValidatorTests(unittest.TestCase):
         )
         self.assertEqual(
             validator.SYNTHETIC_FIXTURE_ROOT,
-            (validator.PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic").resolve(),
+            (
+                validator.PROJECT_ROOT / ".agents/skills/knx-source-evidence-validator/assets/fixtures"
+            ).resolve(),
         )
 
     def test_import_from_other_cwd_keeps_project_root_boundaries(self):
@@ -78,7 +157,7 @@ print(json.dumps({{
         )
         self.assertEqual(
             payload["synthetic_fixture_root"],
-            str((PROJECT_ROOT / "_bmad/memory/knx/fixtures/synthetic").resolve()),
+            str((PROJECT_ROOT / ".agents/skills/knx-source-evidence-validator/assets/fixtures").resolve()),
         )
 
     def test_import_from_other_cwd_uses_project_root_default_config_paths(self):
@@ -136,7 +215,7 @@ spec = importlib.util.spec_from_file_location("validate_source_evidence", script
 module = importlib.util.module_from_spec(spec)
 sys.modules["validate_source_evidence"] = module
 spec.loader.exec_module(module)
-result = module.validate_fixture_pack(Path("_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"))
+result = module.validate_fixture_pack(Path(".agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json"))
 print(json.dumps({{"status": result["status"]}}))
 """
             result = subprocess.run(
@@ -163,7 +242,7 @@ spec = importlib.util.spec_from_file_location("validate_source_evidence", script
 module = importlib.util.module_from_spec(spec)
 sys.modules["validate_source_evidence"] = module
 spec.loader.exec_module(module)
-result = module.validate_source_packet_examples(Path("_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json"))
+result = module.validate_source_packet_examples(Path(r"{SOURCE_PACKET_EXAMPLES_RELATIVE_PATH}"))
 print(json.dumps({{"status": result["status"]}}))
 """
             result = subprocess.run(
@@ -562,13 +641,13 @@ print(json.dumps({{"status": result["status"]}}))
 
     def test_simple_config_value_strips_trailing_comment_after_quoted_yaml_value(self):
         value = validator.simple_config_value(
-            'ksev_fixture_pack: "{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json" # local comment\n',
+            'ksev_fixture_pack: "{project-root}/.agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json" # local comment\n',
             "ksev_fixture_pack",
         )
 
         self.assertEqual(
             value,
-            "{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+            "{project-root}/.agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json",
         )
 
     def test_simple_config_value_strips_trailing_comment_after_quoted_toml_value(self):
@@ -630,7 +709,7 @@ print(json.dumps({{"status": result["status"]}}))
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.yaml"
             config_path.write_text(
-                "ksev_fixture_pack: '{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json'\n",
+                "ksev_fixture_pack: '{project-root}/.agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json'\n",
                 encoding="utf-8",
             )
 
@@ -679,13 +758,17 @@ print(json.dumps({{"status": result["status"]}}))
                 )
 
     def test_configured_fixture_pack_path_rejects_existing_directory(self):
-        fixture_dir = FIXTURE_PACK.parent / "fixture-pack-dir"
-        fixture_dir.mkdir(exist_ok=True)
-        try:
-            with self.assertRaisesRegex(ValueError, "must point to a file, not a directory"):
-                validator.load_configured_fixture_pack_path(str(fixture_dir))
-        finally:
-            fixture_dir.rmdir()
+        original_fixture_root = validator.SYNTHETIC_FIXTURE_ROOT
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_root = Path(temp_dir) / "fixtures"
+            fixture_dir = fixture_root / "fixture-pack-dir"
+            fixture_dir.mkdir(parents=True)
+            validator.SYNTHETIC_FIXTURE_ROOT = fixture_root.resolve()
+            try:
+                with self.assertRaisesRegex(ValueError, "must point to a file, not a directory"):
+                    validator.load_configured_fixture_pack_path(str(fixture_dir))
+            finally:
+                validator.SYNTHETIC_FIXTURE_ROOT = original_fixture_root
 
     def test_configured_report_dir_can_be_loaded_from_toml(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1155,7 +1238,7 @@ print(json.dumps({{"status": result["status"]}}))
                     sys.executable,
                     str(SCRIPT_PATH),
                     "--fixture-pack",
-                    "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+                    ".agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json",
                     "--no-write",
                 ],
                 cwd=other_cwd,
@@ -1175,7 +1258,7 @@ print(json.dumps({{"status": result["status"]}}))
                     sys.executable,
                     str(SCRIPT_PATH),
                     "--source-packet-examples",
-                    "_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json",
+                    SOURCE_PACKET_EXAMPLES_RELATIVE_PATH,
                     "--no-write",
                 ],
                 cwd=other_cwd,
@@ -1219,7 +1302,7 @@ print(json.dumps({{"status": result["status"]}}))
                         sys.executable,
                         str(SCRIPT_PATH),
                         "--fixture-pack",
-                        "_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json",
+                        ".agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json",
                         "--output-dir",
                         relative_output_dir,
                     ],
@@ -1387,7 +1470,7 @@ print(json.dumps({{"status": result["status"]}}))
 
     def test_cli_source_packet_examples_ignores_invalid_fixture_pack_config(self):
         result = self._run_cli_with_temp_user_config(
-            "ksev_fixture_pack: 'C:/Users/slaw_dawg/AppData/Local/Temp/outside-fixture-pack.json'\n",
+            "ksev_fixture_pack: 'C:/Users/example/AppData/Local/Temp/outside-fixture-pack.json'\n",
             ["--source-packet-examples", str(SOURCE_PACKET_EXAMPLES), "--no-write"],
         )
 
@@ -1397,7 +1480,7 @@ print(json.dumps({{"status": result["status"]}}))
 
     def test_cli_no_write_ignores_invalid_report_dir_config(self):
         result = self._run_cli_with_temp_user_config(
-            "ksev_report_dir: 'C:/Users/slaw_dawg/AppData/Local/Temp/outside-report-dir'\n",
+            "ksev_report_dir: 'C:/Users/example/AppData/Local/Temp/outside-report-dir'\n",
             ["--fixture-pack", str(FIXTURE_PACK), "--no-write"],
         )
 
@@ -1416,7 +1499,7 @@ print(json.dumps({{"status": result["status"]}}))
 
     def test_validate_fixture_pack_accepts_project_root_token_path(self):
         result = validator.validate_fixture_pack(
-            Path("{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json")
+            Path("{project-root}/.agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json")
         )
 
         self.assertEqual(result["status"], "PASS")
@@ -2718,7 +2801,7 @@ print(json.dumps({{"status": result["status"]}}))
 
     def test_validate_source_packet_examples_accepts_project_root_token_path(self):
         result = validator.validate_source_packet_examples(
-            Path("{project-root}/_bmad/memory/knx/runtime/source-packets/source-packet-examples-2026-06-01.json")
+            Path(f"{{project-root}}/{SOURCE_PACKET_EXAMPLES_RELATIVE_PATH}")
         )
 
         self.assertEqual(result["status"], "PASS")
@@ -2980,10 +3063,37 @@ print(json.dumps({{"status": result["status"]}}))
         raise AssertionError(f"Fixture not found: {fixture_type}")
 
     def _validate_temp_pack(self, pack):
-        with tempfile.TemporaryDirectory(dir=FIXTURE_PACK.parent) as temp_dir:
-            path = Path(temp_dir) / "fixture-pack.json"
-            path.write_text(json.dumps(pack), encoding="utf-8")
-            return validator.validate_fixture_pack(path)
+        original_fixture_root = validator.SYNTHETIC_FIXTURE_ROOT
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_root = Path(temp_dir) / "fixtures"
+            fixture_root.mkdir()
+            path = fixture_root / FIXTURE_PACK.name
+            temp_pack = self._rewrite_fixture_pack_paths(pack, path)
+            validator.SYNTHETIC_FIXTURE_ROOT = fixture_root.resolve()
+            try:
+                path.write_text(json.dumps(temp_pack), encoding="utf-8")
+                return validator.validate_fixture_pack(path)
+            finally:
+                validator.SYNTHETIC_FIXTURE_ROOT = original_fixture_root
+
+    def _rewrite_fixture_pack_paths(self, value, temp_fixture_pack_path, parent_key=None):
+        if isinstance(value, dict):
+            return {
+                key: self._rewrite_fixture_pack_paths(item, temp_fixture_pack_path, key)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                self._rewrite_fixture_pack_paths(item, temp_fixture_pack_path, parent_key)
+                for item in value
+            ]
+        if (
+            isinstance(value, str)
+            and parent_key in {"source_references", "storage_location"}
+            and value in {FIXTURE_PACK_RELATIVE_PATH, str(FIXTURE_PACK)}
+        ):
+            return str(temp_fixture_pack_path)
+        return value
 
     def _load_source_packet_examples(self):
         return json.loads(SOURCE_PACKET_EXAMPLES.read_text(encoding="utf-8"))

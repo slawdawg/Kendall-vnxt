@@ -13,7 +13,7 @@
       "last_command": "GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/slawdawg/Kendall-vnxt.git HEAD",
       "next_command": "write blocker packet",
       "evidence_paths": ["docs/linux-install/evidence/goal-runs/<run-id>/blockers/blocker-manual-auth.json"],
-      "completion_condition": "manual GitHub auth is completed by Bob and repo probe passes",
+      "completion_condition": "manual GitHub auth is completed by the user and repo probe passes",
       "blocked_condition": "repo probe fails and auth must be user-operated",
       "resume_command": "codex /goal resume linux-setup-mvp"
     },
@@ -55,7 +55,7 @@
       "last_command": null,
       "next_command": "write Tailnet enrollment blocker packet",
       "evidence_paths": ["docs/linux-install/evidence/goal-runs/<run-id>/blockers/blocker-tailnet-enrollment.json"],
-      "completion_condition": "Bob completes Tailnet enrollment manually if needed",
+      "completion_condition": "the user completes Tailnet enrollment manually if needed",
       "blocked_condition": "Tailnet enrollment changes external account/network state",
       "resume_command": "codex /goal resume linux-setup-mvp"
     }

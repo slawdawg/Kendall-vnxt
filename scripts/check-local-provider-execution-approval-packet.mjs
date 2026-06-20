@@ -14,11 +14,25 @@ function assertIncludes(source, text, message, failures) {
   }
 }
 
-const approvalPacket = readWorkspaceFile("docs/goals/local-provider-execution-approval-packet-2026-06-13.md");
+function extractSection(source, startText, endText) {
+  const start = source.indexOf(startText);
+  const end = source.indexOf(endText, start + startText.length);
+  if (start === -1 || end === -1 || end <= start) {
+    return "";
+  }
+  return source.slice(start, end);
+}
+
+const authorityBoundary = readWorkspaceFile("docs/workflows/execution-authority-boundary.md");
+const approvalPacket = extractSection(
+  authorityBoundary,
+  "## Local Provider Execution Contract",
+  "## Premium Execution Contract",
+);
 const settingsSource = readWorkspaceFile("services/supervisor/src/supervisor/config/settings.py");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 
 const approvedEndpoint = "http://192.168.1.128:11434/v1/chat/completions";
 const approvedModel = "qwen3:14b";
@@ -77,7 +91,7 @@ for (const testText of [
 }
 
 for (const indexText of [
-  "Local provider execution: `docs/goals/local-provider-execution-approval-packet-2026-06-13.md`",
+  "Local provider execution: `docs/workflows/execution-authority-boundary.md#local-provider-execution-contract`",
   "No currently blocked Ollama local-provider story remains for the approved VM-to-host endpoint/model.",
   "Any endpoint, model, provider, or retention expansion still requires explicit successor approval.",
 ]) {

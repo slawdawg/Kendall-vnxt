@@ -14,6 +14,15 @@ function assertIncludes(source, text, message, failures) {
   }
 }
 
+function extractSection(source, startText, endText) {
+  const start = source.indexOf(startText);
+  const end = source.indexOf(endText, start + startText.length);
+  if (start === -1 || end === -1 || end <= start) {
+    return "";
+  }
+  return source.slice(start, end);
+}
+
 function scriptCommands(script) {
   return (script ?? "")
     .split("&&")
@@ -21,13 +30,18 @@ function scriptCommands(script) {
     .filter(Boolean);
 }
 
-const approvalPacket = readWorkspaceFile("docs/goals/cleanup-automation-approval-packet-2026-06-14.md");
+const authorityBoundary = readWorkspaceFile("docs/workflows/execution-authority-boundary.md");
+const approvalPacket = extractSection(
+  authorityBoundary,
+  "## Cleanup Automation Contract",
+  "## Next-Lane Authority Decision Contract",
+);
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const deliveryCheck = readWorkspaceFile("scripts/check-delivery-readiness-policy-report.mjs");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
-const story = readWorkspaceFile("docs/stories/18-1-refresh-cleanup-automation-approval-packet.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
+const story = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 
 const failures = [];
 
@@ -88,7 +102,7 @@ for (const testText of [
   "would block worktree removal",
   "would block local branch deletion",
   "git worktree removal would be skipped because target is filesystem residue",
-  "C:/Users/slaw_dawg/Kendall_Nxt",
+  "/tmp/outside-kendall-cleanup-target",
   "failed-delivery",
   "stale-delivery",
 ]) {
@@ -114,7 +128,7 @@ for (const storyText of [
 }
 
 for (const indexText of [
-  "Cleanup automation: `docs/goals/cleanup-automation-approval-packet-2026-06-14.md`",
+  "Cleanup automation: `docs/workflows/execution-authority-boundary.md#cleanup-automation-contract`",
   "Epic 18 starts after the real CLI worker launch approval packet.",
   "Stories in this epic do not approve file deletion, worktree removal, branch deletion, remote ref deletion, retained evidence deletion, cleanup commands, or failed-check bypass.",
 ]) {

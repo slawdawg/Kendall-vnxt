@@ -13,10 +13,10 @@ The user can see the current governance phase, which artifacts are already usabl
 ## Inputs To Consider
 
 - SPEC and companion files under `{project-root}/_bmad-output/specs/spec-kendallai-vnext/`.
-- Module plan at `{project-root}/skills/reports/kendallai-vnext-module-plan.md`.
+- Module plan at `{project-root}/_bmad-output/reports/kendallai-vnext-module-plan.md`.
 - Shared `knx` memory under `{project-root}/_bmad/memory/knx/`.
-- Current handoff at `{project-root}/08_Automation/State/bmad_session_handoff.md`.
-- Existing built skills under `{project-root}/skills/knx-*`.
+- Current handoff at `{project-root}/_bmad-output/handoffs/bmad-session-handoff.md`.
+- Existing built skills under `{project-root}/_bmad-output/bmb-creations/skills/knx-*`.
 
 ## Output Shape
 

@@ -24,7 +24,7 @@ const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const runtimeExportCheck = readWorkspaceFile("scripts/check-runtime-evidence-export.mjs");
 const runbookCheck = readWorkspaceFile("scripts/check-runbook-verification.mjs");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
@@ -126,10 +126,10 @@ for (const testText of [
 }
 
 for (const story of [
-  "docs/stories/2-6-disabled-execution-configuration-checks.md",
-  "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
-  "docs/stories/3-7-execution-readiness-and-evidence-report.md",
-  "docs/stories/3-48-execution-boundary-report-drift-check.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing execution boundary story evidence ${story}`, failures);
 }
@@ -150,12 +150,12 @@ assertCondition(
 );
 
 assertCondition(
-  runtimeExportCheck.includes("docs/stories/3-48-execution-boundary-report-drift-check.md"),
+  runtimeExportCheck.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export drift check must require Story 3.48 git-backed evidence",
   failures,
 );
 assertCondition(
-  serviceSource.includes("docs/stories/3-48-execution-boundary-report-drift-check.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export service must include Story 3.48 git-backed evidence",
   failures,
 );

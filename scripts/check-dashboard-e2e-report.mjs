@@ -17,7 +17,7 @@ function assertCondition(condition, message, failures) {
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const dashboardSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 
 const expectedPackageScripts = [
   ["setup:e2e", "node ./scripts/setup-e2e.mjs"],
@@ -36,43 +36,43 @@ const expectedRunners = [
     runnerId: "dashboard-controls-e2e",
     command: "pnpm run test:e2e:dashboard:controls",
     runnerScript: "scripts/run-controls-e2e.mjs",
-    story: "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
+    evidenceLabel: "3-17-dashboard-e2e-reliability-guardrails.md",
   },
   {
     runnerId: "dashboard-detail-e2e",
     command: "pnpm run test:e2e:dashboard:detail",
     runnerScript: "scripts/run-detail-e2e.mjs",
-    story: "docs/stories/3-21-dashboard-detail-e2e-runner.md",
+    evidenceLabel: "3-21-dashboard-detail-e2e-runner.md",
   },
   {
     runnerId: "dashboard-mobile-e2e",
     command: "pnpm run test:e2e:dashboard:mobile",
     runnerScript: "scripts/run-mobile-e2e.mjs",
-    story: "docs/stories/3-24-dashboard-mobile-e2e-runner.md",
+    evidenceLabel: "3-24-dashboard-mobile-e2e-runner.md",
   },
   {
     runnerId: "dashboard-managed-recipe-e2e",
     command: "pnpm run test:e2e:dashboard:managed",
     runnerScript: "scripts/run-managed-recipe-e2e.mjs",
-    story: "docs/stories/3-25-managed-recipe-e2e-runners.md",
+    evidenceLabel: "3-25-managed-recipe-e2e-runners.md",
   },
   {
     runnerId: "dashboard-managed-mobile-recipe-e2e",
     command: "pnpm run test:e2e:dashboard:managed:mobile",
     runnerScript: "scripts/run-managed-mobile-recipe-e2e.mjs",
-    story: "docs/stories/3-25-managed-recipe-e2e-runners.md",
+    evidenceLabel: "3-25-managed-recipe-e2e-runners.md",
   },
   {
     runnerId: "dashboard-provider-raw-output-e2e",
     command: "pnpm run test:e2e:dashboard:provider-raw-output",
     runnerScript: "scripts/run-provider-raw-output-ui-e2e.mjs",
-    story: "docs/stories/9-3-restore-provider-raw-output-ui-regression-coverage.md",
+    evidenceLabel: "9-3-restore-provider-raw-output-ui-regression-coverage.md",
   },
   {
     runnerId: "dashboard-full-e2e",
     command: "pnpm run test:e2e:dashboard",
     runnerScript: "playwright.config.ts",
-    story: "docs/stories/3-22-dashboard-e2e-report.md",
+    evidenceLabel: "3-22-dashboard-e2e-report.md",
   },
 ];
 
@@ -92,7 +92,6 @@ for (const runner of expectedRunners) {
     `Missing runner evidence file ${runner.runnerScript}`,
     failures,
   );
-  assertCondition(existsSync(join(rootDir, runner.story)), `Missing story evidence file ${runner.story}`, failures);
   assertCondition(
     serviceSource.includes(runner.runnerId),
     `Supervisor dashboard e2e report must include runner id ${runner.runnerId}`,
@@ -109,8 +108,8 @@ for (const runner of expectedRunners) {
     failures,
   );
   assertCondition(
-    storyIndex.includes(runner.story.split("/").at(-1)),
-    `Story index must reference ${runner.story}`,
+    storyIndex.includes(runner.evidenceLabel),
+    `Implementation evidence boundary must reference ${runner.evidenceLabel}`,
     failures,
   );
 }

@@ -9,16 +9,19 @@ Evaluate whether `mise` should become Kendall_Nxt's standard local worktree
 readiness layer for tools, non-secret environment defaults, and common task
 aliases.
 
-This workflow exists to reduce Bob's repeated worktree setup friction while
+This workflow exists to reduce repeated operator worktree setup friction while
 honoring the principle: mature tools and standard practices first, custom
 Kendall_Nxt code last.
 
 ## Inputs
 
-- `docs/research/standard-worktree-workflow-tooling-recommendation-2026-06-18.md`
-- `docs/research/worktree-environment-method-comparison-decision-research-2026-06-18.md`
-- `docs/research/direnv-alternatives-for-kendall-nxt-technical-research-2026-06-18.md`
-- `docs/research/direnv-git-worktrees-agentic-programming-technical-research-2026-06-18.md`
+The original research packets for the worktree-environment comparison were
+local-only planning artifacts and are not part of the GitHub clean-install
+surface. Their preserved copies, when needed for local audit, live under
+`_bmad-output/local-clean-install-boundary-removed-artifacts/` and are ignored
+by Git. This evaluation no longer depends on those packets as tracked inputs;
+use the source-owned inputs below for current evaluation and verification:
+
 - `AGENTS.md`
 - `.node-version`
 - `package.json`
@@ -103,7 +106,7 @@ value:
 3. Check whether `mise` is already available.
    - If `mise` is available, continue the trial.
    - If `mise` is not available, record `mise_missing` as a host prerequisite
-     and stop before installing global tooling unless Bob explicitly approves a
+     and stop before installing global tooling unless the operator explicitly approves a
      separate install operation.
    - If `mise` is available but the requested tool versions are not installed,
      stop before running `mise install` unless the approval also covers
@@ -198,7 +201,7 @@ remaining_gaps:
 ## Stop Lines
 
 - Do not make `mise` mandatory in the first story.
-- Do not install tools globally unless Bob explicitly approves that operation.
+- Do not install tools globally unless the operator explicitly approves that operation.
 - Do not load provider/API secrets.
 - Do not copy `.env` files into worktrees.
 - Do not replace `scripts/codex-workspace.mjs`.
@@ -217,7 +220,7 @@ remaining_gaps:
 
 ## Continuation After Approval
 
-When Bob approves the `mise` install/use gate:
+When the operator approves the `mise` install/use gate:
 
 1. Reconfirm worktree path, branch, and current changed files.
 2. Reconfirm the exact approval scope and denied operations.

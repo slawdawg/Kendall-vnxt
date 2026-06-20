@@ -1,6 +1,53 @@
 import sys
+from pathlib import Path
 
 from fastapi.testclient import TestClient
+
+
+SYNTHETIC_BMAD_ARTIFACT_PATH = "_bmad-output/planning-artifacts/stories/dev-console-label-copy.md"
+SYNTHETIC_BMAD_ARTIFACT = """# Update Dev Console Label Copy
+
+Status: Review
+RiskLevel: low
+
+## Story
+
+As an operator,
+I want the Dev Console labels to use plain language,
+so that I can understand work status without developer terminology.
+
+## Acceptance Criteria
+
+1. Proposed Work labels use plain language.
+2. Active Work labels avoid internal orchestration jargon.
+3. Detail panels keep technical evidence available behind clear headings.
+4. No worker launch, provider call, command execution, Git operation, or GitHub operation is required.
+
+## Authority
+
+Allowed:
+
+- metadata-only BMAD import,
+- Candidate Work approval and promotion,
+- routing preview,
+- fake or blocked execution attempt evidence.
+
+Blocked:
+
+- real Codex launch,
+- real Claude launch,
+- provider calls,
+- shell command execution outside tests,
+- source mutation by workers,
+- Git or GitHub operations.
+
+## Verification
+
+- Import this artifact as Candidate Work.
+- Promote it into Active Work after approval.
+- Generate a routing preview and fake or blocked execution attempt.
+- Confirm Dev Console evidence links the attempt to the source artifact and Task Packet.
+"""
 
 
 def _reset_supervisor_modules() -> None:
@@ -9,15 +56,25 @@ def _reset_supervisor_modules() -> None:
             sys.modules.pop(module_name, None)
 
 
-def _client(tmp_path, monkeypatch, db_name: str) -> TestClient:
+def _client(tmp_path, monkeypatch, db_name: str, repo_root: Path | None = None) -> TestClient:
     _reset_supervisor_modules()
     db_path = (tmp_path / db_name).as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
 
-    from supervisor.api.main import app
+    from supervisor.api import main as api_main
 
-    return TestClient(app)
+    if repo_root is not None:
+        monkeypatch.setattr(api_main.service, "_repo_root", lambda: repo_root.as_posix())
+
+    return TestClient(api_main.app)
+
+
+def _write_synthetic_bmad_fixture(repo_root: Path) -> Path:
+    artifact_path = repo_root / SYNTHETIC_BMAD_ARTIFACT_PATH
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(SYNTHETIC_BMAD_ARTIFACT, encoding="utf-8")
+    return artifact_path
 
 
 def test_candidate_work_can_be_created_listed_and_updated_without_active_work(tmp_path, monkeypatch) -> None:
@@ -28,7 +85,7 @@ def test_candidate_work_can_be_created_listed_and_updated_without_active_work(tm
                 "title": "Draft Story 6.4 import package parser",
                 "requestedOutcome": "Turn BMAD output into a reviewed import package candidate.",
                 "source": "bmad",
-                "sourceArtifactPath": "docs/stories/6-4-bmad-import-package-parser.md",
+                "sourceArtifactPath": "docs/workflows/implementation-evidence-boundary.md",
                 "sourceArtifactType": "bmad_story",
                 "riskLevel": "medium",
                 "priority": "high",
@@ -40,7 +97,7 @@ def test_candidate_work_can_be_created_listed_and_updated_without_active_work(tm
         candidate = created_response.json()["data"]
         assert candidate["title"] == "Draft Story 6.4 import package parser"
         assert candidate["source"] == "bmad"
-        assert candidate["sourceArtifactPath"] == "docs/stories/6-4-bmad-import-package-parser.md"
+        assert candidate["sourceArtifactPath"] == "docs/workflows/implementation-evidence-boundary.md"
         assert candidate["sourceArtifactType"] == "bmad_story"
         assert candidate["riskLevel"] == "medium"
         assert candidate["priority"] == "high"
@@ -81,7 +138,7 @@ def test_candidate_work_rejects_invalid_enum_values_and_missing_candidate(tmp_pa
             "title": "Invalid candidate",
             "requestedOutcome": "Reject invalid enum values.",
             "source": "bmad",
-            "sourceArtifactPath": "docs/stories/invalid.md",
+            "sourceArtifactPath": "docs/workflows/implementation-evidence-boundary.md",
             "sourceArtifactType": "bmad_story",
             "riskLevel": "low",
             "priority": "normal",
@@ -130,7 +187,7 @@ def test_candidate_work_promotes_once_into_active_work_with_metadata(tmp_path, m
                 "title": "Promote proposed work",
                 "requestedOutcome": "Create exactly one active work item.",
                 "source": "operator",
-                "sourceArtifactPath": "docs/stories/6-6-candidate-priority-order-promote.md",
+                "sourceArtifactPath": "docs/workflows/implementation-evidence-boundary.md",
                 "sourceArtifactType": "bmad_story",
                 "riskLevel": "medium",
                 "priority": "high",
@@ -158,7 +215,7 @@ def test_candidate_work_promotes_once_into_active_work_with_metadata(tmp_path, m
         assert work_item["source"] == f"candidate_work:{candidate_id}"
         assert work_item["state"] == "queued"
         assert work_item["metadata"]["candidateWorkId"] == candidate_id
-        assert work_item["metadata"]["sourceArtifactPath"] == "docs/stories/6-6-candidate-priority-order-promote.md"
+        assert work_item["metadata"]["sourceArtifactPath"] == "docs/workflows/implementation-evidence-boundary.md"
         assert work_item["metadata"]["candidatePriority"] == "high"
         assert work_item["metadata"]["candidateSortOrder"] == 2
 
@@ -199,11 +256,13 @@ def test_candidate_work_list_uses_sort_order(tmp_path, monkeypatch) -> None:
 
 
 def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_attempt_evidence(tmp_path, monkeypatch) -> None:
-    with _client(tmp_path, monkeypatch, "synthetic-bmad-proof.db") as client:
+    repo_root = tmp_path / "repo"
+    _write_synthetic_bmad_fixture(repo_root)
+    with _client(tmp_path, monkeypatch, "synthetic-bmad-proof.db", repo_root=repo_root) as client:
         import_response = client.post(
             "/candidate-work/import-bmad",
             json={
-                "artifactPath": "docs/product/epic-6-synthetic-dev-console-label-copy.md",
+                "artifactPath": SYNTHETIC_BMAD_ARTIFACT_PATH,
                 "sortOrder": 7,
             },
         )
@@ -212,13 +271,13 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         candidate_id = candidate["id"]
         assert candidate["title"] == "Review Update Dev Console Label Copy"
         assert candidate["source"] == "bmad"
-        assert candidate["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
-        assert candidate["sourceArtifactType"] == "bmad_research"
+        assert candidate["sourceArtifactPath"] == SYNTHETIC_BMAD_ARTIFACT_PATH
+        assert candidate["sourceArtifactType"] == "bmad_story"
         assert candidate["riskLevel"] == "low"
         assert candidate["priority"] == "high"
         assert candidate["sortOrder"] == 7
         assert candidate["status"] == "proposed"
-        assert "As Bob," in candidate["requestedOutcome"]
+        assert "As an operator," in candidate["requestedOutcome"]
         assert candidate["importMetadata"]["retentionPolicy"] == "metadata_only_no_raw_artifact_content"
         assert candidate["importMetadata"]["artifactTitle"] == "Update Dev Console Label Copy"
         assert "Proposed Work labels use plain language." in candidate["importMetadata"]["acceptanceCriteria"]
@@ -232,8 +291,8 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         work_item_id = work_item["id"]
         assert promoted["candidateWork"]["promotedWorkItemId"] == work_item_id
         assert work_item["source"] == f"candidate_work:{candidate_id}"
-        assert work_item["metadata"]["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
-        assert work_item["metadata"]["sourceArtifactType"] == "bmad_research"
+        assert work_item["metadata"]["sourceArtifactPath"] == SYNTHETIC_BMAD_ARTIFACT_PATH
+        assert work_item["metadata"]["sourceArtifactType"] == "bmad_story"
         assert work_item["metadata"]["candidatePriority"] == "high"
         assert work_item["metadata"]["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
         assert work_item["metadata"]["acceptanceCriteriaSummary"] == candidate["importMetadata"]["acceptanceCriteria"]
@@ -243,7 +302,7 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         packet_preview = packet_response.json()["data"]
         packet = packet_preview["packet"]
         assert packet["workItemId"] == work_item_id
-        assert packet["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
+        assert packet["sourceArtifactPath"] == SYNTHETIC_BMAD_ARTIFACT_PATH
         assert packet["priority"] == "high"
         assert packet["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
         assert packet_preview["previewOnly"] is True
@@ -277,7 +336,7 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         assert len(attempt["artifactRefs"]) == 1
         packet_ref = attempt["artifactRefs"][0]
         assert packet_ref["artifactType"] == "task_packet_v0"
-        assert packet_ref["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
+        assert packet_ref["sourceArtifactPath"] == SYNTHETIC_BMAD_ARTIFACT_PATH
         assert packet_ref["taskKind"] == "evidence_summary"
         assert packet_ref["previewOnly"] is True
         assert packet_ref["executionAllowed"] is False
@@ -287,7 +346,7 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         assert export_response.status_code == 200
         export = export_response.json()["data"]
         assert export["workItem"]["metadata"]["candidateWorkId"] == candidate_id
-        assert export["workItem"]["metadata"]["sourceArtifactPath"] == "docs/product/epic-6-synthetic-dev-console-label-copy.md"
+        assert export["workItem"]["metadata"]["sourceArtifactPath"] == SYNTHETIC_BMAD_ARTIFACT_PATH
         assert export["executionAttempts"][0]["attemptId"] == attempt["attemptId"]
         assert export["executionAttempts"][0]["artifactRefs"][0]["artifactType"] == "task_packet_v0"
         assert export["safety"]["processLaunchAllowed"] is False
@@ -303,71 +362,15 @@ def test_synthetic_bmad_artifact_flows_through_candidate_active_preview_and_atte
         assert "execution_attempt.rejected" in event_types
 
 
-def test_real_bmad_story_flows_through_import_preview_attempt_and_runtime_evidence(tmp_path, monkeypatch) -> None:
+def test_source_owned_boundary_docs_are_not_imported_as_bmad_artifacts(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "real-bmad-proof.db") as client:
         import_response = client.post(
             "/candidate-work/import-bmad",
             json={
-                "artifactPath": "docs/stories/6-5-proposed-work-dev-console-view.md",
+                "artifactPath": "docs/workflows/implementation-evidence-boundary.md",
                 "sortOrder": 11,
             },
         )
-        assert import_response.status_code == 200
-        candidate = import_response.json()["data"]
-        candidate_id = candidate["id"]
-        assert candidate["title"] == "Review Story 6.5: Proposed Work Dev Console View"
-        assert candidate["source"] == "bmad"
-        assert candidate["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
-        assert candidate["sourceArtifactType"] == "bmad_story"
-        assert candidate["priority"] == "normal"
-        assert candidate["sortOrder"] == 11
-        assert candidate["importMetadata"]["storyId"] == "6-5"
-        assert candidate["importMetadata"]["epicId"] == "6"
-        assert "Proposed Work displays Candidate Work cards or rows" in candidate["importMetadata"]["acceptanceCriteria"]
-        assert "dashboard build or focused type check" in candidate["importMetadata"]["verificationSummary"]
-        assert candidate["importMetadata"]["retentionPolicy"] == "metadata_only_no_raw_artifact_content"
-
-        assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
-        promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
-        assert promote_response.status_code == 200
-        work_item = promote_response.json()["data"]["workItem"]
-        work_item_id = work_item["id"]
-        assert work_item["metadata"]["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
-        assert work_item["metadata"]["sourceArtifactType"] == "bmad_story"
-        assert work_item["metadata"]["importMetadata"]["storyId"] == "6-5"
-        assert work_item["metadata"]["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
-        assert work_item["metadata"]["acceptanceCriteriaSummary"] == candidate["importMetadata"]["acceptanceCriteria"]
-
-        packet_response = client.get(f"/work-items/{work_item_id}/task-packet-preview")
-        assert packet_response.status_code == 200
-        packet_preview = packet_response.json()["data"]
-        assert packet_preview["packet"]["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
-        assert packet_preview["packet"]["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
-        assert packet_preview["previewOnly"] is True
-        assert packet_preview["providerCallsAllowed"] is False
-        assert packet_preview["commandExecutionAllowed"] is False
-
-        attempt_response = client.post(
-            f"/work-items/{work_item_id}/execution-attempts",
-            json={"taskKind": "evidence_summary", "actorId": "real-proof", "actorLabel": "Real Proof"},
-        )
-        assert attempt_response.status_code == 200
-        attempt = attempt_response.json()["data"]
-        assert attempt["status"] == "rejected"
-        assert attempt["artifactRefs"][0]["artifactType"] == "task_packet_v0"
-        assert attempt["artifactRefs"][0]["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
-        assert attempt["artifactRefs"][0]["executionAllowed"] is False
-        assert attempt["workspaceIsolationPlan"]["commandsAllowed"] is False
-        assert attempt["workspaceIsolationPlan"]["sourceMutationAllowed"] is False
-        assert attempt["workspaceIsolationPlan"]["networkAllowed"] is False
-
-        export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
-        assert export_response.status_code == 200
-        export = export_response.json()["data"]
-        assert export["workItem"]["metadata"]["importMetadata"]["storyId"] == "6-5"
-        assert export["workItem"]["metadata"]["verificationSummary"] == candidate["importMetadata"]["verificationSummary"]
-        assert export["executionAttempts"][0]["artifactRefs"][0]["sourceArtifactPath"] == "docs/stories/6-5-proposed-work-dev-console-view.md"
-        assert export["safety"]["processLaunchAllowed"] is False
-        assert export["safety"]["providerCallsAllowed"] is False
-        assert export["safety"]["commandExecutionAllowed"] is False
-        assert export["safety"]["sourceMutationAllowed"] is False
+        assert import_response.status_code == 400
+        assert import_response.json()["detail"]["error"]["code"] == "invalid_bmad_import"
+        assert "outside supported artifact roots" in import_response.json()["detail"]["error"]["message"]

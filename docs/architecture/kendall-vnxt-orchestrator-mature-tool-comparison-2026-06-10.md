@@ -63,7 +63,7 @@ Deferred:
 - Temporal for heavier durability.
 - Dagger for verification pipelines.
 - LiteLLM for future multi-API-provider routing.
-- CrewAI/OpenHands for later if Bob wants a broader agent platform.
+- CrewAI/OpenHands for later if the operator wants a broader agent platform.
 
 ## Custom Code Boundary
 

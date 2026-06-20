@@ -206,7 +206,7 @@ Implemented:
 - The dashboard recipe gate audit now renders the supervisor-approved next managed action above the policy ledger.
 - The supervisor now exposes `POST /work-items/{id}/managed-next-action`, which executes only the current available managed action, rejects stale expected action ids, rejects blocked/remote actions, and routes evidence-heavy delivery readiness back to the dedicated checkpoint form.
 - The dashboard recipe gate audit now lets operators trigger executable managed actions from the policy ledger while preserving checkpoint notes and supervisor-side gate validation.
-- The supervisor now resolves recipe command executables through `pnpm.cmd` or `corepack pnpm` when `pnpm` is not directly on `PATH`, so the managed implementation step can run reliably in the Windows browser server environment.
+- The supervisor now resolves recipe command executables through `pnpm` or `corepack pnpm` when `pnpm` is not directly on `PATH`, so the managed implementation step can run reliably in the Linux development environment.
 - Browser coverage now proves the managed recipe stops safely at the path-scope gate when the current workspace includes out-of-scope changes, rather than pretending the supervisor can run through an unsafe implementation attempt.
 - The supervisor now has an opt-in remote delivery executor that can push the branch, create a PR, wait for CI, and merge when `SUPERVISOR_ALLOW_REMOTE_DELIVERY` is enabled.
 - The dashboard recipe gate audit now exposes a supervisor-executable remote delivery step when remote delivery is explicitly enabled.

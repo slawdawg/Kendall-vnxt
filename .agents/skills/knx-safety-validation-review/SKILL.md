@@ -43,8 +43,8 @@ Review against:
 - Custom-code recommendation and mature-tool review evidence.
 - Source packet, work trace, validation evidence, user-input-required, and fixture coverage.
 - Repo/live-state boundary.
-- Installability for users other than Bob.
-- Bob-specific path, OneDrive, Microsoft 365, GitHub, GPU, local model, or external provider assumptions.
+- Installability for users beyond the current operator.
+- Operator-specific path, OneDrive, Microsoft 365, GitHub, GPU, local model, or external provider assumptions.
 
 ## Outputs
 

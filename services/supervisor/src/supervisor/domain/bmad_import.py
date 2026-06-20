@@ -8,9 +8,6 @@ from supervisor.domain.types import CandidateWorkArtifactType, CandidateWorkPrio
 
 
 SUPPORTED_ARTIFACT_ROOTS = (
-    PurePosixPath("docs/stories"),
-    PurePosixPath("docs/prds"),
-    PurePosixPath("docs/product"),
     PurePosixPath("_bmad-output/planning-artifacts"),
 )
 
@@ -44,7 +41,10 @@ def parse_bmad_import_package(repo_root: Path, artifact_path: str) -> BmadImport
         raise BmadImportError("BMAD import path is outside supported artifact roots.")
 
     resolved_root = repo_root.resolve()
-    resolved_artifact = (resolved_root / relative_path.as_posix()).resolve()
+    artifact_path = resolved_root / relative_path.as_posix()
+    if _contains_symlink(resolved_root, relative_path):
+        raise BmadImportError("BMAD import path must not traverse symlinks.")
+    resolved_artifact = artifact_path.resolve()
     if not resolved_artifact.is_relative_to(resolved_root):
         raise BmadImportError("BMAD import path resolves outside the repository root.")
     if not resolved_artifact.exists() or not resolved_artifact.is_file():
@@ -94,6 +94,15 @@ def _normalize_repo_relative_path(artifact_path: str) -> PurePosixPath:
 
 def _is_supported_path(path: PurePosixPath) -> bool:
     return any(path.is_relative_to(root) for root in SUPPORTED_ARTIFACT_ROOTS)
+
+
+def _contains_symlink(repo_root: Path, relative_path: PurePosixPath) -> bool:
+    current = repo_root
+    for part in relative_path.parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
 
 
 def _split_frontmatter(content: str) -> tuple[dict[str, str], str]:
@@ -204,15 +213,20 @@ def _infer_priority(path: PurePosixPath, risk_level: RiskLevel, status: str | No
         return CandidateWorkPriority.HIGH
     if status and status.lower() in {"approved", "review", "ready"}:
         return CandidateWorkPriority.HIGH
-    if path.is_relative_to(PurePosixPath("docs/stories")):
+    if _artifact_type(path) == CandidateWorkArtifactType.BMAD_STORY:
         return CandidateWorkPriority.NORMAL
     return CandidateWorkPriority.LOW
 
 
 def _artifact_type(path: PurePosixPath) -> CandidateWorkArtifactType:
-    if path.is_relative_to(PurePosixPath("docs/stories")):
+    parts = list(path.parts)
+    try:
+        category = parts[parts.index("planning-artifacts") + 1]
+    except (ValueError, IndexError):
+        category = ""
+    if category == "stories":
         return CandidateWorkArtifactType.BMAD_STORY
-    if path.is_relative_to(PurePosixPath("docs/prds")) or path.is_relative_to(PurePosixPath("_bmad-output/planning-artifacts")):
+    if category in {"prds", "epics"}:
         return CandidateWorkArtifactType.BMAD_WORKFLOW_OUTPUT
     return CandidateWorkArtifactType.BMAD_RESEARCH
 

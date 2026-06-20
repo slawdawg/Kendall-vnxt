@@ -42,7 +42,7 @@ test("install contract checker rejects alternate mutating install commands in ac
   assert(failures.some((failure) => failure.includes("alternate mutating install command")));
 });
 
-test("install contract checker requires historical notes to stay fenced from v1 install authority", async () => {
+test("install contract checker requires historical notes to stay fenced by source-owned release boundary", async () => {
   const { validateSingleMutatingInstallBoundary } = await import("../../scripts/check-linux-install-contract.mjs");
 
   const failures = validateSingleMutatingInstallBoundary(
@@ -57,5 +57,5 @@ test("install contract checker requires historical notes to stay fenced from v1 
     ]),
   );
 
-  assert(failures.some((failure) => failure.includes("historical or lab notes")));
+  assert(failures.some((failure) => failure.includes("source-owned release boundary")));
 });

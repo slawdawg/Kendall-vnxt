@@ -7,7 +7,7 @@ knx:
     workflows.
   version: 1.0.0
   default_selected: false
-  knx_user_label: 'Primary user: Bob'
+  knx_user_label: 'Primary user: Operator'
   knx_storage_mode: local-folder
   knx_storage_root: ''
   knx_repo_remote: ''
@@ -24,5 +24,5 @@ ksev:
     source/evidence fixture packs.
   version: 1.0.0
   default_selected: false
-  ksev_fixture_pack: '{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json'
+  ksev_fixture_pack: '{project-root}/.agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json'
   ksev_report_dir: '{project-root}/_bmad/memory/knx/runtime/optional-source-evidence-validator/reports'

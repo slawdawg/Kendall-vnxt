@@ -27,7 +27,7 @@ const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const runtimeExportCheck = readWorkspaceFile("scripts/check-runtime-evidence-export.mjs");
 const reportCatalogCheck = readWorkspaceFile("scripts/check-supervisor-report-catalog.mjs");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
@@ -62,7 +62,7 @@ for (const serviceText of [
   "run-verification-chain",
   "preserve-authority-stop-lines",
   "Maintenance action plans are not execution-authority approvals.",
-  "docs/stories/3-52-maintenance-action-plan-report.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Maintenance action plan service must include ${serviceText}`, failures);
 }
@@ -108,7 +108,7 @@ for (const browserText of [
   "Related reports",
   "GET /supervisor/safe-development-backlog",
   "Related docs",
-  "docs/stories/3-27-safe-development-backlog-report.md",
+  "docs/workflows/implementation-evidence-boundary.md",
   "preserve-authority-stop-lines",
   "pnpm run check:process-lifecycle",
   "/controls#safe-development-backlog",
@@ -125,7 +125,7 @@ for (const testText of [
   '"relatedReports"',
   '"relatedDocs"',
   '"preserve-authority-stop-lines"',
-  "docs/stories/3-52-maintenance-action-plan-report.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
 }
@@ -136,7 +136,7 @@ assertCondition(
   failures,
 );
 assertCondition(
-  runtimeExportCheck.includes("docs/stories/3-52-maintenance-action-plan-report.md"),
+  runtimeExportCheck.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export drift check must require Story 3.52 git-backed evidence",
   failures,
 );
@@ -146,9 +146,9 @@ assertCondition(
   failures,
 );
 
-const storyPath = "docs/stories/3-52-maintenance-action-plan-report.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing maintenance action plan story ${storyPath}`, failures);
-const linksStoryPath = "docs/stories/3-61-maintenance-action-evidence-links.md";
+const linksStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, linksStoryPath)), `Missing maintenance action evidence links story ${linksStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-52-maintenance-action-plan-report.md"),

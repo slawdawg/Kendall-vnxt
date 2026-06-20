@@ -4,7 +4,8 @@ Use this workflow when Codex needs GitHub PR inspection, PR creation, review met
 
 ## Supported Auth Split
 
-- Use Git Credential Manager with Windows DPAPI for ordinary `git fetch`, `git pull`, and `git push`.
+- Use the platform's normal secure Git credential helper for ordinary
+  `git fetch`, `git pull`, and `git push`.
 - Use the Codex GitHub connector/app for repository inspection, PR reads, PR creation, review requests, draft/ready transitions, and other Codex-managed GitHub operations.
 - Use local `gh` auth only for workflows that explicitly shell out to `gh`.
 
@@ -32,14 +33,14 @@ If the connector is unavailable, do not switch to plaintext token storage. Use G
 
 1. Confirm local state:
 
-```powershell
+```bash
 git status --short --branch
 pnpm run doctor:github -- --remote
 ```
 
-2. Push the branch with Git/GCM:
+2. Push the branch with Git and the configured credential helper:
 
-```powershell
+```bash
 git push origin <branch>
 ```
 
@@ -49,6 +50,9 @@ git push origin <branch>
 
 ## Failure Handling
 
-- If Git remote commands fail with DPAPI or credential-store errors, recover through a visible interactive Windows session and Git Credential Manager.
+- If Git remote commands fail with credential-helper errors, recover through
+  the platform's interactive credential-manager flow.
 - If connector reads fail, keep the branch pushed but do not create/update/merge PRs through a local token fallback.
-- If both Git/GCM and the connector are unavailable, stop remote delivery and leave a local handoff with the branch, commit, verification status, and exact blocker.
+- If both Git credentials and the connector are unavailable, stop remote
+  delivery and leave a local handoff with the branch, commit, verification
+  status, and exact blocker.

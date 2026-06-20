@@ -9,7 +9,7 @@ module_greeting: >
   runtime storage.
 ksev_fixture_pack:
   prompt: "Which synthetic KNX fixture pack should be validated by default?"
-  default: "{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json"
+  default: "{project-root}/.agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json"
   user_setting: true
 ksev_report_dir:
   prompt: "Where should validator reports be written?"

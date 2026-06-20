@@ -1,6 +1,7 @@
 ﻿import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -432,7 +433,7 @@ class SupervisorService:
         return candidate
 
     async def import_bmad_candidate_work(self, session: AsyncSession, payload: CandidateWorkBmadImportRequest) -> CandidateWork:
-        repo_root = Path(__file__).resolve().parents[5]
+        repo_root = Path(self._repo_root() or Path(__file__).resolve().parents[5])
         package = parse_bmad_import_package(repo_root, payload.artifactPath)
         return await self.create_candidate_work(
             session,
@@ -567,13 +568,13 @@ class SupervisorService:
         root_dir = Path(__file__).resolve().parents[5]
         index_documents = [
             ("docs/architecture/index.md", "Architecture index"),
-            ("docs/prds/index.md", "PRD index"),
-            ("docs/stories/index.md", "Story index"),
+            ("docs/workflows/product-requirements-boundary.md", "Product requirements boundary"),
+            ("docs/workflows/implementation-evidence-boundary.md", "Story index"),
         ]
         approval_checkpoint_path = "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"
         blocked_stories = [
-            ("4.4", "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md", "Ollama local provider"),
-            ("5.5", "docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md", "Subscription-agent launch"),
+            ("4.4", "docs/workflows/implementation-evidence-boundary.md", "Ollama local provider"),
+            ("5.5", "docs/workflows/implementation-evidence-boundary.md", "Subscription-agent launch"),
         ]
 
         def document_view(path: str, label: str, extra_evidence: list[str] | None = None) -> DocumentationAuthorityDocumentView:
@@ -644,7 +645,7 @@ class SupervisorService:
                     label="Documentation authority report drift command",
                     status="required",
                     summary="Run `pnpm run check:documentation-authority` before merging documentation authority report changes.",
-                    requiredEvidence=["scripts/check-documentation-authority-report.mjs", "docs/stories/3-47-core-readiness-drift-checks.md"],
+                    requiredEvidence=["scripts/check-documentation-authority-report.mjs", "docs/workflows/implementation-evidence-boundary.md"],
                 ),
             ],
             nextSafeActions=[
@@ -942,7 +943,7 @@ class SupervisorService:
                 requiredFor=["work-item detail changes", "runtime evidence panel changes", "focused browser regression checks"],
                 evidence=[
                     "Runs the work-item detail Playwright slice with stable test-file and grep arguments.",
-                    "Owns supervisor and dashboard server lifecycle to avoid raw Playwright teardown hangs in Windows sessions.",
+                    "Owns supervisor and dashboard server lifecycle through the supported Linux Playwright web-server path.",
                 ],
             ),
             VerificationCommandView(
@@ -1009,17 +1010,6 @@ class SupervisorService:
                 evidence=[
                     "Checks Git/GCM/GitHub delivery readiness.",
                     "Live remote checks should be run from an approved interactive context when needed.",
-                ],
-            ),
-            VerificationCommandView(
-                commandId="bootstrap-run-check",
-                label="Fresh VM remote proof",
-                command="powershell -ExecutionPolicy Bypass -File .\\scripts\\bootstrap-windows.ps1 -VerifyRemote -RunCheck -WriteReport",
-                status="optional_for_fresh_vm_acceptance",
-                requiredFor=["fresh Windows VM acceptance", "bootstrap readiness report"],
-                evidence=[
-                    "Writes a redacted readiness report under .data/bootstrap.",
-                    "Proves local checks and live remote checks when credentials are healthy.",
                 ],
             ),
         ]
@@ -1100,12 +1090,12 @@ class SupervisorService:
             ),
             VerificationCommandGroupView(
                 groupId="optional-remote-bootstrap",
-                label="Optional remote and bootstrap",
+                label="Optional remote and setup",
                 status="optional",
-                summary="Use GitHub doctor and bootstrap verification when changing remote delivery, fresh-VM setup, or startup/bootstrap behavior.",
-                commandIds=["github-doctor-remote", "bootstrap-run-check", "setup-e2e"],
-                requiredBefore="fresh VM acceptance or remote delivery troubleshooting",
-                nextAction="Run optional checks only when the relevant auth, browser, or fresh-VM target is available.",
+                summary="Use GitHub doctor and setup verification when changing remote delivery or setup behavior.",
+                commandIds=["github-doctor-remote", "setup-e2e"],
+                requiredBefore="remote delivery or setup troubleshooting",
+                nextAction="Run optional checks only when the relevant auth or browser target is available.",
             ),
         ]
         handoff_checkpoints = [
@@ -1115,7 +1105,7 @@ class SupervisorService:
                 status="required_before_pr",
                 summary="Confirm the changed surfaces have focused verification, then run the full local gate before commit and PR.",
                 requiredCommandIds=["preflight", "full-check"],
-                relatedRunbooks=["README.md", "docs/handoffs/current.md"],
+                relatedRunbooks=["README.md", "docs/workflows/current-session-runbook.md"],
                 nextAction="Record focused checks and `pnpm run check` in the PR body before requesting merge.",
             ),
             VerificationHandoffCheckpointView(
@@ -1124,17 +1114,17 @@ class SupervisorService:
                 status="required_when_dashboard_changes",
                 summary="Pair dashboard UI changes with focused browser coverage and a production dashboard build.",
                 requiredCommandIds=["dashboard-controls-e2e", "dashboard-detail-e2e", "dashboard-build"],
-                relatedRunbooks=["docs/handoffs/current.md", "docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md"],
+                relatedRunbooks=["docs/workflows/current-session-runbook.md"],
                 nextAction="Run the focused browser runner for the changed page, then keep `pnpm run check` green.",
             ),
             VerificationHandoffCheckpointView(
-                checkpointId="fresh-vm-handoff",
-                label="Fresh VM handoff",
-                status="required_for_bootstrap_changes",
-                summary="Use bootstrap verification and redacted readiness reports when Windows setup, startup, or toolchain assumptions change.",
-                requiredCommandIds=["bootstrap-run-check", "github-doctor-remote", "setup-e2e"],
-                relatedRunbooks=["docs/bootstrap-windows-vm.md", "docs/fresh-vm-acceptance-checklist.md"],
-                nextAction="Run optional fresh-VM checks only from an appropriate interactive context with healthy credentials.",
+                checkpointId="setup-handoff",
+                label="Setup handoff",
+                status="required_for_setup_changes",
+                summary="Use setup verification and GitHub doctor evidence when supported setup or remote-delivery assumptions change.",
+                requiredCommandIds=["github-doctor-remote", "setup-e2e"],
+                relatedRunbooks=["README.md", "docs/workflows/linux-primary-development-runbook.md"],
+                nextAction="Run optional setup checks only from an appropriate context with healthy credentials.",
             ),
             VerificationHandoffCheckpointView(
                 checkpointId="authority-boundary-handoff",
@@ -1144,7 +1134,7 @@ class SupervisorService:
                 requiredCommandIds=["check-authority-readiness", "check-execution-boundary", "check-process-lifecycle"],
                 relatedRunbooks=[
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
-                    "docs/stories/index.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 nextAction=(
                     "Do not start provider calls, process launch, shell execution, source mutation, network, "
@@ -1217,8 +1207,8 @@ class SupervisorService:
                     "GET /supervisor/documentation-authority-report",
                 ],
                 relatedDocs=[
-                    "docs/prds/local-provider-ollama-disabled-to-limited-execution.md",
-                    "docs/prds/local-provider-ollama-prd-review-2026-06-08.md",
+                    "docs/workflows/product-requirements-boundary.md#local-provider-ollama-boundary",
+                    "docs/workflows/product-requirements-boundary.md#local-provider-ollama-boundary",
                     "docs/architecture/kendall-vnxt-provider-disabled-fixtures-2026-06-08.md",
                 ],
                 dashboardAnchors=["/controls#execution-readiness-report", "/controls#documentation-authority-report"],
@@ -1252,8 +1242,8 @@ class SupervisorService:
                     "GET /supervisor/threat-boundary",
                 ],
                 relatedDocs=[
-                    "docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md",
-                    "docs/prds/subscription-agent-launch-prd-review-2026-06-08.md",
+                    "docs/workflows/product-requirements-boundary.md#subscription-agent-launch-boundary",
+                    "docs/workflows/product-requirements-boundary.md#subscription-agent-launch-boundary",
                     "docs/architecture/kendall-vnxt-process-lifecycle-design-2026-06-08.md",
                 ],
                 dashboardAnchors=["/controls#maintenance-action-plan-report", "/controls#execution-readiness-report"],
@@ -1286,8 +1276,8 @@ class SupervisorService:
                     "GET /supervisor/managed-recipe-policy-report",
                 ],
                 relatedDocs=[
-                    "docs/stories/1-18-premium-approval-request-artifacts.md",
-                    "docs/prds/supervisor-execution-authority-expansion.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/product-requirements-boundary.md#supervisor-execution-authority-expansion-boundary",
                 ],
                 dashboardAnchors=["/controls#execution-readiness-report", "/controls#managed-recipe-policy-report"],
                 stopLines=[
@@ -1318,8 +1308,8 @@ class SupervisorService:
                     "GET /supervisor/verification-readiness-report",
                 ],
                 relatedDocs=[
-                    "docs/stories/3-54-development-runway-safe-slices.md",
-                    "docs/stories/3-59-development-runway-readiness-checks.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
                 ],
                 dashboardAnchors=[
@@ -1358,7 +1348,7 @@ class SupervisorService:
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-worker-threat-boundary-2026-06-08.md",
                     "docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md",
-                    "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=["/controls#execution-readiness-report"],
                 stopLines=[
@@ -1391,8 +1381,8 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/github-connector-workflow.md",
-                    "docs/stories/3-43-safe-delivery-hygiene.md",
-                    "docs/stories/3-44-delivery-readiness-policy-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#github-workflow-policy-report",
@@ -1430,10 +1420,10 @@ class SupervisorService:
                     "GET /work-items/{id}/delivery-execution-evidence",
                 ],
                 relatedDocs=[
-                    "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md",
-                    "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md",
-                    "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md",
-                    "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                     "docs/github-connector-workflow.md",
                 ],
                 dashboardAnchors=[
@@ -1475,13 +1465,13 @@ class SupervisorService:
                     "GET /supervisor/delivery-readiness-policy-report",
                 ],
                 relatedDocs=[
-                    "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md",
-                    "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md",
-                    "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md",
-                    "docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md",
-                    "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md",
-                    "docs/stories/6-21-local-cleanup-readiness.md",
-                    "docs/stories/6-22-remote-cleanup-sync-readiness.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#local-cleanup-readiness-report",
@@ -1514,9 +1504,9 @@ class SupervisorService:
                         "Artifacts still blocked or deferred name the missing approval, policy, evidence, or readiness gate.",
                     ],
                     relatedDocs=[
-                        "docs/stories/11-1-reconcile-planning-status-after-epic-10-delivery.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
                         "docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md",
-                        "docs/prds/index.md",
+                        "docs/workflows/product-requirements-boundary.md",
                     ],
                     nextAction="Use refreshed evidence, not stale planning labels, before selecting the next authority lane.",
                 ),
@@ -1534,23 +1524,23 @@ class SupervisorService:
                         "Merged-to-main state remains false until PR #103 is approved and merged.",
                     ],
                     relatedDocs=[
-                        "docs/stories/11-3-create-next-lane-authority-decision-packet.md",
-                        "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
+                        "docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract",
                     ],
                     nextAction="Re-check GitHub before claiming merged-to-main state or using PR state for cleanup decisions.",
                 ),
             ],
             nextLaneDecisionPacket=NextLaneDecisionPacketView(
-                packetId="epic-11-next-lane-authority-decision-packet-2026-06-13",
+                packetId="epic-11-next-lane-authority-decision-contract",
                 status="decision_only_no_authority_granted",
-                recommendation="Adaptive scoring decision preparation is only a lane for Bob to consider approving; no lane is selected or authorized.",
-                packetPath="docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+                recommendation="Adaptive scoring decision preparation is only a lane for the operator to consider approving; no lane is selected or authorized.",
+                packetPath="docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract",
                 approvalRequired=True,
                 noAuthorityGranted=True,
                 requiredFreshnessCheck="PR, CI, review, and lane-readiness state must be re-checked on the same day as successor-story approval.",
                 relatedDocs=[
-                    "docs/stories/11-3-create-next-lane-authority-decision-packet.md",
-                    "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract",
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
                 ],
                 stopLines=[
@@ -1558,7 +1548,7 @@ class SupervisorService:
                     "Do not compute adaptive scores, call providers, launch processes, perform premium execution, mutate GitHub, or clean up from this packet.",
                     "Any successor story must match the selected packet lane's exact authority family, operation, target, evidence, stop lines, retained evidence, rollback path, and expiry or review point.",
                 ],
-                nextAction="Prepare an exact approval packet only after Bob selects one lane to consider.",
+                nextAction="Prepare an exact approval packet only after the operator selects one lane to consider.",
             ),
             families=families,
             readinessLadder=[
@@ -1569,7 +1559,7 @@ class SupervisorService:
                     summary="No authority family may move from blocked to ready without operator approval naming the authority and scope.",
                     requiredEvidence=[
                         "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
-                        "docs/stories/index.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
                     ],
                 ),
                 ProviderEnablementPolicyStepView(
@@ -1731,7 +1721,7 @@ class SupervisorService:
                 evidence=[
                     "Runs Playwright coverage through playwright.config.ts web servers.",
                     "Useful after broad operator workflow or responsive UI changes.",
-                    "May require browser stack and Windows web-server teardown posture to be healthy.",
+                    "Requires the Linux browser stack and Playwright web-server lifecycle to be healthy.",
                 ],
                 ownsServerLifecycle=False,
             ),
@@ -1770,7 +1760,7 @@ class SupervisorService:
                 status="active",
                 summary="Reports disabled process, provider, model, premium, command, source, network, and credential authority.",
                 evidenceScope=["runtime settings", "worker registry", "disabled authority gates"],
-                relatedDocs=["docs/stories/2-6-disabled-execution-configuration-checks.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="execution-readiness-report-v1",
@@ -1781,7 +1771,7 @@ class SupervisorService:
                 evidenceScope=["provider enablement policy", "attempt evidence", "routing outcome evidence"],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
-                    "docs/stories/3-7-execution-readiness-and-evidence-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -1791,7 +1781,7 @@ class SupervisorService:
                 status="active",
                 summary="Indexes architecture, PRD, story, approval checkpoint, blocked story, and documentation drift status.",
                 evidenceScope=["documentation indexes", "blocked authority stories", "approval checkpoint"],
-                relatedDocs=["docs/stories/3-15-documentation-authority-report.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="verification-readiness-report-v1",
@@ -1800,7 +1790,7 @@ class SupervisorService:
                 status="active",
                 summary="Lists required checks, optional checks, and verification stop lines for local delivery readiness.",
                 evidenceScope=["workspace checks", "dashboard build", "supervisor tests", "browser test setup"],
-                relatedDocs=["docs/stories/3-16-verification-readiness-report.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="authority-readiness-matrix-report-v1",
@@ -1817,9 +1807,9 @@ class SupervisorService:
                     "authority stop lines",
                 ],
                 relatedDocs=[
-                    "docs/stories/3-53-authority-readiness-matrix-report.md",
-                    "docs/stories/11-4-show-reconciliation-and-next-lane-readiness-in-dev-console.md",
-                    "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -1830,12 +1820,12 @@ class SupervisorService:
                 summary="Maps focused and full dashboard browser verification runners, setup commands, lifecycle notes, and stop lines.",
                 evidenceScope=["Playwright runners", "dashboard browser setup", "repo-local e2e caches", "authority stop lines"],
                 relatedDocs=[
-                    "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
-                    "docs/stories/3-21-dashboard-detail-e2e-runner.md",
-                    "docs/stories/3-22-dashboard-e2e-report.md",
-                    "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md",
-                    "docs/stories/3-24-dashboard-mobile-e2e-runner.md",
-                    "docs/stories/3-25-managed-recipe-e2e-runners.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -1845,7 +1835,7 @@ class SupervisorService:
                 status="active",
                 summary="Aggregates safe maintenance tracks for docs, verification, reports, and blocked authority posture.",
                 evidenceScope=["maintenance tracks", "safe next actions", "authority stop lines"],
-                relatedDocs=["docs/stories/3-19-maintenance-readiness-report.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="maintenance-action-plan-report-v1",
@@ -1854,7 +1844,7 @@ class SupervisorService:
                 status="active",
                 summary="Consolidates the next safe maintenance actions, verification chain, evidence links, and authority stop lines into one operator plan.",
                 evidenceScope=["maintenance action steps", "verification chain", "dashboard anchors", "authority stop lines"],
-                relatedDocs=["docs/stories/3-52-maintenance-action-plan-report.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="safe-development-backlog-report-v1",
@@ -1865,7 +1855,7 @@ class SupervisorService:
                 evidenceScope=["safe backlog items", "recommended PR slice size", "blocked authority boundaries"],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md",
-                    "docs/stories/3-27-safe-development-backlog-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -1875,7 +1865,7 @@ class SupervisorService:
                 status="active",
                 summary="Groups safe backlog, maintenance action, verification, and authority blocker evidence into larger PR-sized development slices.",
                 evidenceScope=["larger PR slice planning", "safe backlog items", "verification chain", "authority stop lines"],
-                relatedDocs=["docs/stories/3-54-development-runway-safe-slices.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="runtime-evidence-review-report-v1",
@@ -1884,7 +1874,7 @@ class SupervisorService:
                 status="active",
                 summary="Indexes work-item runtime evidence exports, review priority, evidence counts, related reports, and read-only review actions.",
                 evidenceScope=["work-item review queue", "runtime evidence counts", "review priority", "authority stop lines"],
-                relatedDocs=["docs/stories/3-55-runtime-evidence-review-index.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="managed-recipe-policy-report-v1",
@@ -1895,7 +1885,7 @@ class SupervisorService:
                 evidenceScope=["managed recipes", "policy gates", "allowed paths", "remote automation stop lines"],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md",
-                    "docs/stories/3-36-managed-recipe-policy-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -1907,8 +1897,8 @@ class SupervisorService:
                 evidenceScope=["Git credential posture", "Codex connector workflow", "GitHub CLI optionality", "remote delivery checks"],
                 relatedDocs=[
                     "docs/github-connector-workflow.md",
-                    "docs/stories/3-1-github-auth-and-remote-sync-doctor.md",
-                    "docs/stories/3-4-connector-backed-github-workflow-polish.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -1918,7 +1908,7 @@ class SupervisorService:
                 status="active",
                 summary="Shows read-only repository, worktree, branch, PR, and CI hygiene signals before delivery automation is approved.",
                 evidenceScope=["local Git status", "branch and upstream status", "worktree inventory", "PR/CI query posture"],
-                relatedDocs=["docs/stories/6-14-git-hygiene-read-only.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="codex-readiness-report-v1",
@@ -1927,7 +1917,7 @@ class SupervisorService:
                 status="active",
                 summary="Shows no-launch Codex CLI discovery, auth-check posture, worker-launch stop lines, and source-mutation boundaries.",
                 evidenceScope=["PATH discovery", "auth check posture", "worker launch boundary", "source mutation boundary"],
-                relatedDocs=["docs/stories/6-16-codex-readiness-no-launch.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="codex-implementation-approval-report-v1",
@@ -1936,7 +1926,7 @@ class SupervisorService:
                 status="active",
                 summary="Defines the exact approval packet for a future bounded Codex implementation run without launching Codex.",
                 evidenceScope=["approval request", "isolated worktree scope", "path boundaries", "verification and rollback evidence"],
-                relatedDocs=["docs/stories/6-17-codex-implementation-approval-packet.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="claude-review-readiness-report-v1",
@@ -1945,7 +1935,7 @@ class SupervisorService:
                 status="active",
                 summary="Shows no-launch Claude CLI discovery, review-only policy, scarcity controls, and stop lines.",
                 evidenceScope=["PATH discovery", "review-only posture", "scarce-use policy", "source mutation boundary"],
-                relatedDocs=["docs/stories/6-18-claude-readiness-no-launch.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="claude-review-approval-report-v1",
@@ -1954,7 +1944,7 @@ class SupervisorService:
                 status="active",
                 summary="Defines the exact approval packet for a future bounded Claude adversarial review without launching Claude.",
                 evidenceScope=["review trigger", "context scope", "no-edit boundary", "scarcity controls", "output contract"],
-                relatedDocs=["docs/stories/6-19-claude-review-approval-packet.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="github-delivery-authority-report-v1",
@@ -1963,7 +1953,7 @@ class SupervisorService:
                 status="active",
                 summary="Defines the progressive approval ladder for push, PR, CI, review resolution, merge, and remote cleanup without remote writes.",
                 evidenceScope=["push approval", "PR approval", "CI wait approval", "merge approval", "remote cleanup boundary"],
-                relatedDocs=["docs/stories/6-20-github-delivery-authority-ladder.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="trusted-delivery-eligibility-report-v1",
@@ -1972,7 +1962,7 @@ class SupervisorService:
                 status="active",
                 summary="Evaluates local branch and evidence readiness for future trusted push, PR, merge, and cleanup without remote mutation.",
                 evidenceScope=["current branch", "working tree", "commits ahead", "missing delivery evidence", "hard stops"],
-                relatedDocs=["docs/stories/6-26-trusted-delivery-eligibility-evaluator.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="local-cleanup-readiness-report-v1",
@@ -1981,7 +1971,7 @@ class SupervisorService:
                 status="active",
                 summary="Defines evidence and stop lines for future local worktree, branch, and artifact cleanup without deleting anything.",
                 evidenceScope=["cleanup policy", "retained evidence", "blocked targets", "worktree and branch removal boundaries"],
-                relatedDocs=["docs/stories/6-21-local-cleanup-readiness.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="remote-cleanup-sync-readiness-report-v1",
@@ -1990,7 +1980,7 @@ class SupervisorService:
                 status="active",
                 summary="Defines readiness for future remote branch cleanup and GitHub issue/story sync without remote mutation.",
                 evidenceScope=["remote branch cleanup", "GitHub issue sync", "story status sync", "remote mutation boundaries"],
-                relatedDocs=["docs/stories/6-22-remote-cleanup-sync-readiness.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="trusted-autonomy-readiness-report-v1",
@@ -1999,7 +1989,7 @@ class SupervisorService:
                 status="active",
                 summary="Defines graduation gates for future low-risk autonomy without enabling autonomous execution.",
                 evidenceScope=["low-risk eligibility", "graduation gates", "blocked work", "autonomy stop lines"],
-                relatedDocs=["docs/stories/6-23-trusted-autonomy-readiness.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="epic-6-completion-audit-report-v1",
@@ -2009,9 +1999,9 @@ class SupervisorService:
                 summary="Shows Epic 6 completion evidence, remaining blockers, and the next approval needed before delivery work continues.",
                 evidenceScope=["Epic 6 local stack", "delivery packaging plan", "authority gates", "completion blockers"],
                 relatedDocs=[
-                    "docs/goals/epic-6-progress-and-kickoff-2026-06-10.md",
-                    "docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md",
-                    "docs/stories/6-24-epic-6-completion-audit.md",
+                    "docs/architecture/kendall-vnxt-epic-6-authority-ledger-2026-06-10.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -2022,8 +2012,8 @@ class SupervisorService:
                 summary="Defines the exact read-only approval packet needed before one real BMAD story trial can use bounded Codex, Claude, delivery, and cleanup lanes.",
                 evidenceScope=["selected story", "approval packets", "blocked operations", "stop conditions", "next safe actions"],
                 relatedDocs=[
-                    "docs/goals/epic-6-progress-and-kickoff-2026-06-10.md",
-                    "docs/stories/6-27-epic-6-mvp-proof-trial-packet.md",
+                    "docs/architecture/kendall-vnxt-epic-6-authority-ledger-2026-06-10.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -2035,7 +2025,7 @@ class SupervisorService:
                 evidenceScope=["delivery readiness statuses", "operator waiver rules", "record-only dashboard checkpoint", "remote automation stop lines"],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md",
-                    "docs/stories/3-44-delivery-readiness-policy-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
             ),
             SupervisorReportCatalogEntryView(
@@ -2114,8 +2104,8 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md",
-                    "docs/stories/3-27-safe-development-backlog-report.md",
-                    "docs/stories/3-19-maintenance-readiness-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=["/controls#safe-development-backlog", "/controls#maintenance-readiness-report"],
                 nextAction="Start with one ready safe backlog item and include all related contracts, service, dashboard, docs, tests, and drift checks in one PR.",
@@ -2138,9 +2128,9 @@ class SupervisorService:
                     "GET /supervisor/verification-readiness-report",
                 ],
                 relatedDocs=[
-                    "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
-                    "docs/stories/3-31-runtime-evidence-export-drift-check.md",
-                    "docs/stories/3-40-runtime-report-anchor-links.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=["/controls#supervisor-report-catalog", "/controls#verification-readiness-report"],
                 nextAction="When an evidence surface changes, update report catalog entries, runtime export references, dashboard links, and browser assertions together.",
@@ -2162,8 +2152,8 @@ class SupervisorService:
                     "GET /supervisor/dashboard-e2e-report",
                 ],
                 relatedDocs=[
-                    "docs/stories/3-16-verification-readiness-report.md",
-                    "docs/stories/3-22-dashboard-e2e-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=["/controls#verification-readiness-report", "/controls#dashboard-e2e-report"],
                 nextAction="Run focused checks matching the changed surfaces, then `pnpm run check` before commit.",
@@ -2188,7 +2178,7 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
-                    "docs/stories/index.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#documentation-authority-report",
@@ -2253,10 +2243,10 @@ class SupervisorService:
                     "GET /supervisor/maintenance-action-plan-report",
                 ],
                 relatedDocs=[
-                    "docs/stories/3-18-supervisor-report-catalog.md",
-                    "docs/stories/3-31-runtime-evidence-export-drift-check.md",
-                    "docs/stories/3-60-safe-backlog-report-anchors.md",
-                    "docs/stories/3-64-development-runway-evidence-links.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#development-runway-report",
@@ -2273,7 +2263,7 @@ class SupervisorService:
                         evidence=["safe-backlog-report-alignment"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
-                        relatedDocs=["docs/stories/3-27-safe-development-backlog-report.md", "docs/stories/3-60-safe-backlog-report-anchors.md"],
+                        relatedDocs=["docs/workflows/implementation-evidence-boundary.md", "docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
                         nextAction="Keep the safe backlog item ready before starting report/evidence navigation work.",
                     ),
@@ -2287,7 +2277,7 @@ class SupervisorService:
                         evidence=["select-large-safe-slice", "verify-evidence-surfaces"],
                         requiredCommandIds=["check-maintenance-action-plan"],
                         relatedReports=["GET /supervisor/maintenance-action-plan-report"],
-                        relatedDocs=["docs/stories/3-52-maintenance-action-plan-report.md", "docs/stories/3-61-maintenance-action-evidence-links.md"],
+                        relatedDocs=["docs/workflows/implementation-evidence-boundary.md", "docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#maintenance-action-plan-report"],
                         nextAction="Keep maintenance action plan steps aligned with report/evidence navigation work.",
                     ),
@@ -2299,7 +2289,7 @@ class SupervisorService:
                         evidence=["check-reports", "check-runtime-export", "check-safe-backlog"],
                         requiredCommandIds=["check-reports", "check-runtime-export", "check-safe-backlog"],
                         relatedReports=["GET /supervisor/verification-readiness-report"],
-                        relatedDocs=["docs/stories/3-16-verification-readiness-report.md", "docs/stories/3-31-runtime-evidence-export-drift-check.md"],
+                        relatedDocs=["docs/workflows/implementation-evidence-boundary.md", "docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#verification-readiness-report"],
                         nextAction="Run focused checks before the full local gate when this slice changes.",
                     ),
@@ -2328,10 +2318,10 @@ class SupervisorService:
                     "GET /supervisor/delivery-readiness-policy-report",
                 ],
                 relatedDocs=[
-                    "docs/stories/3-16-verification-readiness-report.md",
-                    "docs/stories/3-22-dashboard-e2e-report.md",
-                    "docs/stories/3-43-safe-delivery-hygiene.md",
-                    "docs/stories/3-58-verification-handoff-checkpoints.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#verification-readiness-report",
@@ -2350,7 +2340,7 @@ class SupervisorService:
                         evidence=["verification-surface-hardening", "github-delivery-hygiene"],
                         requiredCommandIds=["check-safe-backlog", "check-development-runway"],
                         relatedReports=["GET /supervisor/safe-development-backlog", "GET /supervisor/development-runway-report"],
-                        relatedDocs=["docs/stories/3-43-safe-delivery-hygiene.md", "docs/stories/3-54-development-runway-safe-slices.md"],
+                        relatedDocs=["docs/workflows/implementation-evidence-boundary.md", "docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog", "/controls#development-runway-report"],
                         nextAction="Keep both backlog items ready before changing verification or runbook guidance.",
                     ),
@@ -2362,7 +2352,7 @@ class SupervisorService:
                         evidence=[checkpoint.checkpointId for checkpoint in verification.handoffCheckpoints],
                         requiredCommandIds=["check-verification-readiness", "check-runbooks"],
                         relatedReports=["GET /supervisor/verification-readiness-report"],
-                        relatedDocs=["docs/stories/3-58-verification-handoff-checkpoints.md", "docs/handoffs/current.md"],
+                        relatedDocs=["docs/workflows/implementation-evidence-boundary.md", "docs/workflows/current-session-runbook.md"],
                         dashboardAnchors=["/controls#verification-readiness-report"],
                         nextAction="Keep handoff checkpoints aligned with runbooks whenever verification guidance changes.",
                     ),
@@ -2374,7 +2364,7 @@ class SupervisorService:
                         evidence=["full-check"],
                         requiredCommandIds=["full-check"],
                         relatedReports=["GET /supervisor/verification-readiness-report"],
-                        relatedDocs=["docs/stories/3-16-verification-readiness-report.md", "docs/stories/3-56-verification-execution-plan-groups.md"],
+                        relatedDocs=["docs/workflows/implementation-evidence-boundary.md", "docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#verification-readiness-report"],
                         nextAction="Run the full local gate before committing verification/runbook work.",
                     ),
@@ -2405,9 +2395,9 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
-                    "docs/stories/index.md",
-                    "docs/stories/3-53-authority-readiness-matrix-report.md",
-                    "docs/stories/3-62-maintenance-readiness-evidence-links.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#documentation-authority-report",
@@ -2424,7 +2414,7 @@ class SupervisorService:
                         evidence=blocked_families,
                         requiredCommandIds=["check-authority-readiness"],
                         relatedReports=["GET /supervisor/authority-readiness-matrix-report"],
-                        relatedDocs=["docs/stories/3-53-authority-readiness-matrix-report.md", "docs/stories/index.md"],
+                        relatedDocs=["docs/workflows/implementation-evidence-boundary.md", "docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#authority-readiness-matrix-report"],
                         nextAction="Keep this slice read-only until explicit operator approval names the authority family and scope.",
                     ),
@@ -2436,7 +2426,7 @@ class SupervisorService:
                         evidence=["docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"],
                         requiredCommandIds=["check-docs", "check-documentation-authority"],
                         relatedReports=["GET /supervisor/documentation-authority-report"],
-                        relatedDocs=["docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md", "docs/stories/index.md"],
+                        relatedDocs=["docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md", "docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#documentation-authority-report"],
                         nextAction="Update approval checkpoint evidence only as read-only governance maintenance.",
                     ),
@@ -2449,8 +2439,8 @@ class SupervisorService:
                         requiredCommandIds=["check-execution-boundary", "check-process-lifecycle"],
                         relatedReports=["GET /supervisor/execution-readiness-report", "GET /supervisor/maintenance-readiness-report"],
                         relatedDocs=[
-                            "docs/stories/3-48-execution-boundary-report-drift-check.md",
-                            "docs/stories/3-51-process-lifecycle-policy-drift-check.md",
+                            "docs/workflows/implementation-evidence-boundary.md",
+                            "docs/workflows/implementation-evidence-boundary.md",
                         ],
                         dashboardAnchors=["/controls#execution-readiness-report", "/controls#maintenance-readiness-report"],
                         nextAction="Do not treat green boundary checks as approval to implement blocked authority stories.",
@@ -2520,8 +2510,8 @@ class SupervisorService:
                 relatedReports=["GET /supervisor/documentation-authority-report"],
                 relatedDocs=[
                     "docs/architecture/index.md",
-                    "docs/prds/index.md",
-                    "docs/stories/index.md",
+                    "docs/workflows/product-requirements-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=["/controls#documentation-authority-report"],
                 nextAction="Run `pnpm run check:docs` after every architecture, PRD, story, or approval-checkpoint change.",
@@ -2538,9 +2528,9 @@ class SupervisorService:
                 ],
                 relatedReports=["GET /supervisor/verification-readiness-report", "GET /supervisor/dashboard-e2e-report"],
                 relatedDocs=[
-                    "docs/stories/3-16-verification-readiness-report.md",
-                    "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
-                    "docs/stories/3-22-dashboard-e2e-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=["/controls#verification-readiness-report", "/controls#dashboard-e2e-report"],
                 nextAction="Run focused checks for changed areas, then `pnpm run check` before merge.",
@@ -2556,7 +2546,7 @@ class SupervisorService:
                     "Controls page fetches the report catalog, dashboard e2e report, managed recipe policy report, and other read-only reports.",
                 ],
                 relatedReports=["GET /supervisor/report-catalog", "GET /supervisor/dashboard-e2e-report", "GET /supervisor/managed-recipe-policy-report"],
-                relatedDocs=["docs/stories/3-18-supervisor-report-catalog.md", "docs/stories/3-22-dashboard-e2e-report.md"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md", "docs/workflows/implementation-evidence-boundary.md"],
                 dashboardAnchors=["/controls#supervisor-report-catalog", "/controls#dashboard-e2e-report", "/controls#managed-recipe-policy-report"],
                 nextAction="Add new read-only reports to the catalog, controls page, tests, and runtime export references together.",
             ),
@@ -2577,7 +2567,7 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
-                    "docs/stories/index.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=["/controls#documentation-authority-report", "/controls#execution-readiness-report"],
                 nextAction="Wait for explicit operator approval naming authority and scope before moving blocked stories into implementation.",
@@ -2631,7 +2621,7 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md",
-                    "docs/stories/3-27-safe-development-backlog-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#maintenance-readiness-report",
@@ -2658,16 +2648,16 @@ class SupervisorService:
                     "GET /supervisor/dashboard-e2e-report",
                 ],
                 relatedDocs=[
-                    "docs/stories/3-16-verification-readiness-report.md",
-                    "docs/stories/3-26-dashboard-e2e-report-drift-check.md",
-                    "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
-                    "docs/stories/3-31-runtime-evidence-export-drift-check.md",
-                    "docs/stories/3-32-safe-development-backlog-drift-check.md",
-                    "docs/stories/3-35-runbook-check-chain-hardening.md",
-                    "docs/stories/3-37-managed-recipe-policy-drift-check.md",
-                    "docs/stories/3-38-runbook-managed-recipe-check-chain.md",
-                    "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
-                    "docs/stories/3-46-maintenance-readiness-drift-check.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#verification-readiness-report",
@@ -2698,9 +2688,9 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/github-connector-workflow.md",
-                    "docs/stories/3-42-github-workflow-policy-report.md",
-                    "docs/stories/3-43-safe-delivery-hygiene.md",
-                    "docs/stories/3-44-delivery-readiness-policy-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#github-workflow-policy-report",
@@ -2731,13 +2721,13 @@ class SupervisorService:
                     "GET /supervisor/delivery-readiness-policy-report",
                 ],
                 relatedDocs=[
-                    "docs/stories/2-7-runtime-evidence-export-strategy.md",
-                    "docs/stories/3-20-runtime-evidence-review-manifest.md",
-                    "docs/stories/3-30-runtime-evidence-review-navigator.md",
-                    "docs/stories/3-33-evidence-overview-review-shortcuts.md",
-                    "docs/stories/3-34-report-shortcuts-in-evidence-overview.md",
-                    "docs/stories/3-39-report-shortcut-anchor-polish.md",
-                    "docs/stories/3-36-managed-recipe-policy-report.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#supervisor-report-catalog",
@@ -2767,7 +2757,7 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
-                    "docs/stories/index.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#documentation-authority-report",
@@ -2847,7 +2837,7 @@ class SupervisorService:
                     itemId="git-gcm-remotes",
                     label="Git remotes use Git Credential Manager",
                     status="preferred",
-                    summary="Ordinary fetch, pull, and push should use Git/GCM with Windows DPAPI credential storage.",
+                    summary="Ordinary fetch, pull, and push should use Git/GCM or the supported Linux credential posture.",
                     evidence=[
                         "docs/github-connector-workflow.md defines Git/GCM as the preferred remote Git path.",
                         "pnpm run doctor:github checks credential helper and credentialStore posture.",
@@ -3015,7 +3005,7 @@ class SupervisorService:
         )
 
     def get_codex_readiness_report(self) -> CodexReadinessReportView:
-        cli_path = shutil.which("codex") or shutil.which("codex.cmd")
+        cli_path = shutil.which("codex")
         cli_detected = bool(cli_path)
         return CodexReadinessReportView(
             reportId="codex-readiness-report-v1",
@@ -3035,7 +3025,7 @@ class SupervisorService:
                         if cli_detected
                         else "No Codex CLI executable was found on PATH."
                     ),
-                    evidence=["shutil.which('codex')", "shutil.which('codex.cmd')"],
+                    evidence=["shutil.which('codex')"],
                 ),
                 CodexReadinessCheckView(
                     checkId="auth-posture",
@@ -3079,12 +3069,13 @@ class SupervisorService:
         generated_at = datetime.now(timezone.utc)
         approval_expires_at = generated_at + timedelta(hours=24)
         allowed_paths = [
-            "docs/stories/<approved-story>.md",
+            "docs/workflows/** only when the approved delivery requires source-owned workflow or runbook changes",
             "services/supervisor/** only when the approved story requires backend behavior",
             "apps/dashboard/** only when the approved story requires Dev Console behavior",
             "packages/contracts/** only when API/dashboard contracts change",
             "tests/** only for verification tied to the approved story",
             "scripts/** only for drift checks tied to the approved story",
+            "Local BMAD story artifacts are input-only and must stay out of the Git delivery diff",
         ]
         blocked_paths = [
             ".env and credential files",
@@ -3096,7 +3087,7 @@ class SupervisorService:
         ]
         expected_command_shape = [
             "codex <non-interactive task mode> --cwd <approved-worktree> -- <bounded task packet>",
-            "pnpm.cmd run check or narrower approved verification command",
+            "pnpm run check or narrower approved verification command",
             "git diff --stat and git status --short for evidence only",
         ]
         required_evidence = [
@@ -3145,7 +3136,7 @@ class SupervisorService:
             expectedCommandShape=expected_command_shape,
             requiredEvidence=required_evidence,
             rollbackPlan=[
-                "Leave all changes in the isolated worktree until Bob reviews them.",
+                "Leave all changes in the isolated worktree until the operator reviews them.",
                 "If verification fails, keep the branch blocked and retain failure evidence.",
                 "Do not push, merge, delete branches, or remove the worktree without separate authority.",
                 "Use Git diff/status evidence to decide whether to repair, abandon, or manually inspect the attempt.",
@@ -3171,7 +3162,7 @@ class SupervisorService:
                     label="Verification",
                     status="required",
                     summary="The approval must name the focused and broad checks that prove the attempt.",
-                    evidence=["pnpm.cmd run check", "focused supervisor/dashboard checks when applicable"],
+                    evidence=["pnpm run check", "focused supervisor/dashboard checks when applicable"],
                 ),
                 CodexImplementationApprovalRequirementView(
                     requirementId="retention",
@@ -3192,7 +3183,7 @@ class SupervisorService:
             launchContractFixtures=self._codex_launch_contract_fixtures(),
             blockedAuthorities=self._codex_blocked_authorities(),
             nextSafeActions=[
-                "Use this packet to ask Bob for one story-scoped Codex implementation authority when ready.",
+                "Use this packet to ask the operator for one story-scoped Codex implementation authority when ready.",
                 "Add approval binding before any backend endpoint can launch Codex.",
                 "Keep Claude review, GitHub delivery, merge, and cleanup on separate authority paths.",
             ],
@@ -3229,7 +3220,7 @@ class SupervisorService:
             "allowedPaths": allowed_paths,
             "blockedPaths": blocked_paths,
             "allowedCommandShape": expected_command_shape,
-            "verificationCommand": "pnpm.cmd run check",
+            "verificationCommand": "pnpm run check",
             "timeoutSeconds": 3600,
             "budget": "one_bounded_attempt",
             "evidenceOutputs": required_evidence,
@@ -3347,7 +3338,7 @@ class SupervisorService:
         ]
 
     def get_claude_review_readiness_report(self) -> ClaudeReviewReadinessReportView:
-        cli_path = shutil.which("claude") or shutil.which("claude.cmd")
+        cli_path = shutil.which("claude")
         cli_detected = bool(cli_path)
         return ClaudeReviewReadinessReportView(
             reportId="claude-review-readiness-report-v1",
@@ -3367,7 +3358,7 @@ class SupervisorService:
                         if cli_detected
                         else "No Claude CLI executable was found on PATH."
                     ),
-                    evidence=["shutil.which('claude')", "shutil.which('claude.cmd')"],
+                    evidence=["shutil.which('claude')"],
                 ),
                 ClaudeReadinessCheckView(
                     checkId="auth-posture",
@@ -3387,7 +3378,7 @@ class SupervisorService:
                     checkId="source-mutation",
                     label="Source mutation",
                     status="blocked",
-                    summary="Claude must not edit files unless Bob later grants a separate explicit edit-mode authority.",
+                    summary="Claude must not edit files unless the operator later grants a separate explicit edit-mode authority.",
                     evidence=["Current Claude lane is scarce adversarial review, not routine implementation."],
                 ),
             ],
@@ -3451,7 +3442,7 @@ class SupervisorService:
                     requirementId="explicit-request",
                     label="Explicit request",
                     status="allowed",
-                    summary="Bob can explicitly request Claude review for a named work item or diff.",
+                    summary="The operator can explicitly request Claude review for a named work item or diff.",
                     evidence=["approvalPrompt", "target work item id", "review reason"],
                 ),
                 ClaudeReviewApprovalRequirementView(
@@ -3499,7 +3490,7 @@ class SupervisorService:
                 "Risk-ranked findings with file/path references where applicable.",
                 "False-positive tolerant critique; no implementation patch is expected.",
                 "Explicit statement if no material issues are found.",
-                "Questions or blockers that require Bob rather than autonomous expansion.",
+                "Questions or blockers that require the operator rather than autonomous expansion.",
             ],
             requiredEvidence=[
                 "approval text with authority family, operation, target work item, review reason, and context scope",
@@ -3509,7 +3500,7 @@ class SupervisorService:
                 "findings artifact summary and verification follow-up recommendation",
             ],
             scarcityControls=[
-                "One Claude review attempt per approval unless Bob grants a wider policy.",
+                "One Claude review attempt per approval unless the operator grants a wider policy.",
                 "Do not use Claude for routine generation, low-risk changes, formatting, or ordinary docs cleanup.",
                 "Record why Codex, Ollama, deterministic checks, or human review were insufficient.",
                 "Stop before retrying or expanding context if the review fails or asks for more authority.",
@@ -3522,7 +3513,7 @@ class SupervisorService:
                 "The review output requires implementation, merge, delivery, or cleanup authority.",
             ],
             nextSafeActions=[
-                "Use this packet to ask Bob for one review-only Claude authority when a high-risk work item is ready.",
+                "Use this packet to ask the operator for one review-only Claude authority when a high-risk work item is ready.",
                 "Implement approval binding before any endpoint can launch Claude.",
                 "Keep implementation fixes, GitHub delivery, and cleanup on separate authority paths.",
             ],
@@ -3575,7 +3566,7 @@ class SupervisorService:
                     stepId="resolve-review-comments",
                     label="Resolve review comments",
                     status="blocked",
-                    summary="Resolve or reply to review comments only after Bob confirms comments were addressed.",
+                    summary="Resolve or reply to review comments only after the operator confirms comments were addressed.",
                     requiredApproval="comment-resolution approval",
                     evidence=["review thread ids", "resolution summary", "verification after changes"],
                 ),
@@ -3583,7 +3574,7 @@ class SupervisorService:
                     stepId="merge-pr",
                     label="Merge PR",
                     status="blocked",
-                    summary="Merge only after PR, CI, review, and final branch evidence are ready and Bob approves the merge.",
+                    summary="Merge only after PR, CI, review, and final branch evidence are ready and the operator approves the merge.",
                     requiredApproval="PR-scoped merge approval",
                     evidence=["green CI", "review resolved", "merge method", "post-merge target branch"],
                 ),
@@ -3614,7 +3605,7 @@ class SupervisorService:
                         "target remote is origin and base branch is main",
                         "git status is clean except the approved delivery commits",
                         "diff scope matches the active work item or follow-up delivery plan",
-                        "pnpm.cmd run check passed locally",
+                        "pnpm run check passed locally",
                         "PR title/body include verification and authority boundary evidence",
                     ],
                     hardStops=[
@@ -3769,7 +3760,7 @@ class SupervisorService:
         verification_summary = (
             str(verification_evidence.get("summary"))
             if verification_evidence and verification_evidence.get("summary")
-            else "A recent `pnpm.cmd run check` result must be retained before auto-eligible push or PR."
+            else "A recent `pnpm run check` result must be retained before auto-eligible push or PR."
         )
         verification_command = (
             str(verification_evidence.get("commandShape"))
@@ -3851,7 +3842,7 @@ class SupervisorService:
                 label="Local check evidence",
                 gateFamily="local_verification",
                 status="passed" if verification_recorded else "not_recorded",
-                summary=verification_summary if verification_recorded else "A recent `pnpm.cmd run check` result must be retained before auto-eligible push or PR.",
+                summary=verification_summary if verification_recorded else "A recent `pnpm run check` result must be retained before auto-eligible push or PR.",
                 evidence=[verification_command],
                 blockedReason=None if verification_recorded else "local-verification-evidence-missing",
             ),
@@ -4965,20 +4956,62 @@ class SupervisorService:
         approved_scope: list[str] | None = None,
     ) -> dict:
         default_allowed_globs = [
-            "docs/stories/**",
             "services/supervisor/**",
             "apps/dashboard/**",
             "packages/contracts/**",
             "tests/**",
             "scripts/**",
         ]
-        approved_files = [path for path in (approved_scope or ["docs/stories/<approved-story>.md"]) if not path.endswith("/**")]
+        approved_files = [path for path in (approved_scope or []) if not path.endswith("/**")]
         allowed_globs = approved_scope or default_allowed_globs
         forbidden_paths = [
             ".env*",
             ".git/**",
             "node_modules/**",
+            "**/.next/**",
+            "**/.turbo/**",
+            "**/.pnp*",
+            "**/.yarn/**",
+            "**/.vercel/**",
+            "**/out/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/__pycache__/**",
+            ".pytest_cache/**",
+            ".mypy_cache/**",
+            ".ruff_cache/**",
+            ".data/**",
+            ".idea/**",
+            ".vscode/**",
+            ".coverage",
+            "*.pyc",
+            "*.pyo",
+            "*.pyd",
+            "*.tsbuildinfo",
+            "next-env.d.ts",
+            ".DS_Store",
+            "Thumbs.db",
+            "runtime/.batch_timer_state.json",
             "services/supervisor/.venv/**",
+            "_bmad/config.user.*",
+            "_bmad/custom/config.user.*",
+            "*.user.toml",
+            "_bmad/memory/knx/**",
+            "_bmad-output/**",
+            ".claude/skills/**",
+            ".agents/skills/.claude-plugin/**",
+            ".agents/skills/**/.decision-log.md",
+            ".agents/skills/**/validation-report-*.md",
+            "skills/**",
+            "docs/goals/**",
+            "docs/handoffs/**",
+            "docs/workflows/knx-*-2026-06-19.md",
+            "docs/workflows/mise-normal-workflow-implementation-evidence-2026-06-18.md",
+            "docs/linux-install/planning/**",
+            "docs/linux-install/evidence/** except schema.md",
+            "docs/prds/**",
+            "docs/research/**",
+            "docs/stories/**",
         ]
         generated_file_rules = [
             "generated files are blocked unless their directory is explicitly approved",
@@ -4986,7 +5019,7 @@ class SupervisorService:
         ]
         user_owned_dirty_file_rules = [
             "AGENTS.md requires explicit story scope before worker mutation",
-            "existing dirty files owned by Bob remain blocked until inspected or separated",
+            "existing dirty files owned by the operator remain blocked until inspected or separated",
         ]
         if not diff_name_ok or not status_ok:
             return {
@@ -5053,12 +5086,7 @@ class SupervisorService:
 
     def _classify_trusted_delivery_path(self, path: str, change_type: str, allowed_globs: list[str]) -> dict:
         normalized = path.replace("\\", "/")
-        if (
-            normalized.startswith(".env")
-            or normalized.startswith(".git/")
-            or normalized.startswith("node_modules/")
-            or normalized.startswith("services/supervisor/.venv/")
-        ):
+        if self._is_forbidden_clean_install_delivery_path(normalized):
             return {
                 "path": path,
                 "changeType": change_type,
@@ -5088,7 +5116,7 @@ class SupervisorService:
                 "reason": "approved-scope",
             }
         allowed_prefixes = [glob[:-3] for glob in allowed_globs if glob.endswith("/**")]
-        if any(normalized.startswith(prefix) for prefix in allowed_prefixes):
+        if any(normalized == prefix or normalized.startswith(f"{prefix}/") for prefix in allowed_prefixes):
             return {
                 "path": path,
                 "changeType": change_type,
@@ -5101,6 +5129,59 @@ class SupervisorService:
             "classification": "unexpected",
             "reason": "changed-path-outside-approved-scope",
         }
+
+    def _is_forbidden_clean_install_delivery_path(self, normalized: str) -> bool:
+        if (
+            normalized.startswith(".env")
+            or normalized.startswith(".git/")
+            or normalized.startswith("node_modules/")
+            or normalized.startswith(".pytest_cache/")
+            or normalized.startswith(".mypy_cache/")
+            or normalized.startswith(".ruff_cache/")
+            or normalized.startswith(".data/")
+            or normalized.startswith(".idea/")
+            or normalized.startswith(".vscode/")
+            or normalized.startswith("services/supervisor/.venv/")
+            or normalized in {".coverage", ".DS_Store", "Thumbs.db", "runtime/.batch_timer_state.json"}
+            or normalized.rsplit("/", 1)[-1] == "next-env.d.ts"
+            or normalized.endswith("/.DS_Store")
+            or normalized.endswith("/Thumbs.db")
+            or normalized in {"_bmad/config.user.yaml", "_bmad/config.user.toml", "_bmad/custom/config.user.toml"}
+            or normalized.rsplit("/", 1)[-1].endswith(".user.toml")
+            or normalized.startswith("_bmad/memory/knx/")
+            or normalized.startswith("_bmad-output/")
+            or normalized.startswith(".claude/skills/")
+            or normalized.startswith(".agents/skills/.claude-plugin/")
+            or normalized.startswith("skills/")
+            or normalized.startswith("docs/goals/")
+            or normalized.startswith("docs/handoffs/")
+            or normalized.startswith("docs/linux-install/planning/")
+            or normalized.startswith("docs/prds/")
+            or normalized.startswith("docs/research/")
+            or normalized.startswith("docs/stories/")
+        ):
+            return True
+        if re.match(r"^\.agents/skills/.*/\.decision-log\.md$", normalized):
+            return True
+        if re.match(r"^\.agents/skills/.*/validation-report-[^/]+\.md$", normalized):
+            return True
+        if re.match(r"^docs/workflows/knx-.*-2026-06-19\.md$", normalized):
+            return True
+        if re.search(r"(^|/)(\.next|\.turbo|\.venv|venv|__pycache__)(/|$)", normalized):
+            return True
+        if re.search(r"(^|/)(\.yarn|\.vercel|out)(/|$)", normalized):
+            return True
+        if re.search(r"(^|/)\.pnp(\..*)?$", normalized, re.IGNORECASE):
+            return True
+        if re.search(r"\.tsbuildinfo$", normalized, re.IGNORECASE):
+            return True
+        if re.search(r"\.py[cod]$", normalized, re.IGNORECASE):
+            return True
+        if normalized == "docs/workflows/mise-normal-workflow-implementation-evidence-2026-06-18.md":
+            return True
+        if normalized.startswith("docs/linux-install/evidence/"):
+            return normalized != "docs/linux-install/evidence/schema.md"
+        return False
 
     def _trusted_delivery_diff_guard_fixtures(self) -> list[dict]:
         def guard_for(path: str, change_type: str) -> dict:
@@ -5164,7 +5245,7 @@ class SupervisorService:
             return {
                 "commandId": "full-check",
                 "label": "Full workspace check",
-                "commandShape": "pnpm.cmd run check",
+                "commandShape": "pnpm run check",
                 "status": status,
                 "exitCode": exit_code,
                 "durationMs": 132000 if status == "passed" else None,
@@ -5376,7 +5457,7 @@ class SupervisorService:
                     itemId="stale-worktree",
                     label="Stale worktree",
                     status="manual_review",
-                    summary="A stale worktree requires Bob review until the system can prove it has no unmerged useful changes.",
+                    summary="A stale worktree requires operator review until the system can prove it has no unmerged useful changes.",
                     evidence=["last commit", "branch relation", "changed-file list", "staleness reason"],
                 ),
                 LocalCleanupPolicyItemView(
@@ -5506,7 +5587,7 @@ class SupervisorService:
             generatedAt=datetime.now(timezone.utc),
             summary=(
                 "Read-only trusted autonomy readiness report. It defines the evidence needed before low-risk repeatable workflows "
-                "can run end to end with Bob handling exceptions, but it does not approve autonomous execution."
+                "can run end to end with the operator handling exceptions, but it does not approve autonomous execution."
             ),
             autonomyGates=[
                 TrustedAutonomyReadinessGateView(
@@ -5556,7 +5637,7 @@ class SupervisorService:
                 "clear rollback or stop behavior",
                 "bounded path, command, provider, GitHub, and cleanup scope",
                 "runtime evidence export retained before and after automation",
-                "Bob-approved policy defining what exceptions still interrupt him",
+                "operator-approved policy defining what exceptions still interrupt the operator",
             ],
             stopConditions=[
                 "The work is not low-risk, repeatable, and already proven.",
@@ -5568,7 +5649,7 @@ class SupervisorService:
             nextSafeActions=[
                 "Use this report to select one narrow workflow class for a future autonomy trial.",
                 "Keep all autonomy booleans false until a specific policy is approved.",
-                "Prefer Bob exceptions over silent retries when failures or scope changes occur.",
+                "Prefer operator exceptions over silent retries when failures or scope changes occur.",
             ],
             readOnly=True,
             lowRiskAutonomyApproved=False,
@@ -5609,7 +5690,7 @@ class SupervisorService:
                     evidence=[
                         "https://github.com/slawdawg/Kendall-vnxt/pull/86",
                         "PR #86 was merged into main.",
-                        "docs/goals/epic-6-delivery-packaging-plan-2026-06-11.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
                         "The delivery plan did not approve Codex launch, Claude launch, remote cleanup, story sync, or trusted autonomy expansion.",
                     ],
                 ),
@@ -5617,11 +5698,11 @@ class SupervisorService:
                     itemId="local-cleanup-closeout",
                     label="Local cleanup closeout",
                     status="completed_with_follow_up",
-                    summary="Merged Epic 6 worktrees and branches were cleaned up, and Windows cleanup RCA produced a hardening follow-up.",
+                    summary="Merged Epic 6 worktrees and branches were cleaned up, and local cleanup RCA produced a hardening follow-up.",
                     evidence=[
                         "Local Git worktree list was reduced to the main checkout plus intentional ongoing work.",
                         "Remote merged branches for PR #85, PR #86, PR #87, and PR #88 were cleaned up.",
-                        "Windows cache and ACL cleanup prevention was delivered through PR #87.",
+                        "Local cache and ACL cleanup prevention was delivered through PR #87.",
                     ],
                 ),
                 EpicCompletionAuditItemView(
@@ -5651,7 +5732,7 @@ class SupervisorService:
                     status="completed",
                     summary="Story 3.66 is the selected low-risk real BMAD story for the Epic 6 MVP proof lifecycle.",
                     evidence=[
-                        "docs/stories/3-66-epic-6-mvp-proof-done-evidence.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
                         "Candidate Work 8afea99f-bb79-4f51-a66c-f1b02dff9005 was promoted to Active WorkItem a8e43bba-a2dd-4b2e-b995-22fecea85611.",
                         "PR #96 merged proof-selection, approval-packet, progress, and authority-ledger evidence into main.",
                     ],
@@ -5735,7 +5816,7 @@ class SupervisorService:
                 "cleanup evidence, and final done evidence without launching Claude, expanding providers, syncing issues, "
                 "or retaining raw prompts."
             ),
-            selectedStory="Story 3.66: docs/stories/3-66-epic-6-mvp-proof-done-evidence.md",
+            selectedStory="Story 3.66: docs/workflows/implementation-evidence-boundary.md",
             trialStatus="epic_6_mvp_proof_complete",
             steps=[
                 MvpProofTrialStepView(
@@ -5745,7 +5826,7 @@ class SupervisorService:
                     summary="Story 3.66 was selected as the low-risk real BMAD story for the Epic 6 MVP proof lifecycle.",
                     requiredApproval="Selection was approved through the merged PR #96 proof-selection evidence.",
                     evidence=[
-                        "docs/stories/3-66-epic-6-mvp-proof-done-evidence.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
                         "PR #96 merged proof-selection evidence into main.",
                         "Candidate Work 8afea99f-bb79-4f51-a66c-f1b02dff9005",
                         "Active WorkItem a8e43bba-a2dd-4b2e-b995-22fecea85611",
@@ -5756,12 +5837,12 @@ class SupervisorService:
                     label="Bounded Codex implementation",
                     status="completed",
                     summary="One isolated local Codex worktree updated only the approved proof-scope evidence/report surface for Story 3.66.",
-                    requiredApproval="Approved one Story 3.66 bounded Codex implementation with pnpm.cmd run check verification and no GitHub delivery, cleanup, Claude, provider expansion, or issue sync.",
+                    requiredApproval="Approved one Story 3.66 bounded Codex implementation with pnpm run check verification and no GitHub delivery, cleanup, Claude, provider expansion, or issue sync.",
                     evidence=[
-                        "Approval packet docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md",
+                        "Story 3.66 and the Epic 6 authority ledger retain the bounded implementation approval evidence.",
                         "Worktree branch codex/epic-6-mvp-proof-story-3-66-bounded-implementati",
                         "Focused supervisor tests passed for the changed report surfaces.",
-                        "Full pnpm.cmd run check passed before PR delivery.",
+                        "Full pnpm run check passed before PR delivery.",
                     ],
                 ),
                 MvpProofTrialStepView(
@@ -6344,9 +6425,9 @@ class SupervisorService:
             "GET /supervisor/authority-readiness-matrix-report",
         ]
         related_docs = [
-            "docs/stories/3-55-runtime-evidence-review-index.md",
-            "docs/stories/3-57-work-item-review-queue-shortcuts.md",
-            "docs/stories/3-65-runtime-review-evidence-links.md",
+            "docs/workflows/implementation-evidence-boundary.md",
+            "docs/workflows/implementation-evidence-boundary.md",
+            "docs/workflows/implementation-evidence-boundary.md",
             "docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md",
         ]
         review_dashboard_anchors = [
@@ -6479,79 +6560,11 @@ class SupervisorService:
             "GET /supervisor/disabled-provider-proofs",
         ]
         git_backed_evidence = [
-            "docs/goals/bmad-architecture-completion-github-progress-goal-2026-06-08.md",
-            "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
-            "docs/stories/2-7-runtime-evidence-export-strategy.md",
-            "docs/stories/3-7-execution-readiness-and-evidence-report.md",
-            "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md",
-            "docs/stories/3-15-documentation-authority-report.md",
-            "docs/stories/3-16-verification-readiness-report.md",
-            "docs/stories/3-17-dashboard-e2e-reliability-guardrails.md",
-            "docs/stories/3-18-supervisor-report-catalog.md",
-            "docs/stories/3-19-maintenance-readiness-report.md",
-            "docs/stories/3-52-maintenance-action-plan-report.md",
-            "docs/stories/3-61-maintenance-action-evidence-links.md",
-            "docs/stories/3-53-authority-readiness-matrix-report.md",
-            "docs/stories/3-54-development-runway-safe-slices.md",
-            "docs/stories/3-59-development-runway-readiness-checks.md",
-            "docs/stories/3-63-development-runway-pr-batching-policy.md",
-            "docs/stories/3-64-development-runway-evidence-links.md",
-            "docs/stories/3-55-runtime-evidence-review-index.md",
-            "docs/stories/3-65-runtime-review-evidence-links.md",
-            "docs/stories/3-20-runtime-evidence-review-manifest.md",
-            "docs/stories/3-21-dashboard-detail-e2e-runner.md",
-            "docs/stories/3-22-dashboard-e2e-report.md",
-            "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md",
-            "docs/stories/3-24-dashboard-mobile-e2e-runner.md",
-            "docs/stories/3-25-managed-recipe-e2e-runners.md",
-            "docs/stories/3-26-dashboard-e2e-report-drift-check.md",
-            "docs/stories/3-27-safe-development-backlog-report.md",
-            "docs/stories/3-28-supervisor-report-catalog-drift-check.md",
-            "docs/stories/3-29-runbook-verification-alignment.md",
-            "docs/stories/3-60-safe-backlog-report-anchors.md",
-            "docs/stories/3-30-runtime-evidence-review-navigator.md",
-            "docs/stories/3-31-runtime-evidence-export-drift-check.md",
-            "docs/stories/3-32-safe-development-backlog-drift-check.md",
-            "docs/stories/3-33-evidence-overview-review-shortcuts.md",
-            "docs/stories/3-34-report-shortcuts-in-evidence-overview.md",
-            "docs/stories/3-35-runbook-check-chain-hardening.md",
-            "docs/stories/3-36-managed-recipe-policy-report.md",
-            "docs/stories/3-37-managed-recipe-policy-drift-check.md",
-            "docs/stories/3-38-runbook-managed-recipe-check-chain.md",
-            "docs/stories/3-39-report-shortcut-anchor-polish.md",
-            "docs/stories/3-40-runtime-report-anchor-links.md",
-            "docs/stories/3-41-current-gap-review-refresh.md",
-            "docs/stories/3-42-github-workflow-policy-report.md",
-            "docs/stories/6-14-git-hygiene-read-only.md",
-            "docs/stories/6-16-codex-readiness-no-launch.md",
-            "docs/stories/6-17-codex-implementation-approval-packet.md",
-            "docs/stories/6-18-claude-readiness-no-launch.md",
-            "docs/stories/6-19-claude-review-approval-packet.md",
-            "docs/stories/6-20-github-delivery-authority-ladder.md",
-            "docs/stories/6-26-trusted-delivery-eligibility-evaluator.md",
-            "docs/stories/6-21-local-cleanup-readiness.md",
-            "docs/stories/6-22-remote-cleanup-sync-readiness.md",
-            "docs/stories/6-23-trusted-autonomy-readiness.md",
-            "docs/stories/6-24-epic-6-completion-audit.md",
-            "docs/stories/6-27-epic-6-mvp-proof-trial-packet.md",
-            "docs/stories/3-43-safe-delivery-hygiene.md",
-            "docs/stories/3-44-delivery-readiness-policy-report.md",
-            "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
-            "docs/stories/3-46-maintenance-readiness-drift-check.md",
-            "docs/stories/3-62-maintenance-readiness-evidence-links.md",
-            "docs/stories/3-47-core-readiness-drift-checks.md",
-            "docs/stories/3-48-execution-boundary-report-drift-check.md",
-            "docs/stories/3-49-execution-evidence-boundary-drift-check.md",
-            "docs/stories/3-50-provider-fixture-policy-drift-check.md",
-            "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
-            "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
-            "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
-            "docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md",
-            "docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md",
-            "docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md",
-            "docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md",
-            "docs/stories/3-51-process-lifecycle-policy-drift-check.md",
-            "docs/prds/supervisor-execution-authority-expansion.md",
+            "docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md",
+            "docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md",
+            "docs/workflows/implementation-evidence-boundary.md",
+            "docs/workflows/product-requirements-boundary.md#supervisor-execution-authority-expansion-boundary",
+            "docs/workflows/execution-authority-boundary.md",
             "docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md",
             "docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md",
             "services/supervisor/src/supervisor/api/main.py",
@@ -6630,7 +6643,7 @@ class SupervisorService:
                         "Local runtime state is limited to supervisor database rows and generated export identifiers.",
                     ],
                     relatedReports=["GET /work-items/{id}/runtime-evidence-export"],
-                    relatedDocs=["docs/stories/2-7-runtime-evidence-export-strategy.md"],
+                    relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                     dashboardAnchors=["#execution-attempts", "#workflow-history"],
                 ),
                 RuntimeEvidenceReviewNavigatorItemView(
@@ -6651,7 +6664,7 @@ class SupervisorService:
                     ],
                     relatedDocs=[
                         "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
-                        "docs/stories/2-8-threat-boundary-for-commands-prompts-providers-and-secrets.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
                     ],
                     dashboardAnchors=["#runtime-evidence-export"],
                     stopLines=[
@@ -6678,8 +6691,8 @@ class SupervisorService:
                         "GET /supervisor/safe-development-backlog",
                     ],
                     relatedDocs=[
-                        "docs/stories/3-20-runtime-evidence-review-manifest.md",
-                        "docs/stories/3-30-runtime-evidence-review-navigator.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
                     ],
                     dashboardAnchors=["#runtime-evidence-export"],
                 ),
@@ -6703,10 +6716,10 @@ class SupervisorService:
                         "GET /supervisor/threat-boundary",
                     ],
                     relatedDocs=[
-                        "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
-                        "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
-                        "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
-                        "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
                     ],
                     dashboardAnchors=["#runtime-evidence-export", "/controls#execution-readiness-report"],
                     stopLines=[
@@ -6732,10 +6745,10 @@ class SupervisorService:
                         "GET /supervisor/execution-readiness-report",
                     ],
                     relatedDocs=[
-                        "docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md",
-                        "docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md",
-                        "docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md",
-                        "docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
+                        "docs/workflows/implementation-evidence-boundary.md",
                     ],
                     dashboardAnchors=["#runtime-evidence-export", "#execution-attempts", "/controls#execution-readiness-report"],
                     stopLines=[
@@ -7293,7 +7306,7 @@ class SupervisorService:
             authority_mode=authority_mode,
             status=terminal_status,
             requested_by_id=payload.actorId,
-            requested_by_label=payload.actorLabel or "Bob",
+            requested_by_label=payload.actorLabel or "Operator",
             failure_reason=launch_result["summary"] if terminal_status != ExecutionAttemptStatus.COMPLETED.value else None,
             workspace_isolation_plan_json=workspace_isolation_plan,
             artifact_refs_json=[launch_evidence],
@@ -7585,12 +7598,10 @@ class SupervisorService:
 
     def _run_execution_attempt_verification_command(self, command_shape: str) -> dict:
         allowed_commands = {
-            "pnpm.cmd run check": ["pnpm.cmd", "run", "check"],
             "pnpm run check": ["pnpm", "run", "check"],
-            "pnpm.cmd run test:supervisor": ["pnpm.cmd", "run", "test:supervisor"],
             "pnpm run test:supervisor": ["pnpm", "run", "test:supervisor"],
-            "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch": [
-                "pnpm.cmd",
+            "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch": [
+                "pnpm",
                 "run",
                 "test:supervisor",
                 "--",
@@ -7734,7 +7745,7 @@ class SupervisorService:
             blocked_normalized = self._normalize_supervised_codex_scope_path(blocked, allow_glob=True)
             if not blocked_normalized:
                 return False
-            if blocked_normalized.endswith("/**") and normalized.startswith(blocked_normalized[:-3]):
+            if blocked_normalized.endswith("/**") and self._path_matches_scope_prefix(normalized, blocked_normalized[:-3]):
                 return False
             if blocked_normalized.endswith("*") and normalized.startswith(blocked_normalized[:-1]):
                 return False
@@ -7744,11 +7755,14 @@ class SupervisorService:
             allowed_normalized = self._normalize_supervised_codex_scope_path(allowed, allow_glob=True)
             if not allowed_normalized:
                 continue
-            if allowed_normalized.endswith("/**") and normalized.startswith(allowed_normalized[:-3]):
+            if allowed_normalized.endswith("/**") and self._path_matches_scope_prefix(normalized, allowed_normalized[:-3]):
                 return True
             if normalized == allowed_normalized:
                 return True
         return False
+
+    def _path_matches_scope_prefix(self, normalized: str, prefix: str) -> bool:
+        return normalized == prefix or normalized.startswith(f"{prefix}/")
 
     def _normalize_supervised_codex_scope_path(self, path: str, *, allow_glob: bool = False) -> str | None:
         normalized = path.replace("\\", "/").strip()
@@ -7903,7 +7917,7 @@ class SupervisorService:
             },
             actor_type="operator",
             actor_id=payload.actorId,
-            actor_label=payload.actorLabel or "Bob",
+            actor_label=payload.actorLabel or "Operator",
         )
 
     def _verification_worktree_path(self, attempt: ExecutionAttempt) -> str:
@@ -8616,7 +8630,7 @@ class SupervisorService:
             "targetId": target.target_id,
             "commandTemplateId": target.command_template_id,
             "commandTemplateExecutionStatus": "executable_by_kendall",
-            "approvalActor": "Bob",
+            "approvalActor": "Operator",
             "approvalTimestamp": self._subscription_launch_datetime_as_utc(
                 self._STORY_8_5_ACCEPTED_APPROVAL_TIMESTAMP
             ).isoformat(),
@@ -8644,7 +8658,7 @@ class SupervisorService:
             "idempotentCleanupPolicy": lifecycle_evidence["idempotentCleanupPolicy"],
             "dashboardControls": "approval_bound_disabled_until_all_gates_green",
             "rollbackPolicy": lifecycle_evidence["rollbackPolicy"],
-            "verificationCommand": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+            "verificationCommand": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
             "allowedOutputMode": "artifact-only",
         }
 
@@ -9058,12 +9072,12 @@ class SupervisorService:
             "orphanDetectionPolicy": "not_claimed_direct_process_only",
             "terminalStateReconciliationPolicy": "direct_process_returncode_reconciled",
             "idempotentCleanupPolicy": "runtime_workspace_cleanup_deferred_no_source_or_branch_deletion",
-            "approvalActor": "Bob",
+            "approvalActor": "Operator",
             "commandArgv": self._subscription_agent_runtime_command_argv(target.target_id),
             "cwd": str(self._subscription_agent_runtime_cwd(str(attempt_id))),
             "retainedEvidence": ["approval_instance_id", "attempt_id", "runtime_metadata", "artifact_references"],
             "rollbackPolicy": "disable subscription-agent process launch and return to artifact-only fixture evidence",
-            "verificationCommand": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+            "verificationCommand": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
             "allowedOutputMode": "summary-and-artifact-references-only",
             "stopLines": [
                 "Do not use shell string execution.",
@@ -9312,7 +9326,7 @@ class SupervisorService:
                 "artifactId": f"subscription-fixture-output-summary-{attempt_id}",
                 "artifactKind": "fixture_output_summary",
                 "path": f"_bmad-output/subscription-launch/{attempt_id}/fixture-output-summary.json",
-                "verificationCommand": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "verificationCommand": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
                 "rawPayloadStored": False,
                 "operatorReviewRequired": True,
             },
@@ -9363,7 +9377,7 @@ class SupervisorService:
             lane=str(launch_request.approvalBinding["lane"]),
             authority_mode=str(launch_request.approvalBinding["authorityMode"]),
             status=ExecutionAttemptStatus.COMPLETED.value,
-            requested_by_label="Bob",
+            requested_by_label="Operator",
             workspace_isolation_plan_json=self._subscription_agent_launch_workspace_isolation_plan(launch_request.workspaceContract),
             artifact_refs_json=launch_request.outputArtifactSummary["artifactReferences"],
             event_refs_json=[],
@@ -9455,7 +9469,7 @@ class SupervisorService:
             lane=lane,
             authority_mode=authority_mode,
             status=ExecutionAttemptStatus.STARTING.value,
-            requested_by_label="Bob",
+            requested_by_label="Operator",
             workspace_isolation_plan_json=self._subscription_agent_launch_workspace_isolation_plan(workspace_contract),
             artifact_refs_json=[],
             event_refs_json=[],
@@ -9518,7 +9532,7 @@ class SupervisorService:
                 lane=str(launch_request.approvalBinding["lane"]),
                 authority_mode=str(launch_request.approvalBinding["authorityMode"]),
                 status=terminal_status,
-                requested_by_label="Bob",
+                requested_by_label="Operator",
                 workspace_isolation_plan_json=self._subscription_agent_launch_workspace_isolation_plan(
                     launch_request.workspaceContract
                 ),
@@ -9848,7 +9862,7 @@ class SupervisorService:
             if "rollbackStatus" in rejected_fields:
                 return "Keep subscription-agent launch disabled until rollback evidence is reviewed."
             return f"Inspect {next(iter(rejected_fields))} before exact launch approval can be requested."
-        return "Preserve disabled launch state until Bob supplies an exact launch approval packet."
+        return "Preserve disabled launch state until the operator supplies an exact launch approval packet."
 
     async def _record_subscription_agent_launch_rejection_event(
         self,
@@ -12665,10 +12679,6 @@ class SupervisorService:
             return [resolved, *args[1:]]
 
         if executable == "pnpm":
-            pnpm_cmd = shutil.which("pnpm.cmd")
-            if pnpm_cmd:
-                return [pnpm_cmd, *args[1:]]
-
             corepack = shutil.which("corepack")
             if corepack:
                 return [corepack, "pnpm", *args[1:]]

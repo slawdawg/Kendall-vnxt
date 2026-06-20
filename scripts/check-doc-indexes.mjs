@@ -6,19 +6,29 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
 const documents = [
   {
+    label: "README",
+    path: "README.md",
+    relativeBase: ".",
+  },
+  {
     label: "architecture index",
     path: "docs/architecture/index.md",
     relativeBase: "docs/architecture",
   },
   {
-    label: "PRD index",
-    path: "docs/prds/index.md",
-    relativeBase: "docs/prds",
+    label: "Linux install index",
+    path: "docs/linux-install/index.md",
+    relativeBase: "docs/linux-install",
+  },
+  {
+    label: "product requirements boundary",
+    path: "docs/workflows/product-requirements-boundary.md",
+    relativeBase: "docs/workflows",
   },
   {
     label: "story index",
-    path: "docs/stories/index.md",
-    relativeBase: "docs/stories",
+    path: "docs/workflows/implementation-evidence-boundary.md",
+    relativeBase: "docs/workflows",
   },
   {
     label: "execution authority approval checkpoints",
@@ -29,11 +39,6 @@ const documents = [
     label: "current gap review",
     path: "docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md",
     relativeBase: "docs/architecture",
-  },
-  {
-    label: "fresh VM handoff",
-    path: "docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md",
-    relativeBase: "docs/handoffs",
   },
 ];
 
@@ -52,15 +57,25 @@ function readDocument(document) {
 }
 
 function markdownReferences(content) {
-  return Array.from(content.matchAll(/`([^`\n]+\.md)`/g), (match) => match[1]);
+  const backtickedReferences = Array.from(content.matchAll(/`([^`\n]+\.md(?:#[^`\n]+)?)`/g), (match) => match[1]).filter(
+    (reference) => reference.includes("/") || reference.startsWith("docs"),
+  );
+  const linkReferences = Array.from(content.matchAll(/\[[^\]\n]+\]\(([^)\n]+\.md(?:#[^)\n]+)?)\)/g), (match) => match[1]);
+  return [...new Set([...backtickedReferences, ...linkReferences])];
+}
+
+function markdownLabelReferences(content) {
+  return Array.from(content.matchAll(/`([^`\n]+\.md(?:#[^`\n]+)?)`/g), (match) => match[1]);
 }
 
 function resolveReference(document, reference) {
-  const normalizedReference = normalize(reference);
+  const [referencePath, anchor] = reference.split("#");
+  const normalizedReference = normalize(referencePath);
   if (normalizedReference.startsWith("docs")) {
     return {
       displayPath: normalizedReference.replaceAll("\\", "/"),
       absolutePath: join(rootDir, normalizedReference),
+      anchor,
     };
   }
 
@@ -68,7 +83,25 @@ function resolveReference(document, reference) {
   return {
     displayPath,
     absolutePath: join(rootDir, displayPath),
+    anchor,
   };
+}
+
+function headingSlug(heading) {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function documentHeadingSlugs(content) {
+  return new Set(
+    Array.from(content.matchAll(/^#{1,6}\s+(.+)$/gm), (match) => headingSlug(match[1])).filter(Boolean),
+  );
 }
 
 function verifyMarkdownReferences(document, content) {
@@ -77,6 +110,14 @@ function verifyMarkdownReferences(document, content) {
     const resolved = resolveReference(document, reference);
     if (!existsSync(resolved.absolutePath)) {
       failures.push(`${document.path} references missing document: ${resolved.displayPath}`);
+      continue;
+    }
+    if (resolved.anchor) {
+      const targetContent = readFileSync(resolved.absolutePath, "utf8");
+      const anchors = documentHeadingSlugs(targetContent);
+      if (!anchors.has(resolved.anchor)) {
+        failures.push(`${document.path} references missing anchor ${resolved.displayPath}#${resolved.anchor}`);
+      }
     }
   }
 
@@ -101,7 +142,7 @@ function extractSection(content, heading) {
 
 function storyReferencesFromSection(content, heading) {
   const section = extractSection(content, heading);
-  return markdownReferences(section).map((reference) => {
+  return markdownLabelReferences(section).filter((reference) => !reference.includes("/")).map((reference) => {
     const basename = reference.split(/[\\/]/).pop();
     return basename ?? reference;
   });
@@ -116,13 +157,12 @@ for (const document of documents) {
   }
 }
 
-const storyIndex = loadedDocuments.get("docs/stories/index.md") ?? "";
+const storyIndex = loadedDocuments.get("docs/workflows/implementation-evidence-boundary.md") ?? "";
 const approvalCheckpoints =
   loadedDocuments.get("docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md") ?? "";
 const currentGapReview = loadedDocuments.get("docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md") ?? "";
-const freshVmHandoff = loadedDocuments.get("docs/handoffs/codex-fresh-vm-orientation-2026-06-08.md") ?? "";
 
-const blockedStoryIndexRefs = new Set(storyReferencesFromSection(storyIndex, "Blocked Pending Explicit Approval"));
+const blockedStoryIndexRefs = new Set(storyReferencesFromSection(storyIndex, "Blocked Authority Evidence"));
 const approvalCheckpointRefs = new Set(
   storyReferencesFromSection(approvalCheckpoints, "Current Blocked Execution Stories"),
 );
@@ -188,16 +228,6 @@ for (const currentGapText of [
 
 if (currentGapReview.includes("Updated: 2026-06-08 after execution-authority Stories 2.1-2.8")) {
   failures.push("Current gap review must not retain stale Story 2.1-2.8-only update framing.");
-}
-
-for (const handoffText of ["larger coherent slices", "static drift checks", "Do not start blocked Ollama or subscription-agent authority stories"]) {
-  if (!freshVmHandoff.includes(handoffText)) {
-    failures.push(`Fresh VM handoff must mention current continuation guidance: ${handoffText}`);
-  }
-}
-
-if (freshVmHandoff.includes("the next product slice should be the next explicit BMad story chosen by the operator")) {
-  failures.push("Fresh VM handoff must not point continuation at stale explicit-BMad-story-only guidance.");
 }
 
 for (const message of successes) {

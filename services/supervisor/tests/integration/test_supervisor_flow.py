@@ -1,5 +1,4 @@
 import asyncio
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -37,47 +36,6 @@ def _create_remote_delivery_repo(tmp_path: Path, branch_name: str) -> tuple[Path
     _run_git(repo_root, "add", "README.md")
     _run_git(repo_root, "commit", "-m", "Prepare remote delivery branch")
 
-    gh_cmd_shim = shim_dir / "gh.cmd"
-    gh_cmd_shim.write_text(
-        "\n".join(
-            [
-                "@echo off",
-                "setlocal enabledelayedexpansion",
-                "set \"GH_LOG=%GH_SHIM_LOG_PATH%\"",
-                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"create\" (",
-                "  echo https://github.com/example/repo/pull/789",
-                "  if not \"!GH_LOG!\"==\"\" echo create>>\"!GH_LOG!\"",
-                "  exit /b 0",
-                ")",
-                "if /I \"%1\"==\"auth\" if /I \"%2\"==\"status\" (",
-                "  echo github.com",
-                "  echo   ✓ Logged in to github.com account slawdawg (keyring)",
-                "  if not \"!GH_LOG!\"==\"\" echo auth>>\"!GH_LOG!\"",
-                "  exit /b 0",
-                ")",
-                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"view\" (",
-                "  echo https://github.com/example/repo/pull/789",
-                "  if not \"!GH_LOG!\"==\"\" echo view>>\"!GH_LOG!\"",
-                "  exit /b 0",
-                ")",
-                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"checks\" (",
-                "  echo checks passed",
-                "  if not \"!GH_LOG!\"==\"\" echo checks>>\"!GH_LOG!\"",
-                "  exit /b 0",
-                ")",
-                "if /I \"%1\"==\"pr\" if /I \"%2\"==\"merge\" (",
-                "  echo merged",
-                "  if not \"!GH_LOG!\"==\"\" echo merge>>\"!GH_LOG!\"",
-                "  exit /b 0",
-                ")",
-                "echo unexpected gh command",
-                "if not \"!GH_LOG!\"==\"\" echo unexpected>>\"!GH_LOG!\"",
-                "exit /b 1",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
     gh_shim = shim_dir / "gh"
     gh_shim.write_text(
         "\n".join(
@@ -91,7 +49,7 @@ def _create_remote_delivery_repo(tmp_path: Path, branch_name: str) -> tuple[Path
                 "fi",
                 'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then',
                 "  echo github.com",
-                "  echo '  Logged in to github.com account slawdawg (keyring)'",
+                "  echo '  Logged in to github.com account example-user (keyring)'",
                 '  [ -n "$GH_LOG" ] && echo auth >> "$GH_LOG"',
                 "  exit 0",
                 "fi",
@@ -118,9 +76,6 @@ def _create_remote_delivery_repo(tmp_path: Path, branch_name: str) -> tuple[Path
         encoding="utf-8",
     )
     gh_shim.chmod(0o755)
-
-    if os.name == "nt":
-        gh_shim = gh_cmd_shim
 
     return repo_root, remote_root, gh_shim
 

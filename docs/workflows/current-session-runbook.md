@@ -1,0 +1,51 @@
+# Current Session Runbook
+
+This is the stable first-read pointer for any Codex session starting in this
+repo.
+
+Read these first:
+
+```text
+AGENTS.md
+docs/ai-context/index.md
+docs/workflows/linux-primary-development-runbook.md
+docs/workflows/planning-doc-clean-install-boundary.md
+```
+
+Then use these navigation indexes before starting architecture, PRD, story, or
+execution-authority work:
+
+```text
+docs/architecture/index.md
+docs/workflows/product-requirements-boundary.md
+docs/workflows/implementation-evidence-boundary.md
+```
+
+Recommended prompt:
+
+```text
+Read AGENTS.md and docs/workflows/current-session-runbook.md, then continue from the repo state as source of truth.
+```
+
+Local continuity artifacts, dated handoffs, and BMAD work products are not part
+of the GitHub clean-install surface. Keep them under `_bmad-output/` or another
+ignored local workspace path. If their decisions need to survive in Git, rewrite
+the decision as source-owned docs, scripts, tests, or policy.
+
+This runbook also anchors runbook verification for the active check chain.
+
+`pnpm run check` includes `pnpm run check:docs`,
+`pnpm run check:documentation-authority`,
+`pnpm run check:verification-readiness`,
+`pnpm run check:authority-readiness`, `pnpm run check:premium-execution`,
+`pnpm run check:worker-launch`, `pnpm run check:e2e-report`,
+`pnpm run check:reports`, `pnpm run check:execution-boundary`,
+`pnpm run check:execution-evidence`, `pnpm run check:provider-fixtures`,
+`pnpm run check:process-lifecycle`, `pnpm run check:runbooks` for runbook
+verification, `pnpm run check:runtime-export`, `pnpm run check:runtime-review`,
+`pnpm run check:safe-backlog`, `pnpm run check:managed-recipes`,
+`pnpm run check:maintenance-action-plan`, `pnpm run check:development-runway`,
+`pnpm run check:delivery-readiness`, `pnpm run check:cleanup-automation`,
+`pnpm run check:linux-install-lane`, `pnpm run check:clean-install-boundary`,
+`pnpm run check:maintenance-readiness`, dashboard build verification, and
+supervisor integration tests.

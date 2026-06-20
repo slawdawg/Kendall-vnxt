@@ -29,10 +29,10 @@ const runtimeExportCheck = readWorkspaceFile("scripts/check-runtime-evidence-exp
 const reportCatalogCheck = readWorkspaceFile("scripts/check-supervisor-report-catalog.mjs");
 const runbookCheck = readWorkspaceFile("scripts/check-runbook-verification.mjs");
 const docsCheck = readWorkspaceFile("scripts/check-doc-indexes.mjs");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const currentGap = readWorkspaceFile("docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
-const handoff = readWorkspaceFile("docs/handoffs/current.md");
+const currentSessionRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
 
 const failures = [];
 
@@ -78,9 +78,9 @@ for (const serviceText of [
   "PR body names the safe slice",
   "Development runway slices are not execution-authority approvals.",
   "GET /supervisor/development-runway-report",
-  "docs/stories/3-54-development-runway-safe-slices.md",
-  "docs/stories/3-63-development-runway-pr-batching-policy.md",
-  "docs/stories/3-64-development-runway-evidence-links.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Development runway service must include ${serviceText}`, failures);
 }
@@ -146,7 +146,7 @@ for (const browserText of [
   "Related reports",
   "GET /supervisor/report-catalog",
   "Related docs",
-  "docs/stories/3-64-development-runway-evidence-links.md",
+  "docs/workflows/implementation-evidence-boundary.md",
   "/controls#supervisor-report-catalog",
   "/controls#development-runway-report",
   "Development runway slices are not execution-authority approvals.",
@@ -168,9 +168,9 @@ for (const testText of [
   '"ready-backlog-item"',
   '"handoff-checkpoint-coverage"',
   '"authority-families-blocked"',
-  "docs/stories/3-54-development-runway-safe-slices.md",
-  "docs/stories/3-63-development-runway-pr-batching-policy.md",
-  "docs/stories/3-64-development-runway-evidence-links.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
 }
@@ -181,7 +181,7 @@ assertCondition(
   failures,
 );
 assertCondition(
-  runtimeExportCheck.includes("docs/stories/3-54-development-runway-safe-slices.md"),
+  runtimeExportCheck.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export drift check must require Story 3.54 git-backed evidence",
   failures,
 );
@@ -196,13 +196,13 @@ assertCondition(
   failures,
 );
 
-const storyPath = "docs/stories/3-54-development-runway-safe-slices.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing development runway story ${storyPath}`, failures);
-const readinessStoryPath = "docs/stories/3-59-development-runway-readiness-checks.md";
+const readinessStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, readinessStoryPath)), `Missing development runway readiness story ${readinessStoryPath}`, failures);
-const batchingStoryPath = "docs/stories/3-63-development-runway-pr-batching-policy.md";
+const batchingStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, batchingStoryPath)), `Missing development runway PR batching story ${batchingStoryPath}`, failures);
-const linksStoryPath = "docs/stories/3-64-development-runway-evidence-links.md";
+const linksStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, linksStoryPath)), `Missing development runway evidence links story ${linksStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-54-development-runway-safe-slices.md"),
@@ -243,8 +243,8 @@ assertCondition(
   failures,
 );
 assertCondition(
-  handoff.includes("pnpm run check:development-runway"),
-  "Current handoff must mention check:development-runway in the active verification chain",
+  currentSessionRunbook.includes("pnpm run check:development-runway"),
+  "Current session runbook must mention check:development-runway in the active verification chain",
   failures,
 );
 

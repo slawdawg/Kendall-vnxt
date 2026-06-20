@@ -8,35 +8,40 @@ Scope: Kendall_vNxt governance, supervisor, dashboard, dynamic routing, and reco
 
 This document consolidates the early Chief of Staff / orchestrator concept with the architecture that now exists in the Kendall_vNxt repo. It is the durable architecture spine for future PRDs, stories, and implementation slices.
 
-Kendall_vNxt is not a single chatbot and not a separate Bob Supervisor product. It is a local-first assistant operating system made of governance workflows, a supervisor orchestration runtime, an operator dashboard, shared contracts, and progressively authorized worker lanes.
+Kendall_vNxt is not a single chatbot and not a separate personal supervisor product. It is a local-first assistant operating system made of governance workflows, a supervisor orchestration runtime, an operator dashboard, shared contracts, and progressively authorized worker lanes.
 
 ## Source Artifacts
 
 This architecture stitches together the current source of truth from:
 
 - `docs/architecture/index.md`
-- `docs/prds/index.md`
-- `docs/stories/index.md`
+- `docs/workflows/product-requirements-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
 - `docs/implementation-checkpoint-2026-06-06.md`
 - `docs/environment-recovery-and-runtime-boundary.md`
-- `docs/prds/supervisor-dynamic-routing-mvp-1.md`
-- `docs/prds/supervisor-dynamic-routing-follow-on-roadmap.md`
+- `docs/workflows/product-requirements-boundary.md#supervisor-dynamic-routing-boundary`
+- `docs/workflows/product-requirements-boundary.md#supervisor-dynamic-routing-boundary`
 - `docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md`
-- `docs/prds/supervisor-execution-authority-expansion.md`
+- `docs/workflows/product-requirements-boundary.md#supervisor-execution-authority-expansion-boundary`
 - `docs/architecture/kendall-vnxt-authority-dependency-graph-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-execution-readiness-and-evidence-policy-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-process-lifecycle-design-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-provider-disabled-fixtures-2026-06-08.md`
-- `docs/prds/local-provider-ollama-disabled-to-limited-execution.md`
-- `docs/prds/local-provider-ollama-prd-review-2026-06-08.md`
-- `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`
-- `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`
+- `docs/workflows/product-requirements-boundary.md#local-provider-ollama-boundary`
+- `docs/workflows/product-requirements-boundary.md#local-provider-ollama-boundary`
+- `docs/workflows/product-requirements-boundary.md#subscription-agent-launch-boundary`
+- `docs/workflows/product-requirements-boundary.md#subscription-agent-launch-boundary`
 - `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`
-- `_bmad/memory/knx/profile.md`
-- `_bmad/memory/knx/decisions/governance-coordinator-2026-06-01.md`
-- `_bmad/memory/knx/decisions/runtime-assistant-behavior-planning-gate-2026-06-01.md`
+- `.agents/skills/knx-agent-governance-coordinator/SKILL.md`
+- `docs/workflows/current-session-runbook.md`
+
+Local KNX cleanup inventories, evidence packets, approval packets, and execution
+reports are BMAD/Kendall workspace artifacts. They belong in ignored local
+output, not in the clean-install source surface. Repo-facing decisions from
+those packets must be rewritten as source-owned architecture, policy, or runbook
+content.
 
 ## Architecture Summary
 
@@ -208,7 +213,7 @@ Tracked source-of-truth assets include:
 - setup scripts,
 - dependency manifests and lockfiles,
 - configuration examples,
-- durable PRDs, architecture, checkpoints, and decision documents,
+- source-owned requirements boundaries, architecture, checkpoints, and decision documents,
 - deterministic fixtures that are part of the product.
 
 Ignored or local-only state includes:
@@ -222,7 +227,7 @@ Ignored or local-only state includes:
 - local secrets,
 - machine-specific configuration.
 
-Durable BMad outputs should be promoted into `docs/` when they need to survive machine loss or anchor future implementation.
+Generated BMad outputs stay in ignored local output. Durable decisions from those outputs should be rewritten as source-owned docs when they need to survive machine loss or anchor future implementation.
 
 ## Safety Principles
 

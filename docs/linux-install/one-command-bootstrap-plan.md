@@ -18,7 +18,7 @@ Ubuntu, opens a terminal, and begins the install from that Linux session.
 
 ## Feature-Complete Definition
 
-This feature is complete when a user who is not Bob can take any fresh Ubuntu
+This feature is complete when any user can take a fresh Ubuntu
 26.04-or-later machine, log in as a non-root user with sudo permissions, run
 the documented Kendall Vnxt bootstrap command locally from a terminal, and
 receive one of three evidence-backed outcomes:
@@ -270,7 +270,7 @@ next recovery command.
 - Real Ubuntu 26.04-or-later local-host evidence proves the documented command
   path works.
 - Real Ubuntu 26.04-or-later local-host rerun evidence proves idempotency.
-- `pnpm.cmd run check:docs` passes from the Windows repo checkout.
+- `pnpm run check:docs` passes from the repo checkout.
 - Targeted parser, gate, executor, evidence schema, and auth-denylist tests
   pass.
 
@@ -392,9 +392,9 @@ Local implementation progress:
 - If real-host apt provides an unsupported Node version, the single bootstrap
   script must be updated to install an approved Node channel and then rerun;
   feature-complete proof must not use an undocumented manual Node workaround.
-- `pnpm run check:linux-bootstrap-url` currently fails with HTTP 404 for the
-  raw GitHub `main` bootstrap URL, so the published README command is not yet
-  proven reachable.
+- `pnpm run check:linux-bootstrap-url` is part of the release verification
+  chain so the published README command cannot silently drift away from the
+  GitHub `main` bootstrap source.
 - [fresh-host-proof-procedure.md](fresh-host-proof-procedure.md) defines the
   required first-install and idempotency evidence capture steps and forbids
   switching to a manual multi-step install workaround.
@@ -405,44 +405,47 @@ Local implementation progress:
   and instance-specific notes, and the contract checker enforces that the
   historical section cannot override the single-method v1 boundary.
 
-Remaining before feature-complete:
+Delivered-lane maintenance requirements:
 
-- Publish the installer changes to the source used by the documented GitHub
-  `main` command, or record pre-merge evidence as branch/workspace evidence
-  only.
-- Prove the documented bootstrap script URL is reachable by the intended
-  installer audience, or publish an equivalent public bootstrap source.
-- Run the
-  [fresh host proof procedure](fresh-host-proof-procedure.md) against a fresh
-  or reset Ubuntu 26.04-or-later host.
-- Capture and validate first-install evidence.
-- Rerun after success and capture validated idempotency evidence.
-- Refresh `docs/linux-install.zip` when the implementation and evidence are
-  ready for a real PR.
-- Perform a code review before PR.
+- Keep `pnpm run check:linux-bootstrap-url` green before publishing installer
+  changes that affect the README command.
+- Re-run the
+  [fresh host proof procedure](fresh-host-proof-procedure.md) for any change
+  that modifies the mutating bootstrap path, supported host boundary, evidence
+  schema, package manifest, or toolchain installation behavior.
+- Keep first-install and same-host rerun evidence local unless a source-owned
+  release record is deliberately updated.
+- Refresh `docs/linux-install.zip` only from tracked source docs, schemas, and
+  fixtures; never package local evidence or planning state.
+- Run code review before any successor delivery PR.
 
-## Next Execution Plan
+## Successor Maintenance Plan
 
 1. Run local bootstrap checks:
 
-   ```powershell
-   pnpm.cmd run check:linux-bootstrap
-   pnpm.cmd run check:docs
+   ```bash
+   pnpm run check:linux-bootstrap
+   pnpm run check:docs
    ```
 
-2. Run a real non-mutating verify-only smoke inside the current Linux host and
-   validate the disposable evidence packet.
-3. Delete disposable smoke evidence.
-4. Wait for explicit approval before any real single-script install run because
+2. For docs-only changes, run the Linux install lane guard and package boundary
+   checks before delivery.
+3. For bootstrap or evidence-schema changes, run a real non-mutating
+   verify-only smoke inside the current Linux host and validate the disposable
+   evidence packet.
+4. Delete disposable smoke evidence or leave it under ignored local evidence
+   paths.
+5. Wait for explicit approval before any real single-script install run because
    it mutates the Ubuntu host.
-5. After approval, run the single local bootstrap script inside a fresh or
-   reset Ubuntu 26.04-or-later host and capture durable evidence.
-6. Rerun locally on the same host to capture idempotency evidence.
-7. Update lessons learned, troubleshooting, validation matrix, and evidence
-   schema with anything learned from real-host execution.
-8. Run code review and fix findings.
-9. Refresh the downloadable docs package only when the feature slice is ready
-    for a real PR.
+6. After approval, run the single local bootstrap script inside a fresh or
+   reset Ubuntu 26.04-or-later host and capture local evidence.
+7. Rerun locally on the same host to capture idempotency evidence when the
+   bootstrap path changed.
+8. Update source-owned lessons learned, troubleshooting, validation matrix, and
+   evidence schema with durable decisions only.
+9. Run code review and fix findings.
+10. Refresh the downloadable docs package only when the successor slice is
+    ready for delivery.
 
 ## Implementation Shape
 
