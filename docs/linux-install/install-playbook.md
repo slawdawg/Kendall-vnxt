@@ -175,6 +175,12 @@ cd "$HOME/Kendall_Nxt"
 pnpm dlx playwright@1.61.0 install-deps chromium
 ```
 
+This Playwright dependency step is the approved browser-runtime path for
+Chromium shared-library gaps. It covers Ubuntu 26.04 package names such as
+`libatk1.0-0t64` for `libatk-1.0.so.0` and `libatk-bridge2.0-0t64` for
+`libatk-bridge-2.0.so.0`. Do not add these browser-only packages to the base
+bootstrap package list without a separate bootstrap scope approval.
+
 Install or refresh browser binaries:
 
 ```bash

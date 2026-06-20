@@ -7,6 +7,9 @@ function formatTimestamp(value: string): string {
 }
 
 function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
+  const sourceEvidenceLabels = item.sourceEvidenceLabels ?? [];
+  const relatedDocs = item.relatedDocs ?? [];
+
   return (
     <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -23,12 +26,30 @@ function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
         slice: {item.recommendedSliceSize}
       </p>
       <div className="mt-3 space-y-2">
-        {item.evidence.map((evidence) => (
-          <p key={evidence} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        {item.evidence.map((evidence, evidenceIndex) => (
+          <p
+            key={`${item.itemId}:evidence:${evidence}:${evidenceIndex}`}
+            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]"
+          >
             {evidence}
           </p>
         ))}
       </div>
+      {sourceEvidenceLabels.length > 0 ? (
+        <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Source evidence labels</p>
+          <div className="mt-2 grid gap-2">
+            {sourceEvidenceLabels.map((label, index) => (
+              <p
+                key={`${item.itemId}:source-evidence:${label}:${index}`}
+                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+              >
+                {label}
+              </p>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {item.blockedBy.length > 0 ? (
         <div className="mt-3 space-y-2">
           {item.blockedBy.map((blocker) => (
@@ -52,6 +73,21 @@ function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
           ))}
         </div>
       </div>
+      {relatedDocs.length > 0 ? (
+        <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
+          <div className="mt-2 grid gap-2">
+            {relatedDocs.map((doc, index) => (
+              <p
+                key={`${item.itemId}:related-doc:${doc}:${index}`}
+                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+              >
+                {doc}
+              </p>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="mt-3 flex flex-wrap gap-2">
         {item.dashboardAnchors.map((anchor) => (
           <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">

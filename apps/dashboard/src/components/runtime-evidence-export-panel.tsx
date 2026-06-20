@@ -172,8 +172,11 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
                 {item.target}
               </p>
               <div className="mt-3 space-y-2">
-                {item.evidence.map((evidence) => (
-                  <p key={evidence} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+                {item.evidence.map((evidence, evidenceIndex) => (
+                  <p
+                    key={`${item.itemId}:evidence:${evidence}:${evidenceIndex}`}
+                    className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]"
+                  >
                     {evidence}
                   </p>
                 ))}

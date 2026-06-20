@@ -20,8 +20,8 @@ function TrackCard({ track }: { track: MaintenanceReadinessTrackView }) {
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{track.summary}</p>
       <div className="mt-3 space-y-2">
-        {track.evidence.map((item) => (
-          <p key={item} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        {track.evidence.map((item, itemIndex) => (
+          <p key={`${track.trackId}:evidence:${item}:${itemIndex}`} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
             {item}
           </p>
         ))}
@@ -43,8 +43,11 @@ function TrackCard({ track }: { track: MaintenanceReadinessTrackView }) {
       <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
         <div className="mt-2 grid gap-2">
-          {track.relatedDocs.map((doc) => (
-            <span key={doc} className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+          {track.relatedDocs.map((doc, docIndex) => (
+            <span
+              key={`${track.trackId}:doc:${doc}:${docIndex}`}
+              className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+            >
               {doc}
             </span>
           ))}

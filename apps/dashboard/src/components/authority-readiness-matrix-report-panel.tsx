@@ -9,14 +9,14 @@ function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-function AuthorityListSection({ title, items }: { title: string; items: string[] }) {
+function AuthorityListSection({ title, items, scope }: { title: string; items: string[]; scope: string }) {
   return (
     <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
       <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{title}</p>
       <div className="mt-2 space-y-1">
         {items.length > 0 ? (
-          items.map((item) => (
-            <p key={item} className="break-all text-xs leading-5 text-[var(--muted)]">
+          items.map((item, index) => (
+            <p key={`${scope}:${title}:${item}:${index}`} className="break-all text-xs leading-5 text-[var(--muted)]">
               {item}
             </p>
           ))
@@ -63,19 +63,19 @@ function AuthorityFamilyCard({ family }: { family: AuthorityReadinessFamilyView 
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{family.summary}</p>
 
       <div className="mt-3">
-        <AuthorityListSection title="Required approvals" items={family.requiredApprovals} />
+        <AuthorityListSection title="Required approvals" items={family.requiredApprovals} scope={family.familyId} />
       </div>
 
       <div className="mt-3">
-        <AuthorityListSection title="Required evidence" items={family.requiredEvidence} />
+        <AuthorityListSection title="Required evidence" items={family.requiredEvidence} scope={family.familyId} />
       </div>
 
       {family.blockedStories.length > 0 ? (
         <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Blocked stories</p>
           <div className="mt-2 space-y-1">
-            {family.blockedStories.map((story) => (
-              <p key={story} className="break-all font-mono text-[11px] text-[var(--muted)]">
+            {family.blockedStories.map((story, index) => (
+              <p key={`${family.familyId}:blocked-story:${story}:${index}`} className="break-all font-mono text-[11px] text-[var(--muted)]">
                 {story}
               </p>
             ))}
@@ -84,21 +84,21 @@ function AuthorityFamilyCard({ family }: { family: AuthorityReadinessFamilyView 
       ) : null}
 
       <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <AuthorityListSection title="Related reports" items={family.relatedReports} />
-        <AuthorityListSection title="Related docs" items={family.relatedDocs} />
+        <AuthorityListSection title="Related reports" items={family.relatedReports} scope={family.familyId} />
+        <AuthorityListSection title="Related docs" items={family.relatedDocs} scope={family.familyId} />
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {family.dashboardAnchors.map((anchor) => (
-          <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
+          <Link key={`${family.familyId}:anchor:${anchor}`} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
             {anchor}
           </Link>
         ))}
       </div>
 
       <div className="mt-3 space-y-2">
-        {family.stopLines.map((stopLine) => (
-          <p key={stopLine} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+        {family.stopLines.map((stopLine, index) => (
+          <p key={`${family.familyId}:stop-line:${stopLine}:${index}`} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
             {stopLine}
           </p>
         ))}
@@ -162,8 +162,8 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
                 </div>
                 <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{finding.summary}</p>
                 <div className="mt-3 grid gap-2 md:grid-cols-2">
-                  <AuthorityListSection title="Evidence" items={finding.evidence} />
-                  <AuthorityListSection title="Related docs" items={finding.relatedDocs} />
+                  <AuthorityListSection title="Evidence" items={finding.evidence} scope={finding.findingId} />
+                  <AuthorityListSection title="Related docs" items={finding.relatedDocs} scope={finding.findingId} />
                 </div>
                 <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{finding.nextAction}</p>
               </article>
@@ -194,8 +194,8 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
             <span className="font-semibold text-[var(--foreground)]">Freshness:</span> {nextLaneDecisionPacket.requiredFreshnessCheck}
           </p>
           <div className="mt-3 grid gap-2 md:grid-cols-2">
-            <AuthorityListSection title="Related docs" items={nextLaneDecisionPacket.relatedDocs} />
-            <AuthorityListSection title="Stop lines" items={nextLaneDecisionPacket.stopLines} />
+            <AuthorityListSection title="Related docs" items={nextLaneDecisionPacket.relatedDocs} scope={nextLaneDecisionPacket.packetId} />
+            <AuthorityListSection title="Stop lines" items={nextLaneDecisionPacket.stopLines} scope={nextLaneDecisionPacket.packetId} />
           </div>
           <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{nextLaneDecisionPacket.nextAction}</p>
         </div>

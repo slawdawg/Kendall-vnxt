@@ -26,8 +26,11 @@ function SignalCard({ signal }: { signal: GitHygieneSignalView }) {
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{signal.summary}</p>
       <div className="mt-3 space-y-2">
-        {signal.evidence.map((evidence) => (
-          <p key={evidence} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+        {signal.evidence.map((evidence, evidenceIndex) => (
+          <p
+            key={`${signal.signalId}:evidence:${evidence}:${evidenceIndex}`}
+            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
+          >
             {evidence}
           </p>
         ))}

@@ -970,6 +970,7 @@ export interface SafeDevelopmentBacklogItemView {
   summary: string;
   recommendedSliceSize: string;
   evidence: string[];
+  sourceEvidenceLabels?: string[];
   relatedReports: string[];
   relatedDocs: string[];
   dashboardAnchors: string[];

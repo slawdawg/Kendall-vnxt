@@ -37,8 +37,8 @@ export function DocumentationAuthorityReportPanel({ report }: { report: Document
         <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Current indexes</h4>
           <div className="mt-3 space-y-3">
-            {[...report.indexes, report.approvalCheckpoint].map((document) => (
-              <article key={document.path} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+            {[...report.indexes, report.approvalCheckpoint].map((document, documentIndex) => (
+              <article key={`authority-document:${document.path}:${documentIndex}`} className="rounded-[1rem] border bg-[var(--panel)] p-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{document.status}</p>
@@ -58,8 +58,8 @@ export function DocumentationAuthorityReportPanel({ report }: { report: Document
           <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Blocked authority stories</h4>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
-              {report.blockedStories.map((story) => (
-                <article key={story.path} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+              {report.blockedStories.map((story, storyIndex) => (
+                <article key={`blocked-story:${story.path}:${storyIndex}`} className="rounded-[1rem] border bg-[var(--panel)] p-3">
                   <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">Story {story.storyId}</p>
                   <h5 className="mt-1 text-sm font-semibold">{story.authorityFamily}</h5>
                   <p className="mt-2 break-all text-xs leading-5 text-[var(--muted)]">{story.path}</p>

@@ -29,8 +29,8 @@ function RunnerCard({ runner }: { runner: DashboardE2ERunnerView }) {
         </span>
       </div>
       <div className="mt-3 space-y-2">
-        {runner.evidence.map((item) => (
-          <p key={item} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        {runner.evidence.map((item, itemIndex) => (
+          <p key={`${runner.runnerId}:evidence:${item}:${itemIndex}`} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
             {item}
           </p>
         ))}

@@ -777,7 +777,7 @@ test.describe("dashboard workflow coverage", () => {
       "/controls#safe-development-backlog",
     );
     await expect(actionPlanPanel.getByText("Related docs").first()).toBeVisible();
-    await expect(actionPlanPanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true })).toBeVisible();
+    await expect(actionPlanPanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true }).first()).toBeVisible();
     await expect(
       actionPlanPanel
         .locator("article")
@@ -806,7 +806,7 @@ test.describe("dashboard workflow coverage", () => {
       "/controls#supervisor-report-catalog",
     );
     await expect(runwayPanel.getByText("Related docs").first()).toBeVisible();
-    await expect(runwayPanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true }).first()).toBeVisible();
     await expect(runwayPanel.getByRole("link", { name: "/controls#safe-development-backlog" }).first()).toBeVisible();
     await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("handoff-checkpoint-coverage", { exact: true })).toBeVisible();
@@ -835,12 +835,47 @@ test.describe("dashboard workflow coverage", () => {
     await expect(safeBacklogPanel.getByText("Safe backlog", { exact: true })).toBeVisible();
     await expect(safeBacklogPanel.getByText("Large-slice development map")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Report-aligned backlog governance")).toBeVisible();
-    await expect(safeBacklogPanel.getByText("Verification surface hardening")).toBeVisible();
+    await expect(safeBacklogPanel.getByRole("heading", { name: "Verification surface hardening" })).toBeVisible();
     await expect(safeBacklogPanel.getByText("Related report links").first()).toBeVisible();
     await expect(safeBacklogPanel.getByRole("link", { name: "GET /supervisor/maintenance-readiness-report" }).first()).toHaveAttribute(
       "href",
       "/controls#maintenance-readiness-report",
     );
+    const verificationBacklogCards = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Verification surface hardening" }) });
+    await expect(verificationBacklogCards).toHaveCount(1);
+    const verificationBacklogCard = verificationBacklogCards.first();
+    await expect(verificationBacklogCard.getByText("ready", { exact: true })).toBeVisible();
+    await expect(verificationBacklogCard.getByText("slice: large", { exact: true })).toBeVisible();
+    await expect(verificationBacklogCard.getByText("Source evidence labels", { exact: true })).toBeVisible();
+    await expect(verificationBacklogCard.getByText("3-27-safe-development-backlog-report.md")).toBeVisible();
+    await expect(verificationBacklogCard.getByText("3-32-safe-development-backlog-drift-check.md")).toBeVisible();
+    await expect(verificationBacklogCard.getByText("3-47-core-readiness-drift-checks.md")).toBeVisible();
+    await expect(verificationBacklogCard.getByText("3-56-verification-execution-plan-groups.md")).toBeVisible();
+    await expect(verificationBacklogCard.getByText("3-58-verification-handoff-checkpoints.md")).toBeVisible();
+    await expect(verificationBacklogCard.getByText("3-60-safe-backlog-report-anchors.md")).toBeVisible();
+    await expect(verificationBacklogCard.getByText("Related docs", { exact: true })).toBeVisible();
+    await expect(verificationBacklogCard.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true })).toHaveCount(1);
+    await expect(verificationBacklogCard.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true })).toBeVisible();
+    await expect(verificationBacklogCard.getByRole("link", { name: "GET /supervisor/verification-readiness-report" })).toHaveAttribute(
+      "href",
+      "/controls#verification-readiness-report",
+    );
+    await expect(verificationBacklogCard.getByRole("link", { name: "GET /supervisor/dashboard-e2e-report" })).toHaveAttribute(
+      "href",
+      "/controls#dashboard-e2e-report",
+    );
+    await expect(verificationBacklogCard.getByRole("link", { name: "/controls#verification-readiness-report" })).toBeVisible();
+    await expect(verificationBacklogCard.getByRole("link", { name: "/controls#dashboard-e2e-report" })).toBeVisible();
+    await expect(verificationBacklogCard.getByRole("link", { name: "/controls#supervisor-report-catalog" })).toBeVisible();
+    await expect(verificationBacklogCard.getByRole("link", { name: "/controls#development-runway-report" })).toBeVisible();
+    await expect(
+      verificationBacklogCard.getByText(
+        "Add or extend static drift checks in larger coherent PR slices whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
+      ),
+    ).toBeVisible();
+    await expect(
+      verificationBacklogCard.getByText("Verification surface hardening is read-only planning guidance, not execution-authority approval."),
+    ).toBeVisible();
     await expect(safeBacklogPanel.getByRole("link", { name: "/controls#github-workflow-policy-report" })).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "GitHub delivery hygiene" })).toBeVisible();
     await expect(safeBacklogPanel.getByText("persistent plaintext gh token storage")).toBeVisible();
