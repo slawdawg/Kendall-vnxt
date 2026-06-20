@@ -57,7 +57,7 @@ Beyond obvious validation, consider:
 
 ### Your Toolbox
 
-**Python is the default** for all script logic (cross-platform: macOS, Linux, Windows/WSL). See `./references/script-standards.md` for full rationale.
+**Python is the default** for all script logic in supported Linux development environments. See `./references/script-standards.md` for full rationale.
 
 - **Python:** Standard library (`json`, `pathlib`, `re`, `argparse`, `collections`, `difflib`, `ast`, `csv`, `xml`, etc.) plus PEP 723 inline-declared dependencies (`tiktoken`, `jsonschema`, `pyyaml`, etc.)
 - **Safe shell commands:** `git`, `gh`, `uv run`, `npm`/`npx`/`pnpm`, `mkdir -p` (invocation only, not logic)

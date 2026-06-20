@@ -3,11 +3,11 @@
 # Version: 6.8.0
 # Date: 2026-06-01T00:41:25.484Z
 
-bmad_builder_output_folder: "{project-root}/skills"
-bmad_builder_reports: "{project-root}/skills/reports"
+bmad_builder_output_folder: "{project-root}/_bmad-output/bmb-creations/skills"
+bmad_builder_reports: "{project-root}/_bmad-output/reports"
 
 # Core Configuration Values
-user_name: Bob
+user_name: Operator
 project_name: Kendall_Nxt
 communication_language: English
 document_output_language: English

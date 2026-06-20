@@ -55,21 +55,40 @@ Run `./scripts/merge-config.py --help` or `./scripts/merge-help-csv.py --help` f
 
 After writing config, create any output directories that were configured. For filesystem operations only (such as creating directories), resolve the `{project-root}` token to the actual project root and create each path-type value from `config.yaml` that does not yet exist — this includes `output_folder` and any module variable whose value starts with `{project-root}/`. The paths stored in the config files must continue to use the literal `{project-root}` token; only the directories on disk should use the resolved paths. Use `mkdir -p` or equivalent to create the full path.
 
+## Select Installed Skills Directory
+
+Before legacy cleanup, select the installed skills directory:
+
+1. If `{project-root}/.agents/skills` exists, use it. This is the default for Codex-first installs.
+2. Otherwise, if `{project-root}/.claude/skills` exists, use it. This supports Claude-first or Claude-assist installs.
+3. If both exist, prefer `{project-root}/.agents/skills` unless the user explicitly says the install should target Claude.
+4. If neither exists, skip legacy directory cleanup and tell the user that no installed skills directory was found.
+
+Do not invent another path. Do not remove legacy directories unless `cleanup-legacy.py` can verify the skills in the selected installed skills directory.
+
 ## Cleanup Legacy Directories
 
-After both merge scripts complete successfully, remove the installer's package directories. Skills and agents in these directories are already installed at `.claude/skills/` — the `_bmad/` directory should only contain config files.
+After both merge scripts complete successfully, remove the installer's package directories. Skills and agents in these directories must already be installed in the selected skills directory. The `_bmad/` directory should only contain config files.
+
+Codex-first default:
+
+```bash
+python3 ./scripts/cleanup-legacy.py --bmad-dir "{project-root}/_bmad" --module-code {module-code} --also-remove _config --skills-dir "{project-root}/.agents/skills"
+```
+
+Claude-first fallback:
 
 ```bash
 python3 ./scripts/cleanup-legacy.py --bmad-dir "{project-root}/_bmad" --module-code {module-code} --also-remove _config --skills-dir "{project-root}/.claude/skills"
 ```
 
-The script verifies that every skill in the legacy directories exists at `.claude/skills/` before removing anything. Directories without skills (like `_config/`) are removed directly. If the script exits non-zero, surface the error and stop. Missing directories (already cleaned by a prior run) are not errors — the script is idempotent.
+The script verifies that every skill in the legacy directories exists at the selected `--skills-dir` before removing anything. Directories without skills (like `_config/`) are removed directly. If the script exits non-zero, surface the error and stop. Missing directories (already cleaned by a prior run) are not errors — the script is idempotent.
 
-Check `directories_removed` and `files_removed_count` in the JSON output for the confirmation step. Run `./scripts/cleanup-legacy.py --help` for full usage.
+Check `directories_removed`, `files_removed_count`, and `safety_checks.skills_dir` in the JSON output for the confirmation step. Run `./scripts/cleanup-legacy.py --help` for full usage.
 
 ## Confirm
 
-Use the script JSON output to display what was written — config values set (written to `config.yaml` at root for core, module section for module values), user settings written to `config.user.yaml` (`user_keys` in result), help entries added, fresh install vs update. If legacy files were deleted, mention the migration. If legacy directories were removed, report the count and list (e.g. "Cleaned up 106 installer package files from bmb/, core/, \_config/ — skills are installed at .claude/skills/"). Then display the `module_greeting` from `./assets/module.yaml` to the user.
+Use the script JSON output to display what was written — config values set (written to `config.yaml` at root for core, module section for module values), user settings written to `config.user.yaml` (`user_keys` in result), help entries added, fresh install vs update. If legacy files were deleted, mention the migration. If legacy directories were removed, report the count, list, and selected installed-skills directory (e.g. "Cleaned up 106 installer package files from bmb/, core/, _config/; skills are installed at .agents/skills"). Then display the `module_greeting` from `./assets/module.yaml` to the user.
 
 ## Outcome
 

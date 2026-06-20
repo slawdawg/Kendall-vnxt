@@ -14,6 +14,15 @@ function assertIncludes(source, text, message, failures) {
   }
 }
 
+function extractSection(source, startText, endText) {
+  const start = source.indexOf(startText);
+  const end = source.indexOf(endText, start + startText.length);
+  if (start === -1 || end === -1 || end <= start) {
+    return "";
+  }
+  return source.slice(start, end);
+}
+
 function assertBlockIncludes(source, startText, endText, requiredTexts, messagePrefix, failures) {
   const start = source.indexOf(startText);
   const end = source.indexOf(endText, start + startText.length);
@@ -27,12 +36,17 @@ function assertBlockIncludes(source, startText, endText, requiredTexts, messageP
   }
 }
 
-const approvalPacket = readWorkspaceFile("docs/goals/real-cli-worker-launch-approval-packet-2026-06-14.md");
+const authorityBoundary = readWorkspaceFile("docs/workflows/execution-authority-boundary.md");
+const approvalPacket = extractSection(
+  authorityBoundary,
+  "## Worker Process Launch Contract",
+  "## Cleanup Automation Contract",
+);
 const settingsSource = readWorkspaceFile("services/supervisor/src/supervisor/config/settings.py");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
-const story = readWorkspaceFile("docs/stories/17-1-refresh-real-cli-worker-launch-approval-packet.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
+const story = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 
 const failures = [];
 
@@ -125,7 +139,7 @@ for (const storyText of [
 }
 
 for (const indexText of [
-  "Real CLI worker launch: `docs/goals/real-cli-worker-launch-approval-packet-2026-06-14.md`",
+  "Real CLI worker launch: `docs/workflows/execution-authority-boundary.md#worker-process-launch-contract`",
   "Epic 17 starts after the subscription-agent process-launch approval packet.",
   "Stories in this epic do not approve Codex launch, Claude launch, shell execution, source mutation, credential/session access, PR delivery, cleanup, issue sync, or failed-check bypass.",
 ]) {

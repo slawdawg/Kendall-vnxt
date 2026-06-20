@@ -107,7 +107,7 @@ Things present in `[agent]` that shouldn't be.
 
 | Pattern | Risk |
 | --- | --- |
-| `customize.toml` `[agent] name = "Alice"` but SKILL.md hardcodes "Bob" in the displayName | `high-abuse`. Source-of-truth conflict. Rename one side to match. |
+| `customize.toml` `[agent] name = "Alice"` but SKILL.md hardcodes "Casey" in the displayName | `high-abuse`. Source-of-truth conflict. Rename one side to match. |
 | `name` is populated for a memory/autonomous agent that uses First Breath naming | `medium-abuse`. The name should be learned at First Breath. Suggest setting `name = ""`. |
 
 ### 2. Boolean Toggle Farms

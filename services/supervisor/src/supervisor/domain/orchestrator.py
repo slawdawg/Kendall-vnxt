@@ -26,7 +26,7 @@ class OrchestratorJobState(StrEnum):
     FAILED = "failed"
     COMPLETED = "completed"
     READY_FOR_PR = "ready_for_pr"
-    READY_FOR_BOB = "ready_for_bob"
+    READY_FOR_OPERATOR = "ready_for_operator"
 
 
 class OrchestratorTaskKind(StrEnum):
@@ -132,7 +132,7 @@ class OrchestratorEvidenceRecord:
     timeout_seconds: int | None = None
     budget_class: str | None = None
     blocker: str | None = None
-    next_action: str = "ready_for_bob"
+    next_action: str = "ready_for_operator"
     raw_prompt_retained: bool = False
     raw_completion_retained: bool = False
     raw_provider_payload_retained: bool = False
@@ -168,7 +168,7 @@ class OrchestratorLaneSelector:
                 selected_lane=OrchestratorLane.BLOCKED,
                 state=OrchestratorJobState.AWAITING_APPROVAL,
                 reason_codes=reason_codes + ("approval.scope_expansion_required",),
-                blocked_reason="scope_expansion_requires_bob_approval",
+                blocked_reason="scope_expansion_requires_operator_approval",
                 created_at=created_at or DEFAULT_ORCHESTRATOR_TIMESTAMP,
             )
         if metadata.budget_exhausted:
@@ -176,8 +176,8 @@ class OrchestratorLaneSelector:
                 job_id=metadata.job_id,
                 selected_lane=OrchestratorLane.BLOCKED,
                 state=OrchestratorJobState.AWAITING_APPROVAL,
-                reason_codes=reason_codes + ("budget.exhausted", "approval.bob_required"),
-                blocked_reason="budget_exhausted_requires_bob_decision",
+                reason_codes=reason_codes + ("budget.exhausted", "approval.operator_required"),
+                blocked_reason="budget_exhausted_requires_operator_decision",
                 created_at=created_at or DEFAULT_ORCHESTRATOR_TIMESTAMP,
             )
         if selected_lane in metadata.unavailable_lanes:
@@ -264,14 +264,14 @@ class FakeOrchestratorWorker:
             reason_codes = decision.reason_codes + ("fake_claude.review_findings_without_process_launch",)
             blocker = None
             if metadata.conflicting_review:
-                reason_codes = reason_codes + ("review.conflicting_findings", "approval.bob_required")
-                blocker = "conflicting_review_requires_bob_decision"
+                reason_codes = reason_codes + ("review.conflicting_findings", "approval.operator_required")
+                blocker = "conflicting_review_requires_operator_decision"
             return FakeWorkerAttempt(
                 attempt_id=attempt_id,
                 job_id=metadata.job_id,
                 lane=decision.selected_lane,
                 status=FakeWorkerStatus.COMPLETED,
-                state=OrchestratorJobState.READY_FOR_BOB,
+                state=OrchestratorJobState.READY_FOR_OPERATOR,
                 reason_codes=reason_codes,
                 artifact_refs=(f"orchestrator/fake-workers/{metadata.job_id}/claude-review.json",),
                 task_metadata_summary=summary,
@@ -288,7 +288,7 @@ class FakeOrchestratorWorker:
                 job_id=metadata.job_id,
                 lane=decision.selected_lane,
                 status=FakeWorkerStatus.COMPLETED,
-                state=OrchestratorJobState.READY_FOR_BOB,
+                state=OrchestratorJobState.READY_FOR_OPERATOR,
                 reason_codes=decision.reason_codes + ("fake_github.workflow_requirement_recorded",),
                 artifact_refs=(f"orchestrator/fake-workers/{metadata.job_id}/github-rail.json",),
                 task_metadata_summary=summary,
@@ -333,7 +333,7 @@ class OrchestratorEvidenceBuilder:
                 selected_lane=decision.selected_lane,
                 state=decision.state,
                 reason_codes=decision.reason_codes,
-                next_action="run_fake_worker" if decision.selected_lane != OrchestratorLane.BLOCKED else "ready_for_bob",
+                next_action="run_fake_worker" if decision.selected_lane != OrchestratorLane.BLOCKED else "ready_for_operator",
             )
         return OrchestratorEvidenceRecord(
             job_id=decision.job_id,
@@ -361,16 +361,16 @@ class OrchestratorEvidenceBuilder:
 
     def _next_action(self, attempt: FakeWorkerAttempt) -> str:
         if attempt.status == FakeWorkerStatus.BLOCKED:
-            return "ready_for_bob"
+            return "ready_for_operator"
         if attempt.status == FakeWorkerStatus.FAILED:
-            return "ready_for_bob"
+            return "ready_for_operator"
         if attempt.blocker:
-            return "ready_for_bob"
+            return "ready_for_operator"
         if attempt.lane == OrchestratorLane.CODEX_CLI_WORKER and attempt.verification_status != "passed":
-            return "run_verification_or_request_bob"
+            return "run_verification_or_request_operator"
         if attempt.lane == OrchestratorLane.CLAUDE_CODE_REVIEW_WORKER:
-            return "review_findings_with_bob"
-        return "ready_for_bob"
+            return "review_findings_with_operator"
+        return "ready_for_operator"
 
 
 class FakeOrchestratorGraph:

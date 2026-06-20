@@ -10,33 +10,33 @@ Source review artifacts:
 - `docs/architecture/kendall-vnxt-overall-architecture.md`
 - `docs/architecture/kendall-vnxt-architecture-gap-review-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md`
-- `docs/prds/index.md`
-- `docs/prds/supervisor-execution-authority-expansion.md`
-- `docs/prds/supervisor-dynamic-routing-follow-on-roadmap.md`
-- `docs/stories/index.md`
-- `docs/stories/2-1-execution-attempt-contract-and-state-model.md`
-- `docs/stories/3-51-process-lifecycle-policy-drift-check.md`
-- `docs/stories/3-52-maintenance-action-plan-report.md`
-- `docs/stories/3-53-authority-readiness-matrix-report.md`
-- `docs/stories/3-54-development-runway-safe-slices.md`
-- `docs/stories/3-55-runtime-evidence-review-index.md`
-- `docs/stories/3-56-verification-execution-plan-groups.md`
-- `docs/stories/3-57-work-item-review-queue-shortcuts.md`
-- `docs/stories/3-58-verification-handoff-checkpoints.md`
-- `docs/stories/3-59-development-runway-readiness-checks.md`
-- `docs/stories/3-60-safe-backlog-report-anchors.md`
-- `docs/stories/3-61-maintenance-action-evidence-links.md`
-- `docs/stories/3-62-maintenance-readiness-evidence-links.md`
-- `docs/stories/3-63-development-runway-pr-batching-policy.md`
-- `docs/stories/3-64-development-runway-evidence-links.md`
-- `docs/stories/3-65-runtime-review-evidence-links.md`
-- `docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
-- `docs/stories/8-5-execute-one-explicitly-approved-artifact-only-subscription-agent-launch.md`
-- `docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md`
-- `docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md`
-- `docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md`
-- `docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md`
-- `docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md`
+- `docs/workflows/product-requirements-boundary.md`
+- `docs/workflows/product-requirements-boundary.md#supervisor-execution-authority-expansion-boundary`
+- `docs/workflows/product-requirements-boundary.md#supervisor-dynamic-routing-boundary`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
 
 Implementation areas checked:
 
@@ -99,8 +99,8 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Process lifecycle design | Documented | `docs/architecture/kendall-vnxt-process-lifecycle-design-2026-06-08.md`, Story 3.9 | Defines future process supervisor, lifecycle, workspace, output, session, approval, rollback, and stop-line requirements. |
 | Runtime evidence export readiness references | Implemented | `RuntimeEvidenceExportBoundaryView.relatedSupervisorReports`, Story 3.9 | Work-item exports now point to readiness, boundary, disabled provider proof, config, and threat reports. |
 | Provider disabled adapter fixture expansion | Implemented | `docs/architecture/kendall-vnxt-provider-disabled-fixtures-2026-06-08.md`, provider proof contract, Story 3.10 | Provider proofs now include endpoint family, redaction, timeout, cancellation, and retention policy fields. |
-| First local provider PRD draft | Documented | `docs/prds/local-provider-ollama-disabled-to-limited-execution.md`, Story 3.10 | Drafts Ollama gates, endpoint policy, prompt/retention policy, future acceptance criteria, rollback, and open questions without approving implementation. |
-| Ollama PRD review and story breakdown | Implemented for approved host lane | `docs/prds/local-provider-ollama-prd-review-2026-06-08.md`, Stories 4.1-4.4 | Stories 4.1-4.3 are complete as non-executing no-call preparation; Story 4.4 is implemented only for VM-to-host endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`. |
+| First local provider PRD draft | Documented | `docs/workflows/product-requirements-boundary.md#local-provider-ollama-boundary`, Story 3.10 | Drafts Ollama gates, endpoint policy, prompt/retention policy, future acceptance criteria, rollback, and open questions without approving implementation. |
+| Ollama PRD review and story breakdown | Implemented for approved host lane | `docs/workflows/product-requirements-boundary.md#local-provider-ollama-boundary`, Stories 4.1-4.4 | Stories 4.1-4.3 are complete as non-executing no-call preparation; Story 4.4 is implemented only for VM-to-host endpoint `http://192.168.1.128:11434/v1/chat/completions` and model `qwen3:14b`. |
 | Runtime evidence export dashboard access | Implemented | `RuntimeEvidenceExportPanel`, Story 3.11 | Work-item detail pages show export summary, safety flags, related reports, and git-backed boundary evidence. |
 | Runtime evidence report anchor links | Implemented | `RuntimeEvidenceExportPanel`, Story 3.40 | Runtime export related report entries link to the same stable controls-page report anchors used by evidence overview shortcuts. |
 | Runtime evidence review manifest | Implemented | `RuntimeEvidenceExportView.reviewManifest`, Story 3.20 | Adds export counts, checklist, retention notes, and stop lines without changing approval state. |
@@ -129,8 +129,8 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Authority readiness matrix drift check | Implemented | `pnpm run check:authority-readiness`, Story 3.53 | Keeps authority readiness matrix contracts, schemas, API route, service families, dashboard rendering, report catalog, runtime evidence, browser assertions, and story evidence aligned. |
 | Development runway drift check | Implemented | `pnpm run check:development-runway`, Story 3.54 | Keeps development runway contracts, schemas, API route, service slices, dashboard rendering, report catalog, runtime evidence, browser assertions, runbooks, and story evidence aligned. |
 | Runtime evidence review drift check | Implemented | `pnpm run check:runtime-review`, Story 3.57 | Keeps runtime evidence review contracts, schemas, API route, service queue construction, dashboard rendering, work-item detail shortcuts, report catalog, runtime evidence, browser assertions, runbooks, and story evidence aligned. |
-| Subscription-agent launch PRD | Documented | `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`, Story 3.12 | Drafts supervised launch gates, lifecycle, workspace, output, session, dashboard, runtime export, rollback, and open questions without approving implementation. |
-| Subscription-agent launch PRD review and story breakdown | Partial with approved artifact-only fixture lane | `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`, Stories 5.1-5.5, Epic 8 | Stories 5.1-5.4 are complete as non-executing preparation; Story 8.5 completed the exact-approved artifact-only launch fixture path; direct process launch remains blocked pending explicit process-launch approval. |
+| Subscription-agent launch PRD | Documented | `docs/workflows/product-requirements-boundary.md#subscription-agent-launch-boundary`, Story 3.12 | Drafts supervised launch gates, lifecycle, workspace, output, session, dashboard, runtime export, rollback, and open questions without approving implementation. |
+| Subscription-agent launch PRD review and story breakdown | Partial with approved artifact-only fixture lane | `docs/workflows/product-requirements-boundary.md#subscription-agent-launch-boundary`, Stories 5.1-5.5, Epic 8 | Stories 5.1-5.4 are complete as non-executing preparation; Story 8.5 completed the exact-approved artifact-only launch fixture path; direct process launch remains blocked pending explicit process-launch approval. |
 | Execution authority approval checkpoints | Documented | `docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md`, Story 3.13 | Defines approval language, non-approval language, evidence requirements, and currently blocked authority stories. |
 | Dashboard evidence overview polish | Implemented | `EvidenceOverviewPanel`, Story 3.14 | Work-item detail pages show read-only shortcuts and summaries for routing, attempts, exports, and history. |
 | Evidence overview review shortcuts | Implemented | `EvidenceOverviewPanel`, Story 3.33 | Surfaces runtime export review navigator items at the top of work-item detail without adding execution controls. |
@@ -152,7 +152,7 @@ The remaining work is no longer "add execution attempts." The next useful work i
 | Safe development backlog report | Implemented | `GET /supervisor/safe-development-backlog`, `SafeDevelopmentBacklogPanel`, Story 3.27 | Prioritizes larger safe maintenance/report/verification slices while keeping execution-authority work blocked. |
 | Safe backlog report anchors | Implemented | `SafeDevelopmentBacklogItemView.dashboardAnchors`, Story 3.60 | Links safe backlog items to supporting controls-page report evidence without adding execution controls. |
 | Supervisor report catalog drift check | Implemented | `pnpm run check:reports`, Story 3.28 | Keeps report catalog entries, API routes, runtime export references, dashboard fetches, browser assertions, and story evidence aligned. |
-| Runbook verification alignment | Implemented | `pnpm run check:runbooks`, Story 3.29 | Keeps README, fresh VM checklist, bootstrap guide, and current handoff language aligned with the active verification chain. |
+| Runbook verification alignment | Implemented | `pnpm run check:runbooks`, Story 3.29 | Keeps README, current-session runbook, and active verification-chain guidance aligned. |
 | Runbook check-chain hardening | Implemented | `pnpm run check:runbooks`, Story 3.35 | Requires current operator runbooks to name runtime export and safe backlog drift checks in the active verification chain. |
 | Runbook managed recipe check-chain alignment | Implemented | `pnpm run check:runbooks`, Story 3.38 | Requires current operator runbooks and handoffs to name managed recipe policy drift checks after `check:managed-recipes` entered the full verification chain. |
 | Current gap review refresh | Implemented | `pnpm run check:docs`, Story 3.41 | Keeps the current gap review and continuation handoff aligned with the Story 3.40 safe-work state and larger coherent safe-slice guidance. |
@@ -184,7 +184,7 @@ The highest-value next work should:
 
 1. **Current-State Reconciliation And Next-Lane Authority Planning**: keep checks, docs, safe backlog items, PR state, and blocked-story state current after Epic 10.
 2. **Authority Readiness Refresh**: update readiness evidence for delivery, cleanup, provider, process-launch, premium, and scoring lanes.
-3. **Next-Lane Authority Decision Packet**: use `docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md` to compare provider, process-launch, premium, adaptive scoring, GitHub delivery, and cleanup lanes and decide which lane, if any, should receive the next exact approval packet.
+3. **Next-Lane Authority Decision Contract**: use `docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract` to compare provider, process-launch, premium, adaptive scoring, GitHub delivery, and cleanup lanes and decide which lane, if any, should receive the next exact approval packet.
 4. **Read-Only Evidence Polish**: add small review shortcuts only when useful.
 
 ## Stop Conditions

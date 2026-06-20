@@ -14,12 +14,26 @@ function assertIncludes(source, text, message, failures) {
   }
 }
 
-const approvalPacket = readWorkspaceFile("docs/goals/premium-execution-approval-packet-2026-06-13.md");
+function extractSection(source, startText, endText) {
+  const start = source.indexOf(startText);
+  const end = source.indexOf(endText, start + startText.length);
+  if (start === -1 || end === -1 || end <= start) {
+    return "";
+  }
+  return source.slice(start, end);
+}
+
+const authorityBoundary = readWorkspaceFile("docs/workflows/execution-authority-boundary.md");
+const approvalPacket = extractSection(
+  authorityBoundary,
+  "## Premium Execution Contract",
+  "## Subscription-Agent Launch Contract",
+);
 const settingsSource = readWorkspaceFile("services/supervisor/src/supervisor/config/settings.py");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
-const story = readWorkspaceFile("docs/stories/15-1-refresh-premium-execution-approval-packet.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
+const story = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 
 const failures = [];
 
@@ -90,7 +104,7 @@ for (const storyText of [
 }
 
 for (const indexText of [
-  "Premium execution: `docs/goals/premium-execution-approval-packet-2026-06-13.md`",
+  "Premium execution: `docs/workflows/execution-authority-boundary.md#premium-execution-contract`",
   "Epic 15 starts after the local-provider approval packet.",
   "Stories in this epic do not approve paid provider calls, credential/session access, raw prompt/completion/provider payload retention, budget-incurring behavior, source mutation, launch, delivery, cleanup, or failed-check bypass.",
 ]) {

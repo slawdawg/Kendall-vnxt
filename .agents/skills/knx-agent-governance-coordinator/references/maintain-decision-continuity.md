@@ -18,7 +18,7 @@ Prefer shared module memory and handoffs:
 - `{project-root}/_bmad/memory/knx/index.md`
 - `{project-root}/_bmad/memory/knx/daily/YYYY-MM-DD.md`
 - `{project-root}/_bmad/memory/knx/decisions/`
-- `{project-root}/08_Automation/State/bmad_session_handoff.md`
+- `{project-root}/_bmad-output/handoffs/bmad-session-handoff.md`
 
 Use the smallest update that preserves continuity. Do not create live runtime/deployment state while doing planning continuity work.
 

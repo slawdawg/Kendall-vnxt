@@ -16,8 +16,7 @@
   "expected_action": "package_refreshed",
   "refreshed_artifact": "docs/linux-install.zip",
   "evidence_used": [
-    "docs/linux-install/evidence/bootstrap-url-reachability-20260618T200827Z.json",
-    "docs/linux-install/evidence/goal-runs/20260618T201830Z/fresh-install-and-rerun-validation-transcript.md"
+    "docs/linux-install/release-delivery-record.md"
   ],
   "expected_reason": "The Linux install package was refreshed only after published-source, first-install, rerun, documentation, validation, and review evidence were available."
 }

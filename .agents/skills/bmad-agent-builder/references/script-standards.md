@@ -1,10 +1,10 @@
 # Script Creation Standards
 
-When building scripts for a skill, follow these standards to ensure portability and zero-friction execution. Skills must work across macOS, Linux, and Windows (native, Git Bash, and WSL).
+When building scripts for a skill, follow these standards to ensure Linux-primary portability and zero-friction execution. Kendall_Nxt skills must not assume native Windows or WSL install support.
 
 ## Python Over Bash
 
-**Always favor Python for script logic.** Bash is not portable — it fails or behaves inconsistently on Windows (Git Bash is MSYS2-based, not a full Linux shell; WSL bash can conflict with Git Bash on PATH; PowerShell is a different language entirely). Python with `uv run` works identically on all platforms.
+**Always favor Python for script logic.** Bash one-liners are fine for simple Linux operator commands, but larger shell pipelines become brittle. Python with `uv run` keeps logic testable, structured, and portable across supported Linux development environments.
 
 **Safe bash commands** — these work reliably across all environments and are fine to use directly:
 

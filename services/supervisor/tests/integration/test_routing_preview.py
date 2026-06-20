@@ -51,7 +51,7 @@ def _delivery_approval_entry(
     review_state: str = "approved",
     merge_status: str | None = None,
     artifact_refs: list[str] | None = None,
-    approved_by: str = "Bob",
+    approved_by: str = "Operator",
     approved_at: str = "2000-01-01T00:00:00+00:00",
     expires_at: str | None = "2099-01-01T00:00:00+00:00",
     rollback_plan: list[str] | None = None,
@@ -276,7 +276,7 @@ def test_task_packet_preview_uses_promoted_candidate_metadata_without_execution(
                 "title": "Task packet candidate",
                 "requestedOutcome": "Preview how promoted work would be routed.",
                 "source": "bmad",
-                "sourceArtifactPath": "docs/stories/6-7-task-packet-v0-orchestrated-preview.md",
+                "sourceArtifactPath": "docs/workflows/implementation-evidence-boundary.md",
                 "sourceArtifactType": "bmad_story",
                 "riskLevel": "medium",
                 "priority": "high",
@@ -299,7 +299,7 @@ def test_task_packet_preview_uses_promoted_candidate_metadata_without_execution(
         assert packet["title"] == "Task packet candidate"
         assert packet["requestedOutcome"] == "Preview how promoted work would be routed."
         assert packet["source"] == f"candidate_work:{candidate_id}"
-        assert packet["sourceArtifactPath"] == "docs/stories/6-7-task-packet-v0-orchestrated-preview.md"
+        assert packet["sourceArtifactPath"] == "docs/workflows/implementation-evidence-boundary.md"
         assert packet["taskKind"] == "task_classification"
         assert packet["riskLevel"] == "medium"
         assert packet["priority"] == "high"
@@ -348,7 +348,7 @@ def test_execution_attempt_records_task_packet_artifact_without_execution(tmp_pa
                 "title": "Packet linked attempt",
                 "requestedOutcome": "Record packet evidence on a blocked attempt.",
                 "source": "bmad",
-                "sourceArtifactPath": "docs/stories/6-8-execution-attempt-integration.md",
+                "sourceArtifactPath": "docs/workflows/implementation-evidence-boundary.md",
                 "sourceArtifactType": "bmad_story",
                 "riskLevel": "medium",
                 "priority": "high",
@@ -373,7 +373,7 @@ def test_execution_attempt_records_task_packet_artifact_without_execution(tmp_pa
         assert len(attempt["artifactRefs"]) == 1
         packet_ref = attempt["artifactRefs"][0]
         assert packet_ref["artifactType"] == "task_packet_v0"
-        assert packet_ref["sourceArtifactPath"] == "docs/stories/6-8-execution-attempt-integration.md"
+        assert packet_ref["sourceArtifactPath"] == "docs/workflows/implementation-evidence-boundary.md"
         assert packet_ref["taskKind"] == "evidence_summary"
         assert packet_ref["priority"] == "high"
         assert packet_ref["previewOnly"] is True
@@ -1167,7 +1167,7 @@ def _accepted_local_provider_approval(**overrides):
         "timeoutCancellationPolicy": "connect_timeout_2s_total_timeout_120s",
         "retainedEvidencePolicy": "metadata-only",
         "retainedEvidence": ["work_item_metadata", "workflow_event_summaries"],
-        "approvedBy": "Bob",
+        "approvedBy": "Operator",
         "approvedAt": now.isoformat(),
         "expiresAt": (now + timedelta(minutes=10)).isoformat(),
         "rollbackPath": ["disable local-provider and Ollama-specific gates"],
@@ -1516,8 +1516,8 @@ def test_documentation_authority_report_surfaces_indexes_and_blocked_stories_wit
     assert report["executionAuthorityApproved"] is False
     assert {document["path"] for document in report["indexes"]} == {
         "docs/architecture/index.md",
-        "docs/prds/index.md",
-        "docs/stories/index.md",
+        "docs/workflows/product-requirements-boundary.md",
+        "docs/workflows/implementation-evidence-boundary.md",
     }
     assert report["approvalCheckpoint"]["path"].endswith("kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md")
     assert {story["storyId"] for story in report["blockedStories"]} == {"4.4", "5.5"}
@@ -1588,7 +1588,6 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "dashboard-provider-raw-output-e2e",
         "dashboard-e2e",
         "github-doctor-remote",
-        "bootstrap-run-check",
     }
     assert {group["groupId"] for group in report["commandGroups"]} == {
         "setup-and-preflight",
@@ -1610,15 +1609,18 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert {checkpoint["checkpointId"] for checkpoint in report["handoffCheckpoints"]} == {
         "local-development-handoff",
         "dashboard-change-handoff",
-        "fresh-vm-handoff",
+        "setup-handoff",
         "authority-boundary-handoff",
     }
     local_handoff = next(checkpoint for checkpoint in report["handoffCheckpoints"] if checkpoint["checkpointId"] == "local-development-handoff")
     assert local_handoff["requiredCommandIds"] == ["preflight", "full-check"]
     assert "README.md" in local_handoff["relatedRunbooks"]
-    fresh_vm_handoff = next(checkpoint for checkpoint in report["handoffCheckpoints"] if checkpoint["checkpointId"] == "fresh-vm-handoff")
-    assert "bootstrap-run-check" in fresh_vm_handoff["requiredCommandIds"]
-    assert "docs/bootstrap-windows-vm.md" in fresh_vm_handoff["relatedRunbooks"]
+    assert "docs/workflows/current-session-runbook.md" in local_handoff["relatedRunbooks"]
+    for checkpoint in report["handoffCheckpoints"]:
+        assert "docs/handoffs/current.md" not in checkpoint["relatedRunbooks"]
+    setup_handoff = next(checkpoint for checkpoint in report["handoffCheckpoints"] if checkpoint["checkpointId"] == "setup-handoff")
+    assert "github-doctor-remote" in setup_handoff["requiredCommandIds"]
+    assert "docs/workflows/linux-primary-development-runbook.md" in setup_handoff["relatedRunbooks"]
     authority_handoff = next(checkpoint for checkpoint in report["handoffCheckpoints"] if checkpoint["checkpointId"] == "authority-boundary-handoff")
     assert "explicit operator approval" in authority_handoff["summary"]
     assert any("provider/model calls" in stop_line for stop_line in report["stopLines"])
@@ -1785,7 +1787,7 @@ def test_maintenance_readiness_report_tracks_safe_work_without_mutation(tmp_path
     assert "GET /supervisor/dashboard-e2e-report" in verification_track["relatedReports"]
     assert "/controls#dashboard-e2e-report" in verification_track["dashboardAnchors"]
     documentation_track = next(track for track in report["tracks"] if track["trackId"] == "documentation-hygiene")
-    assert "docs/stories/index.md" in documentation_track["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in documentation_track["relatedDocs"]
     assert "/controls#documentation-authority-report" in documentation_track["dashboardAnchors"]
     assert any("must not approve local provider/model calls" in stop_line for stop_line in report["stopLines"])
     assert any("coherent PRs" in action for action in report["nextSafeActions"])
@@ -1825,7 +1827,7 @@ def test_maintenance_action_plan_report_consolidates_next_safe_steps_without_mut
     assert "pnpm run check:safe-backlog" in safe_slice_step["verificationCommands"]
     assert "/controls#safe-development-backlog" in safe_slice_step["dashboardAnchors"]
     assert "GET /supervisor/safe-development-backlog" in safe_slice_step["relatedReports"]
-    assert "docs/stories/3-27-safe-development-backlog-report.md" in safe_slice_step["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in safe_slice_step["relatedDocs"]
     authority_step = next(step for step in report["steps"] if step["stepId"] == "preserve-authority-stop-lines")
     assert authority_step["status"] == "blocked_pending_explicit_approval"
     assert "pnpm run check:process-lifecycle" in authority_step["verificationCommands"]
@@ -1873,7 +1875,7 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "safe-backlog-report-alignment" in report_slice["includedBacklogItems"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
-    assert "docs/stories/3-64-development-runway-evidence-links.md" in report_slice["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in report_slice["relatedDocs"]
     assert "/controls#supervisor-report-catalog" in report_slice["dashboardAnchors"]
     assert {check["checkId"] for check in report_slice["readinessChecks"]} == {
         "ready-backlog-item",
@@ -1882,17 +1884,21 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     }
     assert all(check["status"] == "ready" for check in report_slice["readinessChecks"])
     ready_check = next(check for check in report_slice["readinessChecks"] if check["checkId"] == "ready-backlog-item")
-    assert "docs/stories/3-27-safe-development-backlog-report.md" in ready_check["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in ready_check["relatedDocs"]
     assert "/controls#safe-development-backlog" in ready_check["dashboardAnchors"]
     verification_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "verification-runbook-hardening-slice")
     assert "pnpm run check:runbooks" in verification_slice["requiredVerification"]
     assert "GET /supervisor/verification-readiness-report" in verification_slice["relatedReports"]
-    assert "docs/stories/3-58-verification-handoff-checkpoints.md" in verification_slice["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in verification_slice["relatedDocs"]
+    assert "docs/handoffs/current.md" not in verification_slice["relatedDocs"]
     assert {check["checkId"] for check in verification_slice["readinessChecks"]} == {
         "ready-backlog-items",
         "handoff-checkpoint-coverage",
         "full-gate-available",
     }
+    handoff_coverage = next(check for check in verification_slice["readinessChecks"] if check["checkId"] == "handoff-checkpoint-coverage")
+    assert "docs/workflows/current-session-runbook.md" in handoff_coverage["relatedDocs"]
+    assert "docs/handoffs/current.md" not in handoff_coverage["relatedDocs"]
     assert any("local-development-handoff" in check["evidence"] for check in verification_slice["readinessChecks"])
     authority_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "authority-blocker-maintenance-slice")
     assert authority_slice["status"] == "blocked_pending_explicit_authority_approval"
@@ -1905,7 +1911,7 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "local-provider-execution" in authority_slice["blockedBy"]
     assert "subscription-agent-launch" in authority_slice["blockedBy"]
     assert "GET /supervisor/authority-readiness-matrix-report" in authority_slice["relatedReports"]
-    assert "docs/stories/index.md" in authority_slice["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in authority_slice["relatedDocs"]
     assert "pnpm run check:development-runway" in report["verificationChain"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("ready safe backlog items" in action for action in report["nextSafeActions"])
@@ -1950,7 +1956,7 @@ def test_runtime_evidence_review_report_indexes_work_item_exports_without_mutati
     assert report["readOnly"] is True
     assert report["executionAuthorityApproved"] is False
     assert "GET /supervisor/runtime-evidence-review-report" in report["relatedReports"]
-    assert "docs/stories/3-65-runtime-review-evidence-links.md" in report["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in report["relatedDocs"]
     assert "/controls#runtime-evidence-review-report" in report["dashboardAnchors"]
     assert "reviewQueue" in report
     assert report["reviewQueue"]
@@ -1960,7 +1966,7 @@ def test_runtime_evidence_review_report_indexes_work_item_exports_without_mutati
     assert review_item["eventCount"] >= 2
     assert review_item["relatedReportCount"] == len(report["relatedReports"])
     assert "GET /supervisor/runtime-evidence-review-report" in review_item["relatedReports"]
-    assert "docs/stories/3-65-runtime-review-evidence-links.md" in review_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in review_item["relatedDocs"]
     assert "/controls#runtime-evidence-review-report" in review_item["dashboardAnchors"]
     assert review_item["runtimeExportHref"] == f"/work-items/{work_item_id}#runtime-evidence-export"
     assert review_item["reviewPriority"] in {"P0", "P1"}
@@ -2002,11 +2008,11 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     assert any("merged into codex/epic-10-delivery-cleanup-plans, not directly into main" in evidence for evidence in pr_finding["evidence"])
     assert any("Merged-to-main state remains false" in evidence for evidence in pr_finding["evidence"])
     packet = report["nextLaneDecisionPacket"]
-    assert packet["packetId"] == "epic-11-next-lane-authority-decision-packet-2026-06-13"
+    assert packet["packetId"] == "epic-11-next-lane-authority-decision-contract"
     assert packet["status"] == "decision_only_no_authority_granted"
     assert packet["approvalRequired"] is True
     assert packet["noAuthorityGranted"] is True
-    assert "docs/goals/epic-11-next-lane-authority-decision-packet-2026-06-13.md" in packet["packetPath"]
+    assert "docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract" in packet["packetPath"]
     assert any("Do not treat the decision packet recommendation as approval" in stop_line for stop_line in packet["stopLines"])
     assert {family["familyId"] for family in report["families"]} == {
         "local-provider-execution",
@@ -2028,12 +2034,12 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     provider_family = next(family for family in report["families"] if family["familyId"] == "local-provider-execution")
     assert provider_family["status"] == "blocked_pending_explicit_approval"
     assert provider_family["blockedStories"] == [
-        "docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md"
+        "docs/workflows/implementation-evidence-boundary.md"
     ]
     assert "GET /supervisor/disabled-provider-proofs" in provider_family["relatedReports"]
     assert "no-call fixture evidence" in provider_family["rollbackPath"]
     launch_family = next(family for family in report["families"] if family["familyId"] == "subscription-agent-launch")
-    assert "docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md" in launch_family["blockedStories"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in launch_family["blockedStories"]
     assert "/controls#maintenance-action-plan-report" in launch_family["dashboardAnchors"]
     scoring_family = next(family for family in report["families"] if family["familyId"] == "adaptive-scoring")
     assert scoring_family["status"] == "blocked_pending_explicit_approval"
@@ -2046,10 +2052,10 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     assert "GET /supervisor/delivery-readiness-policy-report" in remote_family["relatedReports"]
     delivery_family = next(family for family in report["families"] if family["familyId"] == "github-delivery")
     assert delivery_family["status"] == "evidence_ready_approval_required"
-    assert "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md" in delivery_family["relatedDocs"]
-    assert "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md" in delivery_family["relatedDocs"]
-    assert "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md" in delivery_family["relatedDocs"]
-    assert "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md" in delivery_family["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in delivery_family["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in delivery_family["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in delivery_family["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in delivery_family["relatedDocs"]
     assert any("cleanup plan" in evidence for evidence in delivery_family["requiredEvidence"])
     assert any("PR #103" in evidence for evidence in delivery_family["requiredEvidence"])
     assert "dry-run planning" in delivery_family["rollbackPath"]
@@ -2057,11 +2063,11 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     assert cleanup_family["status"] == "blocked_pending_explicit_approval"
     assert "GET /supervisor/local-cleanup-readiness-report" in cleanup_family["relatedReports"]
     assert "GET /supervisor/remote-cleanup-sync-readiness-report" in cleanup_family["relatedReports"]
-    assert "docs/stories/10-1-define-low-risk-delivery-policy-and-dry-run-plan-contract.md" in cleanup_family["relatedDocs"]
-    assert "docs/stories/10-2-record-delivery-execution-evidence-for-approved-pr-and-merge-actions.md" in cleanup_family["relatedDocs"]
-    assert "docs/stories/10-3-plan-safe-cleanup-with-evidence-preservation-and-worktree-residue-classification.md" in cleanup_family["relatedDocs"]
-    assert "docs/stories/10-4-show-delivery-and-cleanup-plans-in-dev-console.md" in cleanup_family["relatedDocs"]
-    assert "docs/stories/10-5-bind-delivery-execution-approval-to-trusted-authority-ledger.md" in cleanup_family["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in cleanup_family["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in cleanup_family["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in cleanup_family["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in cleanup_family["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in cleanup_family["relatedDocs"]
     assert any("Low-risk delivery dry-run plan" in evidence for evidence in cleanup_family["requiredEvidence"])
     assert any("Delivery execution evidence" in evidence for evidence in cleanup_family["requiredEvidence"])
     assert any("Trusted authority ledger" in evidence for evidence in cleanup_family["requiredEvidence"])
@@ -2114,27 +2120,27 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
     assert "/controls#verification-readiness-report" in verification_item["dashboardAnchors"]
     assert "/controls#development-runway-report" in verification_item["dashboardAnchors"]
-    assert "docs/stories/3-32-safe-development-backlog-drift-check.md" in verification_item["relatedDocs"]
-    assert "docs/stories/3-35-runbook-check-chain-hardening.md" in verification_item["relatedDocs"]
-    assert "docs/stories/3-37-managed-recipe-policy-drift-check.md" in verification_item["relatedDocs"]
-    assert "docs/stories/3-38-runbook-managed-recipe-check-chain.md" in verification_item["relatedDocs"]
-    assert "docs/stories/3-45-delivery-readiness-policy-drift-check.md" in verification_item["relatedDocs"]
-    assert "docs/stories/3-46-maintenance-readiness-drift-check.md" in verification_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
     github_item = next(item for item in report["items"] if item["itemId"] == "github-delivery-hygiene")
     assert github_item["recommendedSliceSize"] == "large"
     assert "GET /supervisor/github-workflow-policy-report" in github_item["relatedReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in github_item["relatedReports"]
     assert "/controls#github-workflow-policy-report" in github_item["dashboardAnchors"]
     assert "/controls#delivery-readiness-policy-report" in github_item["dashboardAnchors"]
-    assert "docs/stories/3-42-github-workflow-policy-report.md" in github_item["relatedDocs"]
-    assert "docs/stories/3-43-safe-delivery-hygiene.md" in github_item["relatedDocs"]
-    assert "docs/stories/3-44-delivery-readiness-policy-report.md" in github_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in github_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in github_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in github_item["relatedDocs"]
     assert any("plaintext gh token" in evidence for evidence in github_item["evidence"])
     evidence_item = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish")
     assert "/controls#supervisor-report-catalog" in evidence_item["dashboardAnchors"]
-    assert "docs/stories/3-33-evidence-overview-review-shortcuts.md" in evidence_item["relatedDocs"]
-    assert "docs/stories/3-34-report-shortcuts-in-evidence-overview.md" in evidence_item["relatedDocs"]
-    assert "docs/stories/3-39-report-shortcut-anchor-polish.md" in evidence_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
@@ -2635,7 +2641,7 @@ def test_subscription_agent_launch_stub_generation_is_non_mutating(tmp_path, mon
     assert stub["readinessEvidence"]["staleEnvelopeFields"] == []
     assert stub["readinessEvidence"]["commandTemplateId"] == "codex-subscription-cli-template-disabled-v1"
     assert stub["readinessEvidence"]["commandTemplateExecutable"] is False
-    assert stub["approvalBinding"]["verificationCommand"] == "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch"
+    assert stub["approvalBinding"]["verificationCommand"] == "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch"
     assert stub["workspaceContract"]["materializationMode"] == "artifact_only_no_workspace_created"
     assert stub["workspaceContract"]["environmentPolicy"] == "deny_inheritance_allowlist_only"
     assert ".ssh" in stub["workspaceContract"]["forbiddenPaths"]
@@ -2929,7 +2935,7 @@ def _approved_subscription_launch_binding(stub: dict, **overrides: object) -> di
     approval.update(
         {
             "executionAttemptId": approval["attemptId"],
-            "approvalActor": "Bob",
+            "approvalActor": "Operator",
             "approvalTimestamp": STORY_8_5_APPROVAL_TIMESTAMP.isoformat(),
             "approvalExpiry": STORY_8_5_APPROVAL_EXPIRY.isoformat(),
             "permissionEnvelope": "approved_for_one_artifact_only_subscription_launch",
@@ -2946,7 +2952,7 @@ def _approved_subscription_launch_binding(stub: dict, **overrides: object) -> di
             "runTimeoutSeconds": 30,
             "cancellationTimeoutSeconds": 5,
             "dashboardControls": "approval_bound_disabled_until_all_gates_green",
-            "verificationCommand": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+            "verificationCommand": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
             "allowedOutputMode": "artifact-only",
         }
     )
@@ -3195,8 +3201,8 @@ def test_subscription_agent_launch_request_accepts_exact_artifact_only_fixture_p
     assert attempt["workspaceIsolationPlan"]["credentialAccessAllowed"] is False
     assert ".env" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
     assert ".ssh" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
-    assert "AppData/Roaming/Claude" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
-    assert "AppData/Roaming/Codex" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
+    assert ".claude" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
+    assert ".codex" in attempt["workspaceIsolationPlan"]["forbiddenPaths"]
     assert attempt["workspaceIsolationPlan"]["sessionBoundary"] == "forbid_shell_profiles_ssh_browser_tokens_and_subscription_sessions"
 
     launch_events = [event for event in events if event["eventType"].startswith("execution_attempt.subscription_launch_fixture")]
@@ -3237,7 +3243,7 @@ def test_subscription_agent_launch_request_accepts_exact_artifact_only_fixture_p
         assert event["payload"]["lifecyclePolicyResults"]["idempotentCleanupPolicy"] == "cleanup_is_metadata_only_and_idempotent_without_deletion"
         assert event["payload"]["lifecyclePolicyResults"]["rollbackPolicy"] == "rollback_records_global_disable_without_resource_deletion"
         assert ".ssh" in event["payload"]["workspaceContract"]["forbiddenPaths"]
-        assert "AppData/Local/Google/Chrome/User Data" in event["payload"]["workspaceContract"]["forbiddenPaths"]
+        assert ".config/google-chrome" in event["payload"]["workspaceContract"]["forbiddenPaths"]
         assert "rawStdout" not in event["payload"]
         assert "rawStderr" not in event["payload"]
         assert "generatedPatch" not in event["payload"]
@@ -3639,7 +3645,7 @@ def test_runtime_evidence_export_includes_subscription_launch_summary_without_ra
     assert launch_export["outputArtifactReferences"][0]["artifactKind"] == "fixture_output_summary"
     assert launch_export["outputArtifactReferences"][1]["artifactKind"] == "fixture_generated_patch_reference"
     assert launch_export["verificationEvidence"]["status"] == "not_recorded"
-    assert launch_export["verificationEvidence"]["commandShape"] == "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch"
+    assert launch_export["verificationEvidence"]["commandShape"] == "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch"
     assert launch_export["verificationEvidence"]["blockedReason"] == "subscription-launch-verification-missing"
     assert launch_export["verificationEvidence"]["deliveryEligible"] is False
     assert launch_export["rawOutputStored"] is False
@@ -3765,7 +3771,7 @@ def test_subscription_agent_launch_verification_records_recovery_and_rollback_me
     monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
 
     def fake_verification_command(command_shape: str) -> dict:
-        assert command_shape == "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch"
+        assert command_shape == "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch"
         return {
             "status": "failed",
             "exitCode": 1,
@@ -3794,7 +3800,7 @@ def test_subscription_agent_launch_verification_records_recovery_and_rollback_me
             json={
                 "commandId": "subscription-launch-fixture-check",
                 "label": "Subscription launch fixture verification",
-                "commandShape": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "commandShape": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
                 "status": "failed",
                 "exitCode": 1,
                 "durationMs": 42000,
@@ -3803,7 +3809,7 @@ def test_subscription_agent_launch_verification_records_recovery_and_rollback_me
                 "recoveryAction": "inspect retained subscription launch artifacts before retry or rollback",
                 "rollbackStatus": "triggered",
                 "rollbackReason": "verification_failed",
-                "nextSafeAction": "Keep subscription-agent launch disabled until Bob reviews retained artifacts.",
+                "nextSafeAction": "Keep subscription-agent launch disabled until the operator reviews retained artifacts.",
             },
         )
         export_response = client.get(f"/work-items/{work_item_id}/runtime-evidence-export")
@@ -3812,13 +3818,13 @@ def test_subscription_agent_launch_verification_records_recovery_and_rollback_me
             json={
                 "commandId": "subscription-launch-fixture-check",
                 "label": "Subscription launch fixture verification",
-                "commandShape": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "commandShape": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
                 "status": "failed",
                 "summary": "Duplicate rollback evidence must not be accepted.",
                 "recoveryAction": "inspect retained subscription launch artifacts before retry or rollback",
                 "rollbackStatus": "triggered",
                 "rollbackReason": "verification_failed",
-                "nextSafeAction": "Keep subscription-agent launch disabled until Bob reviews retained artifacts.",
+                "nextSafeAction": "Keep subscription-agent launch disabled until the operator reviews retained artifacts.",
             },
         )
         replay_different_command_response = client.post(
@@ -3826,13 +3832,13 @@ def test_subscription_agent_launch_verification_records_recovery_and_rollback_me
             json={
                 "commandId": "subscription-launch-fixture-check-retry",
                 "label": "Subscription launch fixture verification retry",
-                "commandShape": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "commandShape": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
                 "status": "failed",
                 "summary": "Duplicate rollback evidence with a new command id must not be accepted.",
                 "recoveryAction": "inspect retained subscription launch artifacts before retry or rollback",
                 "rollbackStatus": "triggered",
                 "rollbackReason": "verification_failed",
-                "nextSafeAction": "Keep subscription-agent launch disabled until Bob reviews retained artifacts.",
+                "nextSafeAction": "Keep subscription-agent launch disabled until the operator reviews retained artifacts.",
             },
         )
         rollback_blocked_response = client.post(
@@ -3850,7 +3856,7 @@ def test_subscription_agent_launch_verification_records_recovery_and_rollback_me
     assert evidence["subscriptionLaunchVerification"]["rollbackStatus"] == "triggered"
     assert evidence["subscriptionLaunchVerification"]["rollbackReason"] == "verification_failed"
     assert evidence["subscriptionLaunchVerification"]["blockedReason"] == "subscription-launch-verification-failed"
-    assert evidence["subscriptionLaunchVerification"]["nextSafeAction"] == "Keep subscription-agent launch disabled until Bob reviews retained artifacts."
+    assert evidence["subscriptionLaunchVerification"]["nextSafeAction"] == "Keep subscription-agent launch disabled until the operator reviews retained artifacts."
     assert evidence["rawOutputRetained"] is False
     assert "rawStdout" not in str(evidence)
     assert "rawStderr" not in str(evidence)
@@ -3860,7 +3866,7 @@ def test_subscription_agent_launch_verification_records_recovery_and_rollback_me
     assert launch_export["verificationEvidence"]["recoveryPath"] == "inspect retained subscription launch artifacts before retry or rollback"
     assert launch_export["verificationEvidence"]["rollbackStatus"] == "triggered"
     assert launch_export["verificationEvidence"]["blockedReason"] == "subscription-launch-verification-failed"
-    assert launch_export["verificationEvidence"]["nextSafeAction"] == "Keep subscription-agent launch disabled until Bob reviews retained artifacts."
+    assert launch_export["verificationEvidence"]["nextSafeAction"] == "Keep subscription-agent launch disabled until the operator reviews retained artifacts."
     assert launch_export["readinessStatus"] == "subscription_launch_rollback_triggered"
     assert {artifact["artifactKind"] for artifact in launch_export["outputArtifactReferences"]} == {
         "fixture_output_summary",
@@ -3909,7 +3915,7 @@ def test_subscription_agent_launch_stale_verification_is_metadata_only_and_block
             json={
                 "commandId": "subscription-launch-stale-check",
                 "label": "Subscription launch stale verification",
-                "commandShape": "pnpm.cmd run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
+                "commandShape": "pnpm run test:supervisor -- tests/integration/test_routing_preview.py -q -k subscription_agent_launch",
                 "status": "stale",
                 "summary": "Prior subscription launch verification is stale.",
                 "artifactRef": "_bmad-output/subscription-launch/stale-verification-summary.json",
@@ -4261,59 +4267,11 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
         "supervisor_database.execution_attempts",
         "runtime-generated export timestamps and identifiers",
     ]
-    assert "docs/stories/2-7-runtime-evidence-export-strategy.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-7-execution-readiness-and-evidence-report.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-20-runtime-evidence-review-manifest.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-22-dashboard-e2e-report.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-23-dashboard-e2e-runner-lifecycle-helper.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-24-dashboard-mobile-e2e-runner.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-25-managed-recipe-e2e-runners.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-26-dashboard-e2e-report-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-27-safe-development-backlog-report.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-28-supervisor-report-catalog-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-29-runbook-verification-alignment.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-30-runtime-evidence-review-navigator.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-31-runtime-evidence-export-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-32-safe-development-backlog-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-33-evidence-overview-review-shortcuts.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-34-report-shortcuts-in-evidence-overview.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-35-runbook-check-chain-hardening.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-37-managed-recipe-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-38-runbook-managed-recipe-check-chain.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-39-report-shortcut-anchor-polish.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-40-runtime-report-anchor-links.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-41-current-gap-review-refresh.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-42-github-workflow-policy-report.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-14-git-hygiene-read-only.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-16-codex-readiness-no-launch.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-17-codex-implementation-approval-packet.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-18-claude-readiness-no-launch.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-19-claude-review-approval-packet.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-20-github-delivery-authority-ladder.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-21-local-cleanup-readiness.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-22-remote-cleanup-sync-readiness.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-23-trusted-autonomy-readiness.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/6-24-epic-6-completion-audit.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-43-safe-delivery-hygiene.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-44-delivery-readiness-policy-report.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-45-delivery-readiness-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-46-maintenance-readiness-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-47-core-readiness-drift-checks.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-48-execution-boundary-report-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-49-execution-evidence-boundary-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-50-provider-fixture-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-51-process-lifecycle-policy-drift-check.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-52-maintenance-action-plan-report.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-53-authority-readiness-matrix-report.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-54-development-runway-safe-slices.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-63-development-runway-pr-batching-policy.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-64-development-runway-evidence-links.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-55-runtime-evidence-review-index.md" in export["boundary"]["gitBackedEvidence"]
-    assert "docs/stories/3-65-runtime-review-evidence-links.md" in export["boundary"]["gitBackedEvidence"]
+    git_backed_evidence = export["boundary"]["gitBackedEvidence"]
+    assert len(git_backed_evidence) == len(set(git_backed_evidence))
+    assert "docs/workflows/implementation-evidence-boundary.md" in git_backed_evidence
+    assert "docs/workflows/execution-authority-boundary.md" in git_backed_evidence
+    assert "docs/workflows/product-requirements-boundary.md#supervisor-execution-authority-expansion-boundary" in git_backed_evidence
     assert "GET /supervisor/execution-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/documentation-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/verification-readiness-report" in export["boundary"]["relatedSupervisorReports"]
@@ -4579,7 +4537,7 @@ def test_codex_launch_contract_reports_bounded_authority_and_negative_fixtures(t
     assert contract["approvalBinding"]["workspacePlanId"] == "isolated-codex-worktree"
     assert contract["permissionEnvelope"]["allowedPaths"] == report["allowedPaths"]
     assert ".git/**" in contract["permissionEnvelope"]["blockedPaths"]
-    assert "pnpm.cmd run check" in contract["permissionEnvelope"]["verificationCommand"]
+    assert "pnpm run check" in contract["permissionEnvelope"]["verificationCommand"]
     assert contract["evaluation"]["status"] == "accepted"
     assert contract["evaluation"]["launchApproved"] is False
     assert contract["evaluation"]["processLaunchAttempted"] is False
@@ -4735,7 +4693,7 @@ def test_github_delivery_authority_report_stays_read_only_and_blocks_remote_step
     assert all(step["status"] == "blocked" for step in report["ladder"])
     assert all(stage["status"] == "policy_defined_not_enabled" for stage in report["eligibilityStages"])
     assert any("Trusted delivery is evidence-gated" in rule for rule in report["trustedDeliveryPolicy"])
-    assert any("pnpm.cmd run check passed locally" in condition for stage in report["eligibilityStages"] for condition in stage["eligibleWhen"])
+    assert any("pnpm run check passed locally" in condition for stage in report["eligibilityStages"] for condition in stage["eligibleWhen"])
     assert any("Provider execution" in rule for rule in report["trustedDeliveryPolicy"])
     assert any("green CI" in evidence for step in report["ladder"] for evidence in step["evidence"])
     assert any("plaintext tokens" in stop_condition for stop_condition in report["stopConditions"])
@@ -4770,6 +4728,15 @@ def test_trusted_delivery_eligibility_report_evaluates_local_evidence_without_mu
         return False, "unexpected git command"
 
     monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
+
+    broad_workflow_scope_guard = api_main.service._trusted_delivery_diff_guard(
+        diff_name_ok=True,
+        diff_name_output="M\tdocs/workflows/knx-runtime-cleanup-execution-report-2026-06-19.md",
+        status_ok=True,
+        status_output="",
+        approved_scope=["docs/workflows/**"],
+    )
+    assert broad_workflow_scope_guard["changedFiles"][0]["reason"] == "forbidden-path"
 
     with TestClient(api_main.app) as client:
         work_item_id = _create_routing_work_item(client)
@@ -4893,6 +4860,31 @@ def test_trusted_delivery_diff_guard_classifies_scope_violations_and_blocks_gree
             return True, "\n".join(
                 [
                     "M\tservices/supervisor/src/supervisor/application/service.py",
+                    "M\t_bmad-output/reviews/local-review.md",
+                    "M\t_bmad/memory/knx/profile.md",
+                    "M\ttools/local.user.toml",
+                    "M\t.claude/skills/bmad-help/SKILL.md",
+                    "M\t.agents/skills/knx-profile-setup/.decision-log.md",
+                    "M\tskills/generated-example/SKILL.md",
+                    "M\tnode_modules/.pnpm/lock.yaml",
+                    "M\tservices/supervisor/.venv/pyvenv.cfg",
+                    "M\tservices/supervisor/tests/__pycache__/test_api.cpython-312.pyc",
+                    "M\t.vscode/settings.json",
+                    "M\truntime/.batch_timer_state.json",
+                    "M\tapps/dashboard/next-env.d.ts",
+                    "M\tapps/dashboard/.vercel/project.json",
+                    "M\tapps/dashboard/.pnp.cjs",
+                    "M\tapps/dashboard/.yarn/cache/example.zip",
+                    "M\tapps/dashboard/out/index.html",
+                    "M\tapps/dashboard/tsconfig.tsbuildinfo",
+                    "M\tdocs/workflows/unchecked-runbook.md",
+                    "M\tdocs/workflows-private/unchecked-runbook.md",
+                    "M\ttests-private/out-of-scope.test.ts",
+                    "M\tdocs/workflows/knx-runtime-cleanup-execution-report-2026-06-19.md",
+                    "M\tdocs/workflows/mise-normal-workflow-implementation-evidence-2026-06-18.md",
+                    "M\tdocs/linux-install/planning/lane-status.md",
+                    "M\tdocs/linux-install/evidence/fresh-vm-full-check-2026-06-16.md",
+                    "M\tdocs/stories/local-story.md",
                     "A\t.env.local",
                     "D\tdocs/prds/legacy.md",
                     "R100\tprivate/secrets.md\tservices/supervisor/src/supervisor/safe.py",
@@ -4919,15 +4911,65 @@ def test_trusted_delivery_diff_guard_classifies_scope_violations_and_blocks_gree
     classifications = {item["path"]: item for item in guard["changedFiles"]}
     assert classifications["services/supervisor/src/supervisor/application/service.py"]["classification"] == "allowed"
     assert classifications["services/supervisor/src/supervisor/safe.py"]["classification"] == "allowed"
+    assert classifications["_bmad-output/reviews/local-review.md"]["reason"] == "forbidden-path"
+    assert classifications["_bmad/memory/knx/profile.md"]["reason"] == "forbidden-path"
+    assert classifications["tools/local.user.toml"]["reason"] == "forbidden-path"
+    assert classifications[".claude/skills/bmad-help/SKILL.md"]["reason"] == "forbidden-path"
+    assert classifications[".agents/skills/knx-profile-setup/.decision-log.md"]["reason"] == "forbidden-path"
+    assert classifications["skills/generated-example/SKILL.md"]["reason"] == "forbidden-path"
+    assert classifications["node_modules/.pnpm/lock.yaml"]["reason"] == "forbidden-path"
+    assert classifications["services/supervisor/.venv/pyvenv.cfg"]["reason"] == "forbidden-path"
+    assert classifications["services/supervisor/tests/__pycache__/test_api.cpython-312.pyc"]["reason"] == "forbidden-path"
+    assert classifications[".vscode/settings.json"]["reason"] == "forbidden-path"
+    assert classifications["runtime/.batch_timer_state.json"]["reason"] == "forbidden-path"
+    assert classifications["apps/dashboard/next-env.d.ts"]["reason"] == "forbidden-path"
+    assert classifications["apps/dashboard/.vercel/project.json"]["reason"] == "forbidden-path"
+    assert classifications["apps/dashboard/.pnp.cjs"]["reason"] == "forbidden-path"
+    assert classifications["apps/dashboard/.yarn/cache/example.zip"]["reason"] == "forbidden-path"
+    assert classifications["apps/dashboard/out/index.html"]["reason"] == "forbidden-path"
+    assert classifications["apps/dashboard/tsconfig.tsbuildinfo"]["reason"] == "forbidden-path"
+    assert classifications["docs/workflows/unchecked-runbook.md"]["reason"] == "changed-path-outside-approved-scope"
+    assert classifications["docs/workflows-private/unchecked-runbook.md"]["reason"] == "changed-path-outside-approved-scope"
+    assert classifications["tests-private/out-of-scope.test.ts"]["reason"] == "changed-path-outside-approved-scope"
+    assert classifications["docs/workflows/knx-runtime-cleanup-execution-report-2026-06-19.md"]["reason"] == "forbidden-path"
+    assert classifications["docs/workflows/mise-normal-workflow-implementation-evidence-2026-06-18.md"]["reason"] == "forbidden-path"
+    assert classifications["docs/linux-install/planning/lane-status.md"]["reason"] == "forbidden-path"
+    assert classifications["docs/linux-install/evidence/fresh-vm-full-check-2026-06-16.md"]["reason"] == "forbidden-path"
+    assert classifications["docs/stories/local-story.md"]["reason"] == "forbidden-path"
     assert classifications["private/secrets.md"]["classification"] == "unexpected"
     assert classifications[".env.local"]["classification"] == "blocked"
-    assert classifications["docs/prds/legacy.md"]["classification"] == "unexpected"
-    assert classifications["docs/prds/dirty.md"]["classification"] == "unexpected"
-    assert classifications["apps/dashboard/.next/cache/build-manifest.json"]["reason"] == "generated-churn-outside-allowed-generated-paths"
+    assert classifications["docs/prds/legacy.md"]["classification"] == "blocked"
+    assert classifications["docs/prds/dirty.md"]["classification"] == "blocked"
+    assert classifications["apps/dashboard/.next/cache/build-manifest.json"]["reason"] == "forbidden-path"
     assert classifications["scratch/outside.txt"]["reason"] == "untracked-file-outside-approved-scope"
     assert classifications["AGENTS.md"]["reason"] == "user-owned-dirty-file"
     assert set(guard["blockedPaths"]) == {
         ".env.local",
+        "_bmad-output/reviews/local-review.md",
+        "_bmad/memory/knx/profile.md",
+        "tools/local.user.toml",
+        ".claude/skills/bmad-help/SKILL.md",
+        ".agents/skills/knx-profile-setup/.decision-log.md",
+        "skills/generated-example/SKILL.md",
+        "node_modules/.pnpm/lock.yaml",
+        "services/supervisor/.venv/pyvenv.cfg",
+        "services/supervisor/tests/__pycache__/test_api.cpython-312.pyc",
+        ".vscode/settings.json",
+        "runtime/.batch_timer_state.json",
+        "apps/dashboard/next-env.d.ts",
+        "apps/dashboard/.vercel/project.json",
+        "apps/dashboard/.pnp.cjs",
+        "apps/dashboard/.yarn/cache/example.zip",
+        "apps/dashboard/out/index.html",
+        "apps/dashboard/tsconfig.tsbuildinfo",
+        "docs/workflows/unchecked-runbook.md",
+        "docs/workflows-private/unchecked-runbook.md",
+        "tests-private/out-of-scope.test.ts",
+        "docs/workflows/knx-runtime-cleanup-execution-report-2026-06-19.md",
+        "docs/workflows/mise-normal-workflow-implementation-evidence-2026-06-18.md",
+        "docs/linux-install/planning/lane-status.md",
+        "docs/linux-install/evidence/fresh-vm-full-check-2026-06-16.md",
+        "docs/stories/local-story.md",
         "docs/prds/legacy.md",
         "private/secrets.md",
         "docs/prds/dirty.md",
@@ -5105,7 +5147,7 @@ def test_epic_6_completion_audit_report_shows_mvp_complete_without_mutation(tmp_
     assert any("PR #97" in evidence for evidence in report["requiredEvidence"])
     assert any("worktree is dirty" in condition for condition in report["stopConditions"])
     assert any(
-        "docs/stories/3-66-epic-6-mvp-proof-done-evidence.md" in evidence
+        "docs/workflows/implementation-evidence-boundary.md" in evidence
         for item in report["completedItems"]
         for evidence in item["evidence"]
     )
@@ -5141,7 +5183,7 @@ def test_epic_6_mvp_proof_trial_report_shows_done_evidence_without_mutation(tmp_
     assert report["claudeLaunchApproved"] is False
     assert report["providerExpansionApproved"] is False
     assert report["autonomousDeliveryApproved"] is False
-    assert report["selectedStory"] == "Story 3.66: docs/stories/3-66-epic-6-mvp-proof-done-evidence.md"
+    assert report["selectedStory"] == "Story 3.66: docs/workflows/implementation-evidence-boundary.md"
     assert report["trialStatus"] == "epic_6_mvp_proof_complete"
     assert {step["stepId"] for step in report["steps"]} == {
         "select-real-story",
@@ -5538,7 +5580,7 @@ def test_delivery_execution_evidence_records_stale_rejection_without_delivery_mu
                 "recordEvent": True,
                 "approvalId": "approval-stale-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": "codex/story-10-2",
                 "expectedHeadRevision": "stale-head",
                 "baseBranch": "main",
@@ -5599,7 +5641,7 @@ def test_delivery_execution_evidence_rejects_missing_binding_fields(tmp_path, mo
                 "recordEvent": True,
                 "approvalId": "approval-missing-binding-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "ciStatus": "passed",
                 "reviewState": "approved",
                 "mergeStatus": "ready",
@@ -5664,7 +5706,7 @@ def test_delivery_execution_evidence_rejects_retention_boundary_payload(tmp_path
                 "recordEvent": True,
                 "approvalId": "approval-retention-boundary-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -5725,7 +5767,7 @@ def test_delivery_execution_evidence_exact_policy_without_approval_is_report_onl
                 "actionId": "pr",
                 "recordEvent": True,
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -5794,7 +5836,7 @@ def test_delivery_execution_evidence_rejects_unknown_approval_id_without_approve
                 "recordEvent": True,
                 "approvalId": "arbitrary-approval-id",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -5871,7 +5913,7 @@ def test_delivery_execution_evidence_rejects_expired_approval_ledger_entry(tmp_p
                 "recordEvent": True,
                 "approvalId": "approval-expired-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -5934,7 +5976,7 @@ def test_delivery_execution_evidence_rejects_ambiguous_approval_ledger_id(tmp_pa
                 "recordEvent": True,
                 "approvalId": "approval-ambiguous-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -6001,7 +6043,7 @@ def test_delivery_execution_evidence_rejects_retained_evidence_mismatch(tmp_path
                 "recordEvent": True,
                 "approvalId": "approval-retained-evidence-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -6070,7 +6112,7 @@ def test_delivery_execution_evidence_rejects_operator_mismatch(tmp_path, monkeyp
                 "recordEvent": True,
                 "approvalId": "approval-operator-mismatch-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -6148,7 +6190,7 @@ def test_delivery_execution_evidence_rejects_trusted_current_pr_state_mismatch(t
                 "recordEvent": True,
                 "approvalId": "approval-current-state-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -6216,7 +6258,7 @@ def test_delivery_execution_evidence_records_pr_without_merge_status(tmp_path, m
                 "recordEvent": True,
                 "approvalId": "approval-pr-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -6286,7 +6328,7 @@ def test_delivery_execution_evidence_rejects_completed_nonzero_exit_code(tmp_pat
                 "recordEvent": True,
                 "approvalId": "approval-nonzero-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -6353,7 +6395,7 @@ def test_delivery_execution_evidence_records_failed_action_metadata_only(tmp_pat
                 "recordEvent": True,
                 "approvalId": "approval-failed-pr-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "baseBranch": plan["baseBranch"],
@@ -6431,7 +6473,7 @@ def test_delivery_execution_evidence_records_approved_merge_metadata_only(tmp_pa
                 "recordEvent": True,
                 "approvalId": "approval-merge-fixture",
                 "policyId": "low-risk-delivery-policy-v1",
-                "actorLabel": "Bob",
+                "actorLabel": "Operator",
                 "expectedBranch": plan["currentBranch"],
                 "expectedHeadRevision": plan["headRevision"],
                 "pullRequestHeadRevision": plan["headRevision"],
@@ -6595,11 +6637,11 @@ def test_cleanup_plan_blocks_unsafe_path_crossing(tmp_path, monkeypatch) -> None
                 "metadata": {
                     "executionRecipeId": "dashboard-test-coverage",
                     "executionBranch": "codex/story-10-3",
-                    "cleanupTargetPath": "C:/Users/slaw_dawg/Kendall_Nxt",
+                    "cleanupTargetPath": "/tmp/outside-kendall-cleanup-target",
                     "cleanupTargetExists": True,
                     "cleanupTargetGitRegistered": True,
                     "cleanupTargetInsideApprovedRoot": False,
-                    "cleanupBlockedPaths": ["C:/Users/slaw_dawg/Kendall_Nxt"],
+                    "cleanupBlockedPaths": ["/tmp/outside-kendall-cleanup-target"],
                     "deliveryExecutionEvidence": [
                         {
                             "mode": "approved_merge_action_recorded",
@@ -7309,9 +7351,9 @@ def test_supervised_codex_launch_dry_run_records_terminal_attempt_evidence(tmp_p
         if command == ("git", "rev-list", "--count", "main..HEAD"):
             return True, "1"
         if command == ("git", "diff", "--stat", "main...HEAD"):
-            return True, "docs/stories/7-4-run-first-supervised-codex-worker-launch.md | 1 +"
+            return True, "docs/workflows/implementation-evidence-boundary.md | 1 +"
         if command == ("git", "diff", "--name-status", "main...HEAD"):
-            return True, "M\tdocs/stories/7-4-run-first-supervised-codex-worker-launch.md"
+            return True, "M\tdocs/workflows/implementation-evidence-boundary.md"
         return False, "unexpected git command"
 
     monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
@@ -7324,11 +7366,11 @@ def test_supervised_codex_launch_dry_run_records_terminal_attempt_evidence(tmp_p
             json={
                 "taskId": "story-7-4-readiness-evidence-clarity",
                 "dryRun": True,
-                "allowedPaths": ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"],
+                "allowedPaths": ["docs/workflows/implementation-evidence-boundary.md"],
                 "blockedPaths": [".env*", ".git/**", "node_modules/**", "services/supervisor/.venv/**"],
-                "verificationCommand": "pnpm.cmd run check",
+                "verificationCommand": "pnpm run check",
                 "outputSummary": "Dry-run supervised Codex launch retained metadata-only evidence.",
-                "touchedFiles": ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"],
+                "touchedFiles": ["docs/workflows/implementation-evidence-boundary.md"],
             },
         )
         history_response = client.get(f"/work-items/{work_item_id}/execution-attempts")
@@ -7347,8 +7389,8 @@ def test_supervised_codex_launch_dry_run_records_terminal_attempt_evidence(tmp_p
     launch_evidence = next(ref for ref in attempt["artifactRefs"] if ref["artifactType"] == "supervised_codex_launch_evidence")
     assert launch_evidence["dryRun"] is True
     assert launch_evidence["commandShape"] == "codex <bounded task packet> --cwd <isolated-worktree>"
-    assert launch_evidence["verificationCommand"] == "pnpm.cmd run check"
-    assert launch_evidence["touchedFiles"] == ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"]
+    assert launch_evidence["verificationCommand"] == "pnpm run check"
+    assert launch_evidence["touchedFiles"] == ["docs/workflows/implementation-evidence-boundary.md"]
     assert launch_evidence["terminalState"] == "completed"
     assert launch_evidence["recoveryPath"] == "inspect retained worktree evidence before retry, revert, or delivery"
     assert len(history_response.json()["data"]) == 1
@@ -7398,9 +7440,9 @@ def test_supervised_codex_launch_real_mutation_requires_green_diff_guard(tmp_pat
             json={
                 "taskId": "story-7-4-real-launch",
                 "dryRun": False,
-                "allowedPaths": ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"],
+                "allowedPaths": ["docs/workflows/implementation-evidence-boundary.md"],
                 "blockedPaths": [".env*", ".git/**", "node_modules/**", "services/supervisor/.venv/**"],
-                "verificationCommand": "pnpm.cmd run check",
+                "verificationCommand": "pnpm run check",
                 "outputSummary": "Attempt real launch.",
                 "touchedFiles": ["scratch/outside.txt"],
             },
@@ -7455,11 +7497,11 @@ def test_supervised_codex_launch_real_mutation_scopes_diff_guard_to_request_path
             json={
                 "taskId": "story-7-4-real-launch",
                 "dryRun": False,
-                "allowedPaths": ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"],
+                "allowedPaths": ["docs/workflows/implementation-evidence-boundary.md"],
                 "blockedPaths": [".env*", ".git/**", "node_modules/**", "services/supervisor/.venv/**"],
-                "verificationCommand": "pnpm.cmd run check",
+                "verificationCommand": "pnpm run check",
                 "outputSummary": "Attempt real launch.",
-                "touchedFiles": ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"],
+                "touchedFiles": ["docs/workflows/implementation-evidence-boundary.md"],
                 "routeDecisionId": "supervised-codex-story-7-4-real-launch",
                 "workerId": "codex.local.supervised",
                 "lane": "utility",
@@ -7497,9 +7539,9 @@ def test_supervised_codex_launch_real_mutation_requires_live_binding_and_invokes
         if command == ("git", "rev-list", "--count", "main..HEAD"):
             return True, "1"
         if command == ("git", "diff", "--stat", "main...HEAD"):
-            return True, "docs/stories/7-4-run-first-supervised-codex-worker-launch.md | 1 +"
+            return True, "docs/workflows/implementation-evidence-boundary.md | 1 +"
         if command == ("git", "diff", "--name-status", "main...HEAD"):
-            return True, "M\tdocs/stories/7-4-run-first-supervised-codex-worker-launch.md"
+            return True, "M\tdocs/workflows/implementation-evidence-boundary.md"
         return False, "unexpected git command"
 
     launched: list[str] = []
@@ -7523,11 +7565,11 @@ def test_supervised_codex_launch_real_mutation_requires_live_binding_and_invokes
     base_payload = {
         "taskId": "story-7-4-real-launch",
         "dryRun": False,
-        "allowedPaths": ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"],
+        "allowedPaths": ["docs/workflows/implementation-evidence-boundary.md"],
         "blockedPaths": [".env*", ".git/**", "node_modules/**", "services/supervisor/.venv/**"],
-        "verificationCommand": "pnpm.cmd run check",
+        "verificationCommand": "pnpm run check",
         "outputSummary": "Attempt real launch.",
-        "touchedFiles": ["docs/stories/7-4-run-first-supervised-codex-worker-launch.md"],
+        "touchedFiles": ["docs/workflows/implementation-evidence-boundary.md"],
     }
     binding = {
         "routeDecisionId": "supervised-codex-story-7-4-real-launch",
@@ -7565,13 +7607,17 @@ def test_supervised_codex_scope_rejects_traversal_and_absolute_paths(tmp_path, m
 
     from supervisor.api.main import service
 
-    allowed = ["docs/stories/**"]
-    blocked = [".env*", ".git/**", "node_modules/**"]
+    allowed = ["docs/workflows/**", "docs/stories/**"]
+    blocked = [".env*", ".git/**", "node_modules/**", "docs/stories/**"]
 
-    assert service._path_allowed_for_supervised_codex_launch("docs/stories/7-4.md", allowed, blocked) is True
-    assert service._path_allowed_for_supervised_codex_launch("docs/stories/../secrets.env", allowed, blocked) is False
-    assert service._path_allowed_for_supervised_codex_launch("C:/Users/slaw_dawg/Kendall_Nxt/docs/stories/7-4.md", allowed, blocked) is False
-    assert service._path_allowed_for_supervised_codex_launch("/docs/stories/7-4.md", allowed, blocked) is False
+    assert service._path_allowed_for_supervised_codex_launch("docs/workflows/approved-runbook.md", allowed, blocked) is True
+    assert service._path_allowed_for_supervised_codex_launch("docs/workflows-private/approved-runbook.md", allowed, blocked) is False
+    assert service._path_allowed_for_supervised_codex_launch("docs/workflows/../secrets.env", allowed, blocked) is False
+    assert service._path_allowed_for_supervised_codex_launch(
+        "/tmp/outside-kendall-cleanup-target/docs/workflows/approved-runbook.md", allowed, blocked
+    ) is False
+    assert service._path_allowed_for_supervised_codex_launch("/docs/workflows/approved-runbook.md", allowed, blocked) is False
+    assert service._path_allowed_for_supervised_codex_launch("docs/stories/approved-story.md", allowed, blocked) is False
 
 
 def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, monkeypatch) -> None:
@@ -7599,15 +7645,15 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
         if command == ("git", "rev-list", "--count", "main..HEAD"):
             return True, "1"
         if command == ("git", "diff", "--stat", "main...HEAD"):
-            return True, "docs/stories/7-5-record-verification-results-and-recovery-evidence.md | 1 +"
+            return True, "docs/workflows/implementation-evidence-boundary.md | 1 +"
         if command == ("git", "diff", "--name-status", "main...HEAD"):
-            return True, "M\tdocs/stories/7-5-record-verification-results-and-recovery-evidence.md"
+            return True, "M\tdocs/workflows/implementation-evidence-boundary.md"
         return False, "unexpected git command"
 
     monkeypatch.setattr(api_main.service, "_git_output", fake_git_output)
 
     def fake_verification_command(command_shape: str) -> dict:
-        assert command_shape == "pnpm.cmd run check"
+        assert command_shape == "pnpm run check"
         return {
             "status": "passed",
             "exitCode": 0,
@@ -7625,11 +7671,11 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
             json={
                 "taskId": "story-7-5-verification-evidence",
                 "dryRun": True,
-                "allowedPaths": ["docs/stories/7-5-record-verification-results-and-recovery-evidence.md"],
+                "allowedPaths": ["docs/workflows/implementation-evidence-boundary.md"],
                 "blockedPaths": [".env*", ".git/**", "node_modules/**", "services/supervisor/.venv/**"],
-                "verificationCommand": "pnpm.cmd run check",
+                "verificationCommand": "pnpm run check",
                 "outputSummary": "Launch evidence ready for verification.",
-                "touchedFiles": ["docs/stories/7-5-record-verification-results-and-recovery-evidence.md"],
+                "touchedFiles": ["docs/workflows/implementation-evidence-boundary.md"],
             },
         )
         attempt = launch_response.json()["data"]
@@ -7638,7 +7684,7 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
             json={
                 "commandId": "full-check",
                 "label": "Full workspace check",
-                "commandShape": "pnpm.cmd run check",
+                "commandShape": "pnpm run check",
                 "status": "passed",
                 "exitCode": 0,
                 "durationMs": 132000,
@@ -7655,11 +7701,11 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
             json={
                 "taskId": "story-7-5-newer-unverified-launch",
                 "dryRun": True,
-                "allowedPaths": ["docs/stories/7-5-record-verification-results-and-recovery-evidence.md"],
+                "allowedPaths": ["docs/workflows/implementation-evidence-boundary.md"],
                 "blockedPaths": [".env*", ".git/**", "node_modules/**", "services/supervisor/.venv/**"],
-                "verificationCommand": "pnpm.cmd run check",
+                "verificationCommand": "pnpm run check",
                 "outputSummary": "Newer launch requires fresh verification.",
-                "touchedFiles": ["docs/stories/7-5-record-verification-results-and-recovery-evidence.md"],
+                "touchedFiles": ["docs/workflows/implementation-evidence-boundary.md"],
             },
         )
         stale_readiness_response = client.get(f"/work-items/{work_item_id}/trusted-delivery-eligibility-report")
@@ -7668,7 +7714,7 @@ def test_verification_evidence_records_result_and_recovery_metadata(tmp_path, mo
     updated = response.json()["data"]
     evidence = next(ref for ref in updated["artifactRefs"] if ref["artifactType"] == "verification_result")
     assert evidence["commandId"] == "full-check"
-    assert evidence["commandShape"] == "pnpm.cmd run check"
+    assert evidence["commandShape"] == "pnpm run check"
     assert evidence["status"] == "passed"
     assert evidence["exitCode"] == 0
     assert evidence["durationMs"] == 132000

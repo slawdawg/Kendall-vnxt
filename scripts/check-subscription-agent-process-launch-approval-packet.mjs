@@ -14,6 +14,15 @@ function assertIncludes(source, text, message, failures) {
   }
 }
 
+function extractSection(source, startText, endText) {
+  const start = source.indexOf(startText);
+  const end = source.indexOf(endText, start + startText.length);
+  if (start === -1 || end === -1 || end <= start) {
+    return "";
+  }
+  return source.slice(start, end);
+}
+
 function assertSettingDefaultFalse(source, fieldName, alias, failures) {
   const settingPattern = new RegExp(`${fieldName}: bool = Field\\(\\s*default=False,\\s*alias="${alias}",?\\s*\\)`);
   if (!settingPattern.test(source)) {
@@ -21,12 +30,17 @@ function assertSettingDefaultFalse(source, fieldName, alias, failures) {
   }
 }
 
-const approvalPacket = readWorkspaceFile("docs/goals/subscription-agent-process-launch-approval-packet-2026-06-13.md");
+const authorityBoundary = readWorkspaceFile("docs/workflows/execution-authority-boundary.md");
+const approvalPacket = extractSection(
+  authorityBoundary,
+  "## Subscription-Agent Launch Contract",
+  "## Worker Process Launch Contract",
+);
 const settingsSource = readWorkspaceFile("services/supervisor/src/supervisor/config/settings.py");
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
-const story = readWorkspaceFile("docs/stories/16-1-refresh-subscription-agent-process-launch-approval-packet.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
+const story = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 
 const failures = [];
 
@@ -101,14 +115,14 @@ for (const testText of [
 
 for (const storyText of [
   "This story intentionally stops before real subscription-agent process launch.",
-  "explicitly keeps production/direct process launch blocked until Bob accepts the exact future launch approval.",
+  "explicitly keeps production/direct process launch blocked until the operator accepts the exact future launch approval.",
   "Preserve Story 8.5 as artifact-only fixture evidence, not production process-launch approval.",
 ]) {
   assertIncludes(story, storyText, `Story 16.1 must preserve process-launch packet evidence: ${storyText}`, failures);
 }
 
 for (const indexText of [
-  "Subscription-agent process launch: `docs/goals/subscription-agent-process-launch-approval-packet-2026-06-13.md`",
+  "Subscription-agent process launch: `docs/workflows/execution-authority-boundary.md#subscription-agent-launch-contract`",
   "Epic 16 starts after the premium-execution approval packet.",
   "Stories 16.1 and 16.2 do not approve process launch, shell expansion, credential/session inheritance, provider calls, source mutation, generated patch application, issue sync, PR delivery, cleanup, or failed-check bypass.",
   "Runtime stories in this epic must preserve those denials except for the one explicitly approved supervised launch operation they implement.",

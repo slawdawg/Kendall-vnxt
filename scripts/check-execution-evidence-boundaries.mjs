@@ -26,7 +26,7 @@ const runtimeExportCheck = readWorkspaceFile("scripts/check-runtime-evidence-exp
 const runbookCheck = readWorkspaceFile("scripts/check-runbook-verification.mjs");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
@@ -99,20 +99,20 @@ for (const browserText of [
 }
 
 for (const story of [
-  "docs/stories/3-8-queue-attempt-boundary-and-provider-proofs.md",
-  "docs/stories/3-49-execution-evidence-boundary-drift-check.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing execution evidence story ${story}`, failures);
   assertCondition(storyIndex.includes(story.split("/").pop()), `Story index must reference ${story}`, failures);
 }
 
 assertCondition(
-  runtimeExportCheck.includes("docs/stories/3-49-execution-evidence-boundary-drift-check.md"),
+  runtimeExportCheck.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export drift check must require Story 3.49 git-backed evidence",
   failures,
 );
 assertCondition(
-  serviceSource.includes("docs/stories/3-49-execution-evidence-boundary-drift-check.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export service must include Story 3.49 git-backed evidence",
   failures,
 );

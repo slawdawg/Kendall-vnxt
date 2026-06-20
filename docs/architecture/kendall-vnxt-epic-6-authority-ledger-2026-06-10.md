@@ -15,7 +15,7 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 | --- | --- | --- | --- |
 | BMAD Candidate creation | Automatic Candidate creation | Automatic | Allowed |
 | Candidate priority/order | Manual + recommendations | Manual + recommendations | Allowed |
-| Candidate promotion | Bob approval or explicit immediate mode | Bob approval or immediate mode | Allowed |
+| Candidate promotion | Operator approval or explicit immediate mode | Operator approval or immediate mode | Allowed |
 | Orchestrated routing | Preview/decision/evidence | Automatic decision/evidence | Allowed |
 | Execution attempts | Fake/blocked only | Integrated with orchestrator evidence | Allowed only as fake/blocked until successor approval |
 | Ollama | Approved current host endpoint/model boundary only | Automatic local-safe checks in approved scope | Limited |
@@ -25,8 +25,8 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 | Claude review | Not approved | Human-approved or high-risk policy-triggered review-only | Blocked |
 | Git read-only | Read-only local hygiene | Automatic read-only hygiene | Allowed |
 | Local worktree management | Plan-only | Approved/policy-bound local worktree create/remove | Creation/removal blocked |
-| GitHub remote write | Completed for Epic 6 MVP proof PRs; post-MVP writes gated | Bob-approved push/PR/delivery | PR #97 delivery completed; future remote writes require scoped approval or policy |
-| Merge | Completed for Epic 6 MVP proof PRs; post-MVP merges gated | Bob-approved or stretch | PR #97 merge completed; future merges require scoped approval or policy |
+| GitHub remote write | Completed for Epic 6 MVP proof PRs; post-MVP writes gated | operator-approved push/PR/delivery | PR #97 delivery completed; future remote writes require scoped approval or policy |
+| Merge | Completed for Epic 6 MVP proof PRs; post-MVP merges gated | operator-approved or stretch | PR #97 merge completed; future merges require scoped approval or policy |
 | Local cleanup | Completed for Epic 6 MVP proof targets; post-MVP deletion gated | Automatic after done with evidence | PR #96 and PR #97 branches/worktrees cleaned up after evidence retention |
 | Remote cleanup | Readiness only | Stretch | Blocked |
 | Trusted low-risk autonomy | Active for doc/evidence PR preparation only | Stretch | Allowed only for `epic-6-low-risk-doc-evidence-pr-v1`; merge, cleanup, issue sync, Claude, providers, secrets, destructive operations, and failed-check bypass remain blocked |
@@ -42,7 +42,9 @@ Approvals are specific to authority family, operation, scope, and evidence. Gene
 - Trusted autonomy: `GET /supervisor/trusted-autonomy-readiness-report`.
 - Epic completion audit: `GET /supervisor/epic-6-completion-audit-report`.
 - MVP proof trial packet: `GET /supervisor/epic-6-mvp-proof-trial-report`.
-- Low-risk doc/evidence autonomy policy: `docs/goals/epic-6-low-risk-doc-evidence-autonomy-policy-proposal-2026-06-11.md`.
+- Low-risk doc/evidence autonomy policy: local-only planning packet preserved
+  under `_bmad-output/local-clean-install-boundary-removed-artifacts/`; source
+  evidence remains in the Epic 6 readiness and trusted-autonomy reports.
 
 These reports are evidence and approval-prep surfaces only. They do not grant the authority they describe.
 
@@ -52,20 +54,20 @@ Snapshot date: 2026-06-11.
 
 - PR #85, PR #86, PR #87, PR #88, PR #89, PR #90, PR #91, PR #92, PR #93, PR #94, PR #96, and PR #97 are merged into `main`.
 - PR #90 delivered the read-only Epic 6 MVP proof trial packet from `codex/epic-6-mvp-proof-run`.
-- Current `main` verification passed after PR #90 with `pnpm.cmd run check`, including dashboard build and 143 supervisor tests.
+- Current `main` verification passed after PR #90 with `pnpm run check`, including dashboard build and 143 supervisor tests.
 - PR #91 delivered the initial Story 3.61 bounded doc/evidence proof trial. PR #92 refreshed post-proof authority docs. PR #93 proposed `epic-6-low-risk-doc-evidence-pr-v1`. PR #94 activated `epic-6-low-risk-doc-evidence-pr-v1` on `main`.
-- Future post-MVP branch deletion, local cleanup, remote cleanup, Claude launch, provider expansion, GitHub delivery, merge, and issue/story sync still require explicit Bob approval naming action and scope or a new standing policy.
+- Future post-MVP branch deletion, local cleanup, remote cleanup, Claude launch, provider expansion, GitHub delivery, merge, and issue/story sync still require explicit operator approval naming action and scope or a new standing policy.
 - PR #91 and PR #92 provide initial evidence for `epic-6-low-risk-doc-evidence-pr-v1`.
-- On 2026-06-11, Bob approved `epic-6-low-risk-doc-evidence-pr-v1`: for matching doc/evidence-only changes, Codex may create an isolated branch/worktree from `main`, implement bounded documentation/evidence changes, run `pnpm.cmd run check`, commit, push, open one PR to `main`, and run read-only PR/CI checks without per-step approval. Auto-merge, cleanup, issue sync, Claude launch, provider expansion, secrets access, destructive operations, failed-check bypass, and unrelated source changes remain separately gated.
-- On 2026-06-11, Bob approved standing Epic 6 completion authority for PR creation/update, CI inspection, merge, and cleanup when scoped to Epic 6 completion work with clean status, green verification, green CI, clean merge state, and retained evidence. This approval did not grant Claude launch, provider expansion, secrets access, issue sync, unrelated deletion, or broad post-MVP autonomy.
+- On 2026-06-11, the operator approved `epic-6-low-risk-doc-evidence-pr-v1`: for matching doc/evidence-only changes, Codex may create an isolated branch/worktree from `main`, implement bounded documentation/evidence changes, run `pnpm run check`, commit, push, open one PR to `main`, and run read-only PR/CI checks without per-step approval. Auto-merge, cleanup, issue sync, Claude launch, provider expansion, secrets access, destructive operations, failed-check bypass, and unrelated source changes remain separately gated.
+- On 2026-06-11, the operator approved standing Epic 6 completion authority for PR creation/update, CI inspection, merge, and cleanup when scoped to Epic 6 completion work with clean status, green verification, green CI, clean merge state, and retained evidence. This approval did not grant Claude launch, provider expansion, secrets access, issue sync, unrelated deletion, or broad post-MVP autonomy.
 
 ## Current Epic 6 MVP Proof Trial State
 
 Snapshot date: 2026-06-11.
 
-- Selected successor proof story: `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md`.
+- Selected successor proof story: `docs/workflows/implementation-evidence-boundary.md`.
 - Current supervisor proof instance: `http://127.0.0.1:8010` using repo-local proof database `.data/epic-6-proof-supervisor.db`.
-- Candidate Work: `8afea99f-bb79-4f51-a66c-f1b02dff9005`, approved from `docs/stories/3-66-epic-6-mvp-proof-done-evidence.md` with metadata-only BMAD import retention.
+- Candidate Work: `8afea99f-bb79-4f51-a66c-f1b02dff9005`, approved from `docs/workflows/implementation-evidence-boundary.md` with metadata-only BMAD import retention.
 - Active WorkItem: `a8e43bba-a2dd-4b2e-b995-22fecea85611`.
 - Task packet/routing evidence selected `local_readonly` with preview-only authority, no provider calls, and no command execution.
 - Local evidence event: `local-evidence-route-a8e43bba-a2dd-4b2e-b995-22fecea85611-epic-6-mvp-proof-local-evidence-task_classification`.
@@ -74,16 +76,16 @@ Snapshot date: 2026-06-11.
 - Proof-selection PR: `https://github.com/slawdawg/Kendall-vnxt/pull/96`.
 - PR #96 CI `check` passed on 2026-06-11, then PR #96 was marked ready and merged into `main` at `c35ff16339fd53c502b328e3f3b120a303f905e1` after explicit approval.
 - PR #96 branch `codex/epic-6-proof-selection-evidence` was deleted locally and remotely after separate cleanup approval.
-- PR #96 merge approval packet: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
-- Story 3.66 bounded implementation scope: `docs/goals/epic-6-real-story-trial-approval-packet-2026-06-11.md`.
+- PR #96 merge approval packet: local-only preserved workspace state.
+- Story 3.66 bounded implementation scope: `docs/workflows/implementation-evidence-boundary.md`.
 - Current state: after proof-selection docs were committed and the dirty-repo blocker was cleared, the WorkItem reached `implementing` state. Runtime evidence still shows zero execution attempts and all process/provider/command/source-mutation authority flags disabled.
-- Current bounded implementation authority: Bob approved one Story 3.66 local Codex implementation in isolated worktree `C:\Users\slaw_dawg\.codex-workspaces\slawdawg-kendall-vnxt\worktrees\20260611-epic-6-mvp-proof-story-3-66-bounded-implementati` on branch `codex/epic-6-mvp-proof-story-3-66-bounded-implementati`, limited to the approved proof scope and `pnpm.cmd run check`.
-- Story 3.66 bounded local implementation verification passed with focused report tests and full `pnpm.cmd run check`, including preflight, drift checks, dashboard build, and 143 supervisor integration tests.
+- Current bounded implementation authority: the operator approved one Story 3.66 local Codex implementation in an isolated local Codex worktree on branch `codex/epic-6-mvp-proof-story-3-66-bounded-implementati`, limited to the approved proof scope and `pnpm run check`.
+- Story 3.66 bounded local implementation verification passed with focused report tests and full `pnpm run check`, including preflight, drift checks, dashboard build, and 143 supervisor integration tests.
 - PR #97 delivered the Story 3.66 implementation evidence: `https://github.com/slawdawg/Kendall-vnxt/pull/97`.
 - PR #97 CI `check` passed on 2026-06-11, then PR #97 was marked ready and merged into `main` at `a750601af1d0144507f6cc05b3ca1ada676d2d07`.
 - PR #97 branch/worktree `codex/epic-6-mvp-proof-story-3-66-bounded-implementati` was deleted locally and remotely after retained evidence.
 - Final proof report state: `GET /supervisor/epic-6-mvp-proof-trial-report` reports `trialStatus=epic_6_mvp_proof_complete`; `GET /supervisor/epic-6-completion-audit-report` reports `epicComplete=true`.
-- Final completion update verification passed with focused report tests and full `pnpm.cmd run check`, including preflight, drift checks, dashboard build, and 143 supervisor tests.
+- Final completion update verification passed with focused report tests and full `pnpm run check`, including preflight, drift checks, dashboard build, and 143 supervisor tests.
 - Current stop line: post-MVP Claude review, provider expansion, issue/story sync, additional Codex launches, remote cleanup outside approved targets, and broad trusted autonomy remain separately gated.
 
 ## Approval Request Format
@@ -102,7 +104,7 @@ Every approval request should include:
 
 ## Async Unblocking Rule
 
-Bob may approve, deny, or modify a pending authority request later. While waiting, the long-running goal should continue safe unblocked work.
+The operator may approve, deny, or modify a pending authority request later. While waiting, the long-running goal should continue safe unblocked work.
 
 When an approval-gated operation is reached, use two lanes:
 
@@ -124,7 +126,7 @@ Allowed without a new merge/cleanup approval after an approved PR exists and CI 
 - merge approval packet preparation,
 - cleanup and rollback planning.
 
-Still separately gated unless Bob grants a one-time or standing policy:
+Still separately gated unless the operator grants a one-time or standing policy:
 
 - merge,
 - closing superseded PRs,
@@ -136,14 +138,14 @@ Still separately gated unless Bob grants a one-time or standing policy:
 
 Default next gate after an approved PR has green CI and clean merge state is a narrow merge approval packet, not a broad authority request.
 
-When Bob grants approval:
+When the operator grants approval:
 
 1. Record the approval in this ledger.
 2. Record the approval in the relevant story evidence.
 3. Re-check whether the approved operation is still the right next step.
 4. Execute only within the approved scope.
 
-When Bob denies or narrows approval:
+When the operator denies or narrows approval:
 
 1. Record the decision.
 2. Keep the lane/task blocked or update the scope.

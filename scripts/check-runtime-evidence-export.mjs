@@ -70,7 +70,7 @@ function collectRuntimeEvidenceDriftRuleFailures(fixture) {
   if (fixture.reportRoute !== "/work-items/{work_item_id}/runtime-evidence-export") {
     ruleFailures.push("report-route:runtime-evidence-export");
   }
-  if (fixture.verification?.command !== "pnpm.cmd run check:runtime-export") {
+  if (fixture.verification?.command !== "pnpm run check:runtime-export") {
     ruleFailures.push("verification-command:check-runtime-export");
   }
   if (fixture.verification?.fixtureFamily !== "static-report-schema-drift") {
@@ -96,7 +96,7 @@ function describeRuntimeEvidenceDriftRule(ruleId, fixture) {
     return `${evidenceSurface} report route must be /work-items/{work_item_id}/runtime-evidence-export`;
   }
   if (ruleType === "verification-command") {
-    return `${evidenceSurface} verification command must be pnpm.cmd run check:runtime-export`;
+    return `${evidenceSurface} verification command must be pnpm run check:runtime-export`;
   }
   if (ruleType === "fixture-family") {
     return `${evidenceSurface} fixture family must be static-report-schema-drift`;
@@ -268,7 +268,7 @@ const subscriptionLaunchReadinessPanel = readWorkspaceFile("apps/dashboard/src/c
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const detailSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 
 const failures = [];
 
@@ -385,29 +385,29 @@ assertCondition(
 );
 
 for (const story of [
-  "docs/stories/2-7-runtime-evidence-export-strategy.md",
-  "docs/stories/3-20-runtime-evidence-review-manifest.md",
-  "docs/stories/3-30-runtime-evidence-review-navigator.md",
-  "docs/stories/3-31-runtime-evidence-export-drift-check.md",
-  "docs/stories/3-48-execution-boundary-report-drift-check.md",
-  "docs/stories/3-49-execution-evidence-boundary-drift-check.md",
-  "docs/stories/3-50-provider-fixture-policy-drift-check.md",
-  "docs/stories/3-51-process-lifecycle-policy-drift-check.md",
-  "docs/stories/3-52-maintenance-action-plan-report.md",
-  "docs/stories/3-53-authority-readiness-matrix-report.md",
-  "docs/stories/3-54-development-runway-safe-slices.md",
-  "docs/stories/3-55-runtime-evidence-review-index.md",
-  "docs/stories/3-65-runtime-review-evidence-links.md",
-  "docs/stories/3-57-work-item-review-queue-shortcuts.md",
-  "docs/stories/3-59-development-runway-readiness-checks.md",
-  "docs/stories/3-63-development-runway-pr-batching-policy.md",
-  "docs/stories/3-64-development-runway-evidence-links.md",
-  "docs/stories/3-60-safe-backlog-report-anchors.md",
-  "docs/stories/3-61-maintenance-action-evidence-links.md",
-  "docs/stories/3-62-maintenance-readiness-evidence-links.md",
-  "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
-  "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
-  "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing runtime export story evidence ${story}`, failures);
 }
@@ -513,7 +513,7 @@ for (const panelText of ["Review shortcuts"]) {
 }
 
 assertCondition(
-  serviceSource.includes("docs/stories/3-31-runtime-evidence-export-drift-check.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export git-backed evidence must include Story 3.31",
   failures,
 );

@@ -62,6 +62,15 @@ try {
     assert(match[0].includes("samePath(manifest.worktree_path, record.path)"), "rebuildIndex must skip already indexed worktrees");
   });
 
+  test("run uses shared workspace command resolution", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function run\(commandName[\s\S]*?function samePath/);
+    assert(match, "run source not found");
+    assert(source.includes("resolveWorkspaceCommand"), "codex-workspace must import shared command resolver");
+    assert(match[0].includes("const resolved = resolveWorkspaceCommand(commandName, commandArguments);"), "run must resolve workspace commands");
+    assert(match[0].includes("env: resolved.env ?? process.env"), "run must pass resolved command environment");
+  });
+
   test("list skips malformed manifests without aborting", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });

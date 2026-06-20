@@ -24,12 +24,12 @@ function assertCondition(condition, message, failures) {
 
 const failures = [];
 const workflowPath = "docs/workflows/workspace-coordination-report.md";
-const storyPath = "docs/stories/22-1-workspace-coordination-report.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 const packageJsonSource = readRequiredWorkspaceFile("package.json", failures);
 const packageJson = packageJsonSource ? JSON.parse(packageJsonSource) : {};
 const workflow = readRequiredWorkspaceFile(workflowPath, failures);
 const story = readRequiredWorkspaceFile(storyPath, failures);
-const storyIndex = readRequiredWorkspaceFile("docs/stories/index.md", failures);
+const storyIndex = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
 
 assertCondition(
   packageJson.scripts?.["check:workspace-coordination"] === "node ./scripts/check-workspace-coordination-report.mjs",
@@ -103,7 +103,7 @@ for (const storyText of [
   "cleanup dry-run and a narrow approval packet",
   "starting a non-overlapping",
   "managed worktree",
-  "pnpm.cmd run check:workspace-coordination",
+  "pnpm run check:workspace-coordination",
   "does not merge PRs, clean worktrees, delete branches",
 ]) {
   assertCondition(story.includes(storyText), `Story 22.1 must preserve ${storyText}`, failures);

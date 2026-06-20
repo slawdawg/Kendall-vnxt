@@ -2,7 +2,7 @@
 
 Date: 2026-06-08
 Status: active boundary, real worker execution still denied
-Related PRD: `docs/prds/supervisor-execution-authority-expansion.md`
+Related PRD: `docs/workflows/product-requirements-boundary.md#supervisor-execution-authority-expansion-boundary`
 Implemented surface: `GET /supervisor/threat-boundary`
 
 ## Purpose

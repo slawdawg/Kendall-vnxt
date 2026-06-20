@@ -14,6 +14,7 @@ const activeDocs = [
   "docs/linux-install/validation-matrix.md",
   "docs/linux-install/troubleshooting.md",
   "docs/linux-install/index.md",
+  "docs/linux-install/release-delivery-record.md",
   "docs/linux-install/global-tool-manifest.json",
 ];
 
@@ -55,17 +56,11 @@ const alternateMutatingInstallCommandPatterns = [
   /StrictHostKeyChecking=accept-new/i,
 ];
 
-const historicalBoundarySnippets = [
-  "The documents below are historical, lab-instance, or platform-evaluation notes.",
-  "They are not the generic installer entry point and must not override the\nsingle-method v1 boundary above.",
-];
-
-const historicalIndexEntrySnippets = [
-  "[Bob next steps](bob-next-steps.md) - current lab host notes, not the generic",
-  "[Remaining gaps](remaining-gaps.md) - current Linux host gaps and policy",
-  "[Historical implementation plan](implementation-plan.md) - superseded remote",
-  "[Historical remote approval template](remote-approval-template.md) -",
-  "[Historical SSH key policy](ssh-key-policy.md) - SSH policy history, not part",
+const releaseBoundarySnippets = [
+  "## Release Boundary",
+  "The source-owned Linux Install MVP boundary is tracked in the product\nrequirements boundary.",
+  "[Linux Install MVP product boundary](../workflows/product-requirements-boundary.md#linux-install-mvp)",
+  "[Linux Install MVP release delivery record](release-delivery-record.md)",
 ];
 
 const requiredSnippets = [
@@ -115,7 +110,15 @@ const requiredSnippets = [
   },
   {
     path: "docs/linux-install/one-command-bootstrap-plan.md",
-    text: "`pnpm run check:linux-bootstrap-url` currently fails with HTTP 404 for the\n  raw GitHub `main` bootstrap URL",
+    text: "`pnpm run check:linux-bootstrap-url` is part of the release verification\n  chain",
+  },
+  {
+    path: "docs/linux-install/one-command-bootstrap-plan.md",
+    text: "Delivered-lane maintenance requirements:",
+  },
+  {
+    path: "docs/linux-install/one-command-bootstrap-plan.md",
+    text: "## Successor Maintenance Plan",
   },
   {
     path: "docs/linux-install/index.md",
@@ -123,7 +126,7 @@ const requiredSnippets = [
   },
   {
     path: "docs/linux-install/index.md",
-    text: "They are not the generic installer entry point and must not override the\nsingle-method v1 boundary above.",
+    text: "Local lab notes, raw VM transcripts, remote-operation templates, SSH policy\nhistory, and instance-specific evidence packets are local workspace state.",
   },
   {
     path: "docs/linux-install/index.md",
@@ -384,6 +387,9 @@ const requiredSnippets = [
 ];
 
 const forbiddenPatterns = [
+  /currently fails with HTTP 404/i,
+  /published README command is not yet proven reachable/i,
+  /Remaining before feature-complete/i,
   /SSH may be used/i,
   /terminal transport/i,
   /fallback path/i,
@@ -465,14 +471,9 @@ export function validateSingleMutatingInstallBoundary(documents) {
 
   const indexText = documents.get("docs/linux-install/index.md");
   if (indexText !== undefined) {
-    for (const snippet of historicalBoundarySnippets) {
+    for (const snippet of releaseBoundarySnippets) {
       if (!indexText.includes(snippet)) {
-        boundaryFailures.push("docs/linux-install/index.md must fence historical or lab notes from v1 install authority.");
-      }
-    }
-    for (const snippet of historicalIndexEntrySnippets) {
-      if (!indexText.includes(snippet)) {
-        boundaryFailures.push(`docs/linux-install/index.md must label non-authoritative historical/lab entry: ${snippet}`);
+        boundaryFailures.push(`docs/linux-install/index.md must preserve source-owned release boundary: ${snippet}`);
       }
     }
   }
@@ -540,7 +541,7 @@ function validateGoalRunFixture(path, fixture) {
       "maximum_impact",
       "expires",
       "rollback_or_recovery",
-      "bob_approval_reference",
+      "approval_reference",
     ]) {
       if (!hasString(fixture, field)) {
         failures.push(`${path} must include ${field}.`);
@@ -823,7 +824,7 @@ function validateBlockerFixture(path, fixture) {
     "reason",
     "last_safe_command",
     "proposed_next_command",
-    "required_bob_action",
+    "required_user_action",
     "resume_command",
     "blocked_task_status",
     "secrets_exclusion",

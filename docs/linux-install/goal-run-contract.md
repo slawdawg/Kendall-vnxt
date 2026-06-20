@@ -6,7 +6,7 @@ Target: Ubuntu 26.04, Linux-first setup MVP
 ## Purpose
 
 This contract lets a Codex `/goal` run implement the Linux Setup MVP without
-live Bob interaction for non-gated work. It defines the durable scope,
+live operator interaction for non-gated work. It defines the durable scope,
 authority, state, evidence, and stop-line rules the run must use instead of
 chat history.
 
@@ -18,7 +18,7 @@ Use this objective for autonomous implementation runs:
 Implement the Kendall_Nxt Linux Setup MVP from repo artifacts. Work only inside
 the Goal Run Contract, PRD, release-gate traceability, and implementation
 stories. Complete all non-gated docs, scripts, tests, fixtures, and validation
-work without live Bob interaction. Do not perform provider login, paid provider
+work without live operator interaction. Do not perform provider login, paid provider
 usage, external account enrollment, destructive cleanup, reboot, PR creation,
 merge, or workspace cleanup unless the Authority Ledger contains a matching
 bounded preauthorization. If blocked, write a blocker packet, preserve evidence,
@@ -37,10 +37,11 @@ Committed planning and contract artifacts:
 Runtime evidence artifacts:
 
 - Default path: `docs/linux-install/evidence/goal-runs/<run-id>/`
-- Runtime artifacts may be committed only when they are intentionally selected
-  as release evidence and pass redaction validation.
+- Runtime artifacts are local-only and must not be committed.
+- Release claims that need Git durability must be rewritten as source-owned
+  release docs or contracts. Do not track the generated evidence packet itself.
 - Routine local run state, temporary logs, raw command output, and failed
-  secret-bearing evidence must not be committed.
+  secret-bearing evidence must remain ignored local output.
 
 ## Task State Model
 
@@ -65,7 +66,7 @@ evidence paths, completion condition, blocked condition, and resume command.
 
 | Class | Decision | Examples |
 | --- | --- | --- |
-| `allowed_unattended` | May run without Bob present. | Read docs, edit repo docs/scripts, run local non-mutating checks, write redacted repo evidence. |
+| `allowed_unattended` | May run without the operator present. | Read docs, edit repo docs/scripts, run local non-mutating checks, write redacted repo evidence. |
 | `requires_preauthorization` | May run only when the Authority Ledger has a matching bounded entry. | Package install with `sudo`, repo dependency install that mutates global cache, service changes, bounded cleanup. |
 | `block_and_record` | Must write a Blocker Packet and continue only independent safe work. | Missing Manual Auth, provider login needed, paid provider usage, Tailnet enrollment, reboot proof. |
 | `forbidden` | Must not run. | Capturing secrets, automating OAuth/device-code login, broad destructive cleanup, using generic approval as authority. |
@@ -90,7 +91,7 @@ Each preauthorization must include:
   "expires": "end-of-current-goal-run",
   "evidence_required": ["dry-run-preview", "package-list", "post-verify"],
   "rollback_or_recovery": "record installed packages; manual apt removal only",
-  "bob_approval_reference": "chat-or-ticket-id",
+  "approval_reference": "chat-or-ticket-id",
   "stop_lines": ["unexpected package removal", "provider login prompt"]
 }
 ```
@@ -132,7 +133,7 @@ Allowed source policy:
 - Document which supply-chain guarantees are not provided by MVP.
 
 Privileged commands require a matching authority entry unless they are run by
-Bob manually outside autonomous execution.
+the user manually outside autonomous execution.
 
 ## Rollback And Recovery
 
@@ -213,7 +214,7 @@ Required fields:
   "attempted_command": null,
   "last_safe_command": "pnpm linux:doctor",
   "proposed_next_command": "gh auth status",
-  "required_bob_action": "Run provider-approved GitHub auth manually, then resume.",
+  "required_user_action": "Run provider-approved GitHub auth manually, then resume.",
   "resume_command": "codex /goal resume linux-setup-mvp",
   "evidence_paths": [],
   "dependency_impact": ["task.private-repo-probe"],

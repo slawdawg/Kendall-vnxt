@@ -6,7 +6,7 @@ Remote sync: origin/main synced with HEAD at `e5ac648` before this handoff artif
 
 ## Scope
 
-This checkpoint covers the Kendall_vNxt supervisor dynamic-routing follow-on work after the MVP routing preview/dashboard base. The work stayed inside the existing Kendall_vNxt supervisor and dashboard; it did not create a separate Bob Supervisor product or a second orchestrator.
+This checkpoint covers the Kendall_vNxt supervisor dynamic-routing follow-on work after the MVP routing preview/dashboard base. The work stayed inside the existing Kendall_vNxt supervisor and dashboard; it did not create a separate personal supervisor product or a second orchestrator.
 
 ## Completed Slices
 
@@ -49,12 +49,12 @@ The supervisor can now:
 
 Latest broad verification commands during the final implementation slices:
 
-- Story 1.17: `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt run check` - passed, dashboard build plus 61 supervisor tests.
-- Story 1.18: `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt run check` - passed, dashboard build plus 64 supervisor tests.
-- Story 1.19: `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt exec playwright test tests/e2e/dashboard.spec.ts -g "shows compact routing fleet data on controls"` - passed, 1 test.
-- Story 1.19: `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt run check` - passed, dashboard build plus 64 supervisor tests.
-- Story 1.20: `uv run --directory C:\Users\slaw_dawg\Kendall_Nxt\services\supervisor pytest tests/integration/test_routing_preview.py -q` - passed, 34 tests.
-- Story 1.20: `pnpm -C C:\Users\slaw_dawg\Kendall_Nxt run check` - passed, dashboard build plus 67 supervisor tests.
+- Story 1.17: `pnpm run check` - passed, dashboard build plus 61 supervisor tests.
+- Story 1.18: `pnpm run check` - passed, dashboard build plus 64 supervisor tests.
+- Story 1.19: `pnpm exec playwright test tests/e2e/dashboard.spec.ts -g "shows compact routing fleet data on controls"` - passed, 1 test.
+- Story 1.19: `pnpm run check` - passed, dashboard build plus 64 supervisor tests.
+- Story 1.20: `uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py -q` - passed, 34 tests.
+- Story 1.20: `pnpm run check` - passed, dashboard build plus 67 supervisor tests.
 
 ## Checkpoint Commits
 

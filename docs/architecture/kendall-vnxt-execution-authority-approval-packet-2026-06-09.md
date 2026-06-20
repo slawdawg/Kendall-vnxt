@@ -14,24 +14,24 @@ The operator approved Option A on 2026-06-09 for Stories 4.1-4.3 only. The opera
 
 ### Ollama Local Provider
 
-- `docs/stories/4-4-ollama-limited-provider-adapter-behind-disabled-defaults.md`
+- `docs/workflows/implementation-evidence-boundary.md`
 
 ### Ollama Non-Executing Preparation Approved For Review
 
-- `docs/stories/4-1-ollama-provider-settings-and-registry-gates.md`
-- `docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md`
-- `docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
 
 ### Subscription-Agent Supervised Process Launch
 
-- `docs/stories/5-5-subscription-launch-supervised-process-behind-approval.md`
+- `docs/workflows/implementation-evidence-boundary.md`
 
 ### Subscription-Agent Non-Executing Preparation Approved For Review
 
-- `docs/stories/5-1-subscription-launch-settings-policy-and-target-registry.md`
-- `docs/stories/5-2-subscription-launch-approval-binding-and-stale-rejection.md`
-- `docs/stories/5-3-subscription-launch-workspace-output-and-session-contract.md`
-- `docs/stories/5-4-subscription-launch-supervisor-lifecycle-disabled-adapter.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
 
 ## Recommended Safe Approval Order
 
@@ -157,7 +157,7 @@ Those phrases allow only planning, documentation, tests, dashboard evidence disp
 - `docs/architecture/kendall-vnxt-worker-threat-boundary-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-dashboard-command-boundary-2026-06-08.md`
 - `docs/architecture/kendall-vnxt-queue-attempt-boundary-and-provider-proofs-2026-06-08.md`
-- `docs/prds/local-provider-ollama-disabled-to-limited-execution.md`
-- `docs/prds/local-provider-ollama-prd-review-2026-06-08.md`
-- `docs/prds/subscription-agent-launch-disabled-to-supervised-execution.md`
-- `docs/prds/subscription-agent-launch-prd-review-2026-06-08.md`
+- `docs/workflows/product-requirements-boundary.md#local-provider-ollama-boundary`
+- `docs/workflows/product-requirements-boundary.md#local-provider-ollama-boundary`
+- `docs/workflows/product-requirements-boundary.md#subscription-agent-launch-boundary`
+- `docs/workflows/product-requirements-boundary.md#subscription-agent-launch-boundary`

@@ -8,13 +8,9 @@ const browserPath = process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(rootDir, ".data
 
 mkdirSync(browserPath, { recursive: true });
 
-const playwrightBin = process.platform === "win32"
-  ? join(rootDir, "node_modules", ".bin", "playwright.CMD")
-  : join(rootDir, "node_modules", ".bin", "playwright");
-const command = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : playwrightBin;
-const args = process.platform === "win32" ? ["/d", "/c", playwrightBin, "install", "chromium"] : ["install", "chromium"];
+const playwrightBin = join(rootDir, "node_modules", ".bin", "playwright");
 
-const result = spawnSync(command, args, {
+const result = spawnSync(playwrightBin, ["install", "chromium"], {
   cwd: rootDir,
   env: {
     ...process.env,

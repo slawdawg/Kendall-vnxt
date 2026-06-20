@@ -8,8 +8,8 @@
 After merge-config.py and merge-help-csv.py have migrated config data and
 deleted individual legacy files, this script removes the now-redundant
 directory trees. These directories contain skill files that are already
-installed at .claude/skills/ (or equivalent) — only the config files at
-_bmad/ root need to persist.
+installed in the selected skills directory — only the config files at _bmad/
+root need to persist.
 
 When --skills-dir is provided, the script verifies that every skill found
 in the legacy directories exists at the installed location before removing
@@ -47,8 +47,8 @@ def parse_args():
     )
     parser.add_argument(
         "--skills-dir",
-        help="Path to .claude/skills/ — enables safety verification that skills "
-        "are installed before removing legacy copies",
+        help="Path to the installed skills directory, such as .agents/skills "
+        "or .claude/skills. Enables safety verification before removing legacy copies",
     )
     parser.add_argument(
         "--verbose",

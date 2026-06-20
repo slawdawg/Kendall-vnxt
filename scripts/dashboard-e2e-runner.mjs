@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
@@ -32,10 +32,8 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
 
   try {
     const supervisor = startProcess(
-      process.platform === "win32" ? join(rootDir, "services", "supervisor", ".venv", "Scripts", "python.exe") : "uv",
-      process.platform === "win32"
-        ? ["-m", "uvicorn", "supervisor.api.main:app", "--host", "127.0.0.1", "--port", supervisorPort]
-        : ["run", "--directory", "services/supervisor", "uvicorn", "supervisor.api.main:app", "--host", "127.0.0.1", "--port", supervisorPort],
+      "uv",
+      ["run", "--directory", "services/supervisor", "uvicorn", "supervisor.api.main:app", "--host", "127.0.0.1", "--port", supervisorPort],
       {
         cwd: rootDir,
         env: {
@@ -52,7 +50,7 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
     await waitForUrl(`${supervisorUrl}/health`, "supervisor");
 
     const dashboard = startProcess(dashboardCommand(), dashboardArgs(dashboardPort), {
-      cwd: process.platform === "win32" ? join(rootDir, "apps", "dashboard") : rootDir,
+      cwd: rootDir,
       env: {
         ...baseEnv,
         NEXT_PUBLIC_SUPERVISOR_URL: supervisorUrl,
@@ -87,23 +85,10 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
 }
 
 function dashboardCommand() {
-  return process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : "pnpm";
+  return "pnpm";
 }
 
 function dashboardArgs(dashboardPort) {
-  if (process.platform === "win32") {
-    return [
-      "/d",
-      "/c",
-      join(rootDir, "apps", "dashboard", "node_modules", ".bin", "next.CMD"),
-      "dev",
-      "--hostname",
-      "127.0.0.1",
-      "--port",
-      dashboardPort,
-    ];
-  }
-
   return ["--filter", "@kendall/dashboard", "exec", "next", "dev", "--hostname", "127.0.0.1", "--port", dashboardPort];
 }
 
@@ -112,7 +97,6 @@ function startProcess(command, args, options) {
     cwd: options.cwd,
     env: options.env,
     stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
   });
   child.stdout.on("data", (chunk) => {
     detectExpectedPass(child, options.label, chunk);
@@ -176,15 +160,6 @@ async function waitForExit(child) {
 
 async function stopProcessTree(child) {
   if (!child.pid || child.exitCode !== null) {
-    return;
-  }
-
-  if (process.platform === "win32") {
-    spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
-      stdio: "ignore",
-      timeout: 5_000,
-      windowsHide: true,
-    });
     return;
   }
 

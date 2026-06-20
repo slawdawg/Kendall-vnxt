@@ -1,5 +1,4 @@
-import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 
 function isPnpmNodeEntrypoint(path) {
   const entrypoint = basename(path || "").toLowerCase();
@@ -14,7 +13,6 @@ function withoutNpmExecPath(env) {
 export function resolveWorkspaceCommand(command, commandArgs = [], options = {}) {
   const {
     env = process.env,
-    platform = process.platform,
     processExecPath = process.execPath,
   } = options;
 
@@ -27,32 +25,12 @@ export function resolveWorkspaceCommand(command, commandArgs = [], options = {})
       };
     }
 
-    if (platform === "win32") {
-      return {
-        command: env.ComSpec || "cmd.exe",
-        args: ["/d", "/s", "/c", "pnpm", ...commandArgs],
-        env: npmExecPath ? withoutNpmExecPath(env) : undefined,
-      };
-    }
-
     if (npmExecPath) {
       return {
         command,
         args: commandArgs,
         env: withoutNpmExecPath(env),
       };
-    }
-  }
-
-  if (command === "uv" && platform === "win32") {
-    for (const candidate of [
-      env.UV_EXE,
-      join(env.USERPROFILE ?? "", ".local", "bin", "uv.exe"),
-      join(env.USERPROFILE ?? "", ".cargo", "bin", "uv.exe"),
-    ]) {
-      if (candidate && existsSync(candidate)) {
-        return { command: candidate, args: commandArgs };
-      }
     }
   }
 

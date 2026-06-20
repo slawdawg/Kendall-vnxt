@@ -91,7 +91,7 @@ Do not create live deployment/runtime state during setup unless the user explici
 - Do not send messages, modify source systems, create calendar holds, or create external resources.
 - Do not assume OneDrive, GitHub, external LLM providers, host GPU access, or Microsoft 365 availability.
 - Do not write inside a Git repo as live deployment state unless the user explicitly chooses that path and the profile records the risk.
-- Do not treat Bob-specific paths or preferences as defaults for other users.
+- Do not treat operator-specific paths or preferences as defaults for other users.
 
 ## Next Workflow
 

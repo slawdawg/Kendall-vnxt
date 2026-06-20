@@ -19,7 +19,7 @@ Check whether `{project-root}/_bmad/config.yaml` contains a `ksev` section. If i
 
 Load available config from `{project-root}/_bmad/config.yaml` and `{project-root}/_bmad/config.user.yaml` at root level plus the `knx` and `ksev` sections. Use sensible defaults when optional `ksev` values are missing:
 
-- Fixture pack: `{project-root}/_bmad/memory/knx/fixtures/synthetic/first-fixture-pack.json`
+- Fixture pack: `{project-root}/.agents/skills/knx-source-evidence-validator/assets/fixtures/first-fixture-pack.json`
 - Report directory: `{project-root}/_bmad/memory/knx/runtime/optional-source-evidence-validator/reports`
 - Approved storage root: `knx_storage_root` from config, or `{project-root}/_bmad/memory/knx/runtime`
 

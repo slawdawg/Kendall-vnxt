@@ -9,13 +9,13 @@ updated: 2026-06-10
 
 ## Product Idea
 
-Kendall_vNxt should become an integrated product-development system where Bob can turn an idea into researched, structured, prioritized, implemented, reviewed, delivered, and cleaned-up work with progressively increasing automation.
+Kendall_vNxt should become an integrated product-development system where the operator can turn an idea into researched, structured, prioritized, implemented, reviewed, delivered, and cleaned-up work with progressively increasing automation.
 
-The important shift is from "LLM router" to "task orchestrator." A router decides which model receives a prompt. The orchestrator decides what work needs doing, which lane, tool, or agent should handle it, what authority applies, what evidence is required, when to escalate, when to stop for Bob, and how the result appears in the Dev Console.
+The important shift is from "LLM router" to "task orchestrator." A router decides which model receives a prompt. The orchestrator decides what work needs doing, which lane, tool, or agent should handle it, what authority applies, what evidence is required, when to escalate, when to stop for the operator, and how the result appears in the Dev Console.
 
 ## North Star
 
-Bob has an idea. BMAD-method workflows and skills help develop, expand, research, and structure it. The completed product work enters the Dev Console pipeline. The system prioritizes, decomposes, routes, implements, verifies, reviews, delivers, and cleans up. Bob is pulled in for meaningful decisions, approvals, exceptions, and review checkpoints.
+The operator has an idea. BMAD-method workflows and skills help develop, expand, research, and structure it. The completed product work enters the Dev Console pipeline. The system prioritizes, decomposes, routes, implements, verifies, reviews, delivers, and cleans up. The operator is pulled in for meaningful decisions, approvals, exceptions, and review checkpoints.
 
 North-star flow:
 
@@ -39,11 +39,11 @@ Epic 6 MVP should prove one real BMAD story can move from Candidate Work to Acti
 
 ### Chief Of Staff
 
-The Chief of Staff is Bob's broad executive-assistant front door. It can receive broad requests, clarify intent, split work into jobs, and delegate to specialist agents or resources. It is not limited to software work.
+The Chief of Staff is the operator's broad executive-assistant front door. It can receive broad requests, clarify intent, split work into jobs, and delegate to specialist agents or resources. It is not limited to software work.
 
 ### Dev Console
 
-The Dev Console is Bob's development pipeline window. Any software-development work, including work started through Chief of Staff or BMAD, should become visible here when it is Candidate or Active work.
+The Dev Console is the operator's development pipeline window. Any software-development work, including work started through Chief of Staff or BMAD, should become visible here when it is Candidate or Active work.
 
 The user-facing dashboard should move from "Supervisor" language toward "Dev Console." The internal `supervisor` service name can remain for now to avoid unnecessary churn.
 
@@ -64,7 +64,7 @@ Work should move through a staged model:
 3. Active Dev Console Work Item: approved work or explicit immediate-mode work that enters the supervisor/orchestrator pipeline.
 4. Orchestrated Execution: active work is routed, attempted, evidenced, blocked, reviewed, delivered, or completed.
 
-BMAD and Chief of Staff may create Draft or Candidate work automatically. Active work requires Bob approval or explicit immediate mode. Immediate mode skips candidate approval, but it does not skip execution-authority gates.
+BMAD and Chief of Staff may create Draft or Candidate work automatically. Active work requires operator approval or explicit immediate mode. Immediate mode skips candidate approval, but it does not skip execution-authority gates.
 
 ## BMAD-Method Role
 
@@ -75,11 +75,11 @@ The orchestrator should consume BMAD outputs as task inputs and context. It shou
 Default behavior:
 
 - BMAD outputs candidate Dev Console work items.
-- Bob reviews, edits, approves, rejects, batches, or prioritizes them.
+- The operator reviews, edits, approves, rejects, batches, or prioritizes them.
 
 Override behavior:
 
-- Bob can explicitly authorize BMAD outputs to create Active work and begin routing immediately.
+- The operator can explicitly authorize BMAD outputs to create Active work and begin routing immediately.
 - Execution authority gates still apply.
 
 ## Lanes And Resource Policy
@@ -147,11 +147,11 @@ Next technical direction:
 - avoid timed full-page refresh loops,
 - show a subtle stale-data warning when realtime disconnects.
 
-The Dev Console and supervisor backend should launch automatically as part of the VM startup/logon experience. Startup automation is part of the product experience, not an operator afterthought.
+The Dev Console and supervisor backend should launch automatically as part of the supported Linux startup experience. Startup automation is part of the product experience, not an operator afterthought.
 
 ## Priority And Work Order
 
-Bob should be able to manually prioritize, reorder, pause, defer, pin, or promote Draft, Candidate, and Active work.
+The operator should be able to manually prioritize, reorder, pause, defer, pin, or promote Draft, Candidate, and Active work.
 
 The system should also recommend or automatically adjust work order when dependencies, blockers, risk, urgency, resource scarcity, failed checks, stale branches, or GitHub/CI state make a different sequence safer or more efficient.
 
@@ -189,7 +189,7 @@ Git/GitHub operations follow the same progressive authority ladder:
 
 ## Mature-Tool Posture
 
-Bob prefers self-hosted mature tooling before custom runtime code.
+The operator prefers self-hosted mature tooling before custom runtime code.
 
 Current direction:
 
@@ -215,7 +215,7 @@ Second proof:
 ## Success Signals
 
 - BMAD output can become Candidate work.
-- Bob can approve or immediate-mode Candidate work into Active Dev Console work.
+- The operator can approve or immediate-mode Candidate work into Active Dev Console work.
 - Existing supervisor contracts store the work.
 - Orchestrator decisions reuse/evolve routing preview rather than duplicating it.
 - Execution attempts and evidence use existing supervisor concepts.

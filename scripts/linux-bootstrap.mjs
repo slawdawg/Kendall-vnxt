@@ -34,7 +34,7 @@ function runLocal(command, args, options = {}) {
 }
 
 function commandAvailable(command) {
-  const result = runLocal(process.platform === "win32" ? "where.exe" : "which", [command]);
+  const result = runLocal("which", [command]);
   return result.status === 0;
 }
 

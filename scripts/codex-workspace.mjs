@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultBaseBranch = "main";
@@ -773,10 +774,9 @@ function assertCurrentBranch(manifest) {
 }
 
 function verificationCommand(profile) {
-  const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const profiles = {
     preflight: ["node", "./scripts/preflight.mjs"],
-    check: [pnpmExecutable, "run", "check"],
+    check: ["pnpm", "run", "check"],
     "codex-workspace": ["node", "./scripts/test-codex-workspace.mjs"],
   };
   if (!profiles[profile]) {
@@ -900,10 +900,9 @@ function removeWorktree(worktreePath, state) {
 function removeManagedDirectory(worktreePath, state) {
   assertManagedWorktreePath(worktreePath, state);
   cleanupGeneratedArtifacts(worktreePath);
-  normalizeAttributes(worktreePath);
   rmSync(worktreePath, { recursive: true, force: true });
   if (existsSync(worktreePath)) {
-    throw new Error(adminCleanupMessage(worktreePath));
+    throw new Error(`Worktree path still exists after cleanup: ${worktreePath}`);
   }
 }
 
@@ -914,11 +913,10 @@ function cleanupGeneratedArtifacts(worktreePath) {
   for (const artifact of generatedCleanupArtifacts()) {
     const artifactPath = join(worktreePath, artifact);
     if (existsSync(artifactPath)) {
-      normalizeAttributes(artifactPath);
       try {
         rmSync(artifactPath, { recursive: true, force: true });
       } catch {
-        throw new Error(adminCleanupMessage(worktreePath));
+        throw new Error(`Could not remove generated cleanup artifact: ${artifactPath}`);
       }
     }
   }
@@ -951,41 +949,6 @@ function worktreeListed(worktreePath) {
     return true;
   }
   return parseWorktreePorcelain(result.stdout).some((record) => samePath(record.path, worktreePath));
-}
-
-function normalizeAttributes(targetPath) {
-  if (!existsSync(targetPath)) {
-    return;
-  }
-  if (process.platform !== "win32") {
-    return;
-  }
-  const result = run("powershell.exe", [
-    "-NoProfile",
-    "-Command",
-    `$target = ${JSON.stringify(targetPath)}; Get-ChildItem -LiteralPath $target -Recurse -Force | ForEach-Object { $_.Attributes = 'Normal' }`,
-  ]);
-  if (result.code !== 0) {
-    console.warn(`WARN: Could not normalize attributes for ${targetPath}.`);
-  }
-}
-
-function adminCleanupMessage(worktreePath) {
-  const root = JSON.stringify(dirname(worktreePath));
-  const name = JSON.stringify(basename(worktreePath));
-  return [
-    `Worktree path still exists after cleanup: ${worktreePath}`,
-    "Windows may require an elevated PowerShell window to repair ACLs and remove generated cache folders.",
-    "Run this exact scoped command as Administrator:",
-    `$root = ${root}`,
-    `$target = Join-Path $root ${name}`,
-    "$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-    "$grant = \"*$sid`:(OI)(CI)F\"",
-    "takeown.exe /F $target /R /D Y",
-    "icacls.exe $target /reset /T /C",
-    "icacls.exe $target /grant:r $grant /T /C",
-    "Remove-Item -LiteralPath $target -Recurse -Force",
-  ].join("\n");
 }
 
 function parseWorktreePorcelain(value) {
@@ -1156,9 +1119,11 @@ function runShellChecked(commandText, options = {}) {
 }
 
 function run(commandName, commandArguments, options = {}) {
-  const result = spawnSync(resolveCommand(commandName), resolveArgs(commandName, commandArguments), {
+  const resolved = resolveWorkspaceCommand(commandName, commandArguments);
+  const result = spawnSync(resolved.command, resolved.args, {
     cwd: options.cwd || repoRoot,
     encoding: "utf8",
+    env: resolved.env ?? process.env,
     stdio: "pipe",
     timeout: options.timeout || 120_000,
   });
@@ -1170,26 +1135,6 @@ function run(commandName, commandArguments, options = {}) {
   };
 }
 
-function resolveCommand(commandName) {
-  if (process.platform === "win32" && commandName === "git") {
-    for (const candidate of [
-      process.env.GIT_EXE,
-      "C:\\Program Files\\Git\\cmd\\git.exe",
-      "C:\\Program Files\\Git\\bin\\git.exe",
-      "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
-    ]) {
-      if (candidate && existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return commandName;
-}
-
-function resolveArgs(_commandName, commandArguments) {
-  return commandArguments;
-}
-
 function samePath(left, right) {
-  return resolve(left).toLowerCase() === resolve(right).toLowerCase();
+  return resolve(left) === resolve(right);
 }

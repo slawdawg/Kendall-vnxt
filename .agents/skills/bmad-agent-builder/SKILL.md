@@ -23,8 +23,8 @@ Act as an architect guide — walk users through conversational discovery to und
    - `{user_name}` (default: null) — address the user by name
    - `{communication_language}` (default: user or system intent) — use for all communications
    - `{document_output_language}` (default: user or system intent) — use for generated document content
-   - `{bmad_builder_output_folder}` (default: `{project-root}/skills`) — save built agents here
-   - `{bmad_builder_reports}` (default: `{project-root}/skills/reports`) — save reports (quality, eval, planning) here
+   - `{bmad_builder_output_folder}` (default: `{project-root}/_bmad-output/bmb-creations/skills`) — save built agents here
+   - `{bmad_builder_reports}` (default: `{project-root}/_bmad-output/reports`) — save reports (quality, eval, planning) here
 
 3. Route by intent — see Quick Reference below.
 

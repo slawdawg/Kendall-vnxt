@@ -157,7 +157,7 @@ The highest-value next move remains an Execution Authority Expansion PRD, but th
 
 ## Recommended Next Work
 
-Create a focused PRD: `docs/prds/supervisor-execution-authority-expansion.md`.
+Create a focused PRD: `docs/workflows/product-requirements-boundary.md#supervisor-execution-authority-expansion-boundary`.
 
 Recommended PRD scope:
 

@@ -27,8 +27,8 @@ Current safe posture:
 Use these indexes before starting new architecture, PRD, story, or authority work:
 
 - `docs/architecture/index.md`
-- `docs/prds/index.md`
-- `docs/stories/index.md`
+- `docs/workflows/product-requirements-boundary.md`
+- `docs/workflows/implementation-evidence-boundary.md`
 
 ## What Is Already Covered
 

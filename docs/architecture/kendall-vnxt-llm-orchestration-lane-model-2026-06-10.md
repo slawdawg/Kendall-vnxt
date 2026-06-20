@@ -10,7 +10,7 @@ The approved local provider implementation gives Kendall_vNxt one automated mode
 - Approved model: `qwen3:14b`
 - Approved VM source: `192.168.1.118`
 
-Bob also has subscription or local-tool access to Codex, Claude Code, and GitHub Pro. Those are not currently normal model API providers in Kendall. They should be modeled as worker/workflow lanes unless separate API access is added later.
+The operator may also have subscription or local-tool access to Codex, Claude Code, and GitHub Pro. Those are not currently normal model API providers in Kendall. They should be modeled as worker/workflow lanes unless separate API access is added later.
 
 ## Current Lane Model
 

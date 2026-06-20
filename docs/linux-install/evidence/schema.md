@@ -233,8 +233,9 @@ Autonomous goal-run evidence writes under:
 docs/linux-install/evidence/goal-runs/<run-id>/
 ```
 
-Routine local run state and temporary logs are not committed unless selected as
-release evidence and validated for redaction.
+Routine local run state and temporary logs must remain ignored local output.
+Release claims that need Git durability must be rewritten as source-owned
+release docs or contracts instead of tracking generated evidence packets.
 
 ## Goal-Run Evidence Fields
 

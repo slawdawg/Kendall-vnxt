@@ -10,16 +10,17 @@ runbook is current-instance operational guidance, not the generic installer
 entry point. New Ubuntu 26.04-or-later deployments should start with
 `docs/linux-install/install-playbook.md`.
 
-The Windows machine remains the current operator host for SSH access and
-private-key storage, not the planned development fallback.
+The operator workstation remains the current host for SSH access and private-key
+storage, not the planned development fallback.
 
-This runbook is based on `docs/platform-evaluation-sprint.md` and the fresh
-Kendall Vnxt Ubuntu deployment evidence under `docs/linux-install/evidence/`.
+This runbook is based on `docs/workflows/platform-decision-boundary.md` and
+`docs/linux-install/release-delivery-record.md`.
 
 For repeatable Linux provisioning work, use
-`docs/linux-install/implementation-plan.md` as the governing plan. That plan
-requires contract-first, verify-only-first implementation and gates remote host
-mutation behind explicit operator approval.
+`docs/linux-install/install-playbook.md` and
+`docs/linux-install/fresh-host-proof-procedure.md`. They require a
+verify-first flow and keep remote host mutation outside the supported v1
+installer.
 
 ## Current Target
 
@@ -44,13 +45,13 @@ mutation behind explicit operator approval.
 
 From the current operator host:
 
-```powershell
+```bash
 ssh <ssh-alias>
 ```
 
 For one-off non-interactive checks:
 
-```powershell
+```bash
 ssh <ssh-alias> 'cd "$HOME/Kendall_Nxt" && pnpm run preflight'
 ```
 
@@ -119,7 +120,7 @@ Current Linux VM evidence:
 - Playwright browser/e2e proof passed after updating `@playwright/test` to
   `1.61.0`, installing browser dependencies interactively, and fixing brittle
   dashboard assertions. Current evidence: `25 passed`.
-  See `docs/linux-install/evidence/fresh-vm-playwright-e2e-2026-06-16.md`.
+  See `docs/linux-install/release-delivery-record.md`.
 
 ## Development Servers
 
@@ -206,7 +207,7 @@ Do not use the temporary cleanup commands for durable task workspaces.
 
 Current GitHub state:
 
-- `gh auth status` passes as `slawdawg`.
+- `gh auth status` passes for the operator's GitHub account.
 - HTTPS Git operations are usable non-interactively.
 - Private repo probe passed:
 
@@ -216,7 +217,7 @@ env GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/slawdawg/Kendall-vnxt
 
 This is post-deployment user auth state, not part of base Linux bootstrap. Do not
 store raw tokens in the repo, shell history, handoff docs, or evidence records.
-If a workflow needs private GitHub access and auth is absent or expired, Bob
+If a workflow needs private GitHub access and auth is absent or expired, the user
 refreshes it interactively with `gh auth login`, then rerun:
 
 ```bash
@@ -265,14 +266,14 @@ Current evidence:
 - Linger is currently `no`.
 
 Do not add automatic startup services until there is an explicit need. Prefer
-interactive user-login startup for Codex and development servers unless Bob
+interactive user-login startup for Codex and development servers unless the operator
 approves a service-managed workflow.
 
 ## Snapshot And Backup Policy
 
 Baseline snapshot state:
 
-- Bob confirmed a VM snapshot was taken after toolchain, post-deployment
+- The operator confirmed a VM snapshot was taken after toolchain, post-deployment
   GitHub auth for repo access, repo setup, full check, reboot proof, real
   work-cycle proof, and agent CLI verification.
 
@@ -305,8 +306,9 @@ Fallback path:
 3. Push or preserve any intentional Linux work.
 4. Restore from Git, VM snapshot, or a fresh Kendall Vnxt Ubuntu deployment
    path as appropriate.
-5. Record the Linux blocker in `docs/platform-evaluation-sprint.md` before
-   retrying migration.
+5. Record the Linux blocker in the local platform-evaluation packet and update
+   `docs/workflows/platform-decision-boundary.md` only if the source-owned
+   platform decision changes.
 
 ## Cutover Checklist
 

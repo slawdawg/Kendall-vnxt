@@ -27,7 +27,7 @@ const policyPanel = readWorkspaceFile("apps/dashboard/src/components/delivery-re
 const deliveryCleanupPlanPanel = readWorkspaceFile("apps/dashboard/src/components/delivery-cleanup-plan-panel.tsx");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
@@ -86,7 +86,7 @@ for (const serviceText of [
   "Record delivery readiness only through the work-item delivery readiness checkpoint form.",
   "local-only waiver",
   "GET /supervisor/delivery-readiness-policy-report",
-  "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Delivery readiness policy service must include ${serviceText}`, failures);
 }
@@ -289,12 +289,12 @@ for (const testText of [
   "test_delivery_execution_evidence_rejects_operator_mismatch",
   "test_delivery_execution_evidence_rejects_trusted_current_pr_state_mismatch",
   '"allowedOperations"] == []',
-  "docs/stories/3-45-delivery-readiness-policy-drift-check.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
 }
 
-const storyPath = "docs/stories/3-45-delivery-readiness-policy-drift-check.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing delivery readiness policy drift story ${storyPath}`, failures);
 assertCondition(
   storyIndex.includes("3-45-delivery-readiness-policy-drift-check.md"),

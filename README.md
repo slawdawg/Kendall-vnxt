@@ -114,7 +114,7 @@ embed them in bootstrap scripts.
 
 ## Developer Checks
 
-- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
+- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, clean-install boundary checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
 - `pnpm run check:linux-bootstrap` verifies the Linux bootstrap contract, shell syntax, install docs, and focused bootstrap tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - `pnpm run check:documentation-authority` verifies documentation authority report contract/schema/service/dashboard/story alignment
@@ -134,6 +134,8 @@ embed them in bootstrap scripts.
 - `pnpm run check:maintenance-action-plan` verifies maintenance action plan contract/schema/service/dashboard/story alignment
 - `pnpm run check:development-runway` verifies development runway contract/schema/service/dashboard/story/runbook alignment for larger PR-sized safe slices
 - `pnpm run check:delivery-readiness` verifies delivery readiness policy contract/schema/service/dashboard/story alignment
+- `pnpm run check:linux-install-lane` verifies the delivered Linux install package, docs, and unsupported Windows/remote-install boundary
+- `pnpm run check:clean-install-boundary` rejects tracked local-only BMAD/runtime/secret/unsupported Windows or WSL install artifacts
 - `pnpm run check:maintenance-readiness` verifies maintenance readiness contract/schema/service/dashboard/story alignment
 - `pnpm run test:supervisor` runs supervisor tests through a repo-local uv cache wrapper
 - `pnpm run test:e2e:dashboard` runs browser coverage for intake drafts, workflow actions, and detail navigation
@@ -142,14 +144,14 @@ embed them in bootstrap scripts.
 - `pnpm run preflight` checks that shared JS deps and the supervisor virtualenv are ready
 - `pnpm run doctor` is an alias for `preflight`
 
-Playwright starts the dashboard with `next dev` for faster browser-test startup. `pnpm run check` remains the production-build gate. Supervisor tests launched from package scripts use a repo-local uv cache wrapper so Windows user-cache state does not decide whether verification can start.
+Playwright starts the dashboard with `next dev` for faster browser-test startup. `pnpm run check` remains the production-build gate. Supervisor tests launched from package scripts use a repo-local uv cache wrapper so local user-cache state does not decide whether verification can start.
 
 ## Project Docs
 
 - Linux install docs: [docs/linux-install/index.md](docs/linux-install/index.md)
 - Current architecture index: [docs/architecture/index.md](docs/architecture/index.md)
-- Current PRD index: [docs/prds/index.md](docs/prds/index.md)
-- Current story index: [docs/stories/index.md](docs/stories/index.md)
+- Product requirements boundary: [docs/workflows/product-requirements-boundary.md](docs/workflows/product-requirements-boundary.md)
+- Implementation evidence boundary: [docs/workflows/implementation-evidence-boundary.md](docs/workflows/implementation-evidence-boundary.md)
 - Current implementation checkpoint: [docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md](docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md)
 
 ## Why pnpm

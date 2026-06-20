@@ -31,7 +31,7 @@ const runtimeExportCheck = readWorkspaceFile("scripts/check-runtime-evidence-exp
 const reportCatalogCheck = readWorkspaceFile("scripts/check-supervisor-report-catalog.mjs");
 const runbookCheck = readWorkspaceFile("scripts/check-runbook-verification.mjs");
 const docsCheck = readWorkspaceFile("scripts/check-doc-indexes.mjs");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const currentGap = readWorkspaceFile("docs/architecture/kendall-vnxt-current-gap-review-2026-06-08.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
@@ -69,8 +69,8 @@ for (const serviceText of [
   "dashboardAnchors",
   "Runtime evidence review is not execution-authority approval.",
   "GET /supervisor/runtime-evidence-review-report",
-  "docs/stories/3-55-runtime-evidence-review-index.md",
-  "docs/stories/3-65-runtime-review-evidence-links.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Runtime evidence review service must include ${serviceText}`, failures);
 }
@@ -138,7 +138,7 @@ for (const browserText of [
   "GET /supervisor/runtime-evidence-review-report",
   "Related reports",
   "Related docs",
-  "docs/stories/3-65-runtime-review-evidence-links.md",
+  "docs/workflows/implementation-evidence-boundary.md",
   "pnpm run check:runtime-review",
   "/controls#runtime-evidence-review-report",
   "Runtime evidence review is not execution-authority approval.",
@@ -154,8 +154,8 @@ for (const testText of [
   '"runtimeExportHref"',
   '"relatedDocs"',
   '"dashboardAnchors"',
-  "docs/stories/3-55-runtime-evidence-review-index.md",
-  "docs/stories/3-65-runtime-review-evidence-links.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
 }
@@ -166,12 +166,12 @@ assertCondition(
   failures,
 );
 assertCondition(
-  runtimeExportCheck.includes("docs/stories/3-55-runtime-evidence-review-index.md"),
+  runtimeExportCheck.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export drift check must require Story 3.55 git-backed evidence",
   failures,
 );
 assertCondition(
-  runtimeExportCheck.includes("docs/stories/3-65-runtime-review-evidence-links.md"),
+  runtimeExportCheck.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export drift check must require Story 3.65 git-backed evidence",
   failures,
 );
@@ -186,11 +186,11 @@ assertCondition(
   failures,
 );
 
-const storyPath = "docs/stories/3-55-runtime-evidence-review-index.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing runtime evidence review story ${storyPath}`, failures);
-const shortcutStoryPath = "docs/stories/3-57-work-item-review-queue-shortcuts.md";
+const shortcutStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, shortcutStoryPath)), `Missing work-item review queue shortcut story ${shortcutStoryPath}`, failures);
-const linksStoryPath = "docs/stories/3-65-runtime-review-evidence-links.md";
+const linksStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, linksStoryPath)), `Missing runtime review evidence links story ${linksStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-55-runtime-evidence-review-index.md"),

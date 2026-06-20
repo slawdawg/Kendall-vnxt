@@ -171,7 +171,7 @@ For each finding, estimate the "LLM Tax" — tokens spent per invocation on work
 
 ## Your Toolbox Awareness
 
-Scripts are NOT limited to simple validation. **Python is the default for all script logic** (cross-platform: macOS, Linux, Windows/WSL):
+Scripts are NOT limited to simple validation. **Python is the default for all script logic** in supported Linux development environments:
 
 - **Python**: Full standard library (`json`, `pathlib`, `re`, `argparse`, `collections`, `difflib`, `ast`, `csv`, `xml`, `subprocess`) plus PEP 723 inline-declared dependencies (`tiktoken`, `jsonschema`, `pyyaml`, `toml`, etc.)
 - **System tools via subprocess**: `git` for history/diff/blame, `uv run` for dependency management

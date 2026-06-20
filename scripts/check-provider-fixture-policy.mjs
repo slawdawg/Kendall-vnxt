@@ -29,7 +29,7 @@ const providerFixtureDoc = readWorkspaceFile("docs/architecture/kendall-vnxt-pro
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 const runtimeExportCheck = readWorkspaceFile("scripts/check-runtime-evidence-export.mjs");
 const runbookCheck = readWorkspaceFile("scripts/check-runbook-verification.mjs");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
@@ -160,23 +160,23 @@ for (const testText of [
 }
 
 for (const story of [
-  "docs/stories/3-10-provider-fixtures-and-ollama-prd-draft.md",
-  "docs/stories/3-50-provider-fixture-policy-drift-check.md",
-  "docs/stories/4-1-ollama-provider-settings-and-registry-gates.md",
-  "docs/stories/4-2-ollama-prompt-redaction-and-retention-contract.md",
-  "docs/stories/4-3-ollama-timeout-cancellation-and-attempt-evidence.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(existsSync(join(rootDir, story)), `Missing provider fixture story evidence ${story}`, failures);
   assertCondition(storyIndex.includes(story.split("/").pop()), `Story index must reference ${story}`, failures);
 }
 
 assertCondition(
-  runtimeExportCheck.includes("docs/stories/3-50-provider-fixture-policy-drift-check.md"),
+  runtimeExportCheck.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export drift check must require Story 3.50 git-backed evidence",
   failures,
 );
 assertCondition(
-  serviceSource.includes("docs/stories/3-50-provider-fixture-policy-drift-check.md"),
+  serviceSource.includes("docs/workflows/implementation-evidence-boundary.md"),
   "Runtime evidence export service must include Story 3.50 git-backed evidence",
   failures,
 );

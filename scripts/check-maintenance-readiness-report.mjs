@@ -24,7 +24,7 @@ const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx
 const maintenancePanel = readWorkspaceFile("apps/dashboard/src/components/maintenance-readiness-report-panel.tsx");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
-const storyIndex = readWorkspaceFile("docs/stories/index.md");
+const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
@@ -61,7 +61,7 @@ for (const serviceText of [
   "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
   "Raw Ollama prompts, completions, reasoning fields, and provider payloads must not be retained.",
   "Maintenance work must not approve local provider/model calls.",
-  "docs/stories/3-46-maintenance-readiness-drift-check.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Maintenance readiness service must include ${serviceText}`, failures);
 }
@@ -109,7 +109,7 @@ for (const browserText of [
   "Related reports",
   "GET /supervisor/documentation-authority-report",
   "Related docs",
-  "docs/stories/index.md",
+  "docs/workflows/implementation-evidence-boundary.md",
   "/controls#dashboard-e2e-report",
   "verification-hygiene",
   "authority-blocker-watch",
@@ -127,14 +127,14 @@ for (const testText of [
   '"dashboardAnchors"',
   '"relatedDocs"',
   '"authority-blocker-watch"',
-  "docs/stories/3-46-maintenance-readiness-drift-check.md",
+  "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
 }
 
-const storyPath = "docs/stories/3-46-maintenance-readiness-drift-check.md";
+const storyPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, storyPath)), `Missing maintenance readiness drift story ${storyPath}`, failures);
-const linksStoryPath = "docs/stories/3-62-maintenance-readiness-evidence-links.md";
+const linksStoryPath = "docs/workflows/implementation-evidence-boundary.md";
 assertCondition(existsSync(join(rootDir, linksStoryPath)), `Missing maintenance readiness evidence links story ${linksStoryPath}`, failures);
 assertCondition(
   storyIndex.includes("3-46-maintenance-readiness-drift-check.md"),

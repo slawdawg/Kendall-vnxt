@@ -71,10 +71,10 @@ def test_orchestrator_selects_claude_review_only_for_high_risk_work() -> None:
     )
 
     assert evidence.selected_lane == OrchestratorLane.CLAUDE_CODE_REVIEW_WORKER
-    assert evidence.state == OrchestratorJobState.READY_FOR_BOB
+    assert evidence.state == OrchestratorJobState.READY_FOR_OPERATOR
     assert "permissions.review_only_worker" in evidence.reason_codes
     assert "fake_claude.review_findings_without_process_launch" in evidence.reason_codes
-    assert evidence.next_action == "review_findings_with_bob"
+    assert evidence.next_action == "review_findings_with_operator"
     assert evidence.worktree_required is False
     assert evidence.allowed_file_scope == ("services/supervisor/src/supervisor/application/service.py",)
 
@@ -91,7 +91,7 @@ def test_orchestrator_records_github_workflow_rail_requirement() -> None:
     )
 
     assert evidence.selected_lane == OrchestratorLane.GITHUB_WORKFLOW_RAIL
-    assert evidence.state == OrchestratorJobState.READY_FOR_BOB
+    assert evidence.state == OrchestratorJobState.READY_FOR_OPERATOR
     assert "fake_github.workflow_requirement_recorded" in evidence.reason_codes
 
 
@@ -112,7 +112,7 @@ def test_orchestrator_blocks_when_selected_lane_unavailable() -> None:
     assert "lane.unavailable" in evidence.reason_codes
     assert "fake_worker.blocked_without_launch" in evidence.reason_codes
     assert evidence.blocker == "codex_cli_worker_unavailable"
-    assert evidence.next_action == "ready_for_bob"
+    assert evidence.next_action == "ready_for_operator"
 
 
 def test_orchestrator_blocks_when_ollama_unavailable_for_local_reasoning() -> None:
@@ -132,7 +132,7 @@ def test_orchestrator_blocks_when_ollama_unavailable_for_local_reasoning() -> No
     assert "lane.unavailable" in evidence.reason_codes
 
 
-def test_orchestrator_claude_budget_exhausted_requires_bob_decision() -> None:
+def test_orchestrator_claude_budget_exhausted_requires_operator_decision() -> None:
     graph = FakeOrchestratorGraph()
 
     evidence = graph.run(
@@ -147,9 +147,9 @@ def test_orchestrator_claude_budget_exhausted_requires_bob_decision() -> None:
 
     assert evidence.selected_lane == OrchestratorLane.BLOCKED
     assert evidence.state == OrchestratorJobState.AWAITING_APPROVAL
-    assert evidence.blocker == "budget_exhausted_requires_bob_decision"
+    assert evidence.blocker == "budget_exhausted_requires_operator_decision"
     assert "budget.exhausted" in evidence.reason_codes
-    assert evidence.next_action == "ready_for_bob"
+    assert evidence.next_action == "ready_for_operator"
 
 
 def test_orchestrator_verification_failure_keeps_state_resumable() -> None:
@@ -172,7 +172,7 @@ def test_orchestrator_verification_failure_keeps_state_resumable() -> None:
     assert evidence.verification_status == "failed"
     assert evidence.blocker == "verification_failed"
     assert evidence.source_reference == "story-6.1"
-    assert evidence.next_action == "ready_for_bob"
+    assert evidence.next_action == "ready_for_operator"
     assert "verification.failed" in evidence.reason_codes
 
 
@@ -191,11 +191,11 @@ def test_orchestrator_scope_expansion_requires_approval() -> None:
 
     assert evidence.selected_lane == OrchestratorLane.BLOCKED
     assert evidence.state == OrchestratorJobState.AWAITING_APPROVAL
-    assert evidence.blocker == "scope_expansion_requires_bob_approval"
+    assert evidence.blocker == "scope_expansion_requires_operator_approval"
     assert "approval.scope_expansion_required" in evidence.reason_codes
 
 
-def test_orchestrator_conflicting_review_requires_bob_decision() -> None:
+def test_orchestrator_conflicting_review_requires_operator_decision() -> None:
     graph = FakeOrchestratorGraph()
 
     evidence = graph.run(
@@ -208,10 +208,10 @@ def test_orchestrator_conflicting_review_requires_bob_decision() -> None:
     )
 
     assert evidence.selected_lane == OrchestratorLane.CLAUDE_CODE_REVIEW_WORKER
-    assert evidence.state == OrchestratorJobState.READY_FOR_BOB
-    assert evidence.blocker == "conflicting_review_requires_bob_decision"
+    assert evidence.state == OrchestratorJobState.READY_FOR_OPERATOR
+    assert evidence.blocker == "conflicting_review_requires_operator_decision"
     assert "review.conflicting_findings" in evidence.reason_codes
-    assert evidence.next_action == "ready_for_bob"
+    assert evidence.next_action == "ready_for_operator"
 
 
 def test_orchestrator_evidence_builder_does_not_require_worker_attempt() -> None:

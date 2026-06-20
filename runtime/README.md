@@ -41,7 +41,7 @@ Implemented core scaffolds now include:
 
 For durable batch timing that does not depend on shell timestamp rendering, use:
 
-```powershell
+```bash
 python runtime/tools/batch_timer.py start --label runtime-hardening --target-minutes 30
 python runtime/tools/batch_timer.py status
 python runtime/tools/batch_timer.py stop

@@ -11,10 +11,10 @@ module_greeting: >
 
 bmad_builder_output_folder:
   prompt: "Where should your custom output (agent, workflow, module config) be saved?"
-  default: "{project-root}/skills"
+  default: "{project-root}/_bmad-output/bmb-creations/skills"
   result: "{project-root}/{value}"
 
 bmad_builder_reports:
   prompt: "Output for Evals, Test, Quality and Planning Reports?"
-  default: "{project-root}/skills/reports"
+  default: "{project-root}/_bmad-output/reports"
   result: "{project-root}/{value}"

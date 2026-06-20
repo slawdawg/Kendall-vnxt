@@ -15,26 +15,26 @@ The discovered product shape is broader: Kendall_vNxt needs a task orchestrator,
 
 A router decides which model endpoint receives a prompt.
 
-An orchestrator decides what work needs doing, which execution lane should do it, what constraints apply, what evidence is required, and when Bob must make a decision.
+An orchestrator decides what work needs doing, which execution lane should do it, what constraints apply, what evidence is required, and when the operator must make a decision.
 
 ## Job To Be Done
 
-When Bob has development work to move forward, he wants Kendall_vNxt to classify the work, spend the cheapest suitable resource first, escalate to stronger coding workers when needed, request independent review for risky changes, and leave an auditable trail so he can resume, approve, or reject progress without reconstructing context.
+When the operator has development work to move forward, they want Kendall_vNxt to classify the work, spend the cheapest suitable resource first, escalate to stronger coding workers when needed, request independent review for risky changes, and leave an auditable trail so they can resume, approve, or reject progress without reconstructing context.
 
 ## Primary User Outcomes
 
 - Conserve expensive or scarce assistant usage by using Ollama for cheap preparation and validation.
 - Use Codex CLI for the work where high implementation performance matters.
 - Use Claude Code CLI sparingly for adversarial review and flaw finding.
-- Reduce Bob's coordination burden across worktrees, PRs, reviews, and handoffs.
+- Reduce the operator's coordination burden across worktrees, PRs, reviews, and handoffs.
 - Preserve explicit approval gates for risky work, spending, file mutation, and merge paths.
-- Produce durable evidence: why a lane was selected, what changed, what passed, what failed, and what needs Bob.
+- Produce durable evidence: why a lane was selected, what changed, what passed, what failed, and what needs the operator.
 
 ## MVP Workflow
 
 First narrow workflow: issue-to-PR implementation loop.
 
-1. Bob creates or selects a task.
+1. The operator creates or selects a task.
 2. Orchestrator classifies the task by type, risk, scope, cost, and required review depth.
 3. Orchestrator uses Ollama for cheap planning, summarization, or validation when safe.
 4. Orchestrator dispatches implementation work to a Codex CLI worker in an isolated worktree when code edits are required.
@@ -54,7 +54,7 @@ First narrow workflow: issue-to-PR implementation loop.
 
 ## Decision Rights
 
-The orchestrator may decide without Bob:
+The orchestrator may decide without the operator:
 
 - classify task type and risk from metadata
 - use Ollama for approved local-safe reasoning
@@ -63,7 +63,7 @@ The orchestrator may decide without Bob:
 - run read-only checks
 - collect status and verification metadata
 
-The orchestrator requires Bob approval before:
+The orchestrator requires operator approval before:
 
 - enabling a new provider or model lane
 - spending scarce Claude review budget beyond policy
@@ -90,12 +90,12 @@ The orchestrator requires Bob approval before:
 - Codex worker jobs produce isolated diffs and verification results.
 - Claude review is requested only for configured high-risk scenarios.
 - Worker failure produces a clean blocked state, not corrupted repo state.
-- Bob can resume from the latest job record without chat memory.
+- The operator can resume from the latest job record without chat memory.
 
 ## Open Product Questions
 
-- Should Bob start orchestrator work from GitHub Issues, chat commands, or both?
+- Should the operator start orchestrator work from GitHub Issues, chat commands, or both?
 - Which task classes are approved for Codex CLI mutation?
-- Should Claude Code be review-only by policy, or can Bob approve edit mode case-by-case?
+- Should Claude Code be review-only by policy, or can the operator approve edit mode case-by-case?
 - What monthly or weekly scarce-use budget should Claude review enforce?
 - What is the first PR workflow: local-only PR creation, GitHub issue comment, or dashboard surface?

@@ -9,7 +9,7 @@
   "attempted_command": null,
   "last_safe_command": "pnpm run check:linux-bootstrap",
   "proposed_next_command": "pnpm run provider:smoke",
-  "required_bob_action": "Approve the exact provider, operation, spend boundary, and evidence requirements before resume.",
+  "required_user_action": "Approve the exact provider, operation, spend boundary, and evidence requirements before resume.",
   "resume_command": "codex /goal resume linux-setup-mvp",
   "evidence_paths": [],
   "dependency_impact": ["task.provider.smoke"],

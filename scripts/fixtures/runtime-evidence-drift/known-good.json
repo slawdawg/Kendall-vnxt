@@ -31,7 +31,7 @@
     "sourceSnapshots": "excluded"
   },
   "verification": {
-    "command": "pnpm.cmd run check:runtime-export",
+    "command": "pnpm run check:runtime-export",
     "fixtureFamily": "static-report-schema-drift"
   }
 }
