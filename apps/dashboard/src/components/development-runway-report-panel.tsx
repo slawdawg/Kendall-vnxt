@@ -27,8 +27,8 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
         <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Backlog</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            {slice.includedBacklogItems.map((item) => (
-              <span key={item} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+            {slice.includedBacklogItems.map((item, itemIndex) => (
+              <span key={`${slice.sliceId}:backlog:${item}:${itemIndex}`} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
                 {item}
               </span>
             ))}
@@ -37,8 +37,8 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
         <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Action steps</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            {slice.includedActionSteps.map((step) => (
-              <span key={step} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+            {slice.includedActionSteps.map((step, stepIndex) => (
+              <span key={`${slice.sliceId}:action-step:${step}:${stepIndex}`} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
                 {step}
               </span>
             ))}
@@ -49,8 +49,8 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
       <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Required verification</p>
         <div className="mt-2 flex flex-wrap gap-2">
-          {slice.requiredVerification.map((command) => (
-            <span key={command} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+          {slice.requiredVerification.map((command, commandIndex) => (
+            <span key={`${slice.sliceId}:required-verification:${command}:${commandIndex}`} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
               {command}
             </span>
           ))}
@@ -73,8 +73,8 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
               </div>
               <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{check.summary}</p>
               <div className="mt-2 flex flex-wrap gap-2">
-                {check.requiredCommandIds.map((commandId) => (
-                  <span key={commandId} className="rounded-full border bg-[var(--surface)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+                {check.requiredCommandIds.map((commandId, commandIndex) => (
+                  <span key={`${check.checkId}:required-command:${commandId}:${commandIndex}`} className="rounded-full border bg-[var(--surface)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
                     {commandId}
                   </span>
                 ))}
@@ -83,9 +83,9 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
                 <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
                   <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
                   <div className="mt-2 grid gap-2">
-                    {check.relatedReports.map((report) => (
+                    {check.relatedReports.map((report, reportIndex) => (
                       <Link
-                        key={report}
+                        key={`${check.checkId}:report:${report}:${reportIndex}`}
                         href={reportShortcutHref(report)}
                         className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
                       >
@@ -97,8 +97,11 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
                 <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
                   <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
                   <div className="mt-2 grid gap-2">
-                    {check.relatedDocs.map((doc) => (
-                      <span key={doc} className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+                    {check.relatedDocs.map((doc, docIndex) => (
+                      <span
+                        key={`${check.checkId}:doc:${doc}:${docIndex}`}
+                        className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+                      >
                         {doc}
                       </span>
                     ))}
@@ -122,9 +125,9 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
         <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
           <div className="mt-2 grid gap-2">
-            {slice.relatedReports.map((report) => (
+            {slice.relatedReports.map((report, reportIndex) => (
               <Link
-                key={report}
+                key={`${slice.sliceId}:report:${report}:${reportIndex}`}
                 href={reportShortcutHref(report)}
                 className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
               >
@@ -136,8 +139,11 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
         <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
           <div className="mt-2 grid gap-2">
-            {slice.relatedDocs.map((doc) => (
-              <span key={doc} className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+            {slice.relatedDocs.map((doc, docIndex) => (
+              <span
+                key={`${slice.sliceId}:doc:${doc}:${docIndex}`}
+                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+              >
                 {doc}
               </span>
             ))}
@@ -156,8 +162,8 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
       ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {slice.dashboardAnchors.map((anchor) => (
-          <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
+        {slice.dashboardAnchors.map((anchor, anchorIndex) => (
+          <Link key={`${slice.sliceId}:anchor:${anchor}:${anchorIndex}`} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
             {anchor}
           </Link>
         ))}
@@ -232,8 +238,8 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
           <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">PR batching checklist</h4>
             <div className="mt-3 space-y-2">
-              {report.prBatchingChecklist.map((item) => (
-                <p key={item} className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+              {report.prBatchingChecklist.map((item, itemIndex) => (
+                <p key={`pr-batching-checklist:${item}:${itemIndex}`} className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
                   {item}
                 </p>
               ))}

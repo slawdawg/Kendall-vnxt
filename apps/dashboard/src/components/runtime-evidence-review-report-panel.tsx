@@ -37,9 +37,9 @@ function WorkItemReviewCard({ item }: { item: RuntimeEvidenceReviewWorkItemView 
         <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
           <div className="mt-2 grid gap-2">
-            {item.relatedReports.map((report) => (
+            {item.relatedReports.map((report, reportIndex) => (
               <Link
-                key={report}
+                key={`${item.workItemId}:report:${report}:${reportIndex}`}
                 href={reportShortcutHref(report)}
                 className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
               >
@@ -51,8 +51,11 @@ function WorkItemReviewCard({ item }: { item: RuntimeEvidenceReviewWorkItemView 
         <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
           <div className="mt-2 grid gap-2">
-            {item.relatedDocs.map((doc) => (
-              <span key={doc} className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+            {item.relatedDocs.map((doc, docIndex) => (
+              <span
+                key={`${item.workItemId}:doc:${doc}:${docIndex}`}
+                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+              >
                 {doc}
               </span>
             ))}
@@ -60,8 +63,8 @@ function WorkItemReviewCard({ item }: { item: RuntimeEvidenceReviewWorkItemView 
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        {item.dashboardAnchors.map((anchor) => (
-          <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
+        {item.dashboardAnchors.map((anchor, anchorIndex) => (
+          <Link key={`${item.workItemId}:anchor:${anchor}:${anchorIndex}`} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
             {anchor}
           </Link>
         ))}
@@ -137,8 +140,11 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
           <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Related docs</h4>
             <div className="mt-3 space-y-2">
-              {report.relatedDocs.map((doc) => (
-                <p key={doc} className="break-all rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+              {report.relatedDocs.map((doc, docIndex) => (
+                <p
+                  key={`${report.reportId}:doc:${doc}:${docIndex}`}
+                  className="break-all rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
+                >
                   {doc}
                 </p>
               ))}
@@ -148,8 +154,8 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
           <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Dashboard anchors</h4>
             <div className="mt-3 flex flex-wrap gap-2">
-              {report.dashboardAnchors.map((anchor) => (
-                <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--panel)] px-2 py-1 text-[11px] text-[var(--accent)]">
+              {report.dashboardAnchors.map((anchor, anchorIndex) => (
+                <Link key={`${report.reportId}:anchor:${anchor}:${anchorIndex}`} href={anchor} className="rounded-full border bg-[var(--panel)] px-2 py-1 text-[11px] text-[var(--accent)]">
                   {anchor}
                 </Link>
               ))}

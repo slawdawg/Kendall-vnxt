@@ -228,6 +228,36 @@ try {
   failures.push("docs/linux-install/install-contract.md is missing.");
 }
 
+try {
+  const installPlaybook = read("docs/linux-install/install-playbook.md");
+  for (const expected of [
+    "pnpm dlx playwright@1.61.0 install-deps chromium",
+    "libatk1.0-0t64",
+    "libatk-1.0.so.0",
+    "libatk-bridge2.0-0t64",
+    "libatk-bridge-2.0.so.0",
+    "Do not add these browser-only packages to the base",
+    "bootstrap package list without a separate bootstrap scope approval.",
+  ]) {
+    if (!installPlaybook.includes(expected)) {
+      failures.push(`docs/linux-install/install-playbook.md must preserve Playwright browser dependency guidance: ${expected}`);
+    }
+  }
+} catch {
+  failures.push("docs/linux-install/install-playbook.md is missing.");
+}
+
+try {
+  const bootstrapLinux = read("scripts/bootstrap-linux.sh");
+  for (const browserOnlyPackage of ["libatk1.0-0t64", "libatk-bridge2.0-0t64"]) {
+    if (bootstrapLinux.includes(browserOnlyPackage)) {
+      failures.push(`scripts/bootstrap-linux.sh must not install browser-only Playwright package ${browserOnlyPackage} without separate bootstrap scope approval.`);
+    }
+  }
+} catch {
+  failures.push("scripts/bootstrap-linux.sh is missing.");
+}
+
 for (const { path, pattern } of stalePatterns) {
   try {
     if (read(path).includes(pattern)) {

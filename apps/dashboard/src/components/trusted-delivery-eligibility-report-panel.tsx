@@ -24,8 +24,8 @@ function ListBlock({ title, items, warn = false }: { title: string; items: strin
     <div>
       <h5 className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">{title}</h5>
       <div className="mt-2 space-y-1">
-        {items.map((item) => (
-          <p key={item} className={`text-xs leading-5 ${warn ? "text-[var(--warn)]" : "text-[var(--muted)]"}`}>
+        {items.map((item, index) => (
+          <p key={`${title}:${item}:${index}`} className={`text-xs leading-5 ${warn ? "text-[var(--warn)]" : "text-[var(--muted)]"}`}>
             {item}
           </p>
         ))}

@@ -2091,14 +2091,41 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
 
     from supervisor.api.main import app
 
+    def quote_identifier(value: str) -> str:
+        return f'"{value.replace(chr(34), chr(34) * 2)}"'
+
+    def persistence_snapshot() -> dict[str, list[str]]:
+        with sqlite3.connect(db_path) as conn:
+            table_names = {
+                row[0]
+                for row in conn.execute("select name from sqlite_master where type = 'table' and name not like 'sqlite_%'").fetchall()
+                if row and row[0]
+            }
+            snapshot: dict[str, list[str]] = {}
+            for table in sorted(table_names):
+                rows = conn.execute(f"select * from {quote_identifier(table)}").fetchall()
+                snapshot[table] = sorted(json.dumps(row, default=str) for row in rows)
+            return snapshot
+
     with TestClient(app) as client:
         work_item_id = _create_routing_work_item(client)
         before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        before_snapshot = persistence_snapshot()
         response = client.get("/supervisor/safe-development-backlog")
+        after_first_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        after_first_snapshot = persistence_snapshot()
+        response_again = client.get("/supervisor/safe-development-backlog")
         after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        after_snapshot = persistence_snapshot()
 
     assert response.status_code == 200
+    assert response_again.status_code == 200
+    assert before_events == after_first_events
+    assert before_snapshot == after_first_snapshot
+    assert after_first_events == after_events
+    assert after_first_snapshot == after_snapshot
     assert before_events == after_events
+    assert before_snapshot == after_snapshot
 
     report = response.json()["data"]
     assert report["reportId"] == "safe-development-backlog-report-v1"
@@ -2121,11 +2148,27 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "/controls#verification-readiness-report" in verification_item["dashboardAnchors"]
     assert "/controls#development-runway-report" in verification_item["dashboardAnchors"]
     assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
+    assert verification_item["relatedDocs"] == ["docs/workflows/implementation-evidence-boundary.md"]
+    assert len(verification_item["relatedDocs"]) == len(set(verification_item["relatedDocs"]))
+    assert verification_item["sourceEvidenceLabels"] == [
+        "3-27-safe-development-backlog-report.md",
+        "3-32-safe-development-backlog-drift-check.md",
+        "3-47-core-readiness-drift-checks.md",
+        "3-56-verification-execution-plan-groups.md",
+        "3-58-verification-handoff-checkpoints.md",
+        "3-60-safe-backlog-report-anchors.md",
+    ]
+    assert len(verification_item["sourceEvidenceLabels"]) == len(set(verification_item["sourceEvidenceLabels"]))
+    assert verification_item["relatedReports"] == [
+        "GET /supervisor/verification-readiness-report",
+        "GET /supervisor/dashboard-e2e-report",
+    ]
+    assert verification_item["dashboardAnchors"] == [
+        "/controls#verification-readiness-report",
+        "/controls#dashboard-e2e-report",
+        "/controls#supervisor-report-catalog",
+        "/controls#development-runway-report",
+    ]
     github_item = next(item for item in report["items"] if item["itemId"] == "github-delivery-hygiene")
     assert github_item["recommendedSliceSize"] == "large"
     assert "GET /supervisor/github-workflow-policy-report" in github_item["relatedReports"]

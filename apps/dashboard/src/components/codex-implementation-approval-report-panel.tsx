@@ -31,8 +31,11 @@ function RequirementCard({ requirement }: { requirement: CodexImplementationAppr
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{requirement.summary}</p>
       <div className="mt-3 space-y-2">
-        {requirement.evidence.map((evidence) => (
-          <p key={evidence} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+        {requirement.evidence.map((evidence, evidenceIndex) => (
+          <p
+            key={`${requirement.requirementId}:evidence:${evidence}:${evidenceIndex}`}
+            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
+          >
             {evidence}
           </p>
         ))}
@@ -46,9 +49,9 @@ function ListPanel({ title, items, tone = "muted" }: { title: string; items: str
     <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
       <h4 className="text-base font-semibold">{title}</h4>
       <div className="mt-3 space-y-2">
-        {items.map((item) => (
+        {items.map((item, index) => (
           <p
-            key={item}
+            key={`${title}:${item}:${index}`}
             className={`rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 ${
               tone === "warn" ? "text-[var(--warn)]" : "text-[var(--muted)]"
             }`}

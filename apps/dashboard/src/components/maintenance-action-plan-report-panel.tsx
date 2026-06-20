@@ -22,8 +22,8 @@ function StepCard({ step }: { step: MaintenanceActionPlanStepView }) {
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{step.summary}</p>
 
       <div className="mt-3 grid gap-2">
-        {step.evidence.map((item) => (
-          <p key={item} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        {step.evidence.map((item, itemIndex) => (
+          <p key={`${step.stepId}:evidence:${item}:${itemIndex}`} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
             {item}
           </p>
         ))}
@@ -32,8 +32,8 @@ function StepCard({ step }: { step: MaintenanceActionPlanStepView }) {
       <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Verification</p>
         <div className="mt-2 flex flex-wrap gap-2">
-          {step.verificationCommands.map((command) => (
-            <span key={command} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+          {step.verificationCommands.map((command, commandIndex) => (
+            <span key={`${step.stepId}:verification:${command}:${commandIndex}`} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
               {command}
             </span>
           ))}
@@ -41,8 +41,8 @@ function StepCard({ step }: { step: MaintenanceActionPlanStepView }) {
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {step.dashboardAnchors.map((anchor) => (
-          <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
+        {step.dashboardAnchors.map((anchor, anchorIndex) => (
+          <Link key={`${step.stepId}:anchor:${anchor}:${anchorIndex}`} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">
             {anchor}
           </Link>
         ))}
@@ -51,9 +51,9 @@ function StepCard({ step }: { step: MaintenanceActionPlanStepView }) {
       <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
         <div className="mt-2 grid gap-2">
-          {step.relatedReports.map((report) => (
+          {step.relatedReports.map((report, reportIndex) => (
             <Link
-              key={report}
+              key={`${step.stepId}:report:${report}:${reportIndex}`}
               href={reportShortcutHref(report)}
               className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
@@ -66,8 +66,11 @@ function StepCard({ step }: { step: MaintenanceActionPlanStepView }) {
       <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
         <div className="mt-2 grid gap-2">
-          {step.relatedDocs.map((doc) => (
-            <span key={doc} className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+          {step.relatedDocs.map((doc, docIndex) => (
+            <span
+              key={`${step.stepId}:doc:${doc}:${docIndex}`}
+              className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+            >
               {doc}
             </span>
           ))}
@@ -122,8 +125,8 @@ export function MaintenanceActionPlanReportPanel({ report }: { report: Maintenan
           <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Verification chain</h4>
             <div className="mt-3 flex flex-wrap gap-2">
-              {report.verificationChain.map((command) => (
-                <span key={command} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+              {report.verificationChain.map((command, commandIndex) => (
+                <span key={`verification-chain:${command}:${commandIndex}`} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
                   {command}
                 </span>
               ))}

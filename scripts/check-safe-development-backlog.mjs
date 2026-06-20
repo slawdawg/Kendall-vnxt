@@ -20,6 +20,7 @@ const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/s
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main.py");
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
+const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
 const backlogPanel = readWorkspaceFile("apps/dashboard/src/components/safe-development-backlog-panel.tsx");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
@@ -28,6 +29,61 @@ const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-bou
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
 
 const failures = [];
+
+const verificationEvidenceLabels = [
+  "3-27-safe-development-backlog-report.md",
+  "3-32-safe-development-backlog-drift-check.md",
+  "3-47-core-readiness-drift-checks.md",
+  "3-56-verification-execution-plan-groups.md",
+  "3-58-verification-handoff-checkpoints.md",
+  "3-60-safe-backlog-report-anchors.md",
+];
+const verificationRelatedReports = ["GET /supervisor/verification-readiness-report", "GET /supervisor/dashboard-e2e-report"];
+const verificationRelatedDocs = ["docs/workflows/implementation-evidence-boundary.md"];
+const verificationDashboardAnchors = [
+  "/controls#verification-readiness-report",
+  "/controls#dashboard-e2e-report",
+  "/controls#supervisor-report-catalog",
+  "/controls#development-runway-report",
+];
+const reportAnchorExpectations = {
+  "GET /supervisor/verification-readiness-report": "#verification-readiness-report",
+  "GET /supervisor/dashboard-e2e-report": "#dashboard-e2e-report",
+};
+
+const verificationItemMatch = serviceSource.match(
+  /SafeDevelopmentBacklogItemView\(\s*itemId="verification-surface-hardening"[\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/,
+);
+const verificationItemSource = verificationItemMatch?.[0] ?? "";
+
+function countOccurrences(source, text) {
+  return source.split(text).length - 1;
+}
+
+function extractPythonStringList(source, fieldName) {
+  const match = source.match(new RegExp(`${fieldName}=\\[([\\s\\S]*?)\\],`));
+  if (!match) {
+    return [];
+  }
+  return Array.from(match[1].matchAll(/"([^"]+)"/g), (item) => item[1]);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function reportShortcutAnchor(report) {
+  const match = reportShortcuts.match(new RegExp(`"${escapeRegExp(report)}"\\s*:\\s*"([^"]+)"`));
+  return match?.[1] ?? "";
+}
+
+function assertExactList(actual, expected, label) {
+  assertCondition(
+    actual.length === expected.length && actual.every((value, index) => value === expected[index]),
+    `${label} must exactly match ${JSON.stringify(expected)} but found ${JSON.stringify(actual)}`,
+    failures,
+  );
+}
 
 assertCondition(
   packageJson.scripts?.["check:safe-backlog"] === "node ./scripts/check-safe-development-backlog.mjs",
@@ -72,6 +128,107 @@ for (const itemId of [
   assertCondition(supervisorTests.includes(`"${itemId}"`), `Supervisor tests must assert item ${itemId}`, failures);
 }
 
+assertCondition(
+  verificationItemSource.includes('itemId="verification-surface-hardening"'),
+  "Safe backlog service must expose the verification-surface-hardening item block",
+  failures,
+);
+assertCondition(
+  contractSource.includes("sourceEvidenceLabels?: string[]"),
+  "Shared contracts must include optional sourceEvidenceLabels for safe backlog items",
+  failures,
+);
+assertCondition(
+  schemaSource.includes("sourceEvidenceLabels: list[str] = Field(default_factory=list)"),
+  "Supervisor schemas must default sourceEvidenceLabels to an empty list",
+  failures,
+);
+assertCondition(
+  backlogPanel.includes("sourceEvidenceLabels") && backlogPanel.includes("Source evidence labels") && backlogPanel.includes("Related docs"),
+  "Safe backlog panel must render source evidence labels and related docs",
+  failures,
+);
+
+const parsedVerificationLabels = extractPythonStringList(verificationItemSource, "sourceEvidenceLabels");
+const parsedVerificationReports = extractPythonStringList(verificationItemSource, "relatedReports");
+const parsedVerificationDocs = extractPythonStringList(verificationItemSource, "relatedDocs");
+const parsedVerificationAnchors = extractPythonStringList(verificationItemSource, "dashboardAnchors");
+const safeBacklogItemSources = Array.from(
+  serviceSource.matchAll(/SafeDevelopmentBacklogItemView\([\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/g),
+  (match) => match[0],
+);
+const safeBacklogRelatedReports = Array.from(
+  new Set(safeBacklogItemSources.flatMap((itemSource) => extractPythonStringList(itemSource, "relatedReports"))),
+);
+
+assertExactList(parsedVerificationLabels, verificationEvidenceLabels, "Verification source evidence labels");
+assertExactList(parsedVerificationReports, verificationRelatedReports, "Verification related reports");
+assertExactList(parsedVerificationDocs, verificationRelatedDocs, "Verification related docs");
+assertExactList(parsedVerificationAnchors, verificationDashboardAnchors, "Verification dashboard anchors");
+assertCondition(
+  new Set(parsedVerificationLabels).size === parsedVerificationLabels.length,
+  "Verification source evidence labels must not contain duplicates",
+  failures,
+);
+assertCondition(
+  new Set(parsedVerificationDocs).size === parsedVerificationDocs.length,
+  "Verification related docs must not contain duplicates",
+  failures,
+);
+assertCondition(
+  parsedVerificationLabels.every((label) => storyIndex.includes(label)),
+  "Verification source evidence labels must all exist in implementation-evidence-boundary.md",
+  failures,
+);
+
+for (const label of verificationEvidenceLabels) {
+  assertCondition(storyIndex.includes(label), `Implementation evidence boundary must include verification source label ${label}`, failures);
+  assertCondition(verificationItemSource.includes(`"${label}"`), `Verification safe backlog item must include source label ${label}`, failures);
+  assertCondition(supervisorTests.includes(`"${label}"`), `Supervisor tests must assert verification source label ${label}`, failures);
+  assertCondition(controlsSpec.includes(label), `Controls e2e must assert verification source label ${label}`, failures);
+}
+
+for (const doc of verificationRelatedDocs) {
+  assertCondition(verificationItemSource.includes(`"${doc}"`), `Verification safe backlog item must include related doc ${doc}`, failures);
+  assertCondition(
+    countOccurrences(verificationItemSource, `"${doc}"`) === 1,
+    `Verification safe backlog item must include related doc ${doc} exactly once`,
+    failures,
+  );
+  assertCondition(supervisorTests.includes(`"${doc}"`), `Supervisor tests must assert verification related doc ${doc}`, failures);
+  assertCondition(controlsSpec.includes(doc), `Controls e2e must assert verification related doc ${doc}`, failures);
+}
+
+for (const report of verificationRelatedReports) {
+  assertCondition(verificationItemSource.includes(`"${report}"`), `Verification safe backlog item must include related report ${report}`, failures);
+  assertCondition(
+    reportShortcuts.includes(`"${report}": "${reportAnchorExpectations[report]}"`),
+    `Report shortcuts must map ${report} to ${reportAnchorExpectations[report]}`,
+    failures,
+  );
+  assertCondition(controlsSpec.includes(report), `Controls e2e must assert verification report link ${report}`, failures);
+}
+
+for (const report of safeBacklogRelatedReports) {
+  const shortcutAnchor = reportShortcutAnchor(report);
+  assertCondition(
+    shortcutAnchor.length > 0 && (report === "GET /supervisor/report-catalog" || shortcutAnchor !== "#supervisor-report-catalog"),
+    `Safe backlog related report ${report} must have an explicit dashboard shortcut instead of falling back to the report catalog`,
+    failures,
+  );
+}
+
+for (const anchor of verificationDashboardAnchors) {
+  assertCondition(verificationItemSource.includes(`"${anchor}"`), `Verification safe backlog item must include dashboard anchor ${anchor}`, failures);
+  assertCondition(controlsSpec.includes(anchor), `Controls e2e must assert verification dashboard anchor ${anchor}`, failures);
+}
+
+assertCondition(
+  verificationEvidenceLabels.every((label) => countOccurrences(verificationItemSource, `"${label}"`) === 1),
+  "Verification source evidence labels must be unique in the service item",
+  failures,
+);
+
 for (const safetyText of [
   "blocked_pending_explicit_approval",
   "do_not_start",
@@ -88,7 +245,18 @@ for (const safetyText of [
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
 
-for (const panelText of ["recommendedSliceSize", "blockedBy", "dashboardAnchors", "reportShortcutHref", "Related report links", "nextSafeActions", "stopLines"]) {
+for (const panelText of [
+  "recommendedSliceSize",
+  "blockedBy",
+  "dashboardAnchors",
+  "sourceEvidenceLabels",
+  "Source evidence labels",
+  "Related docs",
+  "reportShortcutHref",
+  "Related report links",
+  "nextSafeActions",
+  "stopLines",
+]) {
   assertCondition(backlogPanel.includes(panelText), `Safe backlog panel must render ${panelText}`, failures);
 }
 
@@ -96,8 +264,12 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Related report links",
+  "Source evidence labels",
+  "Related docs",
   "/controls#github-workflow-policy-report",
   "Verification surface hardening",
+  "3-27-safe-development-backlog-report.md",
+  "Verification surface hardening is read-only planning guidance, not execution-authority approval.",
   "GitHub delivery hygiene",
   "persistent plaintext gh token storage",
   "Execution-authority stories",

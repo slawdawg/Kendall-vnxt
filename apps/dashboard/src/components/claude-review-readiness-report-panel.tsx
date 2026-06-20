@@ -26,8 +26,11 @@ function CheckCard({ check }: { check: ClaudeReadinessCheckView }) {
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{check.summary}</p>
       <div className="mt-3 space-y-2">
-        {check.evidence.map((evidence) => (
-          <p key={evidence} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+        {check.evidence.map((evidence, evidenceIndex) => (
+          <p
+            key={`${check.checkId}:evidence:${evidence}:${evidenceIndex}`}
+            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
+          >
             {evidence}
           </p>
         ))}
@@ -41,8 +44,8 @@ function ListPanel({ title, items, warn = false }: { title: string; items: strin
     <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
       <h4 className="text-base font-semibold">{title}</h4>
       <div className="mt-3 space-y-2">
-        {items.map((item) => (
-          <p key={item} className={`rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 ${warn ? "text-[var(--warn)]" : "text-[var(--muted)]"}`}>
+        {items.map((item, index) => (
+          <p key={`${title}:${item}:${index}`} className={`rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 ${warn ? "text-[var(--warn)]" : "text-[var(--muted)]"}`}>
             {item}
           </p>
         ))}
