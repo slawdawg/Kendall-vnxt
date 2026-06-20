@@ -126,6 +126,16 @@ durable, milestone-driven workflow rather than a single unbounded task.
   secrets, or retention policy. Approvals must name the authority family,
   operation, scope, and evidence. Generic "continue" language does not approve
   new authority.
+- When an active long-running goal explicitly includes GitHub delivery actions,
+  such as committing local changes, pushing the task branch, opening a PR,
+  monitoring checks, merging the PR after checks are green, deleting the remote
+  branch, or cleaning up the managed workspace, treat that goal text as the
+  operator's standing approval for those named GitHub delivery operations within
+  the current lane. This standing approval does not authorize unrelated
+  repositories, unrelated branches, bypassing failed checks, force-push,
+  destructive history rewrites, secret access, provider calls, cleanup outside
+  the managed workspace, or expanding delivery beyond the reviewed lane scope.
+  Record each delivery action and its evidence as part of the goal.
 - Use progressive authority for all automation: document intent and stop lines,
   add contracts first, preview/report, use fake adapters, dry-run real tools,
   move to read-only real integration, then bounded write integration, then

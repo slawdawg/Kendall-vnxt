@@ -95,6 +95,7 @@ The following implementation evidence labels are source-owned anchors for runtim
 - `12-2-record-post-merge-delivery-and-cleanup-evidence.md`
 - `13-1-define-adaptive-scoring-decision-support-contract.md`
 - `14-1-refresh-local-provider-execution-approval-packet.md`
+- `14-2-pin-local-provider-approval-packet-to-drift-checks.md`
 - `14-3-implement-bounded-local-ollama-provider-runtime.md`
 - `15-1-refresh-premium-execution-approval-packet.md`
 - `16-3-implement-bounded-subscription-agent-supervised-runtime.md`
