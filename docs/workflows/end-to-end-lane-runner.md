@@ -1,0 +1,176 @@
+# End-to-End Lane Runner
+
+Date: 2026-06-21
+Status: active guidance
+
+## Purpose
+
+Give the operator a short way to delegate a complete development lane while
+preserving source boundaries, evidence, and approval safety. Use this workflow
+when the operator wants to focus on ideas and features while Codex carries the
+lane through research, planning, implementation, review, PR delivery, merge,
+and local cleanup.
+
+## Trigger Phrases
+
+Treat these as an end-to-end lane request:
+
+```text
+run end-to-end lane: <objective>
+develop this through merge and cleanup: <objective>
+see this lane through end to end: <objective>
+```
+
+If the objective is clear enough to start safely, do not stop for ceremony.
+Ask at most one concise question when the product goal, repository, base
+branch, or PR-versus-experiment mode is ambiguous.
+
+## Default Authority Profile
+
+The default profile is `standard-delivery`.
+
+It authorizes, for the named lane only:
+
+- Create or resume a managed Codex worktree.
+- Read source, docs, local planning state, and current external PR/check state.
+- Run bounded research using primary or official sources when the decision
+  depends on current tool, API, or ecosystem behavior.
+- Use BMAD workflows, agents, code review, and party mode when the lane benefits
+  from requirements, architecture, QA, or multi-perspective review.
+- Create local BMAD planning artifacts under ignored local output folders.
+- Rewrite durable decisions from local planning into source-owned docs, tests,
+  scripts, or policy.
+- Edit source, docs, tests, scripts, and workflow contracts within the lane.
+- Run scoped verification, then broader checks when the changed surface
+  requires it.
+- Commit, push, open or update the lane PR, and address review or CI feedback.
+- Merge low-risk PRs when the merge evidence checklist is satisfied.
+- Clean up the merged local worktree and local lane branch after a valid dry
+  run names only expected lane resources.
+
+It does not authorize unrelated repositories, unrelated branches, force-push,
+history rewrites, secret access, provider spending, production deploys,
+database or schema migration execution, cleanup outside the managed lane, or
+remote branch deletion unless the operator explicitly grants that authority.
+
+## Lane Lifecycle
+
+1. **Start or resume lane.** Use `node ./scripts/codex-workspace.mjs` as the
+   lifecycle authority. Record the worktree, branch, base, PR mode, and current
+   status.
+2. **Discover.** Inspect the smallest relevant docs and source first. Expand
+   only when the objective crosses a product, architecture, safety, or external
+   behavior boundary.
+3. **Plan only as needed.** Use the matching BMAD skill for PRDs, epics,
+   stories, architecture, UX, QA, research, party mode, or code review when the
+   work benefits from that method. Keep generated BMAD work products local.
+4. **Implement.** Make scoped source-owned changes. Prefer existing repository
+   patterns over new abstractions.
+5. **Review.** Route implemented code changes through `bmad-code-review` when a
+   review is requested or when the lane changes behavior, automation, or
+   shared contracts.
+6. **Verify.** Run the smallest meaningful check first, then broaden when the
+   touched surface crosses packages, APIs, workflows, or user-facing behavior.
+7. **Deliver PR.** Commit intended files, push the lane branch, open or update
+   the PR, and monitor checks and review state.
+8. **Merge.** Merge only when the low-risk checklist is proven for the exact
+   head SHA or when an explicit higher-risk approval covers the residual risk.
+9. **Cleanup.** Run `cleanup-merged` as a dry run. Apply cleanup only when the
+   dry-run output names the expected worktree and local branch.
+
+## Low-Risk Merge Checklist
+
+Merge under `standard-delivery` only when current evidence proves all of these:
+
+- The PR belongs to the current lane and targets the expected base branch.
+- The PR is not a draft.
+- The PR is mergeable at the exact reviewed head SHA.
+- Required and reported checks for that exact head are successful or
+  intentionally skipped.
+- Review threads are resolved and there are no requested changes or pending
+  review requests.
+- Local verification has completed for the changed surface.
+- The changed-file list avoids high-blast-radius surfaces.
+- A rollback or revert path is known.
+
+If any evidence source is stale, unavailable, ambiguous, failing, or too narrow
+for the changed surface, do not classify the merge as low risk.
+
+## High-Risk Surfaces
+
+These surfaces are not automatically covered by `standard-delivery`:
+
+- Secrets, credentials, tokens, or authentication state.
+- Provider calls, paid execution, model selection, or budget changes.
+- Worker or process launch.
+- Production deploys or release automation.
+- Database, schema, migration, or retention changes.
+- GitHub Actions or automation with write permissions.
+- Review-thread mutation, branch protection changes, or merge automation.
+- Destructive cleanup outside the managed lane.
+- Broad policy expansion or evidence-retention changes.
+
+## Risk-Reduction Pass
+
+Do not stop immediately when a high-risk surface appears. First attempt bounded
+mitigation that can lower the residual risk without expanding authority.
+
+Use controls such as:
+
+- Split broad diffs into smaller PRs.
+- Add exact-head checks before mutating PR or merge state.
+- Add explicit labels, actor checks, allowlists, or narrow trigger conditions.
+- Reduce GitHub workflow permissions to the smallest necessary scope.
+- Use dry-run modes before write actions.
+- Use fake adapters, fixtures, or replay before provider or worker execution.
+- Add budget caps and explicit provider/model configuration before any paid
+  path.
+- Add tests, static drift checks, or verification scripts for new contracts.
+- Require clean-worktree, merged-PR, exact branch, and path-allowlist evidence
+  before cleanup.
+- Record rollback, revert, resume, retry, and inspection paths.
+
+After mitigation, reassess residual risk. Continue only if the result satisfies
+the active authority profile. Ask the operator only when residual risk still
+crosses the approval threshold or mitigation itself needs new authority.
+
+## Operator Interruptions
+
+Interrupt the operator only for:
+
+- Product or UX decisions that cannot be inferred safely.
+- Approval for residual high-risk authority.
+- Failed verification that cannot be fixed within the lane.
+- Scope expansion beyond the named objective.
+- Scarce paid, review, or runtime resources.
+- Unsafe behavior, missing credentials, or external-state blockers.
+
+Routine mechanics, command selection, context reads, local planning, test
+selection, PR updates, and low-risk cleanup should continue without operator
+attention while leaving concise evidence.
+
+## Evidence Packet
+
+For each completed lane, preserve or report:
+
+```text
+End-to-End Lane Evidence
+- Objective:
+- Authority profile:
+- Worktree:
+- Branch:
+- PR:
+- Planning/review methods used:
+- Changed-file list:
+- Verification commands and results:
+- PR head SHA:
+- Check/review state:
+- Merge method and result:
+- Cleanup dry-run:
+- Cleanup result:
+- Residual risks or follow-ups:
+```
+
+Do not retain raw prompts, completions, reasoning traces, provider payloads,
+secrets, or unnecessary source copies unless the operator explicitly approves
+that retention.
