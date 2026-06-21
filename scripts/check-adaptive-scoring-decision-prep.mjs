@@ -56,6 +56,12 @@ const runbookCheck = readWorkspaceFile("scripts/check-runbook-verification.mjs")
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const readme = readWorkspaceFile("README.md");
 const currentRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
+const runbookCheckUsesPackageInventory =
+  runbookCheck.includes("activeCheckCommands") &&
+  runbookCheck.includes('extractCheckCommands(packageJson.scripts?.["check:static"])') &&
+  runbookCheck.includes("extractCheckCommands(packageJson.scripts?.check)") &&
+  runbookCheck.includes("for (const command of activeCheckCommands)") &&
+  runbookCheck.includes("mentionsCommand(content, command)");
 
 const failures = [];
 
@@ -154,13 +160,17 @@ for (const testText of [
 
 for (const fileText of [
   [verificationCheck, "check-adaptive-scoring", "verification readiness drift check"],
-  [runbookCheck, "pnpm run check:adaptive-scoring", "runbook drift check"],
   [controlsSpec, "pnpm run check:adaptive-scoring", "controls e2e"],
   [readme, "pnpm run check:adaptive-scoring", "README"],
   [currentRunbook, "pnpm run check:adaptive-scoring", "current session runbook"],
 ]) {
   assertCondition(fileText[0].includes(fileText[1]), `${fileText[2]} must include ${fileText[1]}`, failures);
 }
+assertCondition(
+  runbookCheckUsesPackageInventory,
+  "runbook drift check must derive active check commands from package.json aggregate scripts",
+  failures,
+);
 
 const forbiddenRuntimeMarkers = [
   "adaptiveScoringEnabled",

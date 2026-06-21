@@ -48,6 +48,8 @@ verification, `pnpm run check:runtime-export`, `pnpm run check:runtime-review`,
 `pnpm run check:maintenance-action-plan`, `pnpm run check:development-runway`,
 `pnpm run check:delivery-readiness`, `pnpm run check:github-workflow-policy`,
 `pnpm run check:cleanup-automation`,
-`pnpm run check:linux-install-lane`, `pnpm run check:clean-install-boundary`,
-`pnpm run check:maintenance-readiness`, dashboard build verification, and
+`pnpm run check:maintenance-readiness`, `pnpm run check:token-economy`,
+`pnpm run check:workspace-coordination`, `pnpm run check:mise-workflow`,
+`pnpm run check:linux-install-lane`, `pnpm run check:bmad-work-products`,
+`pnpm run check:clean-install-boundary`, dashboard build verification, and
 supervisor integration tests.

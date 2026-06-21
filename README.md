@@ -114,13 +114,15 @@ embed them in bootstrap scripts.
 
 ## Developer Checks
 
-- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, adaptive scoring decision-prep drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, GitHub workflow policy drift checks, clean-install boundary checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
+- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, adaptive scoring decision-prep drift checks, premium execution policy drift checks, worker launch policy drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, GitHub workflow policy drift checks, cleanup automation policy drift checks, maintenance readiness drift checks, token economy drift checks, workspace coordination drift checks, mise workflow drift checks, Linux install lane checks, BMAD work product boundary checks, clean-install boundary checks, dashboard build, and supervisor integration tests
 - `pnpm run check:linux-bootstrap` verifies the Linux bootstrap contract, shell syntax, install docs, and focused bootstrap tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - `pnpm run check:documentation-authority` verifies documentation authority report contract/schema/service/dashboard/story alignment
 - `pnpm run check:verification-readiness` verifies verification readiness report contract/schema/service/dashboard/story alignment
 - `pnpm run check:authority-readiness` verifies authority readiness matrix contract/schema/service/dashboard/story alignment
 - `pnpm run check:adaptive-scoring` verifies the adaptive scoring decision-prep package and runtime tripwires without enabling scoring
+- `pnpm run check:premium-execution` verifies premium execution approval-packet boundaries without enabling paid provider execution
+- `pnpm run check:worker-launch` verifies real CLI worker-launch approval-packet boundaries without enabling process launch
 - `pnpm run check:e2e-report` verifies dashboard e2e runner/report/browser/story alignment
 - `pnpm run check:reports` verifies supervisor report catalog route/runtime/dashboard/story alignment
 - `pnpm run check:execution-boundary` verifies execution configuration/readiness/threat-boundary route/service/dashboard/story alignment
@@ -136,9 +138,14 @@ embed them in bootstrap scripts.
 - `pnpm run check:development-runway` verifies development runway contract/schema/service/dashboard/story/runbook alignment for larger PR-sized safe slices
 - `pnpm run check:delivery-readiness` verifies delivery readiness policy contract/schema/service/dashboard/story alignment
 - `pnpm run check:github-workflow-policy` verifies Git/GCM, Codex connector, optional gh auth, connector probe, and plaintext-token stop-line alignment
-- `pnpm run check:linux-install-lane` verifies the delivered Linux install package, docs, and unsupported Windows/remote-install boundary
-- `pnpm run check:clean-install-boundary` rejects tracked local-only BMAD/runtime/secret/unsupported Windows or WSL install artifacts
+- `pnpm run check:cleanup-automation` verifies cleanup automation approval-packet boundaries without deleting worktrees, branches, refs, or evidence
 - `pnpm run check:maintenance-readiness` verifies maintenance readiness contract/schema/service/dashboard/story alignment
+- `pnpm run check:token-economy` verifies token economy workflow and measurement evidence alignment
+- `pnpm run check:workspace-coordination` verifies managed-worktree coordination evidence and cleanup approval boundaries
+- `pnpm run check:mise-workflow` verifies the mise-managed normal workflow evidence
+- `pnpm run check:linux-install-lane` verifies the delivered Linux install package, docs, and unsupported Windows/remote-install boundary
+- `pnpm run check:bmad-work-products` verifies generated BMAD work products stay outside the Git-tracked clean-install surface
+- `pnpm run check:clean-install-boundary` rejects tracked local-only BMAD/runtime/secret/unsupported Windows or WSL install artifacts
 - `pnpm run test:supervisor` runs supervisor tests through a repo-local uv cache wrapper
 - `pnpm run test:e2e:dashboard` runs browser coverage for intake drafts, workflow actions, and detail navigation
 - `pnpm run test:e2e:dashboard:controls` runs the focused controls-page browser slice with repo-local Playwright cache defaults

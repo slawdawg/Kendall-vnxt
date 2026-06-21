@@ -194,8 +194,12 @@ assertCondition(
   failures,
 );
 assertCondition(
-  runbookCheck.includes("pnpm run check:development-runway"),
-  "Runbook drift check must require check:development-runway in operator runbooks",
+  runbookCheck.includes("activeCheckCommands") &&
+    runbookCheck.includes('extractCheckCommands(packageJson.scripts?.["check:static"])') &&
+    runbookCheck.includes("extractCheckCommands(packageJson.scripts?.check)") &&
+    runbookCheck.includes("for (const command of activeCheckCommands)") &&
+    runbookCheck.includes("mentionsCommand(content, command)"),
+  "Runbook drift check must derive active check commands from package.json aggregate scripts",
   failures,
 );
 assertCondition(

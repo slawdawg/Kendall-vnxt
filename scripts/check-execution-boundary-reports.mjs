@@ -165,8 +165,12 @@ assertCondition(
   failures,
 );
 assertCondition(
-  runbookCheck.includes("pnpm run check:execution-boundary"),
-  "Runbook drift check must require pnpm run check:execution-boundary",
+  runbookCheck.includes("activeCheckCommands") &&
+    runbookCheck.includes('extractCheckCommands(packageJson.scripts?.["check:static"])') &&
+    runbookCheck.includes("extractCheckCommands(packageJson.scripts?.check)") &&
+    runbookCheck.includes("for (const command of activeCheckCommands)") &&
+    runbookCheck.includes("mentionsCommand(content, command)"),
+  "Runbook drift check must derive active check commands from package.json aggregate scripts",
   failures,
 );
 assertCondition(
