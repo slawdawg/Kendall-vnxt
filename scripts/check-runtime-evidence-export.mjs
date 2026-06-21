@@ -373,6 +373,21 @@ for (const itemId of ["review-runtime-state", "review-authority-boundary", "revi
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Runtime export must include navigator item ${itemId}`, failures);
   assertCondition(supervisorTests.includes(`"${itemId}"`), `Supervisor tests must assert navigator item ${itemId}`, failures);
 }
+for (const crossCheckText of [
+  "RuntimeEvidenceCrossCheckView",
+  "_runtime_evidence_cross_checks",
+  "Review index",
+  "Authority boundary",
+  "Documentation authority",
+  "Development runway",
+  "crossChecks=cross_checks",
+]) {
+  assertCondition(serviceSource.includes(crossCheckText), `Runtime evidence service must define cross-check evidence ${crossCheckText}`, failures);
+}
+for (const contractText of ["RuntimeEvidenceCrossCheckView", "crossChecks: RuntimeEvidenceCrossCheckView[]"]) {
+  assertCondition(contractSource.includes(contractText), `Contracts must expose runtime evidence cross-check field ${contractText}`, failures);
+  assertCondition(schemaSource.includes(contractText.replace(": RuntimeEvidenceCrossCheckView[]", ": list[RuntimeEvidenceCrossCheckView]")), `Schemas must expose runtime evidence cross-check field ${contractText}`, failures);
+}
 assertCondition(
   serviceSource.includes('itemId="review-ollama-no-call-prep"'),
   "Runtime export must include Ollama no-call preparation navigator item",
@@ -416,6 +431,9 @@ for (const panelText of [
   "Review navigator",
   "exportView.reviewNavigator.map",
   "item.label",
+  "item.crossChecks ?? []",
+  "crossCheck.dashboardAnchor",
+  "crossCheck.relatedDoc",
   "item.stopLines",
   "reportShortcutHref(report)",
   "Subscription launch evidence",
@@ -427,7 +445,7 @@ for (const panelText of [
   assertCondition(exportPanel.includes(panelText), `Runtime evidence export panel must render ${panelText}`, failures);
 }
 
-for (const panelText of ["Review shortcuts", "runtimeEvidenceExport.reviewNavigator", "item.target", "item.itemId", "reportShortcutHref(report)"]) {
+for (const panelText of ["Review shortcuts", "Cross-check path", "runtimeEvidenceExport.reviewNavigator", "item.target", "item.itemId", "item.crossChecks ?? []", "item.relatedDoc", "reportShortcutHref(item.report)", "reportShortcutHref(report)"]) {
   assertCondition(overviewPanel.includes(panelText), `Evidence overview panel must render ${panelText}`, failures);
 }
 
@@ -481,6 +499,10 @@ for (const shortcutText of [
 
 for (const panelText of ["Review navigator", "Runtime state", "Authority boundary", "Git-backed evidence"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert ${panelText}`, failures);
+}
+
+for (const panelText of ["Cross-check path", "Documentation authority", "Confirm review work does not grant execution"]) {
+  assertCondition(detailSpec.includes(panelText), `Dashboard e2e must assert runtime evidence cross-check ${panelText}`, failures);
 }
 
 for (const panelText of ["/controls#execution-readiness-report", "/controls#safe-development-backlog"]) {

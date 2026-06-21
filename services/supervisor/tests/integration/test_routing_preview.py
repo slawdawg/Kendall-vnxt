@@ -1992,6 +1992,16 @@ def test_runtime_evidence_review_report_indexes_work_item_exports_without_mutati
     assert "GET /supervisor/runtime-evidence-review-report" in report["relatedReports"]
     assert "docs/workflows/implementation-evidence-boundary.md" in report["relatedDocs"]
     assert "/controls#runtime-evidence-review-report" in report["dashboardAnchors"]
+    assert {item["label"] for item in report["crossChecks"]} == {
+        "Review index",
+        "Authority boundary",
+        "Documentation authority",
+        "Development runway",
+    }
+    authority_cross_check = next(item for item in report["crossChecks"] if item["label"] == "Authority boundary")
+    assert authority_cross_check["report"] == "GET /supervisor/execution-readiness-report"
+    assert authority_cross_check["dashboardAnchor"] == "/controls#execution-readiness-report"
+    assert authority_cross_check["relatedDoc"] == "docs/workflows/execution-authority-boundary.md"
     assert "reviewQueue" in report
     assert report["reviewQueue"]
     review_item = next(item for item in report["workItems"] if item["workItemId"] == work_item_id)
@@ -4427,6 +4437,13 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     authority_item = next(item for item in export["reviewNavigator"] if item["itemId"] == "review-authority-boundary")
     assert authority_item["priority"] == "P0"
     assert "GET /supervisor/threat-boundary" in authority_item["relatedReports"]
+    assert {item["label"] for item in authority_item["crossChecks"]} == {
+        "Review index",
+        "Authority boundary",
+        "Documentation authority",
+        "Development runway",
+    }
+    assert any(item["dashboardAnchor"] == "/controls#documentation-authority-report" for item in authority_item["crossChecks"])
     assert any("not execution-authority approval" in stop_line for stop_line in authority_item["stopLines"])
     ollama_item = next(item for item in export["reviewNavigator"] if item["itemId"] == "review-ollama-no-call-prep")
     assert "GET /supervisor/disabled-provider-proofs" in ollama_item["relatedReports"]

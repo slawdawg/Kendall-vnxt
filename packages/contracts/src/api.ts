@@ -1099,6 +1099,7 @@ export interface RuntimeEvidenceReviewReportView {
   summary: string;
   workItems: RuntimeEvidenceReviewWorkItemView[];
   reviewQueue: RuntimeEvidenceReviewWorkItemView[];
+  crossChecks: RuntimeEvidenceCrossCheckView[];
   relatedReports: string[];
   relatedDocs: string[];
   dashboardAnchors: string[];
@@ -1956,6 +1957,14 @@ export interface RuntimeEvidenceReviewManifestView {
   executionAuthorityApproved: boolean;
 }
 
+export interface RuntimeEvidenceCrossCheckView {
+  label: string;
+  report: string;
+  dashboardAnchor: string;
+  relatedDoc: string;
+  reason: string;
+}
+
 export interface RuntimeEvidenceReviewNavigatorItemView {
   itemId: string;
   label: string;
@@ -1967,6 +1976,7 @@ export interface RuntimeEvidenceReviewNavigatorItemView {
   relatedDocs: string[];
   dashboardAnchors: string[];
   stopLines: string[];
+  crossChecks: RuntimeEvidenceCrossCheckView[];
 }
 
 export interface RuntimeEvidenceSubscriptionLaunchView {

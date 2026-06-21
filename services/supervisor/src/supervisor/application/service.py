@@ -106,6 +106,7 @@ from supervisor.api.schemas import (
     RemoteCleanupSyncPolicyItemView,
     RemoteCleanupSyncReadinessReportView,
     RuntimeEvidenceExportBoundaryView,
+    RuntimeEvidenceCrossCheckView,
     RuntimeEvidenceReviewManifestView,
     RuntimeEvidenceReviewNavigatorItemView,
     RuntimeEvidenceReviewReportView,
@@ -6450,8 +6451,41 @@ class SupervisorService:
         )
         return [self._to_execution_attempt_view(attempt) for attempt in result.scalars()]
 
+    def _runtime_evidence_cross_checks(self) -> list[RuntimeEvidenceCrossCheckView]:
+        return [
+            RuntimeEvidenceCrossCheckView(
+                label="Review index",
+                report="GET /supervisor/runtime-evidence-review-report",
+                dashboardAnchor="/controls#runtime-evidence-review-report",
+                relatedDoc="docs/workflows/implementation-evidence-boundary.md",
+                reason="Confirm the work item is indexed before changing workflow state.",
+            ),
+            RuntimeEvidenceCrossCheckView(
+                label="Authority boundary",
+                report="GET /supervisor/execution-readiness-report",
+                dashboardAnchor="/controls#execution-readiness-report",
+                relatedDoc="docs/workflows/execution-authority-boundary.md",
+                reason="Confirm review work does not grant execution, provider, command, network, or credential authority.",
+            ),
+            RuntimeEvidenceCrossCheckView(
+                label="Documentation authority",
+                report="GET /supervisor/documentation-authority-report",
+                dashboardAnchor="/controls#documentation-authority-report",
+                relatedDoc="docs/workflows/product-requirements-boundary.md",
+                reason="Confirm planning or approval documents are evidence only unless explicit approval is recorded.",
+            ),
+            RuntimeEvidenceCrossCheckView(
+                label="Development runway",
+                report="GET /supervisor/development-runway-report",
+                dashboardAnchor="/controls#development-runway-report",
+                relatedDoc="docs/workflows/implementation-evidence-boundary.md",
+                reason="Confirm the next work stays inside a ready read-only evidence or report-navigation slice.",
+            ),
+        ]
+
     async def get_runtime_evidence_review_report(self, session: AsyncSession) -> RuntimeEvidenceReviewReportView:
         items = await self.list_work_items(session)
+        cross_checks = self._runtime_evidence_cross_checks()
         related_reports = [
             "GET /work-items/{id}/runtime-evidence-export",
             "GET /supervisor/runtime-evidence-review-report",
@@ -6538,6 +6572,7 @@ class SupervisorService:
             summary="Read-only index of work-item runtime evidence exports, review priority, evidence counts, and related report links.",
             workItems=work_item_reviews,
             reviewQueue=review_queue,
+            crossChecks=cross_checks,
             relatedReports=related_reports,
             relatedDocs=related_docs,
             dashboardAnchors=review_dashboard_anchors,
@@ -6607,6 +6642,7 @@ class SupervisorService:
             "services/supervisor/src/supervisor/application/service.py",
             "packages/contracts/src/api.ts",
         ]
+        cross_checks = self._runtime_evidence_cross_checks()
         return RuntimeEvidenceExportView(
             exportId=f"runtime-evidence-export-{work_item_id}",
             format="application/json",
@@ -6681,6 +6717,7 @@ class SupervisorService:
                     relatedReports=["GET /work-items/{id}/runtime-evidence-export"],
                     relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                     dashboardAnchors=["#execution-attempts", "#workflow-history"],
+                    crossChecks=cross_checks,
                 ),
                 RuntimeEvidenceReviewNavigatorItemView(
                     itemId="review-authority-boundary",
@@ -6707,6 +6744,7 @@ class SupervisorService:
                         "Review navigation is not execution-authority approval.",
                         "Do not enable provider/model calls or process launch from runtime export review.",
                     ],
+                    crossChecks=cross_checks,
                 ),
                 RuntimeEvidenceReviewNavigatorItemView(
                     itemId="review-git-backed-evidence",
@@ -6731,6 +6769,7 @@ class SupervisorService:
                         "docs/workflows/implementation-evidence-boundary.md",
                     ],
                     dashboardAnchors=["#runtime-evidence-export"],
+                    crossChecks=cross_checks,
                 ),
                 RuntimeEvidenceReviewNavigatorItemView(
                     itemId="review-ollama-no-call-prep",
@@ -6762,6 +6801,7 @@ class SupervisorService:
                         "Ollama provider/model calls are allowed only for the approved host endpoint and qwen3:14b model.",
                         "Do not add endpoint discovery, model discovery, raw payload retention, or any other provider/model authority without a successor approval.",
                     ],
+                    crossChecks=cross_checks,
                 ),
                 RuntimeEvidenceReviewNavigatorItemView(
                     itemId="review-subscription-launch-prep",
@@ -6791,6 +6831,7 @@ class SupervisorService:
                         "Subscription launch prep keeps process launch disabled.",
                         "Do not add a command runner, process supervisor, credential/session access, shell execution, or external send before Story 5.5 approval.",
                     ],
+                    crossChecks=cross_checks,
                 ),
             ],
         )
