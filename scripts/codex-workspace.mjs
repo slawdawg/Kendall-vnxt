@@ -44,6 +44,9 @@ try {
     case "cleanup-merged":
       cleanupMerged(commandArgs);
       break;
+    case "cleanup-current":
+      cleanupCurrent(commandArgs);
+      break;
     case "cleanup-orphans":
       cleanupOrphans(commandArgs);
       break;
@@ -73,6 +76,7 @@ Commands:
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
+  cleanup-current           Remove the current clean worktree after its PR is merged.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
   cleanup-branches [query]  Remove safe local codex/* branches already present in the base ref by ancestry or patch-id.
   rebuild-index             Rebuild missing manifests from Git worktrees.
@@ -83,6 +87,7 @@ Common options:
   --state-root <path>       Override the Codex workspace state root.
   --owner <id>              Override the lane owner recorded or checked for this command.
   --take-ownership          Reassign a lane to the current owner before mutating it.
+  --takeover-reason <text>  Required with --take-ownership when another owner is recorded.
 
 start options:
   --base <branch>           Base branch. Defaults to main.
@@ -91,6 +96,11 @@ start options:
   --no-fetch                Do not fetch origin before creating the branch.
   --task-id <id>            Override generated task id.
   --worktree <path>         Override generated worktree path.
+
+list options:
+  --active                  Show only non-closed workspaces.
+  --owned                   Show only workspaces owned by the current runner.
+  --owner <id>              Show only workspaces owned by the given owner.
 
 finish-pr options:
   --message <text>          Commit message. Defaults to task title.
@@ -101,6 +111,10 @@ finish-pr options:
   --body <text>             PR body.
 
 cleanup-merged options:
+  --apply                   Apply cleanup. Without this, cleanup is dry-run.
+  --delete-remote           Delete remote branch after merged cleanup.
+
+cleanup-current options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --delete-remote           Delete remote branch after merged cleanup.
 
@@ -238,10 +252,19 @@ function startWorkspace(argv) {
 function listWorkspaces(argv) {
   const { options } = parseOptions(argv);
   const state = workspaceState(options);
-  const manifests = readManifests(state);
+  const ownerFilter = options.owned ? currentLaneOwner(options) : options.owner ? String(options.owner) : "";
+  const manifests = readManifests(state).filter(({ manifest }) => {
+    if (options.active && manifest.status === "closed") {
+      return false;
+    }
+    if (ownerFilter && manifest.owner !== ownerFilter) {
+      return false;
+    }
+    return true;
+  });
 
   if (manifests.length === 0) {
-    console.log(`No Codex workspaces found under ${state.tasksDir}`);
+    console.log(`No Codex workspaces found or matched under ${state.tasksDir}`);
     return;
   }
 
@@ -376,6 +399,10 @@ function finishPr(argv) {
 
     runChecked("git", ["push", "-u", "origin", manifest.branch], { cwd: manifest.worktree_path });
     appendTaskEvent(manifest, "pushed", manifest.branch);
+    manifest.pr_delivery_head_sha = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path }).stdout.trim() || null;
+    manifest.pr_delivery_branch = manifest.branch;
+    manifest.pr_delivery_base_branch = manifest.base_branch;
+    manifest.pr_delivery_pushed_at = new Date().toISOString();
 
     if (existingPr) {
       manifest.pr_url = existingPr.url;
@@ -410,10 +437,14 @@ function finishPr(argv) {
   console.log(`PR: ${manifest.pr_url}`);
 }
 
-function cleanupMerged(argv) {
+function cleanupMerged(argv, mode = {}) {
   const { positional, options } = parseOptions(argv);
   const state = workspaceState(options);
-  const records = positional.length > 0 ? [findManifest(state, positional.join(" "))] : readManifests(state);
+  const records = mode.currentOnly
+    ? [findManifest(state, positional.join(" "), { preferCurrentWorktree: true })]
+    : positional.length > 0
+      ? [findManifest(state, positional.join(" "))]
+      : readManifests(state);
   const deleteRemote = Boolean(options.deleteRemote);
   const apply = Boolean(options.apply);
 
@@ -437,18 +468,14 @@ function cleanupMerged(argv) {
       continue;
     }
 
-    assertWorktreeExists(manifest);
-    const worktreeStatus = parseStatus(manifest.worktree_path);
-    if (worktreeStatus.any) {
+    const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
+    const worktreeStatus = worktreeCleanupStatus(manifest, cleanupCwd);
+    if (worktreeStatus.dirty) {
       console.log(`SKIP ${manifest.task_id}: worktree is not clean.`);
       continue;
     }
 
-    const plan = [`git worktree remove ${manifest.worktree_path}`, `git branch -d ${manifest.branch}`];
-    plan.unshift(`clean generated artifacts under ${manifest.worktree_path}`);
-    if (deleteRemote) {
-      plan.push(`git push origin --delete ${manifest.branch}`);
-    }
+    const plan = cleanupMergedPlan(manifest, pr, { cleanupCwd, deleteRemote });
 
     if (options.dryRun || !apply) {
       printPlan(`cleanup-merged ${manifest.task_id}`, plan);
@@ -465,21 +492,26 @@ function cleanupMerged(argv) {
       claimLaneOwner(lockedManifest, options);
       Object.assign(manifest, lockedManifest);
       try {
-        removeWorktree(manifest.worktree_path, state);
-        const branchDelete = git(["branch", "-d", manifest.branch], { cwd: repoRoot });
-        if (branchDelete.code !== 0 && !/not found/i.test(branchDelete.stderr)) {
-          throw new Error(branchDelete.stderr || branchDelete.stdout);
+        const lockedPr = prView(manifest);
+        if (!lockedPr?.mergedAt) {
+          throw new Error(`Could not refresh merged PR evidence under cleanup lock for ${manifest.task_id}.`);
         }
-        if (deleteRemote) {
-          runChecked("git", ["push", "origin", "--delete", manifest.branch], { cwd: repoRoot });
+        if (lockedPr.baseRefName && lockedPr.baseRefName !== manifest.base_branch) {
+          throw new Error(`Existing PR base is ${lockedPr.baseRefName}, expected ${manifest.base_branch}.`);
         }
-
+        const lockedCleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
+        const lockedWorktreeStatus = worktreeCleanupStatus(manifest, lockedCleanupCwd);
+        if (lockedWorktreeStatus.dirty) {
+          throw new Error("Worktree is not clean after acquiring cleanup lock.");
+        }
+        cleanupMergedResources(manifest, state, { cleanupCwd: lockedCleanupCwd, deleteRemote, pr: lockedPr });
         manifest.status = "closed";
-        manifest.pr_url = pr.url || manifest.pr_url;
-        manifest.pr_number = pr.number || manifest.pr_number;
-        manifest.merged_at = pr.mergedAt;
+        manifest.pr_url = lockedPr.url || manifest.pr_url;
+        manifest.pr_number = lockedPr.number || manifest.pr_number;
+        manifest.merged_at = lockedPr.mergedAt;
         manifest.closed_at = new Date().toISOString();
         manifest.updated_at = manifest.closed_at;
+        manifest.cleanup_error = null;
         appendTaskEvent(manifest, "closed", `cleaned merged PR ${manifest.pr_url || manifest.pr_number}`);
       } catch (error) {
         manifest.status = "cleanup_partial";
@@ -493,6 +525,169 @@ function cleanupMerged(argv) {
     });
     console.log(`Closed ${manifest.task_id}`);
   }
+}
+
+function cleanupCurrent(argv) {
+  cleanupMerged(argv, { currentOnly: true });
+}
+
+function cleanupRepositoryRoot(worktreePath) {
+  const main = mainWorktreePath();
+  if (main && !samePath(main, worktreePath) && existsSync(main)) {
+    return main;
+  }
+  if (!samePath(repoRoot, worktreePath) && existsSync(repoRoot)) {
+    return repoRoot;
+  }
+  throw new Error(`No stable repository worktree is available to clean up ${worktreePath}.`);
+}
+
+function worktreeCleanupStatus(manifest, cleanupCwd) {
+  const exists = existsSync(manifest.worktree_path) && statSync(manifest.worktree_path).isDirectory();
+  if (!exists) {
+    return { exists: false, listed: worktreeListed(manifest.worktree_path, cleanupCwd), dirty: false };
+  }
+  const status = parseStatus(manifest.worktree_path);
+  return { exists: true, listed: worktreeListed(manifest.worktree_path, cleanupCwd), dirty: status.any, status };
+}
+
+function cleanupMergedPlan(manifest, pr, options) {
+  const localBranchSha = branchSha(manifest.branch, options.cleanupCwd);
+  const remoteBranchSha = options.deleteRemote ? originBranchSha(manifest.branch, options.cleanupCwd) : "";
+  const expectedHeadSha = expectedCleanupHeadSha(manifest, pr);
+  const lines = [
+    `PR #${pr.number || manifest.pr_number || "unknown"} merged at ${pr.mergedAt}`,
+    `expected head ${expectedHeadSha || "missing"}`,
+    `owner ${manifest.owner || "unowned"}`,
+    `local branch ${manifest.branch} (${localBranchSha || "absent"})`,
+  ];
+  if (options.deleteRemote) {
+    lines.push(`remote branch origin/${manifest.branch} (${remoteBranchSha || "absent"})`);
+  }
+  lines.push(`clean generated artifacts under ${manifest.worktree_path}`);
+  lines.push(`git worktree remove ${manifest.worktree_path}`);
+  lines.push(`git branch -d ${manifest.branch}`);
+  if (options.deleteRemote) {
+    lines.push(`git push origin --delete ${manifest.branch}`);
+  }
+  return lines;
+}
+
+function cleanupMergedResources(manifest, state, options) {
+  const cleanupStartedAt = new Date().toISOString();
+  const expectedHeadSha = requireCleanupHeadSha(manifest, options.pr);
+  preflightCleanupBranchHeads(manifest, options.cleanupCwd, expectedHeadSha, options.deleteRemote);
+  manifest.cleanup_started_at = manifest.cleanup_started_at || cleanupStartedAt;
+  manifest.cleanup_owner = manifest.owner || null;
+  manifest.cleanup_branch = manifest.branch;
+  manifest.cleanup_expected_head_sha = expectedHeadSha;
+  manifest.cleanup_pr_number = options.pr.number || manifest.pr_number || null;
+  manifest.cleanup_pr_url = options.pr.url || manifest.pr_url || null;
+  manifest.cleanup_merged_at = options.pr.mergedAt || manifest.merged_at || null;
+  manifest.cleanup_local_branch_sha = branchSha(manifest.branch, options.cleanupCwd) || manifest.cleanup_local_branch_sha || null;
+  if (options.deleteRemote) {
+    manifest.cleanup_remote_branch_sha =
+      originBranchSha(manifest.branch, options.cleanupCwd) || manifest.cleanup_remote_branch_sha || null;
+  }
+
+  removeWorktreeIfPresent(manifest, state, options.cleanupCwd);
+  deleteLocalBranchIfPresent(manifest, options.cleanupCwd, expectedHeadSha);
+  if (options.deleteRemote) {
+    deleteRemoteBranchIfPresent(manifest, options.cleanupCwd, expectedHeadSha);
+  }
+  manifest.cleanup_completed_at = new Date().toISOString();
+}
+
+function preflightCleanupBranchHeads(manifest, cleanupCwd, expectedHeadSha, deleteRemote) {
+  assertExpectedBranchHead(`Local branch ${manifest.branch}`, branchSha(manifest.branch, cleanupCwd), expectedHeadSha);
+  if (deleteRemote) {
+    assertExpectedBranchHead(
+      `Remote branch origin/${manifest.branch}`,
+      originBranchSha(manifest.branch, cleanupCwd),
+      expectedHeadSha,
+    );
+  }
+}
+
+function expectedCleanupHeadSha(manifest, pr) {
+  return String(manifest.pr_delivery_head_sha || pr?.headRefOid || "").trim();
+}
+
+function requireCleanupHeadSha(manifest, pr) {
+  const expectedHeadSha = expectedCleanupHeadSha(manifest, pr);
+  if (!expectedHeadSha) {
+    throw new Error("Cleanup requires exact PR head evidence before deleting lane branches.");
+  }
+  return expectedHeadSha;
+}
+
+function assertExpectedBranchHead(label, actualSha, expectedSha) {
+  if (!actualSha) {
+    return;
+  }
+  if (actualSha !== expectedSha) {
+    throw new Error(`${label} head ${actualSha} does not match expected cleanup head ${expectedSha}.`);
+  }
+}
+
+function removeWorktreeIfPresent(manifest, state, cleanupCwd) {
+  const exists = existsSync(manifest.worktree_path);
+  const listed = worktreeListed(manifest.worktree_path, cleanupCwd);
+  if (!exists && listed) {
+    runChecked("git", ["worktree", "prune"], { cwd: cleanupCwd });
+  }
+  const wasPresent = exists || listed;
+  if (wasPresent) {
+    if (exists) {
+      removeWorktree(manifest.worktree_path, state, { cwd: cleanupCwd });
+      appendTaskEvent(manifest, "worktree_removed", manifest.worktree_path);
+    } else {
+      appendTaskEvent(manifest, "worktree_registration_pruned", manifest.worktree_path);
+    }
+  } else {
+    appendTaskEvent(manifest, "worktree_already_absent", manifest.worktree_path);
+  }
+  if (existsSync(manifest.worktree_path) || worktreeListed(manifest.worktree_path, cleanupCwd)) {
+    throw new Error(`Worktree still exists after cleanup: ${manifest.worktree_path}`);
+  }
+  manifest.worktree_removed_at = manifest.worktree_removed_at || new Date().toISOString();
+}
+
+function deleteLocalBranchIfPresent(manifest, cleanupCwd, expectedHeadSha) {
+  const localSha = branchSha(manifest.branch, cleanupCwd);
+  assertExpectedBranchHead(`Local branch ${manifest.branch}`, localSha, expectedHeadSha);
+  if (localSha) {
+    const branchDelete = git(["update-ref", "-d", `refs/heads/${manifest.branch}`, expectedHeadSha], { cwd: cleanupCwd });
+    if (branchDelete.code !== 0) {
+      throw new Error(branchDelete.stderr || branchDelete.stdout);
+    }
+    appendTaskEvent(manifest, "local_branch_deleted", manifest.branch);
+  } else {
+    appendTaskEvent(manifest, "local_branch_already_absent", manifest.branch);
+  }
+  if (branchExists(manifest.branch, cleanupCwd)) {
+    throw new Error(`Local branch still exists after cleanup: ${manifest.branch}`);
+  }
+  manifest.local_branch_deleted_at = manifest.local_branch_deleted_at || new Date().toISOString();
+}
+
+function deleteRemoteBranchIfPresent(manifest, cleanupCwd, expectedHeadSha) {
+  const remoteSha = originBranchSha(manifest.branch, cleanupCwd);
+  assertExpectedBranchHead(`Remote branch origin/${manifest.branch}`, remoteSha, expectedHeadSha);
+  if (remoteSha) {
+    runChecked(
+      "git",
+      ["push", `--force-with-lease=refs/heads/${manifest.branch}:${expectedHeadSha}`, "origin", `:refs/heads/${manifest.branch}`],
+      { cwd: cleanupCwd },
+    );
+    appendTaskEvent(manifest, "remote_branch_deleted", manifest.branch);
+  } else {
+    appendTaskEvent(manifest, "remote_branch_already_absent", manifest.branch);
+  }
+  if (originBranchSha(manifest.branch, cleanupCwd)) {
+    throw new Error(`Remote branch still exists after cleanup: origin/${manifest.branch}`);
+  }
+  manifest.remote_branch_deleted_at = manifest.remote_branch_deleted_at || new Date().toISOString();
 }
 
 function cleanupOrphans(argv) {
@@ -831,12 +1026,28 @@ function resolveBaseRef(baseBranch) {
   throw new Error(`Base branch not found locally: ${baseBranch}`);
 }
 
-function branchExists(branch) {
-  return git(["rev-parse", "--verify", "--quiet", branch], { cwd: repoRoot }).code === 0;
+function branchExists(branch, cwd = repoRoot) {
+  return git(["rev-parse", "--verify", "--quiet", branch], { cwd }).code === 0;
 }
 
 function remoteBranchExists(branch) {
   return git(["rev-parse", "--verify", "--quiet", `origin/${branch}`], { cwd: repoRoot }).code === 0;
+}
+
+function branchSha(branch, cwd = repoRoot) {
+  const result = git(["rev-parse", "--verify", "--quiet", branch], { cwd });
+  return result.code === 0 ? result.stdout.trim() : "";
+}
+
+function originBranchSha(branch, cwd = repoRoot) {
+  const result = git(["ls-remote", "--heads", "origin", branch], { cwd });
+  if (result.code !== 0) {
+    throw new Error(result.stderr || `Could not inspect remote branch: origin/${branch}`);
+  }
+  if (!result.stdout) {
+    return "";
+  }
+  return result.stdout.split(/\s+/)[0] || "";
 }
 
 function refExists(ref) {
@@ -932,6 +1143,13 @@ function assertLaneOwner(manifest, options = {}) {
       )}. Use --take-ownership only after confirming the lane is idle.`,
     );
   }
+  if (warning && options.takeOwnership && !validTakeoverReason(options.takeoverReason)) {
+    throw new Error("--takeover-reason must explain the takeover in at least 10 non-whitespace characters.");
+  }
+}
+
+function validTakeoverReason(value) {
+  return String(value || "").replace(/\s+/g, "").length >= 10;
 }
 
 function claimLaneOwner(manifest, options = {}) {
@@ -946,11 +1164,25 @@ function claimLaneOwner(manifest, options = {}) {
   }
 
   const previousOwner = manifest.owner || "unowned";
+  const reason = String(options.takeoverReason || "").trim();
   manifest.owner = currentOwner;
   manifest.owner_thread_id = process.env.CODEX_THREAD_ID || null;
   manifest.owner_acquired_at = new Date().toISOString();
   manifest.owner_updated_at = manifest.owner_acquired_at;
-  appendTaskEvent(manifest, "ownership_claimed", `owner ${previousOwner} -> ${currentOwner}`);
+  if (!manifest.ownership_takeovers) {
+    manifest.ownership_takeovers = [];
+  }
+  manifest.ownership_takeovers.push({
+    at: manifest.owner_acquired_at,
+    previous_owner: previousOwner,
+    new_owner: currentOwner,
+    reason: reason || "unowned legacy lane claimed",
+  });
+  appendTaskEvent(
+    manifest,
+    "ownership_claimed",
+    `owner ${previousOwner} -> ${currentOwner}${reason ? `: ${reason}` : ""}`,
+  );
 }
 
 function reconcileManifest(manifest, options = {}) {
@@ -1062,10 +1294,11 @@ function appendTaskEvent(manifest, type, message) {
   manifest.events.push(taskEvent(type, message));
 }
 
-function removeWorktree(worktreePath, state) {
+function removeWorktree(worktreePath, state, options = {}) {
+  const cwd = options.cwd || repoRoot;
   assertManagedWorktreePath(worktreePath, state);
   cleanupGeneratedArtifacts(worktreePath);
-  const result = git(["worktree", "remove", worktreePath], { cwd: repoRoot });
+  const result = git(["worktree", "remove", worktreePath], { cwd });
   if (result.code === 0) {
     if (existsSync(worktreePath)) {
       removeManagedDirectory(worktreePath, state);
@@ -1073,7 +1306,7 @@ function removeWorktree(worktreePath, state) {
     return true;
   }
 
-  if (worktreeListed(worktreePath)) {
+  if (worktreeListed(worktreePath, cwd)) {
     throw new Error(result.stderr || result.stdout || `Could not remove worktree: ${worktreePath}`);
   }
 
@@ -1127,8 +1360,8 @@ function assertManagedWorktreePath(worktreePath, state) {
   }
 }
 
-function worktreeListed(worktreePath) {
-  const result = git(["worktree", "list", "--porcelain"], { cwd: repoRoot });
+function worktreeListed(worktreePath, cwd = repoRoot) {
+  const result = git(["worktree", "list", "--porcelain"], { cwd });
   if (result.code !== 0) {
     return true;
   }
@@ -1179,7 +1412,7 @@ function assertWorktreeExists(manifest) {
 
 function prView(manifest) {
   const selector = manifest.pr_number ? String(manifest.pr_number) : manifest.branch;
-  const result = run("gh", ["pr", "view", selector, "--json", "number,url,mergedAt,state,baseRefName"], {
+  const result = run("gh", ["pr", "view", selector, "--json", "number,url,mergedAt,state,baseRefName,headRefOid"], {
     cwd: manifest.worktree_path && existsSync(manifest.worktree_path) ? manifest.worktree_path : repoRoot,
   });
   if (result.code !== 0) {

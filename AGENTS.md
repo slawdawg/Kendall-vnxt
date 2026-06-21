@@ -247,7 +247,8 @@ surface is `node ./scripts/codex-workspace.mjs`.
   `node ./scripts/codex-workspace.mjs resume "<task>"`, then use the reported
   worktree path for follow-up commands. If the manifest owner belongs to another
   runner, do not mutate that lane unless the operator confirms the other session
-  is idle; only then pass `--take-ownership` and record the previous owner.
+  is idle; only then pass `--take-ownership --takeover-reason "<reason>"` and
+  record the previous owner.
 - When the operator says "finish this as a PR", run the smallest relevant verification,
   then use `node ./scripts/codex-workspace.mjs finish-pr` from the task
   worktree or pass a task query from another worktree. Stage intended files
@@ -257,12 +258,19 @@ surface is `node ./scripts/codex-workspace.mjs`.
   above are proven; otherwise wait for explicit merge approval after showing
   the PR state.
 - When the operator says "clean up merged work", run
-  `node ./scripts/codex-workspace.mjs cleanup-merged --delete-remote` first as a
-  dry-run when the active authority is `standard-delivery`. The script must see
-  a merged PR with the expected base branch, the current lane owner, and a clean
-  worktree before it removes anything. Re-run with `--apply --delete-remote`
-  only when the dry-run output names the expected worktree, local branch, and
-  remote branch.
+  `node ./scripts/codex-workspace.mjs cleanup-current --delete-remote` from
+  inside the lane, or `node ./scripts/codex-workspace.mjs cleanup-merged
+  "<query>" --delete-remote` from another worktree, first as a dry-run when the
+  active authority is `standard-delivery`. The script must see a merged PR with
+  the expected base branch, the current lane owner, and a clean or already
+  removed target worktree before it removes anything. It must also verify that
+  any local or remote lane branch still present matches the recorded PR delivery
+  head before deletion. Re-run with `--apply --delete-remote` only when the
+  dry-run output names the expected PR, owner, worktree, local branch, remote
+  branch, and expected head. If cleanup previously stopped in
+  `cleanup_partial`, rerun the same cleanup command from a stable worktree; the
+  script should resume already-completed removal steps and close the manifest
+  after verifying worktree, local branch, and remote branch absence.
 - When local `codex/*` branches remain after workspace cleanup, run
   `node ./scripts/codex-workspace.mjs cleanup-branches` as a dry-run. The
   script may delete only local Codex branches that are already present in the

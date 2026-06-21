@@ -80,9 +80,16 @@ remote branch deletion outside the merged managed lane.
    the PR, and monitor checks and review state.
 8. **Merge.** Merge only when the low-risk checklist is proven for the exact
    head SHA or when an explicit higher-risk approval covers the residual risk.
-9. **Cleanup.** Run `cleanup-merged --delete-remote` as a dry run. Apply
-   cleanup only when the dry-run output names the expected worktree, local
-   branch, and remote branch for the current lane.
+9. **Cleanup.** Prefer `cleanup-current --delete-remote` from inside the lane,
+   or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
+   run first. Apply cleanup only when the dry-run output names the expected PR,
+   owner, worktree, local branch, and remote branch for the current lane.
+   Cleanup is resumable; if a previous attempt removed the worktree but stopped
+   before branch deletion or manifest closure, rerun the same cleanup command
+   from a stable worktree.
+   Stop if the worktree is dirty, no stable repository root is available, owner
+   evidence is missing or mismatched, PR merge evidence is missing, or the
+   local/remote branch head differs from the recorded PR delivery head.
 
 ## Lane Ownership
 
@@ -94,13 +101,18 @@ fallback. `list` and `resume` surface that owner.
 Before resuming, finishing, merging, or cleaning up a lane, compare the
 manifest owner with the current runner owner. If another owner is recorded,
 stop and do not mutate the lane unless the operator confirms that the other
-session is idle. Only then may the runner pass `--take-ownership`, and the
-evidence packet must record the previous owner and reason for takeover.
+session is idle. Only then may the runner pass `--take-ownership` with
+`--takeover-reason "<reason>"`, and the evidence packet must record the
+previous owner and reason for takeover.
 
 Unowned legacy manifests may be claimed by the first mutating runner, but new
 end-to-end lanes should not remain unowned. Prefer setting
 `CODEX_WORKSPACE_OWNER` to a stable, human-readable value when multiple Codex
 sessions are expected.
+
+`list --active`, `list --owned`, and `list --owner <id>` compose as strict AND
+filters. Empty or placeholder owner values are not acceptable evidence for a
+takeover or cleanup decision.
 
 ## Low-Risk Merge Checklist
 
@@ -157,6 +169,8 @@ Use controls such as:
 - Add tests, static drift checks, or verification scripts for new contracts.
 - Require clean-worktree, merged-PR, exact branch, owner, and path-allowlist
   evidence before cleanup.
+- Make cleanup resumable so already-removed worktrees or already-deleted
+  branches are verified as absent and recorded instead of treated as blockers.
 - Record rollback, revert, resume, retry, and inspection paths.
 
 After mitigation, reassess residual risk. Continue only if the result satisfies
