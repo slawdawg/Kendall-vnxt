@@ -1,9 +1,59 @@
-import type { SafeDevelopmentBacklogItemView, SafeDevelopmentBacklogReportView } from "@kendall/contracts";
+import type { NextLaneRecommendationView, SafeDevelopmentBacklogItemView, SafeDevelopmentBacklogReportView } from "@kendall/contracts";
 import Link from "next/link";
 import { reportShortcutHref } from "../lib/report-shortcuts";
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
+}
+
+function NextLanePanel({ nextLane }: { nextLane?: NextLaneRecommendationView | null }) {
+  if (!nextLane) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+      <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Next lane handoff</p>
+      <p className="mt-2 text-sm font-semibold">{nextLane.laneTitle}</p>
+      <div className="mt-2 grid gap-2">
+        <p className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+          branch: {nextLane.branchName}
+        </p>
+        <p className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+          start: {nextLane.startCommand}
+        </p>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Scope</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {nextLane.scope.map((scopeItem) => (
+              <span key={scopeItem} className="rounded-full border bg-[var(--panel)] px-2 py-1 text-[11px] text-[var(--muted)]">
+                {scopeItem}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Verification</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {nextLane.verificationCommands.map((command) => (
+              <span key={command} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+                {command}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 space-y-2">
+        {nextLane.stopLines.map((stopLine) => (
+          <p key={stopLine} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+            {stopLine}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
@@ -88,6 +138,7 @@ function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
           </div>
         </div>
       ) : null}
+      <NextLanePanel nextLane={item.nextLane} />
       <div className="mt-3 flex flex-wrap gap-2">
         {item.dashboardAnchors.map((anchor) => (
           <Link key={anchor} href={anchor} className="rounded-full border bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--accent)]">

@@ -975,7 +975,18 @@ export interface SafeDevelopmentBacklogItemView {
   relatedDocs: string[];
   dashboardAnchors: string[];
   blockedBy: string[];
+  nextLane?: NextLaneRecommendationView | null;
   nextAction: string;
+}
+
+export interface NextLaneRecommendationView {
+  laneTitle: string;
+  laneSlug: string;
+  branchName: string;
+  startCommand: string;
+  scope: string[];
+  verificationCommands: string[];
+  stopLines: string[];
 }
 
 export interface SafeDevelopmentBacklogReportView {
@@ -1042,6 +1053,7 @@ export interface DevelopmentRunwaySliceView {
   dashboardAnchors: string[];
   readinessChecks: DevelopmentRunwayReadinessCheckView[];
   blockedBy: string[];
+  nextLane?: NextLaneRecommendationView | null;
   nextAction: string;
 }
 

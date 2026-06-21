@@ -1893,6 +1893,13 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert report_slice["status"] == "ready"
     assert "safe-backlog-report-alignment" in report_slice["includedBacklogItems"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
+    assert report_slice["nextLane"]["laneSlug"] == "safe-backlog-report-alignment"
+    assert report_slice["nextLane"]["branchName"] == "codex/safe-backlog-report-alignment"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "safe backlog report alignment"'
+    assert "pnpm run check:reports" in report_slice["nextLane"]["verificationCommands"]
+    assert "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py" in report_slice["nextLane"]["verificationCommands"]
+    assert any("merge, cleanup, issue-sync" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
+    assert any("verification-surface-hardening" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
     assert "docs/workflows/implementation-evidence-boundary.md" in report_slice["relatedDocs"]
     assert report_slice["relatedDocs"].count("docs/workflows/implementation-evidence-boundary.md") == 1
@@ -1927,6 +1934,7 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert any("local-development-handoff" in check["evidence"] for check in verification_slice["readinessChecks"])
     authority_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "authority-blocker-maintenance-slice")
     assert authority_slice["status"] == "blocked_pending_explicit_authority_approval"
+    assert authority_slice["nextLane"] is None
     assert {check["checkId"] for check in authority_slice["readinessChecks"]} == {
         "authority-families-blocked",
         "approval-checkpoint-indexed",
@@ -2167,10 +2175,20 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
     assert all(item["recommendedSliceSize"] in {"large", "medium_to_large"} for item in ready_items)
+    report_alignment_item = next(item for item in report["items"] if item["itemId"] == "safe-backlog-report-alignment")
+    assert report_alignment_item["nextLane"]["laneSlug"] == "safe-backlog-report-alignment"
+    assert report_alignment_item["nextLane"]["branchName"] == "codex/safe-backlog-report-alignment"
+    assert report_alignment_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "safe backlog report alignment"'
+    assert "pnpm run check:safe-backlog" in report_alignment_item["nextLane"]["verificationCommands"]
+    assert "pnpm run check:development-runway" in report_alignment_item["nextLane"]["verificationCommands"]
+    assert "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py" in report_alignment_item["nextLane"]["verificationCommands"]
+    assert any("Do not add provider/model calls" in stop_line for stop_line in report_alignment_item["nextLane"]["stopLines"])
+    assert any("verification-surface-hardening" in stop_line for stop_line in report_alignment_item["nextLane"]["stopLines"])
     blocked_item = next(item for item in report["items"] if item["itemId"] == "authority-blocked-work")
     assert blocked_item["status"] == "blocked_pending_explicit_approval"
     assert blocked_item["recommendedSliceSize"] == "do_not_start"
     assert "explicit operator approval naming authority and scope" in blocked_item["blockedBy"]
+    assert blocked_item["nextLane"] is None
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
     assert "/controls#verification-readiness-report" in verification_item["dashboardAnchors"]
     assert "/controls#development-runway-report" in verification_item["dashboardAnchors"]

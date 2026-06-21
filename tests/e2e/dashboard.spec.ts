@@ -798,6 +798,12 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Development runway", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
+    await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/safe-backlog-report-alignment")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "safe backlog report alignment"')).toBeVisible();
+    await expect(runwayPanel.getByText("uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py")).toBeVisible();
+    await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
+    await expect(runwayPanel.getByText("Do not start or modify the active verification-surface-hardening lane while using this recommendation.")).toBeVisible();
     await expect(runwayPanel.getByText("verification-runbook-hardening-slice")).toBeVisible();
     await expect(runwayPanel.getByText("authority-blocker-maintenance-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Readiness checks").first()).toBeVisible();
@@ -817,7 +823,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("handoff-checkpoint-coverage", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("authority-families-blocked", { exact: true })).toBeVisible();
-    await expect(runwayPanel.getByText("pnpm run check:development-runway", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByText("pnpm run check:development-runway", { exact: true }).first()).toBeVisible();
     await expect(runwayPanel.getByRole("link", { name: "/controls#development-runway-report" }).first()).toBeVisible();
     await expect(runwayPanel.getByText("Development runway slices are not execution-authority approvals.")).toBeVisible();
     await expect(page.locator("#development-runway-report")).toBeVisible();
@@ -841,6 +847,14 @@ test.describe("dashboard workflow coverage", () => {
     await expect(safeBacklogPanel.getByText("Safe backlog", { exact: true })).toBeVisible();
     await expect(safeBacklogPanel.getByText("Large-slice development map")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Report-aligned backlog governance")).toBeVisible();
+    const reportAlignmentCard = safeBacklogPanel.locator("article").filter({ hasText: "Report-aligned backlog governance" });
+    await expect(reportAlignmentCard.getByText("Next lane handoff")).toBeVisible();
+    await expect(reportAlignmentCard.getByText("Safe backlog report alignment", { exact: true })).toBeVisible();
+    await expect(reportAlignmentCard.getByText("branch: codex/safe-backlog-report-alignment")).toBeVisible();
+    await expect(reportAlignmentCard.getByText('start: node ./scripts/codex-workspace.mjs start "safe backlog report alignment"')).toBeVisible();
+    await expect(reportAlignmentCard.getByText("pnpm run check:safe-backlog")).toBeVisible();
+    await expect(reportAlignmentCard.getByText("uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py")).toBeVisible();
+    await expect(reportAlignmentCard.getByText("Do not start or modify the active verification-surface-hardening lane while using this recommendation.")).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "Verification surface hardening" })).toBeVisible();
     await expect(safeBacklogPanel.getByText("Related report links").first()).toBeVisible();
     await expect(safeBacklogPanel.getByRole("link", { name: "GET /supervisor/maintenance-readiness-report" }).first()).toHaveAttribute(
