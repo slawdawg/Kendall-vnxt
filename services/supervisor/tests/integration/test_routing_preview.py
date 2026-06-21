@@ -2033,14 +2033,17 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     assert report["executionAuthorityApproved"] is False
     assert {finding["findingId"] for finding in report["currentStateFindings"]} == {
         "planning-reconciliation-current",
-        "pr-103-review-gated",
+        "pr-103-merged-to-main",
     }
-    pr_finding = next(finding for finding in report["currentStateFindings"] if finding["findingId"] == "pr-103-review-gated")
-    assert pr_finding["status"] == "ci_green_external_review_blocked"
-    assert any("mergeStateStatus=BLOCKED" in evidence for evidence in pr_finding["evidence"])
+    pr_finding = next(finding for finding in report["currentStateFindings"] if finding["findingId"] == "pr-103-merged-to-main")
+    assert pr_finding["status"] == "merged_to_main_recorded"
+    assert any("merged on 2026-06-13T22:51:00Z" in evidence for evidence in pr_finding["evidence"])
+    assert any("80dbd488885d90c225c1d7625d1e84ef75a94752" in evidence for evidence in pr_finding["evidence"])
+    assert any("does not cover local Story 11.4 readiness" in evidence for evidence in pr_finding["evidence"])
     assert any("Local story completion is recorded" in evidence for evidence in pr_finding["evidence"])
-    assert any("merged into codex/epic-10-delivery-cleanup-plans, not directly into main" in evidence for evidence in pr_finding["evidence"])
-    assert any("Merged-to-main state remains false" in evidence for evidence in pr_finding["evidence"])
+    assert any("landed through PR #103" in evidence for evidence in pr_finding["evidence"])
+    assert any("Merged-to-main state is recorded true" in evidence for evidence in pr_finding["evidence"])
+    assert any("fresh GitHub re-checks and exact approval" in evidence for evidence in pr_finding["evidence"])
     packet = report["nextLaneDecisionPacket"]
     assert packet["packetId"] == "epic-11-next-lane-authority-decision-contract"
     assert packet["status"] == "decision_only_no_authority_granted"
@@ -2092,10 +2095,13 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     assert "docs/workflows/implementation-evidence-boundary.md" in delivery_family["relatedDocs"]
     assert "docs/workflows/implementation-evidence-boundary.md" in delivery_family["relatedDocs"]
     assert any("cleanup plan" in evidence for evidence in delivery_family["requiredEvidence"])
-    assert any("PR #103" in evidence for evidence in delivery_family["requiredEvidence"])
+    assert any("PR #103 recorded merged to main" in evidence for evidence in delivery_family["requiredEvidence"])
+    assert any("fresh exact approval packet" in stop_line for stop_line in delivery_family["stopLines"])
     assert "dry-run planning" in delivery_family["rollbackPath"]
     cleanup_family = next(family for family in report["families"] if family["familyId"] == "cleanup-automation")
     assert cleanup_family["status"] == "blocked_pending_explicit_approval"
+    assert any("fresh GitHub re-check" in evidence for evidence in cleanup_family["requiredEvidence"])
+    assert any("target-specific approval" in evidence for evidence in cleanup_family["requiredEvidence"])
     assert "GET /supervisor/local-cleanup-readiness-report" in cleanup_family["relatedReports"]
     assert "GET /supervisor/remote-cleanup-sync-readiness-report" in cleanup_family["relatedReports"]
     assert "docs/workflows/implementation-evidence-boundary.md" in cleanup_family["relatedDocs"]

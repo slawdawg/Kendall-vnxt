@@ -678,10 +678,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByText("Authority readiness", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Execution authority matrix")).toBeVisible();
     await expect(authorityMatrixPanel.getByRole("heading", { name: "Current-state reconciliation" })).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("ci_green_external_review_blocked")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("merged_to_main_recorded")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Local story completion is recorded")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("not directly into main")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("Merged-to-main state remains false")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("80dbd488885d90c225c1d7625d1e84ef75a94752")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("Merged-to-main state is recorded true")).toBeVisible();
     await expect(authorityMatrixPanel.getByRole("heading", { name: "Next-lane authority packet" })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("decision_only_no_authority_granted")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract").first()).toBeVisible();
