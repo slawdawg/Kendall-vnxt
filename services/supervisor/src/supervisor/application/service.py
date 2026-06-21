@@ -714,6 +714,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-adaptive-scoring",
+                label="Adaptive scoring decision-prep drift",
+                command="pnpm run check:adaptive-scoring",
+                status="required",
+                requiredFor=["adaptive scoring decision-prep changes", "authority boundary changes", "verification command changes"],
+                evidence=[
+                    "Validates the adaptive scoring decision-prep package, research anchors, stop lines, runbooks, and runtime tripwires stay aligned without enabling scoring.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-e2e-report",
                 label="Dashboard e2e report drift",
                 command="pnpm run check:e2e-report",
@@ -1033,6 +1044,7 @@ class SupervisorService:
                     "check-documentation-authority",
                     "check-verification-readiness",
                     "check-authority-readiness",
+                    "check-adaptive-scoring",
                     "check-e2e-report",
                     "check-reports",
                     "check-execution-boundary",
@@ -1309,7 +1321,7 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/adaptive-scoring-decision-prep.md",
                     "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md",
                 ],
                 dashboardAnchors=[
@@ -1323,7 +1335,7 @@ class SupervisorService:
                     "Do not retain raw scoring inputs beyond metadata-only evidence.",
                 ],
                 rollbackPath="Keep deterministic review-only ordering and remove any scoring-derived recommendation if the scoring policy, evidence, or approval binding is incomplete.",
-                nextAction="Prepare a separate scoring decision packet before any adaptive scoring implementation starts.",
+                nextAction="Use docs/workflows/adaptive-scoring-decision-prep.md and pnpm run check:adaptive-scoring to prepare a separate scoring decision packet before any adaptive scoring implementation starts.",
             ),
             AuthorityReadinessFamilyView(
                 familyId="worker-command-source-network-credentials",

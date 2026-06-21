@@ -50,6 +50,7 @@ for (const path of currentRunbooks) {
   assertCondition(content.includes("pnpm run check:documentation-authority"), `${path} must mention pnpm run check:documentation-authority`, failures);
   assertCondition(content.includes("pnpm run check:verification-readiness"), `${path} must mention pnpm run check:verification-readiness`, failures);
   assertCondition(content.includes("pnpm run check:authority-readiness"), `${path} must mention pnpm run check:authority-readiness`, failures);
+  assertCondition(content.includes("pnpm run check:adaptive-scoring"), `${path} must mention pnpm run check:adaptive-scoring`, failures);
   assertCondition(content.includes("pnpm run check:e2e-report"), `${path} must mention pnpm run check:e2e-report`, failures);
   assertCondition(content.includes("pnpm run check:reports"), `${path} must mention pnpm run check:reports`, failures);
   assertCondition(content.includes("pnpm run check:execution-boundary"), `${path} must mention pnpm run check:execution-boundary`, failures);

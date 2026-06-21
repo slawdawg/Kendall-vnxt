@@ -1568,6 +1568,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-documentation-authority",
         "check-verification-readiness",
         "check-authority-readiness",
+        "check-adaptive-scoring",
         "check-e2e-report",
         "check-reports",
         "check-execution-boundary",
@@ -1609,6 +1610,11 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     static_group = next(group for group in report["commandGroups"] if group["groupId"] == "static-drift-chain")
     assert "check-runtime-review" in static_group["commandIds"]
     assert "check-development-runway" in static_group["commandIds"]
+    assert "check-adaptive-scoring" in static_group["commandIds"]
+    adaptive_scoring_command = next(
+        command for command in report["requiredCommands"] if command["commandId"] == "check-adaptive-scoring"
+    )
+    assert adaptive_scoring_command["command"] == "pnpm run check:adaptive-scoring"
     dashboard_group = next(group for group in report["commandGroups"] if group["groupId"] == "dashboard-browser-build")
     assert "dashboard-controls-e2e" in dashboard_group["commandIds"]
     assert "dashboard-provider-raw-output-e2e" in dashboard_group["commandIds"]
@@ -2064,6 +2070,7 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     scoring_family = next(family for family in report["families"] if family["familyId"] == "adaptive-scoring")
     assert scoring_family["status"] == "blocked_pending_explicit_approval"
     assert "GET /supervisor/development-runway-report" in scoring_family["relatedReports"]
+    assert "docs/workflows/adaptive-scoring-decision-prep.md" in scoring_family["relatedDocs"]
     assert any("Do not run adaptive scoring" in stop_line for stop_line in scoring_family["stopLines"])
     command_family = next(family for family in report["families"] if family["familyId"] == "worker-command-source-network-credentials")
     assert command_family["status"] == "blocked_by_default"

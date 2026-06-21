@@ -37,8 +37,9 @@ This runbook also anchors runbook verification for the active check chain.
 `pnpm run check` includes `pnpm run check:docs`,
 `pnpm run check:documentation-authority`,
 `pnpm run check:verification-readiness`,
-`pnpm run check:authority-readiness`, `pnpm run check:premium-execution`,
-`pnpm run check:worker-launch`, `pnpm run check:e2e-report`,
+`pnpm run check:authority-readiness`, `pnpm run check:adaptive-scoring`,
+`pnpm run check:premium-execution`, `pnpm run check:worker-launch`,
+`pnpm run check:e2e-report`,
 `pnpm run check:reports`, `pnpm run check:execution-boundary`,
 `pnpm run check:execution-evidence`, `pnpm run check:provider-fixtures`,
 `pnpm run check:process-lifecycle`, `pnpm run check:runbooks` for runbook
