@@ -26,9 +26,53 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          APPROVAL_LABEL: ci-resolve-review-threads
         shell: bash
         run: |
           set -euo pipefail
+
+          metadata_query='
+          query($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+              pullRequest(number: $number) {
+                headRefOid
+                labels(first: 100) {
+                  nodes {
+                    name
+                  }
+                }
+              }
+            }
+          }'
+
+          current_head="$(
+            gh api graphql \
+              -f owner="$OWNER" \
+              -f repo="$REPO" \
+              -F number="$PR_NUMBER" \
+              -f query="$metadata_query" \
+              --jq '.data.repository.pullRequest.headRefOid'
+          )"
+
+          if [ "$current_head" != "$RUN_HEAD_SHA" ]; then
+            echo "Skipping PR #${PR_NUMBER}: CI head ${RUN_HEAD_SHA} does not match current head ${current_head}."
+            exit 0
+          fi
+
+          approval_label_present="$(
+            gh api graphql \
+              -f owner="$OWNER" \
+              -f repo="$REPO" \
+              -F number="$PR_NUMBER" \
+              -f query="$metadata_query" \
+              --jq '.data.repository.pullRequest.labels.nodes | map(.name) | index("ci-resolve-review-threads") != null'
+          )"
+
+          if [ "$approval_label_present" != "true" ]; then
+            echo "Skipping PR #${PR_NUMBER}: add label ${APPROVAL_LABEL} after confirming review comments were addressed."
+            exit 0
+          fi
 
           query='
           query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
