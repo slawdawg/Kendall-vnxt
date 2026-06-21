@@ -155,6 +155,9 @@ jobs:
       - name: Sync supervisor virtualenv
         run: uv sync --directory services/supervisor --locked
 
+      - name: Configure repo-local Git hooks
+        run: git config core.hooksPath .githooks
+
       - name: Run full check
         run: pnpm run check
 

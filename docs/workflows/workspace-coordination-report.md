@@ -64,11 +64,14 @@ Workspace Coordination Report
 - `policy-approved low-risk delivery`: the active goal explicitly names merge
   and cleanup, the PR belongs to the current lane, the exact reviewed head SHA
   is still current, the PR targets the expected base branch, the PR is not a
-  draft, the PR is mergeable, required or reported checks are passing or absent
-  by repository policy, review threads are resolved, local verification passed,
-  and the diff avoids high-blast-radius surfaces such as secrets, credentials,
-  provider calls, deploy/release automation, migrations, destructive cleanup,
-  broad policy expansion, or evidence-retention changes.
+  draft, the PR is mergeable, required and reported checks for that head SHA are
+  passing, review threads are resolved, local verification passed, and the diff
+  avoids high-blast-radius surfaces such as secrets, credentials, provider
+  calls, deploy/release automation, migrations, destructive cleanup, broad
+  policy expansion, or evidence-retention changes. If GitHub reports no checks
+  for the head SHA, record that absence as evidence and treat it as low risk
+  only when repository rules do not require status checks and local verification
+  covers the changed surface.
 
 ## Merge Risk Controls
 
@@ -77,6 +80,11 @@ request reviews, status checks, conversation resolution, signed commits, linear
 history, merge queue, or successful deployments before changes land on a
 protected branch. A PR that does not meet the repository's visible merge
 requirements remains merge-gated.
+
+Proof for low-risk delivery must come from current GitHub PR metadata, review
+threads, review requests, status/check results for the exact head SHA, local
+verification output, and the reviewed changed-file list. If any evidence source
+is unavailable or ambiguous, the PR is not low risk.
 
 Use these controls to reduce a higher-risk candidate before classifying it as
 low risk:

@@ -105,16 +105,19 @@ try {
       assert(dryRun.stdout.includes("delete local branch codex/merged"), dryRun.stdout || dryRun.stderr);
       assert(dryRun.stdout.includes("delete local branch codex/equivalent"), dryRun.stdout || dryRun.stderr);
       assert(dryRun.stdout.includes("SKIP codex/diverged: 1 commit(s) not present"), dryRun.stdout || dryRun.stderr);
+      assert(dryRun.stdout.includes("SKIP codex/similar: 1 commit(s) not present"), dryRun.stdout || dryRun.stderr);
       assert(dryRun.stdout.includes("SKIP codex/active: branch is checked out in a worktree"), dryRun.stdout || dryRun.stderr);
-      for (const branch of ["codex/merged", "codex/equivalent", "codex/diverged", "codex/active"]) {
+      for (const branch of ["codex/merged", "codex/equivalent", "codex/diverged", "codex/similar", "codex/active"]) {
         assert(branchExists(fixture.root, branch), `${branch} was deleted during dry-run`);
       }
 
       const apply = runFixtureScript(fixture, ["cleanup-branches", "--base", "origin/main", "--apply"]);
       assert(apply.code === 0, apply.stderr || apply.stdout);
+      assert(apply.stdout.includes("Deleted 2 safe local codex/* branch(es)."), apply.stdout || apply.stderr);
       assert(!branchExists(fixture.root, "codex/merged"), "merged branch was not deleted");
       assert(!branchExists(fixture.root, "codex/equivalent"), "patch-equivalent branch was not deleted");
       assert(branchExists(fixture.root, "codex/diverged"), "diverged branch was deleted");
+      assert(branchExists(fixture.root, "codex/similar"), "similar non-equivalent branch was deleted");
       assert(branchExists(fixture.root, "codex/active"), "active worktree branch was deleted");
     } finally {
       cleanupBranchCleanupFixture(fixture);
@@ -127,7 +130,7 @@ try {
       const result = runFixtureScript(fixture, ["cleanup-branches", "--base", "origin/missing", "--apply"]);
       assert(result.code !== 0, "missing base ref unexpectedly passed");
       assert(result.stderr.includes("Base ref not found locally: origin/missing"), result.stderr || result.stdout);
-      for (const branch of ["codex/merged", "codex/equivalent", "codex/diverged", "codex/active"]) {
+      for (const branch of ["codex/merged", "codex/equivalent", "codex/diverged", "codex/similar", "codex/active"]) {
         assert(branchExists(fixture.root, branch), `${branch} was deleted after missing base ref`);
       }
     } finally {
@@ -232,6 +235,9 @@ function createBranchCleanupFixture() {
 
   runGit(fixtureRoot, ["switch", "-q", "-c", "codex/diverged", "origin/main"]);
   commitFile(fixtureRoot, "diverged.txt", "unique local work\n", "diverged work");
+
+  runGit(fixtureRoot, ["switch", "-q", "-c", "codex/similar", "origin/main"]);
+  commitFile(fixtureRoot, "equivalent.txt", "similar but not equivalent\n", "similar non-equivalent work");
 
   runGit(fixtureRoot, ["switch", "-q", "main"]);
   runGit(fixtureRoot, ["branch", "codex/active", "origin/main"]);

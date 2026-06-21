@@ -147,6 +147,13 @@ durable, milestone-driven workflow rather than a single unbounded task.
   other high-blast-radius surfaces. Record the PR URL, head SHA, base branch,
   check/review state, verification command, merge method, merge result, and
   rollback path before cleanup.
+- Prove the low-risk delivery criteria with concrete evidence from GitHub PR
+  metadata for base branch, mergeability, draft state, and exact head SHA;
+  GitHub review-thread and review-request state for unresolved conversations or
+  requested changes; GitHub status/check results for the exact head SHA; local
+  verification command output for repo-specific checks; and a reviewed diff
+  file list for excluded high-blast-radius surfaces. If a source is unavailable
+  or ambiguous, the criterion is not proven.
 - Reduce higher-risk merge candidates by adding evidence and controls before
   merge: split broad diffs into smaller PRs, keep the PR as draft until review
   is complete, require status checks/reviews/conversation resolution where the

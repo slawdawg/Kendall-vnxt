@@ -272,6 +272,7 @@ PR meets the repo policy-approved low-risk delivery checklist: current lane,
 expected base branch, exact reviewed head SHA, non-draft, mergeable, no failing
 required or reported checks, no unresolved review threads or requested changes,
 relevant local verification passed, no high-blast-radius surfaces, and a
-recorded rollback path. Cleanup requires merged or intentionally abandoned work,
-preserved evidence, recorded worktree state, and exact cleanup authority from
-the same standing delivery approval or a separate approval packet.
+recorded rollback path. Cleanup and local branch deletion require merged or
+intentionally abandoned work, preserved evidence, recorded worktree state, and
+exact cleanup or branch-deletion authority from the same standing delivery
+approval or a separate approval packet.

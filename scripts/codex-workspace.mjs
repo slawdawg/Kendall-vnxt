@@ -577,6 +577,7 @@ function cleanupBranches(argv) {
     runChecked("git", ["branch", "-D", branch], { cwd: repoRoot });
     console.log(`Deleted local branch ${branch}`);
   }
+  console.log(`Deleted ${eligible.length} safe local codex/* branch(es).`);
 }
 
 function rebuildIndex(argv) {

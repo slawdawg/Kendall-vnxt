@@ -22,6 +22,43 @@ function assertCondition(condition, message, failures) {
   }
 }
 
+function ciJobBlock(jobName) {
+  const jobStart = ciWorkflow.indexOf(`\n  ${jobName}:`);
+  if (jobStart === -1) {
+    return "";
+  }
+  const jobKeyPattern = /\n  [A-Za-z0-9_-]+:\n/g;
+  jobKeyPattern.lastIndex = jobStart + `\n  ${jobName}:`.length;
+  const nextJob = jobKeyPattern.exec(ciWorkflow);
+  return nextJob ? ciWorkflow.slice(jobStart, nextJob.index) : ciWorkflow.slice(jobStart);
+}
+
+function assertCiHookBeforeCheck({ packageScriptName, ciJobName, ciCheckCommand }, failures) {
+  const packageScript = packageJson.scripts?.[packageScriptName];
+  if (!packageScript?.includes("pnpm run test:codex-workspace")) {
+    return;
+  }
+
+  const job = ciJobBlock(ciJobName);
+  const hookConfigIndex = job.indexOf("git config core.hooksPath .githooks");
+  const checkCommandIndex = job.indexOf(ciCheckCommand);
+  assertCondition(
+    job,
+    `${ciWorkflowPath} must define the ${ciJobName} job`,
+    failures,
+  );
+  assertCondition(
+    job && hookConfigIndex !== -1,
+    `${ciWorkflowPath} must configure core.hooksPath in the ${ciJobName} job before running ${ciCheckCommand} because ${packageScriptName} runs test:codex-workspace`,
+    failures,
+  );
+  assertCondition(
+    job && hookConfigIndex !== -1 && checkCommandIndex !== -1 && hookConfigIndex < checkCommandIndex,
+    `${ciWorkflowPath} must configure core.hooksPath before ${ciCheckCommand} in the ${ciJobName} job`,
+    failures,
+  );
+}
+
 const failures = [];
 const workflowPath = "docs/workflows/workspace-coordination-report.md";
 const storyPath = "docs/workflows/implementation-evidence-boundary.md";
@@ -47,20 +84,11 @@ assertCondition(
   failures,
 );
 
-if (packageJson.scripts?.["check:static"]?.includes("pnpm run test:codex-workspace")) {
-  const hookConfigIndex = ciWorkflow.indexOf("git config core.hooksPath .githooks");
-  const staticCheckIndex = ciWorkflow.indexOf("pnpm run check:static");
-  assertCondition(
-    hookConfigIndex !== -1,
-    `${ciWorkflowPath} must configure core.hooksPath before running check:static because check:static runs test:codex-workspace`,
-    failures,
-  );
-  assertCondition(
-    hookConfigIndex !== -1 && staticCheckIndex !== -1 && hookConfigIndex < staticCheckIndex,
-    `${ciWorkflowPath} must configure core.hooksPath before pnpm run check:static`,
-    failures,
-  );
-}
+assertCiHookBeforeCheck(
+  { packageScriptName: "check:static", ciJobName: "static", ciCheckCommand: "pnpm run check:static" },
+  failures,
+);
+assertCiHookBeforeCheck({ packageScriptName: "check", ciJobName: "full", ciCheckCommand: "pnpm run check" }, failures);
 
 for (const path of [workflowPath, storyPath]) {
   assertCondition(existsSync(join(rootDir, path)), `Missing workspace coordination artifact ${path}`, failures);
@@ -113,6 +141,7 @@ for (const requiredText of [
   "Authority lanes owned by other sessions.",
   "GitHub branch protection and rulesets can lower merge risk",
   "Merge only the exact reviewed head SHA; do not bypass branch protection.",
+  "Proof for low-risk delivery must come from current GitHub PR metadata",
   "Generic continuation is not standing approval.",
   "policy-approved low-risk delivery checklist",
   "This workflow does not merge PRs, clean worktrees, delete branches",
