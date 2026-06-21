@@ -25,11 +25,13 @@ function assertCondition(condition, message, failures) {
 const failures = [];
 const workflowPath = "docs/workflows/workspace-coordination-report.md";
 const storyPath = "docs/workflows/implementation-evidence-boundary.md";
+const ciWorkflowPath = ".github/workflows/ci.yml";
 const packageJsonSource = readRequiredWorkspaceFile("package.json", failures);
 const packageJson = packageJsonSource ? JSON.parse(packageJsonSource) : {};
 const workflow = readRequiredWorkspaceFile(workflowPath, failures);
 const story = readRequiredWorkspaceFile(storyPath, failures);
 const storyIndex = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
+const ciWorkflow = readRequiredWorkspaceFile(ciWorkflowPath, failures);
 
 assertCondition(
   packageJson.scripts?.["check:workspace-coordination"] === "node ./scripts/check-workspace-coordination-report.mjs",
@@ -44,6 +46,21 @@ assertCondition(
   "pnpm run check must include pnpm run check:workspace-coordination",
   failures,
 );
+
+if (packageJson.scripts?.["check:static"]?.includes("pnpm run test:codex-workspace")) {
+  const hookConfigIndex = ciWorkflow.indexOf("git config core.hooksPath .githooks");
+  const staticCheckIndex = ciWorkflow.indexOf("pnpm run check:static");
+  assertCondition(
+    hookConfigIndex !== -1,
+    `${ciWorkflowPath} must configure core.hooksPath before running check:static because check:static runs test:codex-workspace`,
+    failures,
+  );
+  assertCondition(
+    hookConfigIndex !== -1 && staticCheckIndex !== -1 && hookConfigIndex < staticCheckIndex,
+    `${ciWorkflowPath} must configure core.hooksPath before pnpm run check:static`,
+    failures,
+  );
+}
 
 for (const path of [workflowPath, storyPath]) {
   assertCondition(existsSync(join(rootDir, path)), `Missing workspace coordination artifact ${path}`, failures);

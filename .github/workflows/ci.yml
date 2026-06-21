@@ -66,6 +66,9 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Configure repo-local Git hooks
+        run: git config core.hooksPath .githooks
+
       - name: Run static repository checks
         run: pnpm run check:static
 
