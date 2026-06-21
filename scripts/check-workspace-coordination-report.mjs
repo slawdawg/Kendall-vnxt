@@ -22,14 +22,74 @@ function assertCondition(condition, message, failures) {
   }
 }
 
+function ciJobBlock(jobName) {
+  const jobStart = ciWorkflow.indexOf(`\n  ${jobName}:`);
+  if (jobStart === -1) {
+    return "";
+  }
+  const jobKeyPattern = /\n  [A-Za-z0-9_-]+:\n/g;
+  jobKeyPattern.lastIndex = jobStart + `\n  ${jobName}:`.length;
+  const nextJob = jobKeyPattern.exec(ciWorkflow);
+  return nextJob ? ciWorkflow.slice(jobStart, nextJob.index) : ciWorkflow.slice(jobStart);
+}
+
+function assertCiHookBeforeCheck({ packageScriptName, ciJobName, ciCheckCommand }, failures) {
+  const packageScript = packageJson.scripts?.[packageScriptName];
+  if (!packageScript?.includes("pnpm run test:codex-workspace")) {
+    return;
+  }
+
+  const job = ciJobBlock(ciJobName);
+  const hookConfigIndex = job.indexOf("git config core.hooksPath .githooks");
+  const checkCommandIndex = job.indexOf(ciCheckCommand);
+  assertCondition(
+    job,
+    `${ciWorkflowPath} must define the ${ciJobName} job`,
+    failures,
+  );
+  assertCondition(
+    job && hookConfigIndex !== -1,
+    `${ciWorkflowPath} must configure core.hooksPath in the ${ciJobName} job before running ${ciCheckCommand} because ${packageScriptName} runs test:codex-workspace`,
+    failures,
+  );
+  assertCondition(
+    job && hookConfigIndex !== -1 && checkCommandIndex !== -1 && hookConfigIndex < checkCommandIndex,
+    `${ciWorkflowPath} must configure core.hooksPath before ${ciCheckCommand} in the ${ciJobName} job`,
+    failures,
+  );
+}
+
+function assertCiBaseRefBeforeCheck({ packageScriptName, ciJobName, ciCheckCommand }, failures) {
+  const packageScript = packageJson.scripts?.[packageScriptName];
+  if (!packageScript?.includes("pnpm run test:codex-workspace")) {
+    return;
+  }
+
+  const job = ciJobBlock(ciJobName);
+  const baseFetchIndex = job.indexOf("git fetch origin main:refs/remotes/origin/main");
+  const checkCommandIndex = job.indexOf(ciCheckCommand);
+  assertCondition(
+    job && baseFetchIndex !== -1,
+    `${ciWorkflowPath} must fetch origin/main in the ${ciJobName} job before running ${ciCheckCommand} because ${packageScriptName} runs test:codex-workspace`,
+    failures,
+  );
+  assertCondition(
+    job && baseFetchIndex !== -1 && checkCommandIndex !== -1 && baseFetchIndex < checkCommandIndex,
+    `${ciWorkflowPath} must fetch origin/main before ${ciCheckCommand} in the ${ciJobName} job`,
+    failures,
+  );
+}
+
 const failures = [];
 const workflowPath = "docs/workflows/workspace-coordination-report.md";
 const storyPath = "docs/workflows/implementation-evidence-boundary.md";
+const ciWorkflowPath = ".github/workflows/ci.yml";
 const packageJsonSource = readRequiredWorkspaceFile("package.json", failures);
 const packageJson = packageJsonSource ? JSON.parse(packageJsonSource) : {};
 const workflow = readRequiredWorkspaceFile(workflowPath, failures);
 const story = readRequiredWorkspaceFile(storyPath, failures);
 const storyIndex = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
+const ciWorkflow = readRequiredWorkspaceFile(ciWorkflowPath, failures);
 
 assertCondition(
   packageJson.scripts?.["check:workspace-coordination"] === "node ./scripts/check-workspace-coordination-report.mjs",
@@ -44,6 +104,16 @@ assertCondition(
   "pnpm run check must include pnpm run check:workspace-coordination",
   failures,
 );
+
+assertCiHookBeforeCheck(
+  { packageScriptName: "check:static", ciJobName: "static", ciCheckCommand: "pnpm run check:static" },
+  failures,
+);
+assertCiBaseRefBeforeCheck(
+  { packageScriptName: "check:static", ciJobName: "static", ciCheckCommand: "pnpm run check:static" },
+  failures,
+);
+assertCiHookBeforeCheck({ packageScriptName: "check", ciJobName: "full", ciCheckCommand: "pnpm run check" }, failures);
 
 for (const path of [workflowPath, storyPath]) {
   assertCondition(existsSync(join(rootDir, path)), `Missing workspace coordination artifact ${path}`, failures);
@@ -72,6 +142,7 @@ for (const classification of [
   "merge-gated lane",
   "local-only commit",
   "cleanup candidate",
+  "policy-approved low-risk delivery",
 ]) {
   assertCondition(workflow.includes(classification), `Workspace coordination workflow must define ${classification}`, failures);
 }
@@ -93,6 +164,11 @@ for (const requiredText of [
   "Open PRs waiting at a merge gate.",
   "Dirty active lanes.",
   "Authority lanes owned by other sessions.",
+  "GitHub branch protection and rulesets can lower merge risk",
+  "Merge only the exact reviewed head SHA; do not bypass branch protection.",
+  "Proof for low-risk delivery must come from current GitHub PR metadata",
+  "Generic continuation is not standing approval.",
+  "policy-approved low-risk delivery checklist",
   "This workflow does not merge PRs, clean worktrees, delete branches",
 ]) {
   assertCondition(workflow.includes(requiredText), `Workspace coordination workflow must include ${requiredText}`, failures);

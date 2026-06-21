@@ -12,6 +12,30 @@ The cleanup path removes generated Python artifacts before removing a disposable
 worktree. This prevents stale cache and temporary-file residue from blocking
 `git worktree remove`.
 
+After merged workspace cleanup, local `codex/*` branches may remain. Run the
+branch cleanup preview before deleting anything:
+
+```bash
+node ./scripts/codex-workspace.mjs cleanup-branches
+```
+
+Review the dry-run output. Preserve the selected base ref, skipped active
+worktrees, and proposed branch deletion list as cleanup evidence. The command
+only considers local `codex/*` branches, skips branches checked out in any
+worktree, and treats a branch as eligible only when it is already included in
+the base ref by ancestry or patch equivalence. It does not fetch; if the base
+ref looks stale, fetch explicitly before re-running the dry-run.
+
+Apply local branch deletion only when every listed branch is expected:
+
+```bash
+node ./scripts/codex-workspace.mjs cleanup-branches --apply
+```
+
+Stop if the dry-run lists an unexpected branch, reports a missing base ref, or
+skips a branch you expected to be deleted. Do not use broad branch deletion as a
+fallback.
+
 For orphan directories that are no longer registered as Git worktrees, dry-run first:
 
 ```bash

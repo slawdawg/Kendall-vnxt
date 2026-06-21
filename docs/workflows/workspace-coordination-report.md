@@ -61,6 +61,43 @@ Workspace Coordination Report
   preserved until pushed, merged, or explicitly discarded.
 - `cleanup candidate`: PR is merged, worktree is clean, and cleanup dry-run
   names only the expected worktree and local branch.
+- `policy-approved low-risk delivery`: the active goal explicitly names merge
+  and cleanup, the PR belongs to the current lane, the exact reviewed head SHA
+  is still current, the PR targets the expected base branch, the PR is not a
+  draft, the PR is mergeable, required and reported checks for that head SHA are
+  passing, review threads are resolved, local verification passed, and the diff
+  avoids high-blast-radius surfaces such as secrets, credentials, provider
+  calls, deploy/release automation, migrations, destructive cleanup, broad
+  policy expansion, or evidence-retention changes. If GitHub reports no checks
+  for the head SHA, record that absence as evidence and treat it as low risk
+  only when repository rules do not require status checks and local verification
+  covers the changed surface.
+
+## Merge Risk Controls
+
+GitHub branch protection and rulesets can lower merge risk by requiring pull
+request reviews, status checks, conversation resolution, signed commits, linear
+history, merge queue, or successful deployments before changes land on a
+protected branch. A PR that does not meet the repository's visible merge
+requirements remains merge-gated.
+
+Proof for low-risk delivery must come from current GitHub PR metadata, review
+threads, review requests, status/check results for the exact head SHA, local
+verification output, and the reviewed changed-file list. If any evidence source
+is unavailable or ambiguous, the PR is not low risk.
+
+Use these controls to reduce a higher-risk candidate before classifying it as
+low risk:
+
+- Split broad changes into smaller PRs.
+- Keep the PR as draft until review evidence is complete.
+- Require or preserve status checks, reviewer approval, and conversation
+  resolution when available.
+- Merge only the exact reviewed head SHA; do not bypass branch protection.
+- Prefer auto-merge or merge queue when repository rules require them.
+- Add feature flags, staged rollout, or manual validation for behavior changes.
+- Record a revert path before merge.
+- Rerun verification after base updates or material review changes.
 
 ## Stop Lines
 
@@ -74,8 +111,12 @@ Do not perform these actions from a generic continuation:
 - Resolve a review thread that has not been addressed.
 - Start work in a lane whose scope overlaps an active dirty lane.
 
-Use a narrow approval packet for merge, cleanup, branch deletion, or discarding
-local commits.
+Generic continuation is not standing approval. Use a narrow approval packet for
+merge, cleanup, branch deletion, or discarding local commits unless the active
+goal explicitly grants the named GitHub delivery operation and the action meets
+the policy-approved low-risk delivery checklist above. If any checklist item is
+missing, ambiguous, stale, failing, or high risk, stop for explicit operator
+approval.
 
 ## Next Safe Slice Rules
 

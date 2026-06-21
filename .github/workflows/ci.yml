@@ -66,6 +66,12 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Configure repo-local Git hooks
+        run: git config core.hooksPath .githooks
+
+      - name: Fetch base branch for workspace protocol tests
+        run: git fetch origin main:refs/remotes/origin/main
+
       - name: Run static repository checks
         run: pnpm run check:static
 
@@ -151,6 +157,9 @@ jobs:
 
       - name: Sync supervisor virtualenv
         run: uv sync --directory services/supervisor --locked
+
+      - name: Configure repo-local Git hooks
+        run: git config core.hooksPath .githooks
 
       - name: Run full check
         run: pnpm run check

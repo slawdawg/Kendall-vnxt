@@ -266,6 +266,13 @@ Before PR creation:
 - Open blockers and skipped checks are explicit.
 - No independent safe implementation work remains.
 
-Merge requires a separate decision after PR review/check state is visible.
-Cleanup requires merged or intentionally abandoned work, preserved evidence,
-recorded worktree state, and explicit cleanup authority.
+Merge requires a separate decision after PR review/check state is visible unless
+the active goal explicitly grants the named GitHub delivery operation and the
+PR meets the repo policy-approved low-risk delivery checklist: current lane,
+expected base branch, exact reviewed head SHA, non-draft, mergeable, no failing
+required or reported checks, no unresolved review threads or requested changes,
+relevant local verification passed, no high-blast-radius surfaces, and a
+recorded rollback path. Cleanup and local branch deletion require merged or
+intentionally abandoned work, preserved evidence, recorded worktree state, and
+exact cleanup or branch-deletion authority from the same standing delivery
+approval or a separate approval packet.
