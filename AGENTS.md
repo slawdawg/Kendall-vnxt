@@ -200,6 +200,35 @@ durable, milestone-driven workflow rather than a single unbounded task.
   especially when the work affects the supervisor, dashboard, tools, or
   PATH-sensitive commands.
 
+## End-to-End Lane Runner
+
+Use `docs/workflows/end-to-end-lane-runner.md` when the operator uses a short
+delegation phrase such as "run end-to-end lane: <objective>", "develop this
+through merge and cleanup", or "see this lane through end to end".
+
+- Treat the default authority profile as `standard-delivery`: create or resume a
+  managed worktree, research, use matching BMAD workflows and code review when
+  useful, implement, verify, review, commit, push, open or update the PR, merge
+  low-risk PRs, and clean up the merged local worktree and local branch when the
+  evidence gates pass. BMAD party mode or spawned BMAD subagents require
+  explicit provider, model-selection, and spending approval for the lane.
+- Keep generated BMAD artifacts local. Rewrite durable decisions into
+  source-owned docs, tests, scripts, or policy before delivery.
+- Do not interrupt for routine mechanics. Interrupt only for product steering,
+  residual high-risk approval, failed checks that cannot be fixed within the
+  lane, scope expansion, scarce paid or review resources, unsafe behavior, or
+  external blockers.
+- High-risk surfaces do not immediately require operator approval. First run a
+  risk-reduction pass: split broad diffs, add exact-head checks, dry-runs,
+  allowlists, explicit labels, narrow permissions, fake adapters, tests,
+  rollback paths, or cleanup path guards. Ask the operator only when residual
+  risk still exceeds the active authority profile or the mitigation itself needs
+  new authority.
+- Preserve an evidence packet for the lane: objective, authority profile,
+  worktree, branch, PR, planning/review methods, changed files, verification,
+  PR head SHA, check/review state, merge result, cleanup dry-run/result, and
+  residual risks.
+
 ## Codex Workspace Protocol
 
 Use the repo-owned Codex workspace workflow when the operator asks to start, list,
