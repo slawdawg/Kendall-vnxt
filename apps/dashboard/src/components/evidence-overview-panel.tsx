@@ -1,6 +1,7 @@
 import type {
   ExecutionAttemptView,
   RoutingPreviewView,
+  RuntimeEvidenceCrossCheckView,
   RuntimeEvidenceExportView,
   RuntimeEvidenceReviewWorkItemView,
   WorkflowEventView,
@@ -16,6 +17,18 @@ function titleCase(value: string): string {
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
+}
+
+function uniqueCrossChecks(items: RuntimeEvidenceCrossCheckView[]): RuntimeEvidenceCrossCheckView[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.label}:${item.report}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 export function EvidenceOverviewPanel({
@@ -79,6 +92,7 @@ export function EvidenceOverviewPanel({
   ];
   const reviewShortcuts = runtimeEvidenceExport.reviewNavigator;
   const reportShortcuts = runtimeEvidenceExport.boundary.relatedSupervisorReports.slice(0, 4);
+  const crossChecks = uniqueCrossChecks(reviewShortcuts.flatMap((item) => item.crossChecks ?? [])).slice(0, 4);
 
   return (
     <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
@@ -181,6 +195,33 @@ export function EvidenceOverviewPanel({
               className="break-all rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
               {report}
+            </a>
+          ))}
+        </div>
+      </div>
+      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h4 className="text-base font-semibold">Cross-check path</h4>
+            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+              Source-owned report checks for reviewing runtime evidence without changing authority.
+            </p>
+          </div>
+          <span className="w-fit rounded-full bg-[var(--panel)] px-3 py-1 font-mono text-xs text-[var(--muted)]">
+            {crossChecks.length} checks
+          </span>
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {crossChecks.map((item) => (
+            <a
+              key={`${item.label}:${item.report}`}
+              href={reportShortcutHref(item.report)}
+              className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              <p className="text-xs font-semibold">{item.label}</p>
+              <p className="mt-1 break-all font-mono text-[11px] text-[var(--muted)]">{item.dashboardAnchor}</p>
+              <p className="mt-1 break-all font-mono text-[11px] text-[var(--muted)]">{item.relatedDoc}</p>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{item.reason}</p>
             </a>
           ))}
         </div>

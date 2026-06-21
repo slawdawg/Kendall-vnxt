@@ -1139,6 +1139,14 @@ class DevelopmentRunwayReportView(BaseModel):
     remoteAutomationApproved: bool = False
 
 
+class RuntimeEvidenceCrossCheckView(BaseModel):
+    label: str
+    report: str
+    dashboardAnchor: str
+    relatedDoc: str
+    reason: str
+
+
 class RuntimeEvidenceReviewWorkItemView(BaseModel):
     workItemId: str
     title: str
@@ -1164,6 +1172,7 @@ class RuntimeEvidenceReviewReportView(BaseModel):
     summary: str
     workItems: list[RuntimeEvidenceReviewWorkItemView]
     reviewQueue: list[RuntimeEvidenceReviewWorkItemView]
+    crossChecks: list[RuntimeEvidenceCrossCheckView] = Field(default_factory=list)
     relatedReports: list[str]
     relatedDocs: list[str]
     dashboardAnchors: list[str]
@@ -2068,6 +2077,7 @@ class RuntimeEvidenceReviewNavigatorItemView(BaseModel):
     relatedDocs: list[str] = Field(default_factory=list)
     dashboardAnchors: list[str] = Field(default_factory=list)
     stopLines: list[str] = Field(default_factory=list)
+    crossChecks: list[RuntimeEvidenceCrossCheckView] = Field(default_factory=list)
 
 
 class RuntimeEvidenceSubscriptionLaunchView(BaseModel):

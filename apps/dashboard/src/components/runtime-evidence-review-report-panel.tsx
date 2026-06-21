@@ -123,6 +123,28 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
 
         <div className="space-y-4">
           <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <h4 className="text-base font-semibold">Cross-check path</h4>
+            <div className="mt-3 space-y-2">
+              {report.crossChecks.map((crossCheck) => (
+                <Link
+                  key={`${crossCheck.label}:${crossCheck.report}`}
+                  href={reportShortcutHref(crossCheck.report)}
+                  className="block rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                >
+                  <span className="text-xs font-semibold">{crossCheck.label}</span>
+                  <span className="mt-1 block break-all font-mono text-[11px] text-[var(--muted)]">
+                    {crossCheck.dashboardAnchor}
+                  </span>
+                  <span className="mt-1 block break-all font-mono text-[11px] text-[var(--muted)]">
+                    {crossCheck.relatedDoc}
+                  </span>
+                  <span className="mt-2 block text-xs leading-5 text-[var(--muted)]">{crossCheck.reason}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Related reports</h4>
             <div className="mt-3 space-y-2">
               {report.relatedReports.map((reportEndpoint) => (

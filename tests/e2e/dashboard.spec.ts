@@ -680,7 +680,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByRole("heading", { name: "Current-state reconciliation" })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("merged_to_main_recorded")).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Local story completion is recorded")).toBeVisible();
-    await expect(authorityMatrixPanel.getByText("80dbd488885d90c225c1d7625d1e84ef75a94752")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("80dbd488885d90c225c1d7625d1e84ef75a94752").first()).toBeVisible();
     await expect(authorityMatrixPanel.getByText("Merged-to-main state is recorded true")).toBeVisible();
     await expect(authorityMatrixPanel.getByRole("heading", { name: "Next-lane authority packet" })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("decision_only_no_authority_granted")).toBeVisible();
@@ -835,6 +835,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runtimeReviewPanel.getByText("Related reports").first()).toBeVisible();
     await expect(runtimeReviewPanel.getByText("Related docs").first()).toBeVisible();
     await expect(runtimeReviewPanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true }).first()).toBeVisible();
+    await expect(runtimeReviewPanel.getByRole("heading", { name: "Cross-check path" })).toBeVisible();
+    await expect(runtimeReviewPanel.getByRole("link", { name: /Development runway/ })).toHaveAttribute(
+      "href",
+      "/controls#development-runway-report",
+    );
     await expect(runtimeReviewPanel.getByRole("link", { name: "GET /supervisor/runtime-evidence-review-report" }).first()).toHaveAttribute(
       "href",
       "/controls#runtime-evidence-review-report",
@@ -1312,6 +1317,12 @@ test.describe("dashboard workflow coverage", () => {
       "href",
       "/controls#execution-readiness-report",
     );
+    await expect(overviewPanel.getByRole("heading", { name: "Cross-check path" })).toBeVisible();
+    await expect(overviewPanel.getByRole("link", { name: /Authority boundary/ }).first()).toHaveAttribute(
+      "href",
+      "/controls#execution-readiness-report",
+    );
+    await expect(overviewPanel.getByText("Confirm review work does not grant execution")).toBeVisible();
     await expect(overviewPanel.getByRole("heading", { name: "Review queue position" })).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: "Open review index" })).toHaveAttribute(
       "href",
@@ -1323,7 +1334,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(overviewPanel.getByText("Review queue shortcuts are not execution-authority approvals.")).toBeVisible();
     await expect(overviewPanel.getByRole("heading", { name: "Review shortcuts" })).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Runtime state/ })).toBeVisible();
-    await expect(overviewPanel.getByRole("link", { name: /Authority boundary/ })).toBeVisible();
+    await expect(overviewPanel.getByRole("link").filter({ hasText: "review-authority-boundary" })).toBeVisible();
     await expect(overviewPanel.getByRole("link", { name: /Git-backed evidence/ })).toBeVisible();
 
     await page.getByRole("link", { name: "Attempts", exact: true }).click();
@@ -1356,6 +1367,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(exportPanel.getByRole("heading", { name: "Runtime state" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Authority boundary" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Git-backed evidence" })).toBeVisible();
+    await expect(exportPanel.getByRole("link", { name: /Documentation authority/ }).first()).toHaveAttribute(
+      "href",
+      "/controls#documentation-authority-report",
+    );
     await expect(exportPanel.getByText("cancel_requested -> request_abort_recorded")).toBeVisible();
     await expect(exportPanel.getByText("Review navigation is not execution-authority approval.")).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Related reports" })).toBeVisible();

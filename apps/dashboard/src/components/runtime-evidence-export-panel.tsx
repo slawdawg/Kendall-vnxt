@@ -184,6 +184,20 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
               <p className="mt-3 break-words rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
                 {item.relatedReports.join(" | ")}
               </p>
+              <div className="mt-3 space-y-2">
+                {(item.crossChecks ?? []).map((crossCheck) => (
+                  <a
+                    key={`${item.itemId}:${crossCheck.label}:${crossCheck.report}`}
+                    href={reportShortcutHref(crossCheck.report)}
+                    className="block rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                  >
+                    <p className="text-xs font-semibold">{crossCheck.label}</p>
+                    <p className="mt-1 break-all font-mono text-[11px] text-[var(--muted)]">{crossCheck.dashboardAnchor}</p>
+                    <p className="mt-1 break-all font-mono text-[11px] text-[var(--muted)]">{crossCheck.relatedDoc}</p>
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{crossCheck.reason}</p>
+                  </a>
+                ))}
+              </div>
               {item.stopLines.length > 0 ? (
                 <div className="mt-3 space-y-2">
                   {item.stopLines.map((stopLine) => (
