@@ -1027,6 +1027,16 @@ class MaintenanceReadinessReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class NextLaneRecommendationView(BaseModel):
+    laneTitle: str
+    laneSlug: str
+    branchName: str
+    startCommand: str
+    scope: list[str] = Field(default_factory=list)
+    verificationCommands: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
+
+
 class SafeDevelopmentBacklogItemView(BaseModel):
     itemId: str
     label: str
@@ -1040,6 +1050,7 @@ class SafeDevelopmentBacklogItemView(BaseModel):
     relatedDocs: list[str] = Field(default_factory=list)
     dashboardAnchors: list[str] = Field(default_factory=list)
     blockedBy: list[str] = Field(default_factory=list)
+    nextLane: NextLaneRecommendationView | None = None
     nextAction: str
 
 
@@ -1107,6 +1118,7 @@ class DevelopmentRunwaySliceView(BaseModel):
     dashboardAnchors: list[str] = Field(default_factory=list)
     readinessChecks: list[DevelopmentRunwayReadinessCheckView] = Field(default_factory=list)
     blockedBy: list[str] = Field(default_factory=list)
+    nextLane: NextLaneRecommendationView | None = None
     nextAction: str
 
 

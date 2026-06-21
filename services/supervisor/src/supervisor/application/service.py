@@ -96,6 +96,7 @@ from supervisor.api.schemas import (
     MaintenanceReadinessTrackView,
     MvpProofTrialReportView,
     MvpProofTrialStepView,
+    NextLaneRecommendationView,
     NextLaneDecisionPacketView,
     OperatorViewCreate,
     OperatorViewResponse,
@@ -2232,6 +2233,7 @@ class SupervisorService:
         ready_backlog_item_ids = {item.itemId for item in backlog.items if item.status == "ready"}
         action_step_ids = {step.stepId for step in action_plan.steps}
         verification_command_ids = {command.commandId for command in verification.requiredCommands + verification.optionalCommands}
+        report_navigation_lane = self._report_evidence_navigation_next_lane()
 
         slices = [
             DevelopmentRunwaySliceView(
@@ -2302,6 +2304,7 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
+                nextLane=report_navigation_lane,
                 nextAction="Select this slice for read-only navigation or evidence-surface work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
@@ -2603,6 +2606,7 @@ class SupervisorService:
         blocked_maintenance_tracks = [track.trackId for track in maintenance.tracks if "blocked" in track.status]
         required_verification = [command.command for command in verification.requiredCommands]
         report_count = len(catalog.reports)
+        report_navigation_lane = self._report_evidence_navigation_next_lane()
 
         items = [
             SafeDevelopmentBacklogItemView(
@@ -2631,6 +2635,7 @@ class SupervisorService:
                     "/controls#supervisor-report-catalog",
                     "/controls#verification-readiness-report",
                 ],
+                nextLane=report_navigation_lane,
                 nextAction="Batch future maintenance work into coherent report/API/dashboard/docs/test slices.",
             ),
             SafeDevelopmentBacklogItemView(
@@ -2795,6 +2800,34 @@ class SupervisorService:
                 "Keep GitHub delivery hygiene current before relying on remote PR automation, and avoid persistent plaintext token storage.",
                 "Use required verification commands and focused e2e runners as acceptance evidence for each slice.",
                 "Keep blocked authority work visible but outside implementation until explicit approval arrives.",
+            ],
+        )
+
+    def _report_evidence_navigation_next_lane(self) -> NextLaneRecommendationView:
+        lane_slug = "safe-backlog-report-alignment"
+        return NextLaneRecommendationView(
+            laneTitle="Safe backlog report alignment",
+            laneSlug=lane_slug,
+            branchName="codex/safe-backlog-report-alignment",
+            startCommand=f'node ./scripts/codex-workspace.mjs start "{lane_slug.replace("-", " ")}"',
+            scope=[
+                "safe backlog report contracts and service data",
+                "development runway report contracts and service data",
+                "controls dashboard report rendering",
+                "supervisor, browser, and static drift checks",
+            ],
+            verificationCommands=[
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:reports",
+                "pnpm run check:runtime-export",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+            stopLines=[
+                "Do not add provider/model calls, process launch, premium execution, worker shell commands, source mutation, network access, or credential access.",
+                "Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.",
+                "Do not start or modify the active verification-surface-hardening lane while using this recommendation.",
             ],
         )
 
