@@ -186,8 +186,12 @@ assertCondition(
   failures,
 );
 assertCondition(
-  runbookCheck.includes("pnpm run check:provider-fixtures"),
-  "Runbook drift check must require pnpm run check:provider-fixtures",
+  runbookCheck.includes("activeCheckCommands") &&
+    runbookCheck.includes('extractCheckCommands(packageJson.scripts?.["check:static"])') &&
+    runbookCheck.includes("extractCheckCommands(packageJson.scripts?.check)") &&
+    runbookCheck.includes("for (const command of activeCheckCommands)") &&
+    runbookCheck.includes("mentionsCommand(content, command)"),
+  "Runbook drift check must derive active check commands from package.json aggregate scripts",
   failures,
 );
 assertCondition(

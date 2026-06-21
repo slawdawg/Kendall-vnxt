@@ -14,6 +14,40 @@ function assertCondition(condition, message, failures) {
   }
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function mentionsCommand(content, command) {
+  return new RegExp(`${escapeRegExp(command)}(?![A-Za-z0-9:-])`).test(content);
+}
+
+function extractCheckCommands(script) {
+  const commands = [];
+  const commandPattern = /\bpnpm\s+run\s+(check:[A-Za-z0-9:-]+)/g;
+  let match;
+
+  while ((match = commandPattern.exec(script ?? "")) !== null) {
+    commands.push(`pnpm run ${match[1]}`);
+  }
+
+  return commands;
+}
+
+function uniqueInOrder(values) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const value of values) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      unique.push(value);
+    }
+  }
+
+  return unique;
+}
+
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const files = {
   "README.md": readWorkspaceFile("README.md"),
@@ -38,6 +72,17 @@ assertCondition(
   failures,
 );
 
+const activeCheckCommands = uniqueInOrder([
+  ...extractCheckCommands(packageJson.scripts?.["check:static"]),
+  ...extractCheckCommands(packageJson.scripts?.check),
+]);
+
+assertCondition(
+  activeCheckCommands.length > 0,
+  "package.json aggregate check scripts must include at least one pnpm run check:* command",
+  failures,
+);
+
 const currentRunbooks = [
   "README.md",
   "docs/workflows/current-session-runbook.md",
@@ -45,29 +90,10 @@ const currentRunbooks = [
 
 for (const path of currentRunbooks) {
   const content = files[path];
-  assertCondition(content.includes("pnpm run check"), `${path} must mention pnpm run check`, failures);
-  assertCondition(content.includes("pnpm run check:docs"), `${path} must mention pnpm run check:docs`, failures);
-  assertCondition(content.includes("pnpm run check:documentation-authority"), `${path} must mention pnpm run check:documentation-authority`, failures);
-  assertCondition(content.includes("pnpm run check:verification-readiness"), `${path} must mention pnpm run check:verification-readiness`, failures);
-  assertCondition(content.includes("pnpm run check:authority-readiness"), `${path} must mention pnpm run check:authority-readiness`, failures);
-  assertCondition(content.includes("pnpm run check:adaptive-scoring"), `${path} must mention pnpm run check:adaptive-scoring`, failures);
-  assertCondition(content.includes("pnpm run check:e2e-report"), `${path} must mention pnpm run check:e2e-report`, failures);
-  assertCondition(content.includes("pnpm run check:reports"), `${path} must mention pnpm run check:reports`, failures);
-  assertCondition(content.includes("pnpm run check:execution-boundary"), `${path} must mention pnpm run check:execution-boundary`, failures);
-  assertCondition(content.includes("pnpm run check:execution-evidence"), `${path} must mention pnpm run check:execution-evidence`, failures);
-  assertCondition(content.includes("pnpm run check:provider-fixtures"), `${path} must mention pnpm run check:provider-fixtures`, failures);
-  assertCondition(content.includes("pnpm run check:process-lifecycle"), `${path} must mention pnpm run check:process-lifecycle`, failures);
-  assertCondition(content.includes("pnpm run check:runbooks"), `${path} must mention pnpm run check:runbooks`, failures);
-  assertCondition(content.includes("pnpm run check:runtime-export"), `${path} must mention pnpm run check:runtime-export`, failures);
-  assertCondition(content.includes("pnpm run check:runtime-review"), `${path} must mention pnpm run check:runtime-review`, failures);
-  assertCondition(content.includes("pnpm run check:safe-backlog"), `${path} must mention pnpm run check:safe-backlog`, failures);
-  assertCondition(content.includes("pnpm run check:managed-recipes"), `${path} must mention pnpm run check:managed-recipes`, failures);
-  assertCondition(content.includes("pnpm run check:maintenance-action-plan"), `${path} must mention pnpm run check:maintenance-action-plan`, failures);
-  assertCondition(content.includes("pnpm run check:development-runway"), `${path} must mention pnpm run check:development-runway`, failures);
-  assertCondition(content.includes("pnpm run check:delivery-readiness"), `${path} must mention pnpm run check:delivery-readiness`, failures);
-  assertCondition(content.includes("pnpm run check:linux-install-lane"), `${path} must mention pnpm run check:linux-install-lane`, failures);
-  assertCondition(content.includes("pnpm run check:clean-install-boundary"), `${path} must mention pnpm run check:clean-install-boundary`, failures);
-  assertCondition(content.includes("pnpm run check:maintenance-readiness"), `${path} must mention pnpm run check:maintenance-readiness`, failures);
+  assertCondition(mentionsCommand(content, "pnpm run check"), `${path} must mention pnpm run check`, failures);
+  for (const command of activeCheckCommands) {
+    assertCondition(mentionsCommand(content, command), `${path} must mention ${command}`, failures);
+  }
   assertCondition(
     !content.includes("77 supervisor tests") && !content.includes("70 supervisor tests"),
     `${path} must not carry stale fixed supervisor test counts`,
