@@ -46,7 +46,8 @@ This runbook also anchors runbook verification for the active check chain.
 verification, `pnpm run check:runtime-export`, `pnpm run check:runtime-review`,
 `pnpm run check:safe-backlog`, `pnpm run check:managed-recipes`,
 `pnpm run check:maintenance-action-plan`, `pnpm run check:development-runway`,
-`pnpm run check:delivery-readiness`, `pnpm run check:cleanup-automation`,
+`pnpm run check:delivery-readiness`, `pnpm run check:github-workflow-policy`,
+`pnpm run check:cleanup-automation`,
 `pnpm run check:linux-install-lane`, `pnpm run check:clean-install-boundary`,
 `pnpm run check:maintenance-readiness`, dashboard build verification, and
 supervisor integration tests.

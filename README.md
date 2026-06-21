@@ -114,7 +114,7 @@ embed them in bootstrap scripts.
 
 ## Developer Checks
 
-- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, adaptive scoring decision-prep drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, clean-install boundary checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
+- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, adaptive scoring decision-prep drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, GitHub workflow policy drift checks, clean-install boundary checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
 - `pnpm run check:linux-bootstrap` verifies the Linux bootstrap contract, shell syntax, install docs, and focused bootstrap tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - `pnpm run check:documentation-authority` verifies documentation authority report contract/schema/service/dashboard/story alignment
@@ -135,6 +135,7 @@ embed them in bootstrap scripts.
 - `pnpm run check:maintenance-action-plan` verifies maintenance action plan contract/schema/service/dashboard/story alignment
 - `pnpm run check:development-runway` verifies development runway contract/schema/service/dashboard/story/runbook alignment for larger PR-sized safe slices
 - `pnpm run check:delivery-readiness` verifies delivery readiness policy contract/schema/service/dashboard/story alignment
+- `pnpm run check:github-workflow-policy` verifies Git/GCM, Codex connector, optional gh auth, connector probe, and plaintext-token stop-line alignment
 - `pnpm run check:linux-install-lane` verifies the delivered Linux install package, docs, and unsupported Windows/remote-install boundary
 - `pnpm run check:clean-install-boundary` rejects tracked local-only BMAD/runtime/secret/unsupported Windows or WSL install artifacts
 - `pnpm run check:maintenance-readiness` verifies maintenance readiness contract/schema/service/dashboard/story alignment
