@@ -48,19 +48,19 @@ It authorizes, for the named lane only:
   requires it.
 - Commit, push, open or update the lane PR, and address review or CI feedback.
 - Merge low-risk PRs when the merge evidence checklist is satisfied.
-- Clean up the merged local worktree and local lane branch after a valid dry
-  run names only expected lane resources.
+- Clean up the merged local worktree, local lane branch, and remote lane branch
+  after a valid dry run names only expected lane resources.
 
 It does not authorize unrelated repositories, unrelated branches, force-push,
 history rewrites, secret access, provider spending, production deploys,
 database or schema migration execution, cleanup outside the managed lane, or
-remote branch deletion unless the operator explicitly grants that authority.
+remote branch deletion outside the merged managed lane.
 
 ## Lane Lifecycle
 
 1. **Start or resume lane.** Use `node ./scripts/codex-workspace.mjs` as the
-   lifecycle authority. Record the worktree, branch, base, PR mode, and current
-   status.
+   lifecycle authority. Record the worktree, branch, base, PR mode, current
+   status, and lane owner.
 2. **Discover.** Inspect the smallest relevant docs and source first. Expand
    only when the objective crosses a product, architecture, safety, or external
    behavior boundary.
@@ -80,14 +80,35 @@ remote branch deletion unless the operator explicitly grants that authority.
    the PR, and monitor checks and review state.
 8. **Merge.** Merge only when the low-risk checklist is proven for the exact
    head SHA or when an explicit higher-risk approval covers the residual risk.
-9. **Cleanup.** Run `cleanup-merged` as a dry run. Apply cleanup only when the
-   dry-run output names the expected worktree and local branch.
+9. **Cleanup.** Run `cleanup-merged --delete-remote` as a dry run. Apply
+   cleanup only when the dry-run output names the expected worktree, local
+   branch, and remote branch for the current lane.
+
+## Lane Ownership
+
+Lane runners must treat the workspace manifest as the local ownership record.
+`node ./scripts/codex-workspace.mjs start` records the current owner from
+`--owner`, `CODEX_WORKSPACE_OWNER`, `CODEX_THREAD_ID`, or a local user/host
+fallback. `list` and `resume` surface that owner.
+
+Before resuming, finishing, merging, or cleaning up a lane, compare the
+manifest owner with the current runner owner. If another owner is recorded,
+stop and do not mutate the lane unless the operator confirms that the other
+session is idle. Only then may the runner pass `--take-ownership`, and the
+evidence packet must record the previous owner and reason for takeover.
+
+Unowned legacy manifests may be claimed by the first mutating runner, but new
+end-to-end lanes should not remain unowned. Prefer setting
+`CODEX_WORKSPACE_OWNER` to a stable, human-readable value when multiple Codex
+sessions are expected.
 
 ## Low-Risk Merge Checklist
 
 Merge under `standard-delivery` only when current evidence proves all of these:
 
 - The PR belongs to the current lane and targets the expected base branch.
+- The workspace manifest owner matches the current runner, or ownership was
+  explicitly taken over with operator confirmation.
 - The PR is not a draft.
 - The PR is mergeable at the exact reviewed head SHA.
 - Required and reported checks for that exact head are successful or
@@ -115,6 +136,7 @@ These surfaces are not automatically covered by `standard-delivery`:
 - GitHub Actions or automation with write permissions.
 - Review-thread mutation, branch protection changes, or merge automation.
 - Destructive cleanup outside the managed lane.
+- Lane ownership takeover without operator confirmation.
 - Broad policy expansion or evidence-retention changes.
 
 ## Risk-Reduction Pass
@@ -133,8 +155,8 @@ Use controls such as:
 - Add budget caps and explicit provider/model configuration before any paid
   path.
 - Add tests, static drift checks, or verification scripts for new contracts.
-- Require clean-worktree, merged-PR, exact branch, and path-allowlist evidence
-  before cleanup.
+- Require clean-worktree, merged-PR, exact branch, owner, and path-allowlist
+  evidence before cleanup.
 - Record rollback, revert, resume, retry, and inspection paths.
 
 After mitigation, reassess residual risk. Continue only if the result satisfies
@@ -175,6 +197,8 @@ End-to-End Lane Evidence
 - Merge method and result:
 - Cleanup dry-run:
 - Cleanup result:
+- Lane owner:
+- Ownership takeover, if any:
 - Residual risks or follow-ups:
 ```
 

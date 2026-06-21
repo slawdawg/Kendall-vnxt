@@ -10,6 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
@@ -80,6 +81,8 @@ Commands:
 Common options:
   --dry-run                 Print the planned mutation without applying it.
   --state-root <path>       Override the Codex workspace state root.
+  --owner <id>              Override the lane owner recorded or checked for this command.
+  --take-ownership          Reassign a lane to the current owner before mutating it.
 
 start options:
   --base <branch>           Base branch. Defaults to main.
@@ -159,6 +162,7 @@ function startWorkspace(argv) {
   assertSafeBranch(branch);
 
   const state = workspaceState(options);
+  const owner = currentLaneOwner(options);
   const worktreePath = resolve(String(options.worktree || join(state.worktreesDir, taskId)));
   const manifestPath = join(state.tasksDir, `${taskId}.json`);
   const shouldFetch = !options.noFetch;
@@ -193,6 +197,10 @@ function startWorkspace(argv) {
     branch,
     worktree_path: worktreePath,
     status: "active",
+    owner,
+    owner_thread_id: process.env.CODEX_THREAD_ID || null,
+    owner_acquired_at: new Date().toISOString(),
+    owner_updated_at: new Date().toISOString(),
     mode,
     pr_url: null,
     pr_number: null,
@@ -244,6 +252,7 @@ function listWorkspaces(argv) {
         manifest.status,
         manifest.branch,
         manifest.pr_url || "no-pr",
+        `owner=${manifest.owner || "unowned"}`,
         manifest.worktree_path,
       ].join(" | "),
     );
@@ -257,6 +266,11 @@ function resumeWorkspace(argv) {
 
   console.log(`Task: ${manifest.task_id}`);
   console.log(`Status: ${manifest.status}`);
+  console.log(`Owner: ${manifest.owner || "unowned"}`);
+  const ownerWarning = laneOwnerWarning(manifest, options);
+  if (ownerWarning) {
+    console.log(ownerWarning);
+  }
   console.log(`Branch: ${manifest.branch}`);
   console.log(`Worktree: ${manifest.worktree_path}`);
   if (manifest.pr_url) {
@@ -275,6 +289,7 @@ function finishPr(argv) {
 
   const verifyProfile = options.noVerify ? "" : String(options.verify || "");
   const verifyCommand = verifyProfile ? verificationCommand(verifyProfile) : [];
+  assertLaneOwner(manifest, options);
   requireGh("finish-pr");
   if (manifest.mode === "experiment") {
     throw new Error("This workspace is marked as experiment mode. Create a PR only after changing its manifest mode to pr.");
@@ -326,6 +341,8 @@ function finishPr(argv) {
   withManifestLock(state, manifest.task_id, () => {
     const lockedManifest = readManifest(manifestPath);
     validateManifest(lockedManifest, manifestPath);
+    assertLaneOwner(lockedManifest, options);
+    claimLaneOwner(lockedManifest, options);
     Object.assign(manifest, lockedManifest);
     assertCurrentBranch(manifest);
 
@@ -407,6 +424,7 @@ function cleanupMerged(argv) {
     if (manifest.status === "closed") {
       continue;
     }
+    assertLaneOwner(manifest, options);
     reconcileManifest(manifest, { refreshPr: true });
 
     const pr = prView(manifest);
@@ -441,6 +459,11 @@ function cleanupMerged(argv) {
     }
 
     withManifestLock(state, manifest.task_id, () => {
+      const lockedManifest = readManifest(manifestPath);
+      validateManifest(lockedManifest, manifestPath);
+      assertLaneOwner(lockedManifest, options);
+      claimLaneOwner(lockedManifest, options);
+      Object.assign(manifest, lockedManifest);
       try {
         removeWorktree(manifest.worktree_path, state);
         const branchDelete = git(["branch", "-d", manifest.branch], { cwd: repoRoot });
@@ -630,6 +653,10 @@ function rebuildIndex(argv) {
       branch,
       worktree_path: record.path,
       status: "active",
+      owner: null,
+      owner_thread_id: null,
+      owner_acquired_at: null,
+      owner_updated_at: null,
       pr_url: null,
       pr_number: null,
       created_at: new Date().toISOString(),
@@ -873,6 +900,57 @@ function validateManifest(manifest, path) {
     }
   }
   assertSafeBranch(manifest.branch);
+}
+
+function currentLaneOwner(options = {}) {
+  const configured = options.owner || process.env.CODEX_WORKSPACE_OWNER || process.env.CODEX_THREAD_ID;
+  const owner = configured ? String(configured).trim() : `${process.env.USER || "unknown"}@${hostname() || "unknown-host"}`;
+  return owner || "unknown-owner";
+}
+
+function laneOwnerWarning(manifest, options = {}) {
+  if (!manifest.owner) {
+    return "";
+  }
+  const currentOwner = currentLaneOwner(options);
+  if (manifest.owner === currentOwner) {
+    return "";
+  }
+  return [
+    `Owner warning: lane is owned by ${manifest.owner}.`,
+    `Current runner owner is ${currentOwner}.`,
+    "Do not mutate this lane unless the operator confirms it is idle and you pass --take-ownership.",
+  ].join(" ");
+}
+
+function assertLaneOwner(manifest, options = {}) {
+  const warning = laneOwnerWarning(manifest, options);
+  if (warning && !options.takeOwnership) {
+    throw new Error(
+      `${manifest.task_id} is owned by ${manifest.owner}; current runner is ${currentLaneOwner(
+        options,
+      )}. Use --take-ownership only after confirming the lane is idle.`,
+    );
+  }
+}
+
+function claimLaneOwner(manifest, options = {}) {
+  const currentOwner = currentLaneOwner(options);
+  if (manifest.owner === currentOwner) {
+    manifest.owner_updated_at = new Date().toISOString();
+    return;
+  }
+
+  if (manifest.owner && !options.takeOwnership) {
+    return;
+  }
+
+  const previousOwner = manifest.owner || "unowned";
+  manifest.owner = currentOwner;
+  manifest.owner_thread_id = process.env.CODEX_THREAD_ID || null;
+  manifest.owner_acquired_at = new Date().toISOString();
+  manifest.owner_updated_at = manifest.owner_acquired_at;
+  appendTaskEvent(manifest, "ownership_claimed", `owner ${previousOwner} -> ${currentOwner}`);
 }
 
 function reconcileManifest(manifest, options = {}) {
@@ -1167,6 +1245,7 @@ function currentGitRoot() {
 
 function printManifestSummary(manifest) {
   console.log(`Task: ${manifest.task_id}`);
+  console.log(`Owner: ${manifest.owner || "unowned"}`);
   console.log(`Branch: ${manifest.branch}`);
   console.log(`Base: ${manifest.base_ref}`);
   console.log(`Worktree: ${manifest.worktree_path}`);

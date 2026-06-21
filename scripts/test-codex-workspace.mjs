@@ -21,11 +21,12 @@ try {
   });
 
   test("start dry-run plans fetch, worktree creation, and manifest write", () => {
-    const result = run(["start", "test task", "--dry-run", "--state-root", stateRoot]);
+    const result = run(["start", "test task", "--dry-run", "--owner", "runner-a", "--state-root", stateRoot]);
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("git fetch origin main"), result.stdout || result.stderr);
     assert(result.stdout.includes("git worktree add -b codex/test-task"), result.stdout || result.stderr);
     assert(result.stdout.includes("write "), result.stdout || result.stderr);
+    assert(result.stdout.includes("Owner: runner-a"), result.stdout || result.stderr);
   });
 
   test("help lists local codex branch cleanup", () => {
@@ -147,6 +148,25 @@ try {
     assert(result.stderr.includes("skipping invalid manifest"));
   });
 
+  test("list surfaces lane owner from manifests", () => {
+    const tasksDir = join(stateRoot, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+    writeFileSync(
+      join(tasksDir, "owned-lane.json"),
+      `${JSON.stringify({
+        task_id: "owned-lane",
+        branch: "codex/owned-lane",
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "active",
+        owner: "runner-a",
+      })}\n`,
+    );
+    const result = run(["list", "owned-lane", "--state-root", stateRoot]);
+    assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("owner=runner-a"), result.stdout || result.stderr);
+  });
+
   test("finish-pr rejects unknown verification profile before mutation", () => {
     const tasksDir = join(stateRoot, "tasks");
     const worktreePath = rootDir;
@@ -165,6 +185,35 @@ try {
     const result = run(["finish-pr", "verify-profile", "--verify", "anything", "--dry-run", "--state-root", stateRoot]);
     assert(result.code !== 0, "unknown verification profile unexpectedly passed");
     assert(result.stderr.includes("Unknown verification profile"));
+  });
+
+  test("finish-pr refuses lanes owned by another runner before mutation", () => {
+    const tasksDir = join(stateRoot, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+    writeFileSync(
+      join(tasksDir, "owned-finish.json"),
+      `${JSON.stringify({
+        task_id: "owned-finish",
+        branch: "codex/owned-finish",
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "active",
+        mode: "pr",
+        owner: "runner-a",
+      })}\n`,
+    );
+    const result = run([
+      "finish-pr",
+      "owned-finish",
+      "--no-verify",
+      "--owner",
+      "runner-b",
+      "--state-root",
+      stateRoot,
+    ]);
+    assert(result.code !== 0, "mismatched owner unexpectedly passed");
+    assert(result.stderr.includes("owned by runner-a"), result.stderr || result.stdout);
+    assert(result.stderr.includes("--take-ownership"), result.stderr || result.stdout);
   });
 
   test("cleanup-orphans lists orphan directories without deleting by default", () => {
