@@ -648,6 +648,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:authority-readiness", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:adaptive-scoring", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:e2e-report", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:reports", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:execution-boundary", { exact: true })).toBeVisible();
@@ -689,6 +690,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByText("local-provider-execution", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("subscription-agent-launch", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("adaptive-scoring", { exact: true })).toBeVisible();
+    await expect(
+      authorityMatrixPanel
+        .locator('[data-family-id="adaptive-scoring"]')
+        .getByText("docs/workflows/adaptive-scoring-decision-prep.md", { exact: true }),
+    ).toBeVisible();
     await expect(authorityMatrixPanel.getByText("worker-command-source-network-credentials", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("remote-delivery-automation", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("github-delivery", { exact: true })).toBeVisible();

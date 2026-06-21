@@ -163,6 +163,50 @@ Stop lines:
 - Do not use string-built shell deletion commands.
 - Do not cross from local cleanup to remote cleanup without exact remote target approval.
 
+## Adaptive Scoring Decision Preparation Contract
+
+Status: decision_only_no_authority_granted, non-executing packet
+
+Authority family: `adaptive-scoring`
+
+Operation candidate: decision preparation for a future metadata-only adaptive
+scoring approval packet
+
+This contract supports review of whether adaptive scoring should receive a
+future exact approval packet. It does not compute scores, persist scores, rank
+work, change priority, alter delivery or cleanup eligibility, approve authority,
+call providers, launch processes, mutate source by workers, read credentials, or
+bypass failed checks.
+
+Source package:
+
+- `docs/workflows/adaptive-scoring-decision-prep.md`
+- `pnpm run check:adaptive-scoring`
+
+Required future approval fields include:
+
+- Approved metadata input fields.
+- Prohibited inputs.
+- Output fields and display rules.
+- Advisory-only versus state-changing authority.
+- Retained evidence and redaction policy.
+- Transparency, explainability, and operator review path.
+- Verification command.
+- Rollback path.
+- Stop lines.
+- Expiry or review point.
+
+Stop lines:
+
+- Do not run adaptive scoring.
+- Do not compute or persist adaptive scores.
+- Do not let scores change priority, routing, delivery, cleanup, authority,
+  merge, or verification behavior.
+- Do not call providers or launch processes.
+- Do not read credentials, sessions, raw prompts, completions, reasoning traces,
+  provider payloads, or raw source copies as scoring input.
+- Do not treat this decision-prep package as approval.
+
 ## Next-Lane Authority Decision Contract
 
 Contract id: `epic-11-next-lane-authority-decision-contract`
@@ -188,7 +232,11 @@ Candidate authority families:
 - `github-delivery`
 - `cleanup-automation`
 
-Recommended lane for the operator to consider approving: adaptive scoring decision preparation, not scoring execution. No lane is selected or authorized until the operator accepts an exact approval packet.
+Recommended lane for the operator to consider approving: adaptive scoring
+decision preparation, not scoring execution. Use
+`docs/workflows/adaptive-scoring-decision-prep.md` and
+`pnpm run check:adaptive-scoring` as the current non-executing package. No lane
+is selected or authorized until the operator accepts an exact approval packet.
 
 Decision-only stop lines:
 

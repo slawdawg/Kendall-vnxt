@@ -114,12 +114,13 @@ embed them in bootstrap scripts.
 
 ## Developer Checks
 
-- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, clean-install boundary checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
+- `pnpm run check` runs preflight, documentation drift checks, documentation authority report drift checks, verification readiness report drift checks, authority readiness matrix drift checks, adaptive scoring decision-prep drift checks, dashboard e2e report drift checks, supervisor report catalog drift checks, execution boundary report drift checks, execution evidence boundary drift checks, provider fixture policy drift checks, process lifecycle policy drift checks, runbook verification checks, runtime evidence export drift checks, runtime evidence review drift checks, safe backlog drift checks, managed recipe policy drift checks, maintenance action plan drift checks, development runway drift checks, delivery readiness policy drift checks, clean-install boundary checks, maintenance readiness drift checks, dashboard build, and supervisor integration tests
 - `pnpm run check:linux-bootstrap` verifies the Linux bootstrap contract, shell syntax, install docs, and focused bootstrap tests
 - `pnpm run check:docs` verifies documentation indexes and blocked execution-authority story references
 - `pnpm run check:documentation-authority` verifies documentation authority report contract/schema/service/dashboard/story alignment
 - `pnpm run check:verification-readiness` verifies verification readiness report contract/schema/service/dashboard/story alignment
 - `pnpm run check:authority-readiness` verifies authority readiness matrix contract/schema/service/dashboard/story alignment
+- `pnpm run check:adaptive-scoring` verifies the adaptive scoring decision-prep package and runtime tripwires without enabling scoring
 - `pnpm run check:e2e-report` verifies dashboard e2e runner/report/browser/story alignment
 - `pnpm run check:reports` verifies supervisor report catalog route/runtime/dashboard/story alignment
 - `pnpm run check:execution-boundary` verifies execution configuration/readiness/threat-boundary route/service/dashboard/story alignment
@@ -152,6 +153,7 @@ Playwright starts the dashboard with `next dev` for faster browser-test startup.
 - Current architecture index: [docs/architecture/index.md](docs/architecture/index.md)
 - Product requirements boundary: [docs/workflows/product-requirements-boundary.md](docs/workflows/product-requirements-boundary.md)
 - Implementation evidence boundary: [docs/workflows/implementation-evidence-boundary.md](docs/workflows/implementation-evidence-boundary.md)
+- Adaptive scoring decision preparation: [docs/workflows/adaptive-scoring-decision-prep.md](docs/workflows/adaptive-scoring-decision-prep.md)
 - Current implementation checkpoint: [docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md](docs/implementation-checkpoint-2026-06-08-supervisor-dynamic-routing-follow-on.md)
 
 ## Why pnpm

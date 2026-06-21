@@ -34,6 +34,7 @@ enough. Keep exact file links and line references for decisions and evidence.
 | Git/GitHub delivery | `AGENTS.md#codex-workspace-protocol`, relevant delivery/readiness story, current PR/CI evidence | Push, PR creation, merge, branch deletion, cleanup, or issue sync is requested |
 | Supervisor/dashboard code changes | Relevant story, nearby tests, package scripts, target app/service files | API contracts, UI state, or cross-package behavior changes |
 | KNX governance or safety work | Matching `.agents/skills/knx-*` skill, `_bmad/memory/knx/` documents if present | Source/evidence boundaries, execution policy, or safety validation expands |
+| Adaptive scoring authority decision | `docs/workflows/adaptive-scoring-decision-prep.md`, `docs/workflows/execution-authority-boundary.md#adaptive-scoring-decision-preparation-contract`, `GET /supervisor/authority-readiness-matrix-report` | Any scoring output, ranking, priority influence, provider call, worker launch, or authority/delivery/cleanup effect is proposed |
 | Research/tool evaluation | Current story/spec, `docs/workflows/token-economy-governance.md`, official docs or primary sources; local-only tool-trial packets belong under `_bmad-output`. Rewrite repo-facing decisions as source-owned docs or policy. | Savings claims, adoption, installation, paid usage, or networked integration are proposed |
 
 ## Expansion Rules
