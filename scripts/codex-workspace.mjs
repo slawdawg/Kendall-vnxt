@@ -46,6 +46,9 @@ try {
     case "cleanup-orphans":
       cleanupOrphans(commandArgs);
       break;
+    case "cleanup-branches":
+      cleanupBranches(commandArgs);
+      break;
     case "rebuild-index":
       rebuildIndex(commandArgs);
       break;
@@ -70,6 +73,7 @@ Commands:
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
+  cleanup-branches [query]  Remove local codex/* branches already present in the base ref by ancestry or patch-id.
   rebuild-index             Rebuild missing manifests from Git worktrees.
   doctor                    Check local workspace protocol readiness.
 
@@ -96,6 +100,10 @@ finish-pr options:
 cleanup-merged options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --delete-remote           Delete remote branch after merged cleanup.
+
+cleanup-branches options:
+  --apply                   Apply cleanup. Without this, cleanup is dry-run.
+  --base <ref>              Ref to compare against. Defaults to origin/main.
 `);
 }
 
@@ -510,6 +518,64 @@ function cleanupOrphans(argv) {
   }
 }
 
+function cleanupBranches(argv) {
+  const { positional, options } = parseOptions(argv);
+  const query = positional.join(" ").trim().toLowerCase();
+  const apply = Boolean(options.apply);
+  const baseRef = String(options.base || `origin/${defaultBaseBranch}`);
+
+  if (!refExists(baseRef)) {
+    throw new Error(`Base ref not found locally: ${baseRef}`);
+  }
+
+  const branches = localCodexBranches().filter((branch) => !query || branch.toLowerCase().includes(query));
+  if (branches.length === 0) {
+    console.log(query ? `No local codex/* branches matched: ${query}` : "No local codex/* branches found.");
+    return;
+  }
+
+  const activeWorktreeBranches = new Set(
+    parseWorktreePorcelain(git(["worktree", "list", "--porcelain"], { cwd: repoRoot }).stdout || "")
+      .map((record) => record.branch?.replace(/^refs\/heads\//, ""))
+      .filter(Boolean),
+  );
+  const eligible = [];
+
+  for (const branch of branches) {
+    assertSafeBranch(branch);
+    if (activeWorktreeBranches.has(branch)) {
+      console.log(`SKIP ${branch}: branch is checked out in a worktree.`);
+      continue;
+    }
+
+    const safety = branchCleanupSafety(branch, baseRef);
+    if (!safety.safe) {
+      console.log(`SKIP ${branch}: ${safety.reason}`);
+      continue;
+    }
+    eligible.push({ branch, reason: safety.reason });
+  }
+
+  if (eligible.length === 0) {
+    console.log(query ? `No safe local codex/* branch cleanup matched: ${query}` : "No safe local codex/* branch cleanup found.");
+    return;
+  }
+
+  const plan = eligible.map(({ branch, reason }) => `delete local branch ${branch} (${reason})`);
+  if (options.dryRun || !apply) {
+    printPlan("cleanup-branches", plan);
+    if (!apply) {
+      console.log("Add --apply to delete the safe local branches.");
+    }
+    return;
+  }
+
+  for (const { branch } of eligible) {
+    runChecked("git", ["branch", "-D", branch], { cwd: repoRoot });
+    console.log(`Deleted local branch ${branch}`);
+  }
+}
+
 function rebuildIndex(argv) {
   const { options } = parseOptions(argv);
   const state = workspaceState(options);
@@ -742,6 +808,10 @@ function remoteBranchExists(branch) {
   return git(["rev-parse", "--verify", "--quiet", `origin/${branch}`], { cwd: repoRoot }).code === 0;
 }
 
+function refExists(ref) {
+  return git(["rev-parse", "--verify", "--quiet", ref], { cwd: repoRoot }).code === 0;
+}
+
 function assertSafeBranch(branch) {
   const short = branch.replace(/^refs\/heads\//, "");
   if (protectedBranches.has(short)) {
@@ -840,6 +910,38 @@ function parseStatus(cwd) {
     unstaged,
     lines,
   };
+}
+
+function localCodexBranches() {
+  const result = git(["for-each-ref", "--format=%(refname:short)", "refs/heads/codex"], { cwd: repoRoot });
+  if (result.code !== 0 || !result.stdout) {
+    return [];
+  }
+  return result.stdout.split(/\r?\n/).filter(Boolean).sort();
+}
+
+function branchCleanupSafety(branch, baseRef) {
+  const merged = git(["merge-base", "--is-ancestor", branch, baseRef], { cwd: repoRoot });
+  if (merged.code === 0) {
+    return { safe: true, reason: `merged into ${baseRef}` };
+  }
+
+  const cherry = git(["cherry", baseRef, branch], { cwd: repoRoot });
+  if (cherry.code !== 0) {
+    return { safe: false, reason: cherry.stderr || `could not compare with ${baseRef}` };
+  }
+
+  const lines = cherry.stdout.split(/\r?\n/).filter(Boolean);
+  if (lines.length === 0) {
+    return { safe: true, reason: `no commits beyond ${baseRef}` };
+  }
+
+  const unapplied = lines.filter((line) => line.startsWith("+"));
+  if (unapplied.length > 0) {
+    return { safe: false, reason: `${unapplied.length} commit(s) not present in ${baseRef}` };
+  }
+
+  return { safe: true, reason: `patch-equivalent to ${baseRef}` };
 }
 
 function withManifestLock(state, taskId, fn) {

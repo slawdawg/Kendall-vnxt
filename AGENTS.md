@@ -200,6 +200,11 @@ surface is `node ./scripts/codex-workspace.mjs`.
   script must see a merged PR with the expected base branch and a clean
   worktree before it removes anything. Re-run with `--apply` only when the
   dry-run output is correct.
+- When local `codex/*` branches remain after workspace cleanup, run
+  `node ./scripts/codex-workspace.mjs cleanup-branches` as a dry-run. The
+  script may delete only local Codex branches that are already present in the
+  base ref by ancestry or patch equivalence and are not checked out in any
+  worktree. Re-run with `--apply` only when the dry-run output is correct.
 - When the operator says "recover workspace state" or manifests appear stale, run
   `node ./scripts/codex-workspace.mjs rebuild-index --dry-run` before applying
   any rebuilt local manifests.

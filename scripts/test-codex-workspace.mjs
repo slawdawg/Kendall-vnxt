@@ -28,6 +28,13 @@ try {
     assert(result.stdout.includes("write "), result.stdout || result.stderr);
   });
 
+  test("help lists local codex branch cleanup", () => {
+    const result = run(["--help"]);
+    assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("cleanup-branches [query]"), result.stdout || result.stderr);
+    assert(result.stdout.includes("--base <ref>"), result.stdout || result.stderr);
+  });
+
   test("start refuses protected branch override", () => {
     const result = run(["start", "bad task", "--branch", "main", "--dry-run", "--state-root", stateRoot]);
     assert(result.code !== 0, "protected branch override unexpectedly passed");
@@ -69,6 +76,24 @@ try {
     assert(source.includes("resolveWorkspaceCommand"), "codex-workspace must import shared command resolver");
     assert(match[0].includes("const resolved = resolveWorkspaceCommand(commandName, commandArguments);"), "run must resolve workspace commands");
     assert(match[0].includes("env: resolved.env ?? process.env"), "run must pass resolved command environment");
+  });
+
+  test("cleanup-branches compares patch equivalence before local deletion", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function cleanupBranches[\s\S]*?function rebuildIndex/);
+    assert(match, "cleanupBranches source not found");
+    assert(match[0].includes("branchCleanupSafety"), "cleanup-branches must use safety classification");
+    assert(match[0].includes("activeWorktreeBranches.has(branch)"), "cleanup-branches must skip checked-out branches");
+    assert(source.includes('git(["cherry", baseRef, branch]'), "branch cleanup must use git cherry patch-equivalence");
+    assert(source.includes('["branch", "-D", branch]'), "branch cleanup must use explicit local branch deletion after safety checks");
+  });
+
+  test("cleanup-branches is dry-run by default", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function cleanupBranches[\s\S]*?function rebuildIndex/);
+    assert(match, "cleanupBranches source not found");
+    assert(match[0].includes("options.dryRun || !apply"), "cleanup-branches must require --apply for deletion");
+    assert(match[0].includes("Add --apply to delete the safe local branches."), "cleanup-branches must guide explicit apply");
   });
 
   test("list skips malformed manifests without aborting", () => {
