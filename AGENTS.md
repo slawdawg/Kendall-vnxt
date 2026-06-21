@@ -207,10 +207,11 @@ delegation phrase such as "run end-to-end lane: <objective>", "develop this
 through merge and cleanup", or "see this lane through end to end".
 
 - Treat the default authority profile as `standard-delivery`: create or resume a
-  managed worktree, research, use matching BMAD workflows or party mode when
+  managed worktree, research, use matching BMAD workflows and code review when
   useful, implement, verify, review, commit, push, open or update the PR, merge
   low-risk PRs, and clean up the merged local worktree and local branch when the
-  evidence gates pass.
+  evidence gates pass. BMAD party mode or spawned BMAD subagents require
+  explicit provider, model-selection, and spending approval for the lane.
 - Keep generated BMAD artifacts local. Rewrite durable decisions into
   source-owned docs, tests, scripts, or policy before delivery.
 - Do not interrupt for routine mechanics. Interrupt only for product steering,

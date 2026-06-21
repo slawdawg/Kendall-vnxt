@@ -35,8 +35,11 @@ It authorizes, for the named lane only:
 - Read source, docs, local planning state, and current external PR/check state.
 - Run bounded research using primary or official sources when the decision
   depends on current tool, API, or ecosystem behavior.
-- Use BMAD workflows, agents, code review, and party mode when the lane benefits
-  from requirements, architecture, QA, or multi-perspective review.
+- Use BMAD workflows and code review when the lane benefits from requirements,
+  architecture, QA, or multi-perspective review.
+- Use BMAD party mode or spawned BMAD subagents only when the operator has
+  explicitly approved the provider, model-selection, and spending authority for
+  that lane.
 - Create local BMAD planning artifacts under ignored local output folders.
 - Rewrite durable decisions from local planning into source-owned docs, tests,
   scripts, or policy.
@@ -62,8 +65,10 @@ remote branch deletion unless the operator explicitly grants that authority.
    only when the objective crosses a product, architecture, safety, or external
    behavior boundary.
 3. **Plan only as needed.** Use the matching BMAD skill for PRDs, epics,
-   stories, architecture, UX, QA, research, party mode, or code review when the
-   work benefits from that method. Keep generated BMAD work products local.
+   stories, architecture, UX, QA, research, or code review when the work
+   benefits from that method. Use BMAD party mode or spawned BMAD subagents
+   only with explicit provider, model-selection, and spending approval. Keep
+   generated BMAD work products local.
 4. **Implement.** Make scoped source-owned changes. Prefer existing repository
    patterns over new abstractions.
 5. **Review.** Route implemented code changes through `bmad-code-review` when a
@@ -102,6 +107,8 @@ These surfaces are not automatically covered by `standard-delivery`:
 
 - Secrets, credentials, tokens, or authentication state.
 - Provider calls, paid execution, model selection, or budget changes.
+- BMAD party mode or spawned BMAD subagents that make provider calls or choose
+  models.
 - Worker or process launch.
 - Production deploys or release automation.
 - Database, schema, migration, or retention changes.
