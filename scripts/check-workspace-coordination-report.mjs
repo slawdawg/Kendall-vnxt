@@ -72,6 +72,7 @@ for (const classification of [
   "merge-gated lane",
   "local-only commit",
   "cleanup candidate",
+  "policy-approved low-risk delivery",
 ]) {
   assertCondition(workflow.includes(classification), `Workspace coordination workflow must define ${classification}`, failures);
 }
@@ -93,6 +94,10 @@ for (const requiredText of [
   "Open PRs waiting at a merge gate.",
   "Dirty active lanes.",
   "Authority lanes owned by other sessions.",
+  "GitHub branch protection and rulesets can lower merge risk",
+  "Merge only the exact reviewed head SHA; do not bypass branch protection.",
+  "Generic continuation is not standing approval.",
+  "policy-approved low-risk delivery checklist",
   "This workflow does not merge PRs, clean worktrees, delete branches",
 ]) {
   assertCondition(workflow.includes(requiredText), `Workspace coordination workflow must include ${requiredText}`, failures);

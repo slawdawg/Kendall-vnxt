@@ -136,6 +136,26 @@ durable, milestone-driven workflow rather than a single unbounded task.
   destructive history rewrites, secret access, provider calls, cleanup outside
   the managed workspace, or expanding delivery beyond the reviewed lane scope.
   Record each delivery action and its evidence as part of the goal.
+- Treat a PR merge under that standing approval as policy-approved low-risk
+  delivery only when all of these are true: the PR belongs to the current lane,
+  targets the expected base branch, is not a draft, is mergeable at the exact
+  reviewed head SHA, has no failing required or reported checks, has no
+  unresolved review threads or requested changes, has completed the relevant
+  local verification, and the diff does not touch secrets, credential handling,
+  provider calls, deployment/release automation, database/schema migrations,
+  destructive cleanup, broad policy expansion, generated evidence retention, or
+  other high-blast-radius surfaces. Record the PR URL, head SHA, base branch,
+  check/review state, verification command, merge method, merge result, and
+  rollback path before cleanup.
+- Reduce higher-risk merge candidates by adding evidence and controls before
+  merge: split broad diffs into smaller PRs, keep the PR as draft until review
+  is complete, require status checks/reviews/conversation resolution where the
+  repository supports it, prefer exact-head merges or auto-merge/merge queue
+  instead of bypassing branch protections, use feature flags or staged rollout
+  for behavior changes, add a documented revert path, and rerun verification
+  after base updates. If any high-risk surface remains, or if the merge tool
+  reports missing/failing/ambiguous checks or reviews, stop for explicit
+  operator approval.
 - Use progressive authority for all automation: document intent and stop lines,
   add contracts first, preview/report, use fake adapters, dry-run real tools,
   move to read-only real integration, then bounded write integration, then
@@ -193,8 +213,10 @@ surface is `node ./scripts/codex-workspace.mjs`.
   then use `node ./scripts/codex-workspace.mjs finish-pr` from the task
   worktree or pass a task query from another worktree. Stage intended files
   explicitly before `finish-pr`; use `--stage-all` only after confirming the
-  full worktree diff belongs to the task. Do not merge to `main` unless the operator
-  explicitly asks for a merge after seeing the PR state.
+  full worktree diff belongs to the task. Merge only when the active goal's
+  standing delivery approval covers merge and the low-risk delivery criteria
+  above are proven; otherwise wait for explicit merge approval after showing
+  the PR state.
 - When the operator says "clean up merged work", run
   `node ./scripts/codex-workspace.mjs cleanup-merged` first as a dry-run. The
   script must see a merged PR with the expected base branch and a clean
