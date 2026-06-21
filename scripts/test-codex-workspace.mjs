@@ -96,6 +96,45 @@ try {
     assert(match[0].includes("Add --apply to delete the safe local branches."), "cleanup-branches must guide explicit apply");
   });
 
+  test("cleanup-branches dry-run and apply only safe inactive branches", () => {
+    const fixture = createBranchCleanupFixture();
+    try {
+      const dryRun = runFixtureScript(fixture, ["cleanup-branches", "--base", "origin/main"]);
+      assert(dryRun.code === 0, dryRun.stderr || dryRun.stdout);
+      assert(dryRun.stdout.includes("Base: origin/main"), dryRun.stdout || dryRun.stderr);
+      assert(dryRun.stdout.includes("delete local branch codex/merged"), dryRun.stdout || dryRun.stderr);
+      assert(dryRun.stdout.includes("delete local branch codex/equivalent"), dryRun.stdout || dryRun.stderr);
+      assert(dryRun.stdout.includes("SKIP codex/diverged: 1 commit(s) not present"), dryRun.stdout || dryRun.stderr);
+      assert(dryRun.stdout.includes("SKIP codex/active: branch is checked out in a worktree"), dryRun.stdout || dryRun.stderr);
+      for (const branch of ["codex/merged", "codex/equivalent", "codex/diverged", "codex/active"]) {
+        assert(branchExists(fixture.root, branch), `${branch} was deleted during dry-run`);
+      }
+
+      const apply = runFixtureScript(fixture, ["cleanup-branches", "--base", "origin/main", "--apply"]);
+      assert(apply.code === 0, apply.stderr || apply.stdout);
+      assert(!branchExists(fixture.root, "codex/merged"), "merged branch was not deleted");
+      assert(!branchExists(fixture.root, "codex/equivalent"), "patch-equivalent branch was not deleted");
+      assert(branchExists(fixture.root, "codex/diverged"), "diverged branch was deleted");
+      assert(branchExists(fixture.root, "codex/active"), "active worktree branch was deleted");
+    } finally {
+      cleanupBranchCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-branches fails closed when the base ref is missing", () => {
+    const fixture = createBranchCleanupFixture();
+    try {
+      const result = runFixtureScript(fixture, ["cleanup-branches", "--base", "origin/missing", "--apply"]);
+      assert(result.code !== 0, "missing base ref unexpectedly passed");
+      assert(result.stderr.includes("Base ref not found locally: origin/missing"), result.stderr || result.stdout);
+      for (const branch of ["codex/merged", "codex/equivalent", "codex/diverged", "codex/active"]) {
+        assert(branchExists(fixture.root, branch), `${branch} was deleted after missing base ref`);
+      }
+    } finally {
+      cleanupBranchCleanupFixture(fixture);
+    }
+  });
+
   test("list skips malformed manifests without aborting", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
@@ -163,6 +202,96 @@ function run(args) {
     stdout: result.stdout || "",
     stderr: result.stderr || "",
   };
+}
+
+function createBranchCleanupFixture() {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-branch-cleanup-"));
+  const fixtureScript = join(fixtureRoot, "scripts", "codex-workspace.mjs");
+  const fixtureLib = join(fixtureRoot, "scripts", "lib", "workspace-command-resolution.mjs");
+  const activeWorktree = `${fixtureRoot}-active`;
+  mkdirSync(join(fixtureRoot, "scripts", "lib"), { recursive: true });
+  writeFileSync(fixtureScript, readFileSync(scriptPath, "utf8"));
+  writeFileSync(
+    fixtureLib,
+    readFileSync(join(rootDir, "scripts", "lib", "workspace-command-resolution.mjs"), "utf8"),
+  );
+
+  runGit(fixtureRoot, ["init", "-q"]);
+  runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
+  runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
+  commitFile(fixtureRoot, "base.txt", "base\n", "base");
+  runGit(fixtureRoot, ["branch", "-M", "main"]);
+  const baseCommit = runGit(fixtureRoot, ["rev-parse", "HEAD"]).stdout;
+
+  commitFile(fixtureRoot, "equivalent.txt", "same patch\n", "main equivalent patch");
+  runGit(fixtureRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  runGit(fixtureRoot, ["branch", "codex/merged", "HEAD"]);
+
+  runGit(fixtureRoot, ["switch", "-q", "-c", "codex/equivalent", baseCommit]);
+  commitFile(fixtureRoot, "equivalent.txt", "same patch\n", "branch equivalent patch");
+
+  runGit(fixtureRoot, ["switch", "-q", "-c", "codex/diverged", "origin/main"]);
+  commitFile(fixtureRoot, "diverged.txt", "unique local work\n", "diverged work");
+
+  runGit(fixtureRoot, ["switch", "-q", "main"]);
+  runGit(fixtureRoot, ["branch", "codex/active", "origin/main"]);
+  runGit(fixtureRoot, ["worktree", "add", "-q", activeWorktree, "codex/active"]);
+
+  return { root: fixtureRoot, script: fixtureScript, activeWorktree };
+}
+
+function cleanupBranchCleanupFixture(fixture) {
+  if (!fixture) {
+    return;
+  }
+  spawnSync("git", ["worktree", "remove", "--force", fixture.activeWorktree], {
+    cwd: fixture.root,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  rmSync(fixture.activeWorktree, { recursive: true, force: true });
+  rmSync(fixture.root, { recursive: true, force: true });
+}
+
+function runFixtureScript(fixture, args) {
+  const result = spawnSync(process.execPath, [fixture.script, ...args], {
+    cwd: fixture.root,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  return {
+    code: result.status ?? 1,
+    stdout: result.stdout || "",
+    stderr: result.stderr || result.error?.message || "",
+  };
+}
+
+function runGit(cwd, args) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  assert((result.status ?? 1) === 0, result.stderr || result.stdout || `git ${args.join(" ")} failed`);
+  return {
+    stdout: (result.stdout || "").trim(),
+    stderr: (result.stderr || "").trim(),
+  };
+}
+
+function commitFile(cwd, path, content, message) {
+  writeFileSync(join(cwd, path), content);
+  runGit(cwd, ["add", path]);
+  runGit(cwd, ["commit", "-q", "-m", message]);
+}
+
+function branchExists(cwd, branch) {
+  const result = spawnSync("git", ["rev-parse", "--verify", "--quiet", branch], {
+    cwd,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  return result.status === 0;
 }
 
 function test(name, fn) {

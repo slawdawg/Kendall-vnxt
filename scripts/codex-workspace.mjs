@@ -73,7 +73,7 @@ Commands:
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
-  cleanup-branches [query]  Remove local codex/* branches already present in the base ref by ancestry or patch-id.
+  cleanup-branches [query]  Remove safe local codex/* branches already present in the base ref by ancestry or patch-id.
   rebuild-index             Rebuild missing manifests from Git worktrees.
   doctor                    Check local workspace protocol readiness.
 
@@ -104,6 +104,7 @@ cleanup-merged options:
 cleanup-branches options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --base <ref>              Ref to compare against. Defaults to origin/main.
+                            Missing base refs fail closed; no fetch is performed.
 `);
 }
 
@@ -527,6 +528,8 @@ function cleanupBranches(argv) {
   if (!refExists(baseRef)) {
     throw new Error(`Base ref not found locally: ${baseRef}`);
   }
+  const baseSha = git(["rev-parse", "--short", baseRef], { cwd: repoRoot }).stdout.trim() || "unknown";
+  console.log(`Base: ${baseRef} (${baseSha})`);
 
   const branches = localCodexBranches().filter((branch) => !query || branch.toLowerCase().includes(query));
   if (branches.length === 0) {
