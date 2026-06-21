@@ -66,11 +66,14 @@ for (const serviceText of [
   "currentStateFindings",
   "nextLaneDecisionPacket",
   "planning-reconciliation-current",
-  "pr-103-review-gated",
-  "ci_green_external_review_blocked",
+  "pr-103-merged-to-main",
+  "merged_to_main_recorded",
   "Local story completion is recorded",
-  "not directly into main",
-  "Merged-to-main state remains false",
+  "GitHub state checked on 2026-06-21 reports PR #103 closed and merged on 2026-06-13T22:51:00Z.",
+  "80dbd488885d90c225c1d7625d1e84ef75a94752",
+  "Merged-to-main state is recorded true",
+  "Do not use PR #103 delivery evidence for new remote mutation without a fresh exact approval packet.",
+  "cleanup use still requires a fresh GitHub re-check and target-specific approval",
   "decision_only_no_authority_granted",
   "epic-11-next-lane-authority-decision-contract",
   "docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract",
@@ -148,10 +151,10 @@ for (const browserText of [
   "Current-state reconciliation",
   "Next-lane authority packet",
   "decision_only_no_authority_granted",
-  "ci_green_external_review_blocked",
+  "merged_to_main_recorded",
   "Local story completion is recorded",
-  "not directly into main",
-  "Merged-to-main state remains false",
+  "80dbd488885d90c225c1d7625d1e84ef75a94752",
+  "Merged-to-main state is recorded true",
   "Execution blocked",
   "docs/workflows/execution-authority-boundary.md#next-lane-authority-decision-contract",
   "local-provider-execution",
@@ -175,10 +178,12 @@ for (const testText of [
   '"currentStateFindings"',
   '"nextLaneDecisionPacket"',
   '"planning-reconciliation-current"',
-  '"pr-103-review-gated"',
+  '"pr-103-merged-to-main"',
   '"decision_only_no_authority_granted"',
   '"Local story completion is recorded"',
-  '"Merged-to-main state remains false"',
+  '"merged_to_main_recorded"',
+  '"80dbd488885d90c225c1d7625d1e84ef75a94752"',
+  '"Merged-to-main state is recorded true"',
   '"local-provider-execution"',
   '"subscription-agent-launch"',
   '"adaptive-scoring"',
@@ -236,6 +241,40 @@ assertCondition(
 assertCondition(
   reconciliation.includes("GitHub delivery") && reconciliation.includes("cleanup"),
   "Implementation reconciliation must mention current delivery and cleanup evidence for authority readiness context",
+  failures,
+);
+assertCondition(
+  reconciliation.includes("PR #103 merged to main on 2026-06-13"),
+  "Implementation reconciliation must mention current merged PR #103 evidence",
+  failures,
+);
+for (const reconciliationText of [
+  "| Low-risk delivery plan contract | Implemented, merged to main |",
+  "| Delivery execution evidence | Implemented, merged to main |",
+  "| Cleanup plan and residue classification | Implemented, merged to main |",
+  "| Dev Console delivery/cleanup visibility | Implemented, merged to main |",
+  "without granting new delivery authority",
+  "without granting cleanup execution authority",
+  "without mutation controls",
+]) {
+  assertCondition(
+    reconciliation.includes(reconciliationText),
+    `Implementation reconciliation must refresh PR #103 merged evidence text: ${reconciliationText}`,
+    failures,
+  );
+}
+assertCondition(
+  !/\| (Low-risk delivery plan contract|Delivery execution evidence|Cleanup plan and residue classification|Dev Console delivery\/cleanup visibility) \| Implemented, PR-gated to main \|/.test(
+    reconciliation,
+  ),
+  "Implementation reconciliation must not preserve stale PR-gated status for PR #103 evidence rows",
+  failures,
+);
+assertCondition(
+  !/findingId="pr-103-merged-to-main"[\s\S]*?(ci_green_external_review_blocked|Merged-to-main state remains false|mergeStateStatus=BLOCKED)[\s\S]*?nextAction=/.test(
+    serviceSource,
+  ),
+  "Authority readiness service must not preserve stale PR #103 review-gated evidence",
   failures,
 );
 assertCondition(
