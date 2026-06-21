@@ -69,6 +69,9 @@ jobs:
       - name: Configure repo-local Git hooks
         run: git config core.hooksPath .githooks
 
+      - name: Fetch base branch for workspace protocol tests
+        run: git fetch origin main:refs/remotes/origin/main
+
       - name: Run static repository checks
         run: pnpm run check:static
 

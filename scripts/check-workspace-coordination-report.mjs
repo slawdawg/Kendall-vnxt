@@ -59,6 +59,27 @@ function assertCiHookBeforeCheck({ packageScriptName, ciJobName, ciCheckCommand 
   );
 }
 
+function assertCiBaseRefBeforeCheck({ packageScriptName, ciJobName, ciCheckCommand }, failures) {
+  const packageScript = packageJson.scripts?.[packageScriptName];
+  if (!packageScript?.includes("pnpm run test:codex-workspace")) {
+    return;
+  }
+
+  const job = ciJobBlock(ciJobName);
+  const baseFetchIndex = job.indexOf("git fetch origin main:refs/remotes/origin/main");
+  const checkCommandIndex = job.indexOf(ciCheckCommand);
+  assertCondition(
+    job && baseFetchIndex !== -1,
+    `${ciWorkflowPath} must fetch origin/main in the ${ciJobName} job before running ${ciCheckCommand} because ${packageScriptName} runs test:codex-workspace`,
+    failures,
+  );
+  assertCondition(
+    job && baseFetchIndex !== -1 && checkCommandIndex !== -1 && baseFetchIndex < checkCommandIndex,
+    `${ciWorkflowPath} must fetch origin/main before ${ciCheckCommand} in the ${ciJobName} job`,
+    failures,
+  );
+}
+
 const failures = [];
 const workflowPath = "docs/workflows/workspace-coordination-report.md";
 const storyPath = "docs/workflows/implementation-evidence-boundary.md";
@@ -85,6 +106,10 @@ assertCondition(
 );
 
 assertCiHookBeforeCheck(
+  { packageScriptName: "check:static", ciJobName: "static", ciCheckCommand: "pnpm run check:static" },
+  failures,
+);
+assertCiBaseRefBeforeCheck(
   { packageScriptName: "check:static", ciJobName: "static", ciCheckCommand: "pnpm run check:static" },
   failures,
 );
