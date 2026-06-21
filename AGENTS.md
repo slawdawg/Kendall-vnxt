@@ -209,9 +209,10 @@ through merge and cleanup", or "see this lane through end to end".
 - Treat the default authority profile as `standard-delivery`: create or resume a
   managed worktree, research, use matching BMAD workflows and code review when
   useful, implement, verify, review, commit, push, open or update the PR, merge
-  low-risk PRs, and clean up the merged local worktree and local branch when the
-  evidence gates pass. BMAD party mode or spawned BMAD subagents require
-  explicit provider, model-selection, and spending approval for the lane.
+  low-risk PRs, and clean up the merged local worktree, local branch, and remote
+  lane branch when the evidence gates pass. BMAD party mode or spawned BMAD
+  subagents require explicit provider, model-selection, and spending approval
+  for the lane.
 - Keep generated BMAD artifacts local. Rewrite durable decisions into
   source-owned docs, tests, scripts, or policy before delivery.
 - Do not interrupt for routine mechanics. Interrupt only for product steering,
@@ -226,8 +227,8 @@ through merge and cleanup", or "see this lane through end to end".
   new authority.
 - Preserve an evidence packet for the lane: objective, authority profile,
   worktree, branch, PR, planning/review methods, changed files, verification,
-  PR head SHA, check/review state, merge result, cleanup dry-run/result, and
-  residual risks.
+  PR head SHA, check/review state, merge result, lane owner, ownership takeover
+  if any, cleanup dry-run/result, and residual risks.
 
 ## Codex Workspace Protocol
 
@@ -244,7 +245,9 @@ surface is `node ./scripts/codex-workspace.mjs`.
   `node ./scripts/codex-workspace.mjs list`.
 - When the operator says "resume <task>", run
   `node ./scripts/codex-workspace.mjs resume "<task>"`, then use the reported
-  worktree path for follow-up commands.
+  worktree path for follow-up commands. If the manifest owner belongs to another
+  runner, do not mutate that lane unless the operator confirms the other session
+  is idle; only then pass `--take-ownership` and record the previous owner.
 - When the operator says "finish this as a PR", run the smallest relevant verification,
   then use `node ./scripts/codex-workspace.mjs finish-pr` from the task
   worktree or pass a task query from another worktree. Stage intended files
@@ -254,10 +257,12 @@ surface is `node ./scripts/codex-workspace.mjs`.
   above are proven; otherwise wait for explicit merge approval after showing
   the PR state.
 - When the operator says "clean up merged work", run
-  `node ./scripts/codex-workspace.mjs cleanup-merged` first as a dry-run. The
-  script must see a merged PR with the expected base branch and a clean
-  worktree before it removes anything. Re-run with `--apply` only when the
-  dry-run output is correct.
+  `node ./scripts/codex-workspace.mjs cleanup-merged --delete-remote` first as a
+  dry-run when the active authority is `standard-delivery`. The script must see
+  a merged PR with the expected base branch, the current lane owner, and a clean
+  worktree before it removes anything. Re-run with `--apply --delete-remote`
+  only when the dry-run output names the expected worktree, local branch, and
+  remote branch.
 - When local `codex/*` branches remain after workspace cleanup, run
   `node ./scripts/codex-workspace.mjs cleanup-branches` as a dry-run. The
   script may delete only local Codex branches that are already present in the
