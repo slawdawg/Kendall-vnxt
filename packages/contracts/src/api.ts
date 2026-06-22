@@ -2078,3 +2078,106 @@ export interface SavedWorkItemViewPayload {
   scope: WorkItemFilterScope;
   filters: WorkItemFilterView;
 }
+
+export type RunnerAssignmentReportStatus = "ok" | "partial" | "error";
+export type RunnerAssignmentStateRootStatus = "available" | "missing" | "unreadable" | "partial";
+export type RunnerAssignmentClassification =
+  | "active"
+  | "claimed"
+  | "assignable"
+  | "ambiguous"
+  | "unknown"
+  | "blocked_authority"
+  | "blocked_stale_owner_needs_takeover"
+  | "blocked_missing_metadata"
+  | "blocked_duplicate_active_owner"
+  | "blocked_unreadable_state"
+  | "blocked_malformed_state"
+  | "blocked_missing_worktree"
+  | "closed";
+export type RunnerAssignmentWarningSeverity = "info" | "warning" | "blocking";
+export type RunnerAssignmentInputKind =
+  | "state-root"
+  | "tasks-dir"
+  | "assignments-dir"
+  | "task-manifest"
+  | "assignment-record"
+  | "worktree"
+  | "safe-backlog"
+  | "unknown";
+
+export interface RunnerAssignmentWarningView {
+  code: string;
+  severity: RunnerAssignmentWarningSeverity;
+  message: string;
+}
+
+export interface RunnerAssignmentDegradedInputView {
+  inputKind: RunnerAssignmentInputKind;
+  path?: string | null;
+  severity: RunnerAssignmentWarningSeverity;
+  reason: string;
+  skippedCount?: number | null;
+}
+
+export interface RunnerAssignmentStatusSummaryView {
+  active: number;
+  stale: number;
+  blocked: number;
+  ambiguous: number;
+  assignable: number;
+  closed: number;
+  degraded: number;
+  missing: number;
+}
+
+export interface RunnerAssignmentStatusRowView {
+  id: string;
+  title: string;
+  classification: RunnerAssignmentClassification;
+  degraded: boolean;
+  reasonCode: string;
+  reason: string;
+  warnings: RunnerAssignmentWarningView[];
+  nextSafeAction: string;
+  owner?: string | null;
+  branch?: string | null;
+  taskId?: string | null;
+  assignmentId?: string | null;
+  backlogItemId?: string | null;
+  phase?: string | null;
+  runnerKind: "codex" | "local" | "unknown";
+  heartbeatAt?: string | null;
+  heartbeatSource: "last_heartbeat_at" | "owner_updated_at" | "updated_at" | "assigned_at" | "created_at" | "missing" | "invalid" | "future";
+  heartbeatAgeSeconds?: number | null;
+  heartbeatMissing: boolean;
+  staleAfterSeconds: number;
+  currentCommand?: string | null;
+  lastResult?: string | null;
+  worktreePath?: string | null;
+  worktreeState: "clean" | "dirty" | "missing" | "unreadable" | "not-applicable";
+  deliveryState: "no-pr" | "draft-pr" | "pr-open" | "pr-closed-unmerged" | "merged" | "cleanup-ready" | "cleanup-partial" | "closed" | "unknown-pr-state" | "unknown";
+  localEvidenceStatus: "available" | "missing" | "unreadable" | "malformed" | "skipped";
+  evidencePath?: string | null;
+}
+
+export type RunnerWorkspaceAssignmentView = RunnerAssignmentStatusRowView;
+export type RunnerLaneAssignmentView = RunnerAssignmentStatusRowView;
+export type RunnerBacklogCandidateView = RunnerAssignmentStatusRowView;
+
+export interface RunnerAssignmentStatusReportView {
+  reportStatus: RunnerAssignmentReportStatus;
+  errorMessage?: string | null;
+  generatedAt: string;
+  stateRoot?: string | null;
+  stateRootStatus: RunnerAssignmentStateRootStatus;
+  partial: boolean;
+  currentOwner?: string | null;
+  staleAfterSeconds: number;
+  summary: RunnerAssignmentStatusSummaryView;
+  workspaceAssignments: RunnerWorkspaceAssignmentView[];
+  laneAssignments: RunnerLaneAssignmentView[];
+  backlogCandidates: RunnerBacklogCandidateView[];
+  degradedInputs: RunnerAssignmentDegradedInputView[];
+}
+

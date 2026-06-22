@@ -631,6 +631,11 @@ async def get_safe_development_backlog_report():
     return ApiEnvelope(data=service.get_safe_development_backlog_report())
 
 
+@app.get("/supervisor/runner-assignment-status-report", response_model=ApiEnvelope)
+async def get_runner_assignment_status_report():
+    return ApiEnvelope(data=service.get_runner_assignment_status_report())
+
+
 @app.get("/supervisor/development-runway-report", response_model=ApiEnvelope)
 async def get_development_runway_report():
     return ApiEnvelope(data=service.get_development_runway_report())

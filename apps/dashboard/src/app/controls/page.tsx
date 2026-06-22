@@ -23,6 +23,7 @@ import { OperatorProfilePanel } from "../../components/operator-profile-panel";
 import { PageIntro } from "../../components/page-intro";
 import { RoutingFleetPanel } from "../../components/routing-fleet-panel";
 import { RuntimeEvidenceReviewReportPanel } from "../../components/runtime-evidence-review-report-panel";
+import { RunnerAssignmentStatusReportPanel } from "../../components/runner-assignment-status-report-panel";
 import { RemoteCleanupSyncReadinessReportPanel } from "../../components/remote-cleanup-sync-readiness-report-panel";
 import { SafeDevelopmentBacklogPanel } from "../../components/safe-development-backlog-panel";
 import { Shell } from "../../components/shell";
@@ -55,6 +56,7 @@ import {
   getRoutingLaneProfiles,
   getRunStatus,
   getRuntimeEvidenceReviewReport,
+  getRunnerAssignmentStatusReport,
   getRemoteCleanupSyncReadinessReport,
   getSafeDevelopmentBacklogReport,
   getSupervisorReportCatalog,
@@ -82,6 +84,7 @@ export default async function ControlsPage() {
     developmentRunwayReport,
     runtimeEvidenceReviewReport,
     safeDevelopmentBacklog,
+    runnerAssignmentStatusReport,
     managedRecipePolicyReport,
     githubWorkflowPolicyReport,
     githubDeliveryAuthorityReport,
@@ -114,6 +117,7 @@ export default async function ControlsPage() {
     getDevelopmentRunwayReport(),
     getRuntimeEvidenceReviewReport(),
     getSafeDevelopmentBacklogReport(),
+    getRunnerAssignmentStatusReport(),
     getManagedRecipePolicyReport(),
     getGitHubWorkflowPolicyReport(),
     getGitHubDeliveryAuthorityReport(),
@@ -181,6 +185,9 @@ export default async function ControlsPage() {
       </div>
       <div id="safe-development-backlog" className="scroll-mt-28">
         <SafeDevelopmentBacklogPanel report={safeDevelopmentBacklog} />
+      </div>
+      <div id="runner-assignment-status" className="scroll-mt-28">
+        <RunnerAssignmentStatusReportPanel report={runnerAssignmentStatusReport} />
       </div>
       <div id="managed-recipe-policy-report" className="scroll-mt-28">
         <ManagedRecipePolicyReportPanel report={managedRecipePolicyReport} />
