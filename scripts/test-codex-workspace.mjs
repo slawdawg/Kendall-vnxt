@@ -34,6 +34,7 @@ try {
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("assignment-report"), result.stdout || result.stderr);
     assert(result.stdout.includes("cleanup-branches [query]"), result.stdout || result.stderr);
+    assert(result.stdout.includes("heartbeat <query>"), result.stdout || result.stderr);
     assert(result.stdout.includes("--base <ref>"), result.stdout || result.stderr);
   });
 
@@ -349,6 +350,107 @@ try {
     }
   });
 
+  test("heartbeat updates current-owner assignment lease evidence", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-assignment-"));
+    try {
+      const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(claim.code === 0, claim.stderr || claim.stdout);
+
+      const result = run([
+        "heartbeat",
+        "safe-backlog-report-alignment",
+        "--owner",
+        "runner-a",
+        "--phase",
+        "active",
+        "--current-command",
+        "pnpm run check:static",
+        "--last-result",
+        "running",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        claimStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("APPLY: heartbeat"), result.stdout || result.stderr);
+      assert(result.stdout.includes("target assignment safe-backlog-report-alignment"), result.stdout || result.stderr);
+      assert(
+        result.stdout.includes("heartbeat metadata only; no branch, PR, cleanup, or ownership mutation"),
+        result.stdout || result.stderr,
+      );
+      assert(!existsSync(join(claimStateRoot, "tasks")), "assignment heartbeat created workspace manifests");
+      assert(!existsSync(join(claimStateRoot, "worktrees")), "assignment heartbeat created worktrees");
+
+      const assignmentPath = join(claimStateRoot, "assignments", "safe-backlog-report-alignment.json");
+      const assignment = JSON.parse(readFileSync(assignmentPath, "utf8"));
+      assert(assignment.status === "claimed", "heartbeat should not change assignment status");
+      assert(assignment.owner === "runner-a", "heartbeat changed assignment owner");
+      assert(assignment.phase === "active", "heartbeat phase missing");
+      assert(assignment.runner_kind === "codex-cli", "heartbeat runner kind missing");
+      assert(assignment.current_command === "pnpm run check:static", "heartbeat current command missing");
+      assert(assignment.last_result === "running", "heartbeat last result missing");
+      assert(assignment.stale_after_seconds === 60, "heartbeat stale threshold missing");
+      assert(assignment.heartbeat_count === 1, "heartbeat count missing");
+      assert(Boolean(assignment.last_heartbeat_at), "last heartbeat timestamp missing");
+      assert(assignment.events.some((event) => event.type === "heartbeat"), "heartbeat event missing");
+
+      const second = run([
+        "heartbeat",
+        "safe-backlog-report-alignment",
+        "--owner",
+        "runner-a",
+        "--phase",
+        "verification",
+        "--state-root",
+        claimStateRoot,
+      ]);
+      assert(second.code === 0, second.stderr || second.stdout);
+      const refreshed = JSON.parse(readFileSync(assignmentPath, "utf8"));
+      assert(refreshed.phase === "verification", "second heartbeat phase missing");
+      assert(refreshed.current_command === "pnpm run check:static", "phase-only heartbeat erased current command");
+      assert(refreshed.last_result === "running", "phase-only heartbeat erased last result");
+      assert(refreshed.heartbeat_count === 2, "second heartbeat did not increment count");
+
+      const report = run(["assignment-report", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(report.code === 0, report.stderr || report.stdout);
+      assert(report.stdout.includes("phase=verification"), report.stdout || report.stderr);
+      assert(report.stdout.includes("runner=codex-cli"), report.stdout || report.stderr);
+      assert(!report.stdout.includes("heartbeat=none"), report.stdout || report.stderr);
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("heartbeat refuses assignment owned by another runner without mutation", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-owned-assignment-"));
+    try {
+      const claim = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
+      assert(claim.code === 0, claim.stderr || claim.stdout);
+      const assignmentPath = join(claimStateRoot, "assignments", "safe-backlog-report-alignment.json");
+      const before = readFileSync(assignmentPath, "utf8");
+
+      const result = run([
+        "heartbeat",
+        "safe-backlog-report-alignment",
+        "--owner",
+        "runner-a",
+        "--phase",
+        "active",
+        "--state-root",
+        claimStateRoot,
+      ]);
+      const after = readFileSync(assignmentPath, "utf8");
+
+      assert(result.code !== 0, "heartbeat unexpectedly updated another owner's assignment");
+      assert(result.stderr.includes("Heartbeat is owner-only"), result.stderr || result.stdout);
+      assert(before === after, "failed heartbeat mutated another owner's assignment");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next apply blocks a lane assigned to another owner", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-owned-assignment-"));
     try {
@@ -434,6 +536,107 @@ try {
       assert(Object.hasOwn(manifest, "owner_thread_id"), "owner thread id evidence missing");
       assert(Array.isArray(manifest.ownership_takeovers), "ownership takeover evidence missing");
       assert(manifest.events.some((event) => event.type === "ownership_claimed"), "ownership event missing");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("heartbeat updates current-owner workspace manifest lease evidence", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-manifest-"));
+    try {
+      const tasksDir = join(claimStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "owned-safe-backlog.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: "owned-safe-backlog",
+            branch: "codex/safe-backlog-report-alignment",
+            worktree_path: rootDir,
+            base_branch: "main",
+            status: "active",
+            owner: "runner-a",
+            owner_updated_at: "2026-06-21T00:00:00.000Z",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const result = run([
+        "heartbeat",
+        "owned-safe-backlog",
+        "--owner",
+        "runner-a",
+        "--phase",
+        "verification",
+        "--runner-kind",
+        "codex-cli",
+        "--last-result",
+        "tests passed",
+        "--state-root",
+        claimStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("target workspace owned-safe-backlog"), result.stdout || result.stderr);
+      assert(!existsSync(join(claimStateRoot, "assignments")), "manifest heartbeat created assignment metadata");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      assert(manifest.status === "active", "heartbeat should not change workspace status");
+      assert(manifest.owner === "runner-a", "heartbeat changed workspace owner");
+      assert(manifest.branch === "codex/safe-backlog-report-alignment", "heartbeat changed branch");
+      assert(manifest.phase === "verification", "workspace heartbeat phase missing");
+      assert(manifest.runner_kind === "codex-cli", "workspace heartbeat runner kind missing");
+      assert(manifest.last_result === "tests passed", "workspace heartbeat result missing");
+      assert(Boolean(manifest.last_heartbeat_at), "workspace heartbeat timestamp missing");
+      assert(manifest.owner_updated_at === manifest.last_heartbeat_at, "workspace owner timestamp not refreshed");
+      assert(manifest.events.some((event) => event.type === "heartbeat"), "workspace heartbeat event missing");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("heartbeat does not allow takeover flags to update another owner's workspace", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-manifest-owned-"));
+    try {
+      const tasksDir = join(claimStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "owned-safe-backlog.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: "owned-safe-backlog",
+            branch: "codex/safe-backlog-report-alignment",
+            worktree_path: rootDir,
+            base_branch: "main",
+            status: "active",
+            owner: "runner-b",
+            owner_updated_at: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = run([
+        "heartbeat",
+        "owned-safe-backlog",
+        "--owner",
+        "runner-a",
+        "--take-ownership",
+        "--takeover-reason",
+        "manual takeover reason",
+        "--state-root",
+        claimStateRoot,
+      ]);
+      const after = readFileSync(manifestPath, "utf8");
+
+      assert(result.code !== 0, "heartbeat unexpectedly honored takeover flags");
+      assert(result.stderr.includes("Heartbeat is owner-only"), result.stderr || result.stdout);
+      assert(before === after, "failed heartbeat mutated another owner's workspace");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }

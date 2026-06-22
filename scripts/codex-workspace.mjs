@@ -41,6 +41,9 @@ try {
     case "claim-next":
       claimNext(commandArgs);
       break;
+    case "heartbeat":
+      heartbeat(commandArgs);
+      break;
     case "resume":
       resumeWorkspace(commandArgs);
       break;
@@ -81,6 +84,7 @@ Commands:
   list                      Show known Codex workspaces.
   assignment-report         Show read-only runner assignment inventory and blockers.
   claim-next                Preview the next claimable runner assignment lane.
+  heartbeat <query>         Update owner-only runner heartbeat evidence.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
@@ -117,6 +121,13 @@ claim-next options:
   --dry-run                 Preview only; no mutation.
   --apply                   Write assignment metadata for an unowned ready lane.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
+
+heartbeat options:
+  --phase <phase>           Runner phase. Defaults to active.
+  --runner-kind <kind>      Runner kind. Defaults to codex-cli.
+  --current-command <text>  Current command or wait state summary.
+  --last-result <text>      Last result summary.
+  --stale-after-seconds <n> Stale owner threshold to record. Defaults to 86400.
 
 finish-pr options:
   --message <text>          Commit message. Defaults to task title.
@@ -355,6 +366,9 @@ function assignmentReport(argv) {
           `owner=${assignment.owner || "unowned"}`,
           `branch=${assignment.branch || "none"}`,
           `task=${assignment.task_id || "none"}`,
+          `phase=${assignment.phase || "none"}`,
+          `heartbeat=${assignment.last_heartbeat_at || "none"}`,
+          `runner=${assignment.runner_kind || "none"}`,
           `reason=${classification.reason}`,
           `next=${classification.nextAction}`,
         ].join(" | "),
@@ -383,6 +397,9 @@ function assignmentReport(argv) {
         `owner=${manifest.owner || "unowned"}`,
         `branch=${manifest.branch}`,
         `worktree=${manifest.worktree_path}`,
+        `phase=${manifest.phase || "none"}`,
+        `heartbeat=${manifest.last_heartbeat_at || "none"}`,
+        `runner=${manifest.runner_kind || "none"}`,
         `reason=${classification.reason}`,
         `next=${classification.nextAction}`,
       ].join(" | "),
@@ -453,6 +470,49 @@ function claimNext(argv) {
 
   console.log("Blocker evidence:");
   printClaimBlockers(evaluations, selected);
+}
+
+function heartbeat(argv) {
+  const { positional, options } = parseOptions(argv);
+  const query = positional.join(" ").trim();
+  if (!query) {
+    throw new Error("heartbeat requires an assignment or task query.");
+  }
+
+  const state = workspaceState(options);
+  const currentOwner = currentLaneOwner(options);
+  const heartbeatOptions = normalizeHeartbeatOptions(options);
+  const assignmentRecord = findAssignment(state, query);
+
+  if (assignmentRecord) {
+    const result = heartbeatAssignment(state, assignmentRecord, {
+      currentOwner,
+      options,
+      heartbeatOptions,
+    });
+    printApplied("heartbeat", [
+      `target assignment ${result.target}`,
+      `owner ${currentOwner}`,
+      `phase ${heartbeatOptions.phase}`,
+      `wrote ${result.path}`,
+      "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
+    ]);
+    return;
+  }
+
+  const manifestRecord = findManifest(state, query, { preferCurrentWorktree: true });
+  const result = heartbeatManifest(state, manifestRecord.manifest.task_id, {
+    currentOwner,
+    options,
+    heartbeatOptions,
+  });
+  printApplied("heartbeat", [
+    `target workspace ${result.target}`,
+    `owner ${currentOwner}`,
+    `phase ${heartbeatOptions.phase}`,
+    `wrote ${result.path}`,
+    "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
+  ]);
 }
 
 function resumeWorkspace(argv) {
@@ -1177,6 +1237,34 @@ function readAssignment(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+function findAssignment(state, query) {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const matches = readAssignments(state).filter(({ assignment }) =>
+    [
+      assignment.assignment_id,
+      assignment.task_id,
+      assignment.lane_slug,
+      assignment.branch,
+      assignment.source_backlog_item?.item_id,
+      assignment.source_backlog_item?.branch_name,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(normalized)),
+  );
+
+  if (matches.length === 0) {
+    return null;
+  }
+  if (matches.length > 1) {
+    throw new Error(`Query matched multiple assignments: ${matches.map((m) => m.assignment.assignment_id).join(", ")}`);
+  }
+  return matches[0];
+}
+
 function findManifest(state, query, options = {}) {
   const manifests = readManifests(state);
   if (manifests.length === 0) {
@@ -1819,6 +1907,13 @@ function buildLaneAssignment(item, existingAssignment, options = {}) {
     owner_thread_id: process.env.CODEX_THREAD_ID || null,
     assigned_at: existingAssignment?.assigned_at || now,
     updated_at: now,
+    phase: existingAssignment?.phase || "claimed",
+    runner_kind: existingAssignment?.runner_kind || null,
+    last_heartbeat_at: existingAssignment?.last_heartbeat_at || null,
+    stale_after_seconds: existingAssignment?.stale_after_seconds || null,
+    current_command: existingAssignment?.current_command || null,
+    last_result: existingAssignment?.last_result || null,
+    heartbeat_count: Number.isInteger(existingAssignment?.heartbeat_count) ? existingAssignment.heartbeat_count : 0,
     source_backlog_item: {
       item_id: item.itemId,
       status: item.status || null,
@@ -1856,6 +1951,114 @@ function laneSlugFromBranch(branchName) {
 function assignmentPath(state, assignmentId) {
   assertSafeTaskId(assignmentId);
   return join(state.assignmentsDir, `${assignmentId}.json`);
+}
+
+function normalizeHeartbeatOptions(options = {}) {
+  return {
+    phase: safeHeartbeatToken(options.phase || "active", "phase"),
+    runnerKind: safeHeartbeatToken(options.runnerKind || "codex-cli", "runner kind"),
+    currentCommand: optionalHeartbeatText(options.currentCommand),
+    currentCommandProvided: options.currentCommand !== undefined && options.currentCommand !== true,
+    lastResult: optionalHeartbeatText(options.lastResult),
+    lastResultProvided: options.lastResult !== undefined && options.lastResult !== true,
+    staleAfterSeconds: positiveInteger(options.staleAfterSeconds, 86_400),
+  };
+}
+
+function safeHeartbeatToken(value, label) {
+  const text = String(value || "").trim();
+  if (!text || !/^[a-zA-Z0-9._/-]+$/.test(text)) {
+    throw new Error(`Invalid heartbeat ${label}: ${value}`);
+  }
+  return text;
+}
+
+function optionalHeartbeatText(value) {
+  if (value === undefined || value === true) {
+    return null;
+  }
+  const text = String(value).trim();
+  return text || null;
+}
+
+function heartbeatAssignment(state, assignmentRecord, { currentOwner, options, heartbeatOptions }) {
+  const assignmentId = String(assignmentRecord.assignment.assignment_id || "");
+  assertSafeTaskId(assignmentId);
+  const path = assignmentRecord.path;
+  return withAssignmentLock(state, assignmentId, () => {
+    const assignment = readAssignment(path);
+    validateAssignment(assignment, path);
+    assertAssignmentOwner(assignment, options);
+    updateHeartbeatFields(assignment, heartbeatOptions);
+    assignment.updated_at = assignment.last_heartbeat_at;
+    assignment.events = [
+      ...(Array.isArray(assignment.events) ? assignment.events : []),
+      taskEvent("heartbeat", `owner ${currentOwner} phase ${heartbeatOptions.phase}`),
+    ];
+    writeAssignment(path, assignment);
+    return {
+      path,
+      target: assignment.assignment_id,
+    };
+  });
+}
+
+function heartbeatManifest(state, taskId, { currentOwner, options, heartbeatOptions }) {
+  assertSafeTaskId(taskId);
+  const path = join(state.tasksDir, `${taskId}.json`);
+  return withManifestLock(state, taskId, () => {
+    const manifest = readManifest(path);
+    validateManifest(manifest, path);
+    assertManifestHeartbeatOwner(manifest, options);
+    updateHeartbeatFields(manifest, heartbeatOptions);
+    manifest.owner_updated_at = manifest.last_heartbeat_at;
+    manifest.updated_at = manifest.last_heartbeat_at;
+    appendTaskEvent(manifest, "heartbeat", `owner ${currentOwner} phase ${heartbeatOptions.phase}`);
+    writeManifest(path, manifest);
+    return {
+      path,
+      target: manifest.task_id,
+    };
+  });
+}
+
+function updateHeartbeatFields(target, heartbeatOptions) {
+  const now = new Date().toISOString();
+  target.last_heartbeat_at = now;
+  target.stale_after_seconds = heartbeatOptions.staleAfterSeconds;
+  target.phase = heartbeatOptions.phase;
+  target.runner_kind = heartbeatOptions.runnerKind;
+  if (heartbeatOptions.currentCommandProvided) {
+    target.current_command = heartbeatOptions.currentCommand;
+  }
+  if (heartbeatOptions.lastResultProvided) {
+    target.last_result = heartbeatOptions.lastResult;
+  }
+  target.heartbeat_count = Number.isInteger(target.heartbeat_count) ? target.heartbeat_count + 1 : 1;
+}
+
+function assertAssignmentOwner(assignment, options = {}) {
+  const currentOwner = currentLaneOwner(options);
+  if (!assignment.owner) {
+    throw new Error(`${assignment.assignment_id} has no assignment owner; claim it before heartbeat.`);
+  }
+  if (assignment.owner !== currentOwner) {
+    throw new Error(
+      `${assignment.assignment_id} is assigned to ${assignment.owner}; current runner is ${currentOwner}. Heartbeat is owner-only.`,
+    );
+  }
+}
+
+function assertManifestHeartbeatOwner(manifest, options = {}) {
+  const currentOwner = currentLaneOwner(options);
+  if (!manifest.owner) {
+    throw new Error(`${manifest.task_id} has no workspace owner; claim it before heartbeat.`);
+  }
+  if (manifest.owner !== currentOwner) {
+    throw new Error(
+      `${manifest.task_id} is owned by ${manifest.owner}; current runner is ${currentOwner}. Heartbeat is owner-only.`,
+    );
+  }
 }
 
 function claimBranchNameBlocker(branchName) {
