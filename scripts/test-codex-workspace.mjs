@@ -32,6 +32,7 @@ try {
   test("help lists local codex branch cleanup", () => {
     const result = run(["--help"]);
     assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("assignment-report"), result.stdout || result.stderr);
     assert(result.stdout.includes("cleanup-branches [query]"), result.stdout || result.stderr);
     assert(result.stdout.includes("--base <ref>"), result.stdout || result.stderr);
   });
@@ -165,6 +166,85 @@ try {
     const result = run(["list", "owned-lane", "--state-root", stateRoot]);
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("owner=runner-a"), result.stdout || result.stderr);
+  });
+
+  test("assignment-report classifies safe backlog and workspace ownership without mutation", () => {
+    const tasksDir = join(stateRoot, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+    const now = new Date().toISOString();
+    const stale = new Date(Date.now() - 60_000).toISOString();
+    const manifests = {
+      "unowned-active": {
+        task_id: "unowned-active",
+        branch: "codex/unowned-active",
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "active",
+      },
+      "current-active": {
+        task_id: "current-active",
+        branch: "codex/current-active",
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "active",
+        owner: "runner-a",
+        owner_updated_at: now,
+      },
+      "other-active": {
+        task_id: "other-active",
+        branch: "codex/other-active",
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "active",
+        owner: "runner-b",
+        owner_updated_at: now,
+      },
+      "stale-active": {
+        task_id: "stale-active",
+        branch: "codex/stale-active",
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "active",
+        owner: "runner-b",
+        owner_updated_at: stale,
+      },
+      "closed-lane": {
+        task_id: "closed-lane",
+        branch: "codex/closed-lane",
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "closed",
+        owner: "runner-b",
+        owner_updated_at: stale,
+      },
+    };
+    for (const [name, manifest] of Object.entries(manifests)) {
+      writeFileSync(join(tasksDir, `${name}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
+    }
+
+    const before = readFileSync(join(tasksDir, "stale-active.json"), "utf8");
+    const result = run([
+      "assignment-report",
+      "--owner",
+      "runner-a",
+      "--stale-after-seconds",
+      "1",
+      "--state-root",
+      stateRoot,
+    ]);
+    const after = readFileSync(join(tasksDir, "stale-active.json"), "utf8");
+
+    assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("Assignment Report"), result.stdout || result.stderr);
+    assert(result.stdout.includes("Safe backlog candidates:"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- safe-backlog-report-alignment | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- other-active | blocked_owned_active"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- stale-active | blocked_stale_owner_needs_takeover"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- closed-lane | closed"), result.stdout || result.stderr);
+    assert(before === after, "assignment-report mutated a workspace manifest");
   });
 
   test("finish-pr rejects unknown verification profile before mutation", () => {

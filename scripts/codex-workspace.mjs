@@ -35,6 +35,9 @@ try {
     case "list":
       listWorkspaces(commandArgs);
       break;
+    case "assignment-report":
+      assignmentReport(commandArgs);
+      break;
     case "resume":
       resumeWorkspace(commandArgs);
       break;
@@ -73,6 +76,7 @@ function printHelp() {
 Commands:
   start <description>       Create a task manifest, branch, and worktree.
   list                      Show known Codex workspaces.
+  assignment-report         Show read-only runner assignment inventory and blockers.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
@@ -101,6 +105,9 @@ list options:
   --active                  Show only non-closed workspaces.
   --owned                   Show only workspaces owned by the current runner.
   --owner <id>              Show only workspaces owned by the given owner.
+
+assignment-report options:
+  --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 finish-pr options:
   --message <text>          Commit message. Defaults to task title.
@@ -277,6 +284,71 @@ function listWorkspaces(argv) {
         manifest.pr_url || "no-pr",
         `owner=${manifest.owner || "unowned"}`,
         manifest.worktree_path,
+      ].join(" | "),
+    );
+  }
+}
+
+function assignmentReport(argv) {
+  const { options } = parseOptions(argv);
+  const state = workspaceState(options);
+  const currentOwner = currentLaneOwner(options);
+  const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
+  const generatedAt = new Date();
+  const manifests = readManifests(state).map(({ manifest }) => manifest);
+  const backlogItems = readSafeBacklogItems();
+  const manifestBranchStates = workspaceBranchStates(manifests);
+
+  console.log("Assignment Report");
+  console.log(`Generated: ${generatedAt.toISOString()}`);
+  console.log(`State root: ${state.root}`);
+  console.log(`Current owner: ${currentOwner}`);
+  console.log(`Stale after seconds: ${staleAfterSeconds}`);
+  console.log("Safe backlog source: services/supervisor/src/supervisor/application/service.py#get_safe_development_backlog_report");
+  console.log("");
+
+  console.log("Safe backlog candidates:");
+  if (backlogItems.length === 0) {
+    console.log("- none found (safe backlog source unavailable or unparsable)");
+  } else {
+    for (const item of backlogItems) {
+      const classification = classifyBacklogItem(item, manifestBranchStates);
+      console.log(
+        [
+          `- ${item.itemId}`,
+          classification.status,
+          `source_status=${item.status || "unknown"}`,
+          `slice=${item.recommendedSliceSize || "unknown"}`,
+          `branch=${item.branchName || "none"}`,
+          `reason=${classification.reason}`,
+        ].join(" | "),
+      );
+    }
+  }
+
+  console.log("");
+  console.log("Workspace assignments:");
+  if (manifests.length === 0) {
+    console.log(`- none (no workspace manifests under ${state.tasksDir})`);
+    return;
+  }
+
+  for (const manifest of manifests) {
+    const classification = classifyWorkspaceAssignment(manifest, {
+      currentOwner,
+      generatedAt,
+      staleAfterSeconds,
+    });
+    console.log(
+      [
+        `- ${manifest.task_id}`,
+        classification.status,
+        `manifest_status=${manifest.status}`,
+        `owner=${manifest.owner || "unowned"}`,
+        `branch=${manifest.branch}`,
+        `worktree=${manifest.worktree_path}`,
+        `reason=${classification.reason}`,
+        `next=${classification.nextAction}`,
       ].join(" | "),
     );
   }
@@ -1150,6 +1222,198 @@ function assertLaneOwner(manifest, options = {}) {
 
 function validTakeoverReason(value) {
   return String(value || "").replace(/\s+/g, "").length >= 10;
+}
+
+function classifyWorkspaceAssignment(manifest, context) {
+  if (manifest.status === "closed") {
+    return {
+      status: "closed",
+      reason: "workspace manifest is closed",
+      nextAction: "no assignment action",
+    };
+  }
+
+  if (String(manifest.status || "").startsWith("blocked_authority")) {
+    return {
+      status: "blocked_authority",
+      reason: "manifest is authority-blocked",
+      nextAction: "wait for explicit authority approval",
+    };
+  }
+
+  if (!manifest.worktree_path || !existsSync(manifest.worktree_path)) {
+    return {
+      status: "ambiguous",
+      reason: "worktree path is missing",
+      nextAction: "run workspace doctor or rebuild-index before assignment",
+    };
+  }
+
+  if (manifest.owner && manifest.owner !== context.currentOwner) {
+    if (laneOwnerIsStale(manifest, context)) {
+      return {
+        status: "blocked_stale_owner_needs_takeover",
+        reason: `owner heartbeat older than ${context.staleAfterSeconds} seconds`,
+        nextAction: "prepare takeover evidence and ask operator before mutation",
+      };
+    }
+    return {
+      status: "blocked_owned_active",
+      reason: `owned by ${manifest.owner}`,
+      nextAction: "do not mutate without explicit takeover approval",
+    };
+  }
+
+  if (manifest.status === "merged") {
+    return {
+      status: "cleanup",
+      reason: "PR is merged but cleanup is not closed",
+      nextAction: "run cleanup-merged dry-run before cleanup",
+    };
+  }
+
+  if (manifest.status === "cleanup_partial") {
+    return {
+      status: "cleanup",
+      reason: manifest.cleanup_error || "cleanup is partial",
+      nextAction: "resume cleanup-merged after confirming branch head evidence",
+    };
+  }
+
+  if (manifest.status === "pr_open") {
+    return {
+      status: "delivery",
+      reason: "PR is open",
+      nextAction: "check PR review, checks, exact head, and merge evidence",
+    };
+  }
+
+  if (!manifest.owner) {
+    return {
+      status: "assignable",
+      reason: "active workspace has no owner",
+      nextAction: "eligible for future claim-next only after dry-run evidence",
+    };
+  }
+
+  return {
+    status: "active",
+    reason: "owned by current runner",
+    nextAction: "continue lane or update heartbeat in a future phase",
+  };
+}
+
+function laneOwnerIsStale(manifest, context) {
+  const timestamp = Date.parse(manifest.owner_updated_at || manifest.updated_at || manifest.created_at || "");
+  if (!Number.isFinite(timestamp)) {
+    return true;
+  }
+  return context.generatedAt.getTime() - timestamp > context.staleAfterSeconds * 1000;
+}
+
+function classifyBacklogItem(item, manifestBranchStates) {
+  if (item.status !== "ready" || item.recommendedSliceSize === "do_not_start") {
+    return {
+      status: "blocked_authority",
+      reason: "safe backlog item is not dispatchable from generic continuation",
+    };
+  }
+  if (!item.startCommand && !item.branchName) {
+    return {
+      status: "ambiguous",
+      reason: "ready item has no source-owned lane start command",
+    };
+  }
+  const branchState = item.branchName ? manifestBranchStates.get(item.branchName) : null;
+  if (branchState === "active") {
+    return {
+      status: "active",
+      reason: "workspace manifest already exists for branch",
+    };
+  }
+  if (branchState === "closed") {
+    return {
+      status: "closed",
+      reason: "only closed workspace manifests exist for branch",
+    };
+  }
+  return {
+    status: "assignable",
+    reason: "ready safe backlog item has no active workspace conflict",
+  };
+}
+
+function workspaceBranchStates(manifests) {
+  const states = new Map();
+  for (const manifest of manifests) {
+    if (!manifest.branch) {
+      continue;
+    }
+    const existing = states.get(manifest.branch);
+    if (existing === "active") {
+      continue;
+    }
+    states.set(manifest.branch, manifest.status === "closed" ? "closed" : "active");
+  }
+  return states;
+}
+
+function readSafeBacklogItems() {
+  const servicePath = join(repoRoot, "services", "supervisor", "src", "supervisor", "application", "service.py");
+  if (!existsSync(servicePath)) {
+    return [];
+  }
+
+  const source = readFileSync(servicePath, "utf8");
+  const reportMatch = source.match(/def get_safe_development_backlog_report[\s\S]*?return SafeDevelopmentBacklogReportView/);
+  if (!reportMatch) {
+    return [];
+  }
+
+  const nextLane = readSafeBacklogNextLane(source);
+  return reportMatch[0]
+    .split("SafeDevelopmentBacklogItemView(")
+    .slice(1)
+    .map((block) => {
+      const item = {
+        itemId: pythonStringField(block, "itemId"),
+        status: pythonStringField(block, "status"),
+        recommendedSliceSize: pythonStringField(block, "recommendedSliceSize"),
+        branchName: "",
+        startCommand: "",
+      };
+      if (block.includes("nextLane=report_navigation_lane")) {
+        item.branchName = nextLane.branchName;
+        item.startCommand = nextLane.startCommand;
+      }
+      return item;
+    })
+    .filter((item) => item.itemId);
+}
+
+function readSafeBacklogNextLane(source) {
+  const match = source.match(/def _report_evidence_navigation_next_lane[\s\S]*?return NextLaneRecommendationView\(([\s\S]*?)\n\s*\)/);
+  const block = match?.[1] || "";
+  return {
+    branchName: pythonStringField(block, "branchName"),
+    startCommand: pythonStringField(block, "startCommand"),
+  };
+}
+
+function pythonStringField(source, fieldName) {
+  const match = source.match(new RegExp(`${fieldName}=["']([^"']+)["']`));
+  return match?.[1] || "";
+}
+
+function positiveInteger(value, fallback) {
+  if (value === undefined || value === true || value === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Expected positive integer but received: ${value}`);
+  }
+  return parsed;
 }
 
 function claimLaneOwner(manifest, options = {}) {
