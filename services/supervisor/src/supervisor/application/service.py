@@ -1896,6 +1896,90 @@ class SupervisorService:
                 summary.degraded += 1
         return summary
 
+    def _runner_assignment_row(
+        self,
+        record: dict,
+        path: Path,
+        state_root: Path,
+        deadline: float,
+        now: datetime,
+        stale_after_seconds: int,
+        row_kind: str,
+    ) -> RunnerAssignmentStatusRowView:
+        warnings: list[RunnerAssignmentWarningView] = []
+        record_id = str(
+            record.get("task_id")
+            or record.get("assignment_id")
+            or record.get("lane_slug")
+            or path.stem
+        )
+        title = str(record.get("title") or record.get("label") or record_id)
+        owner = record.get("owner") or record.get("owner_thread_id")
+        heartbeat_at, heartbeat_source, heartbeat_age, heartbeat_missing, heartbeat_warnings = self._parse_runner_timestamp(record, now)
+        warnings.extend(heartbeat_warnings)
+        stale_after = int(record.get("stale_after_seconds") or stale_after_seconds)
+        is_stale = heartbeat_age is not None and heartbeat_age > stale_after
+        status = str(record.get("status") or "unknown").lower()
+
+        if status == "closed":
+            classification = "closed"
+            reason_code = f"{row_kind}-closed"
+            reason = f"{row_kind} record is closed"
+            next_safe_action = "No assignment action"
+        elif owner:
+            classification = "claimed" if row_kind == "lane" else "active"
+            reason_code = f"{row_kind}-owned"
+            reason = f"{row_kind} record is owned"
+            next_safe_action = "Review active lane or request heartbeat update"
+        else:
+            classification = "assignable"
+            reason_code = f"{row_kind}-unowned"
+            reason = f"{row_kind} record is unowned and claimable"
+            next_safe_action = "Claim or resume this lane before mutating it"
+
+        if is_stale and owner and status != "closed":
+            classification = "blocked_stale_owner_needs_takeover"
+            reason_code = "stale-owner"
+            reason = "owner heartbeat is past stale threshold"
+            next_safe_action = "Review stale lane before takeover"
+
+        worktree_state, worktree_warnings = self._runner_worktree_state(record.get("worktree_path"), state_root, deadline)
+        warnings.extend(worktree_warnings)
+        if worktree_state == "missing" and classification != "closed":
+            classification = "blocked_missing_worktree"
+            reason_code = "missing-worktree"
+            reason = "worktree path is missing"
+            next_safe_action = "Inspect worktree before takeover or cleanup"
+
+        return RunnerAssignmentStatusRowView(
+            id=record_id,
+            title=title,
+            classification=classification,
+            degraded=bool(warnings) or heartbeat_source in {"invalid", "future"},
+            reasonCode=reason_code,
+            reason=reason,
+            warnings=warnings,
+            nextSafeAction=next_safe_action,
+            owner=str(owner) if owner else None,
+            branch=record.get("branch"),
+            taskId=record.get("task_id") or record_id,
+            assignmentId=record.get("assignment_id"),
+            phase=record.get("phase"),
+            runnerKind="codex" if str(record.get("runner_kind") or "").startswith("codex") else "unknown",
+            heartbeatAt=heartbeat_at,
+            heartbeatSource=heartbeat_source,
+            heartbeatAgeSeconds=heartbeat_age,
+            heartbeatMissing=heartbeat_missing,
+            staleAfterSeconds=stale_after,
+            currentCommand=record.get("current_command"),
+            lastResult=record.get("last_result"),
+            worktreePath=record.get("worktree_path"),
+            worktreeState=worktree_state,
+            deliveryState=self._runner_delivery_state(record),
+            localEvidenceStatus="available",
+            evidencePath=str(path),
+        )
+
     def get_runner_assignment_status_report(self) -> RunnerAssignmentStatusReportView:
         now = datetime.now(timezone.utc)
         deadline = now.timestamp() + 2
@@ -1924,13 +2008,16 @@ class SupervisorService:
             if not assignments_dir.exists():
                 state_root_status = "partial"
                 degraded_inputs.append(self._runner_degraded_input("assignments-dir", str(assignments_dir), "warning", "Codex assignments directory is missing."))
+            assignment_files = sorted([p for p in assignments_dir.iterdir() if p.suffix == ".json"]) if assignments_dir.exists() and assignments_dir.is_dir() else []
             skipped = max(0, len(task_files) - 500)
+            assignment_skipped = max(0, len(assignment_files) - 500)
             if skipped:
                 state_root_status = "partial"
                 degraded_inputs.append(self._runner_degraded_input("task-manifest", str(tasks_dir), "warning", "Task manifest scan limit exceeded.", skipped))
+            if assignment_skipped:
+                state_root_status = "partial"
+                degraded_inputs.append(self._runner_degraded_input("assignment-record", str(assignments_dir), "warning", "Assignment record scan limit exceeded.", assignment_skipped))
             for path in task_files[:500]:
-                warnings: list[RunnerAssignmentWarningView] = []
-                degraded = False
                 if path.is_symlink():
                     degraded_inputs.append(self._runner_degraded_input("task-manifest", str(path), "blocking", "Task manifest is a symlink and was skipped."))
                     continue
@@ -1943,69 +2030,31 @@ class SupervisorService:
                     degraded_inputs.append(self._runner_degraded_input("task-manifest", str(path), "blocking", "Task manifest is malformed or unreadable."))
                     continue
 
-                task_id = str(manifest.get("task_id") or path.stem)
-                title = str(manifest.get("title") or task_id)
                 owner = manifest.get("owner") or manifest.get("owner_thread_id")
                 if current_owner is None and owner:
                     current_owner = str(owner)
-                heartbeat_at, heartbeat_source, heartbeat_age, heartbeat_missing, heartbeat_warnings = self._parse_runner_timestamp(manifest, now)
-                warnings.extend(heartbeat_warnings)
-                stale_after = int(manifest.get("stale_after_seconds") or stale_after_seconds)
-                is_stale = heartbeat_age is not None and heartbeat_age > stale_after
-                status = str(manifest.get("status") or "unknown")
-                classification = "closed" if status == "closed" else "active"
-                reason_code = "workspace-active"
-                reason = "owned by current runner" if owner else "workspace manifest is active"
-                next_safe_action = "Review active lane or request heartbeat update"
-                if status == "closed":
-                    reason_code = "workspace-closed"
-                    reason = "workspace manifest is closed"
-                    next_safe_action = "No assignment action"
-                elif is_stale:
-                    classification = "blocked_stale_owner_needs_takeover"
-                    reason_code = "stale-owner"
-                    reason = "owner heartbeat is past stale threshold"
-                    next_safe_action = "Review stale lane before takeover"
-                worktree_state, worktree_warnings = self._runner_worktree_state(manifest.get("worktree_path"), state_root, deadline)
-                warnings.extend(worktree_warnings)
-                if worktree_state == "missing" and classification != "closed":
-                    classification = "blocked_missing_worktree"
-                    reason_code = "missing-worktree"
-                    reason = "worktree path is missing"
-                    next_safe_action = "Inspect worktree before takeover or cleanup"
-                degraded = bool(warnings) or heartbeat_source in {"invalid", "future"}
-                workspace_rows.append(
-                    RunnerAssignmentStatusRowView(
-                        id=task_id,
-                        title=title,
-                        classification=classification,
-                        degraded=degraded,
-                        reasonCode=reason_code,
-                        reason=reason,
-                        warnings=warnings,
-                        nextSafeAction=next_safe_action,
-                        owner=str(owner) if owner else None,
-                        branch=manifest.get("branch"),
-                        taskId=task_id,
-                        phase=manifest.get("phase"),
-                        runnerKind="codex" if str(manifest.get("runner_kind") or "").startswith("codex") else "unknown",
-                        heartbeatAt=heartbeat_at,
-                        heartbeatSource=heartbeat_source,
-                        heartbeatAgeSeconds=heartbeat_age,
-                        heartbeatMissing=heartbeat_missing,
-                        staleAfterSeconds=stale_after,
-                        currentCommand=manifest.get("current_command"),
-                        lastResult=manifest.get("last_result"),
-                        worktreePath=manifest.get("worktree_path"),
-                        worktreeState=worktree_state,
-                        deliveryState=self._runner_delivery_state(manifest),
-                        localEvidenceStatus="available",
-                        evidencePath=str(path),
-                    )
-                )
+                workspace_rows.append(self._runner_assignment_row(manifest, path, state_root, deadline, now, stale_after_seconds, "workspace"))
+            for path in assignment_files[:500]:
+                if path.is_symlink():
+                    degraded_inputs.append(self._runner_degraded_input("assignment-record", str(path), "blocking", "Assignment record is a symlink and was skipped."))
+                    continue
+                try:
+                    if path.stat().st_size > 1024 * 1024:
+                        degraded_inputs.append(self._runner_degraded_input("assignment-record", str(path), "warning", "Assignment record exceeds the 1 MiB file-size limit."))
+                        continue
+                    assignment = json.loads(path.read_text())
+                except Exception:
+                    degraded_inputs.append(self._runner_degraded_input("assignment-record", str(path), "blocking", "Assignment record is malformed or unreadable."))
+                    continue
+                owner = assignment.get("owner") or assignment.get("owner_thread_id")
+                if current_owner is None and owner:
+                    current_owner = str(owner)
+                lane_rows.append(self._runner_assignment_row(assignment, path, state_root, deadline, now, stale_after_seconds, "lane"))
 
         try:
             backlog = self.get_safe_development_backlog_report()
+            occupied_branches = {row.branch for row in workspace_rows + lane_rows if row.branch and row.classification not in {"closed", "assignable"}}
+            occupied_backlog_ids = {row.backlogItemId or row.assignmentId or row.taskId or row.id for row in lane_rows if row.classification not in {"closed", "assignable"}}
             for item in backlog.items:
                 classification = "assignable" if item.nextLane else "ambiguous"
                 reason_code = "backlog-assignable" if item.nextLane else "missing-lane-metadata"
@@ -2016,6 +2065,11 @@ class SupervisorService:
                     reason_code = "blocked-authority"
                     reason = "safe backlog item is blocked pending explicit authority approval"
                     next_action = "Wait for explicit authority approval"
+                elif (item.nextLane and item.nextLane.branchName in occupied_branches) or item.itemId in occupied_backlog_ids:
+                    classification = "claimed"
+                    reason_code = "backlog-lane-claimed"
+                    reason = "safe backlog item already has local workspace or lane assignment evidence"
+                    next_action = "Review the existing assignment before dispatch"
                 backlog_rows.append(
                     RunnerAssignmentStatusRowView(
                         id=item.itemId,

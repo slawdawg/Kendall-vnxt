@@ -8041,3 +8041,70 @@ def test_runner_assignment_status_report_rejects_path_input_contract(tmp_path, m
     report = response.json()["data"]
     assert report["stateRoot"] != "/tmp/not-allowed"
     assert "workspaceAssignments" in report
+
+
+def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_path, monkeypatch) -> None:
+    state_root = tmp_path / "codex-state"
+    assignments_dir = state_root / "assignments"
+    tasks_dir = state_root / "tasks"
+    assignments_dir.mkdir(parents=True)
+    tasks_dir.mkdir()
+    assignment_path = assignments_dir / "safe-backlog-report-alignment.json"
+    assignment_path.write_text(
+        json.dumps(
+            {
+                "assignment_id": "safe-backlog-report-alignment",
+                "task_id": "safe-backlog-report-alignment",
+                "lane_slug": "safe-backlog-report-alignment",
+                "branch": "codex/safe-backlog-report-alignment",
+                "status": "claimed",
+                "owner": "runner-a",
+                "phase": "claimed",
+                "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    )
+    monkeypatch.setenv("CODEX_WORKSPACE_STATE_ROOT", state_root.as_posix())
+    client = _client(tmp_path, monkeypatch, "runner-assignment-status-assignment.db")
+
+    response = client.get("/supervisor/runner-assignment-status-report")
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "safe-backlog-report-alignment")
+    assert lane["classification"] == "claimed"
+    assert lane["branch"] == "codex/safe-backlog-report-alignment"
+    backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "safe-backlog-report-alignment")
+    assert backlog["classification"] == "claimed"
+    assert backlog["reasonCode"] == "backlog-lane-claimed"
+
+
+def test_runner_assignment_status_report_treats_unowned_active_workspace_as_assignable(tmp_path, monkeypatch) -> None:
+    state_root = tmp_path / "codex-state"
+    tasks_dir = state_root / "tasks"
+    assignments_dir = state_root / "assignments"
+    tasks_dir.mkdir(parents=True)
+    assignments_dir.mkdir()
+    task_path = tasks_dir / "legacy-workspace.json"
+    task_path.write_text(
+        json.dumps(
+            {
+                "task_id": "legacy-workspace",
+                "title": "legacy workspace",
+                "branch": "codex/legacy-workspace",
+                "status": "active",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    )
+    monkeypatch.setenv("CODEX_WORKSPACE_STATE_ROOT", state_root.as_posix())
+    client = _client(tmp_path, monkeypatch, "runner-assignment-status-unowned.db")
+
+    response = client.get("/supervisor/runner-assignment-status-report")
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    workspace = next(row for row in report["workspaceAssignments"] if row["taskId"] == "legacy-workspace")
+    assert workspace["classification"] == "assignable"
+    assert workspace["reasonCode"] == "workspace-unowned"
+    assert report["summary"]["assignable"] >= 1
