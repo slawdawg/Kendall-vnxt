@@ -197,6 +197,14 @@ Deliver this spec and index references. No mutation.
 
 Add a supervisor report and CLI read-only output that classify lanes as assignable, active, stale, blocked, or ambiguous.
 
+Initial CLI implementation:
+
+- `node ./scripts/codex-workspace.mjs assignment-report`
+- reads safe backlog guidance from `services/supervisor/src/supervisor/application/service.py#get_safe_development_backlog_report`,
+- reads managed workspace manifests from the Codex workspace state root,
+- classifies safe backlog candidates and workspace assignments without mutating manifests, branches, PRs, or worktrees,
+- reports stale-owner takeover blockers as evidence only.
+
 ### Phase 3: Claim Dry Run
 
 Add `claim-next --dry-run` with deterministic candidate selection and complete blocker evidence.
