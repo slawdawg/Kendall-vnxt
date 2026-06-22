@@ -1892,15 +1892,15 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
-    assert "safe-backlog-report-alignment" in report_slice["includedBacklogItems"]
+    assert "verification-surface-hardening" in report_slice["includedBacklogItems"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "safe-backlog-report-alignment"
-    assert report_slice["nextLane"]["branchName"] == "codex/safe-backlog-report-alignment"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "safe backlog report alignment"'
-    assert "pnpm run check:reports" in report_slice["nextLane"]["verificationCommands"]
+    assert report_slice["nextLane"]["laneSlug"] == "verification-surface-hardening"
+    assert report_slice["nextLane"]["branchName"] == "codex/verification-surface-hardening"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "verification surface hardening"'
+    assert "pnpm run check:verification-readiness" in report_slice["nextLane"]["verificationCommands"]
     assert "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py" in report_slice["nextLane"]["verificationCommands"]
     assert any("merge, cleanup, issue-sync" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
-    assert any("verification-surface-hardening" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
+    assert any("another active lane" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
     assert "docs/workflows/implementation-evidence-boundary.md" in report_slice["relatedDocs"]
     assert report_slice["relatedDocs"].count("docs/workflows/implementation-evidence-boundary.md") == 1
@@ -2193,20 +2193,21 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
     assert all(item["recommendedSliceSize"] in {"large", "medium_to_large"} for item in ready_items)
     report_alignment_item = next(item for item in report["items"] if item["itemId"] == "safe-backlog-report-alignment")
-    assert report_alignment_item["nextLane"]["laneSlug"] == "safe-backlog-report-alignment"
-    assert report_alignment_item["nextLane"]["branchName"] == "codex/safe-backlog-report-alignment"
-    assert report_alignment_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "safe backlog report alignment"'
-    assert "pnpm run check:safe-backlog" in report_alignment_item["nextLane"]["verificationCommands"]
-    assert "pnpm run check:development-runway" in report_alignment_item["nextLane"]["verificationCommands"]
-    assert "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py" in report_alignment_item["nextLane"]["verificationCommands"]
-    assert any("Do not add provider/model calls" in stop_line for stop_line in report_alignment_item["nextLane"]["stopLines"])
-    assert any("verification-surface-hardening" in stop_line for stop_line in report_alignment_item["nextLane"]["stopLines"])
+    assert report_alignment_item["status"] == "closed"
+    assert report_alignment_item["recommendedSliceSize"] == "complete"
+    assert report_alignment_item["nextLane"] is None
+    assert "do not requeue" in report_alignment_item["nextAction"]
     blocked_item = next(item for item in report["items"] if item["itemId"] == "authority-blocked-work")
     assert blocked_item["status"] == "blocked_pending_explicit_approval"
     assert blocked_item["recommendedSliceSize"] == "do_not_start"
     assert "explicit operator approval naming authority and scope" in blocked_item["blockedBy"]
     assert blocked_item["nextLane"] is None
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
+    assert verification_item["nextLane"]["laneSlug"] == "verification-surface-hardening"
+    assert verification_item["nextLane"]["branchName"] == "codex/verification-surface-hardening"
+    assert verification_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "verification surface hardening"'
+    assert "pnpm run check:verification-readiness" in verification_item["nextLane"]["verificationCommands"]
+    assert any("another active lane" in stop_line for stop_line in verification_item["nextLane"]["stopLines"])
     assert "/controls#verification-readiness-report" in verification_item["dashboardAnchors"]
     assert "/controls#development-runway-report" in verification_item["dashboardAnchors"]
     assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
@@ -2233,6 +2234,9 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     ]
     github_item = next(item for item in report["items"] if item["itemId"] == "github-delivery-hygiene")
     assert github_item["recommendedSliceSize"] == "large"
+    assert github_item["nextLane"]["branchName"] == "codex/github-delivery-hygiene"
+    assert github_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "github delivery hygiene"'
+    assert "pnpm run check:github-workflow-policy" in github_item["nextLane"]["verificationCommands"]
     assert "GET /supervisor/github-workflow-policy-report" in github_item["relatedReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in github_item["relatedReports"]
     assert "/controls#github-workflow-policy-report" in github_item["dashboardAnchors"]
@@ -2242,6 +2246,9 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "docs/workflows/implementation-evidence-boundary.md" in github_item["relatedDocs"]
     assert any("plaintext gh token" in evidence for evidence in github_item["evidence"])
     evidence_item = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish")
+    assert evidence_item["nextLane"]["branchName"] == "codex/read-only-evidence-polish"
+    assert evidence_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "read only evidence polish"'
+    assert "pnpm run check:runtime-export" in evidence_item["nextLane"]["verificationCommands"]
     assert "/controls#supervisor-report-catalog" in evidence_item["dashboardAnchors"]
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
@@ -8049,14 +8056,14 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     tasks_dir = state_root / "tasks"
     assignments_dir.mkdir(parents=True)
     tasks_dir.mkdir()
-    assignment_path = assignments_dir / "safe-backlog-report-alignment.json"
+    assignment_path = assignments_dir / "verification-surface-hardening.json"
     assignment_path.write_text(
         json.dumps(
             {
-                "assignment_id": "safe-backlog-report-alignment",
-                "task_id": "safe-backlog-report-alignment",
-                "lane_slug": "safe-backlog-report-alignment",
-                "branch": "codex/safe-backlog-report-alignment",
+                "assignment_id": "verification-surface-hardening",
+                "task_id": "verification-surface-hardening",
+                "lane_slug": "verification-surface-hardening",
+                "branch": "codex/verification-surface-hardening",
                 "status": "claimed",
                 "owner": "runner-a",
                 "phase": "claimed",
@@ -8071,12 +8078,16 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
 
     assert response.status_code == 200
     report = response.json()["data"]
-    lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "safe-backlog-report-alignment")
+    lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "verification-surface-hardening")
     assert lane["classification"] == "claimed"
-    assert lane["branch"] == "codex/safe-backlog-report-alignment"
-    backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "safe-backlog-report-alignment")
+    assert lane["branch"] == "codex/verification-surface-hardening"
+    backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "verification-surface-hardening")
     assert backlog["classification"] == "claimed"
     assert backlog["reasonCode"] == "backlog-lane-claimed"
+    closed_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "safe-backlog-report-alignment")
+    assert closed_backlog["classification"] == "closed"
+    assert closed_backlog["reasonCode"] == "backlog-closed"
+    assert closed_backlog["branch"] is None
 
 
 def test_runner_assignment_status_report_treats_unowned_active_workspace_as_assignable(tmp_path, monkeypatch) -> None:

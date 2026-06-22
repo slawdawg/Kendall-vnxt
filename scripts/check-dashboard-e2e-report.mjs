@@ -18,6 +18,8 @@ const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const serviceSource = readWorkspaceFile("services/supervisor/src/supervisor/application/service.py");
 const dashboardSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
+const dashboardE2ERunner = readWorkspaceFile("scripts/dashboard-e2e-runner.mjs");
+const dashboardE2ERunnerTest = readWorkspaceFile("tests/dashboard-e2e-runner.test.mjs");
 
 const expectedPackageScripts = [
   ["setup:e2e", "node ./scripts/setup-e2e.mjs"],
@@ -29,6 +31,7 @@ const expectedPackageScripts = [
   ["test:e2e:dashboard:managed", "node ./scripts/run-managed-recipe-e2e.mjs"],
   ["test:e2e:dashboard:managed:mobile", "node ./scripts/run-managed-mobile-recipe-e2e.mjs"],
   ["test:e2e:dashboard:provider-raw-output", "node ./scripts/run-provider-raw-output-ui-e2e.mjs"],
+  ["test:dashboard-e2e-runner", "node --test tests/dashboard-e2e-runner.test.mjs"],
 ];
 
 const expectedRunners = [
@@ -127,6 +130,26 @@ assertCondition(
 assertCondition(
   storyIndex.includes("3-26-dashboard-e2e-report-drift-check.md"),
   "Story index must reference Story 3.26 dashboard e2e report drift check",
+  failures,
+);
+assertCondition(
+  packageJson.scripts?.["check:static"]?.includes("pnpm run test:dashboard-e2e-runner") &&
+    packageJson.scripts?.check?.includes("pnpm run test:dashboard-e2e-runner"),
+  "Aggregate check scripts must run pnpm run test:dashboard-e2e-runner",
+  failures,
+);
+assertCondition(
+  dashboardE2ERunner.includes("playwrightBrowserPreflight") &&
+    dashboardE2ERunner.includes("PLAYWRIGHT_BROWSERS_PATH") &&
+    dashboardE2ERunner.includes("pnpm run setup:e2e") &&
+    dashboardE2ERunner.includes("stops before starting supervisor/dashboard servers"),
+  "Dashboard e2e runner must preflight the configured Playwright browser cache before server launch",
+  failures,
+);
+assertCondition(
+  dashboardE2ERunnerTest.includes("dashboard e2e browser preflight fails before server launch") &&
+    dashboardE2ERunnerTest.includes("dashboard e2e browser preflight accepts the configured worktree browser cache"),
+  "Dashboard e2e runner tests must cover missing and ready browser-cache preflight states",
   failures,
 );
 

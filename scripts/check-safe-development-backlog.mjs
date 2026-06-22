@@ -242,9 +242,13 @@ for (const safetyText of [
   "Git/GCM",
   "Codex GitHub connector",
   "node ./scripts/codex-workspace.mjs start",
-  "codex/safe-backlog-report-alignment",
+  'lane_slug="verification-surface-hardening"',
+  'lane_slug="github-delivery-hygiene"',
+  'lane_slug="read-only-evidence-polish"',
+  "complete",
+  "Use this completed item as evidence only; do not requeue it as a new lane.",
   "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
-  "Do not start or modify the active verification-surface-hardening lane while using this recommendation.",
+  "Do not start or modify another active lane while using this recommendation.",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
@@ -273,8 +277,8 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/safe-backlog-report-alignment",
-  'start: node ./scripts/codex-workspace.mjs start "safe backlog report alignment"',
+  "branch: codex/verification-surface-hardening",
+  'start: node ./scripts/codex-workspace.mjs start "verification surface hardening"',
   "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
   "Related report links",
   "Source evidence labels",
@@ -287,7 +291,7 @@ for (const browserText of [
   "persistent plaintext gh token storage",
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
-  "Do not start or modify the active verification-surface-hardening lane while using this recommendation.",
+  "Do not start or modify another active lane while using this recommendation.",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert ${browserText}`, failures);
 }
@@ -298,12 +302,12 @@ assertCondition(
   failures,
 );
 assertCondition(
-  supervisorTests.includes('report_alignment_item["nextLane"]["laneSlug"]') &&
-    supervisorTests.includes('"codex/safe-backlog-report-alignment"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "safe backlog report alignment"') &&
-    supervisorTests.includes("uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py") &&
-    supervisorTests.includes("verification-surface-hardening"),
-  "Supervisor tests must assert safe backlog next-lane handoff evidence",
+  supervisorTests.includes('report_alignment_item["status"] == "closed"') &&
+    supervisorTests.includes('report_alignment_item["nextLane"] is None') &&
+    supervisorTests.includes('"codex/verification-surface-hardening"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "verification surface hardening"') &&
+    supervisorTests.includes("pnpm run check:verification-readiness"),
+  "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );
 assertCondition(
