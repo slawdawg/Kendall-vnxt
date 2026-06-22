@@ -114,7 +114,8 @@ assignment-report options:
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 claim-next options:
-  --dry-run                 Required for Phase 3. Preview only; no mutation.
+  --dry-run                 Preview only; no mutation.
+  --apply                   Write assignment metadata for an unowned ready lane.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 finish-pr options:
@@ -304,8 +305,10 @@ function assignmentReport(argv) {
   const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
   const generatedAt = new Date();
   const manifests = readManifests(state).map(({ manifest }) => manifest);
+  const assignments = readAssignments(state).map(({ assignment }) => assignment);
   const backlogItems = readSafeBacklogItems();
   const manifestBranchStates = workspaceBranchStates(manifests);
+  const assignmentBranchStates = assignmentBranchStatesByBranch(assignments);
 
   console.log("Assignment Report");
   console.log(`Generated: ${generatedAt.toISOString()}`);
@@ -320,7 +323,7 @@ function assignmentReport(argv) {
     console.log("- none found (safe backlog source unavailable or unparsable)");
   } else {
     for (const item of backlogItems) {
-      const classification = classifyBacklogItem(item, manifestBranchStates);
+      const classification = classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates);
       console.log(
         [
           `- ${item.itemId}`,
@@ -329,6 +332,31 @@ function assignmentReport(argv) {
           `slice=${item.recommendedSliceSize || "unknown"}`,
           `branch=${item.branchName || "none"}`,
           `reason=${classification.reason}`,
+        ].join(" | "),
+      );
+    }
+  }
+
+  console.log("");
+  console.log("Lane assignments:");
+  if (assignments.length === 0) {
+    console.log(`- none (no assignment metadata under ${state.assignmentsDir})`);
+  } else {
+    for (const assignment of assignments) {
+      const classification = classifyLaneAssignment(assignment, {
+        currentOwner,
+        generatedAt,
+        staleAfterSeconds,
+      });
+      console.log(
+        [
+          `- ${assignment.assignment_id}`,
+          classification.status,
+          `owner=${assignment.owner || "unowned"}`,
+          `branch=${assignment.branch || "none"}`,
+          `task=${assignment.task_id || "none"}`,
+          `reason=${classification.reason}`,
+          `next=${classification.nextAction}`,
         ].join(" | "),
       );
     }
@@ -367,11 +395,8 @@ function claimNext(argv) {
   if (options.apply && options.dryRun) {
     throw new Error("claim-next accepts either --dry-run or --apply, not both.");
   }
-  if (options.apply) {
-    throw new Error("claim-next --apply is reserved for Phase 4 and is not implemented yet.");
-  }
-  if (!options.dryRun) {
-    throw new Error("claim-next currently supports --dry-run only. Pass --dry-run to preview candidate selection.");
+  if (!options.apply && !options.dryRun) {
+    throw new Error("claim-next requires either --dry-run or --apply.");
   }
 
   const state = workspaceState(options);
@@ -379,9 +404,10 @@ function claimNext(argv) {
   const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
   const generatedAt = new Date();
   const manifests = readManifests(state).map(({ manifest }) => manifest);
+  const assignments = readAssignments(state).map(({ assignment }) => assignment);
   const backlogItems = readSafeBacklogItems();
   const evaluations = backlogItems.map((item) =>
-    evaluateClaimCandidate(item, manifests, {
+    evaluateClaimCandidate(item, manifests, assignments, {
       currentOwner,
       generatedAt,
       staleAfterSeconds,
@@ -402,25 +428,31 @@ function claimNext(argv) {
   if (selected?.item.startCommand) {
     plan.push(`start command ${selected.item.startCommand}`);
   }
-  plan.push("preview only; no manifest, branch, PR, or worktree mutation");
-  printPlan("claim-next", plan);
+  if (options.dryRun) {
+    plan.push("preview only; no manifest, branch, PR, or worktree mutation");
+    printPlan("claim-next", plan);
+  } else {
+    if (!selected) {
+      printBlocked("claim-next", plan);
+      printClaimBlockers(evaluations, selected);
+      throw new Error("No claimable safe backlog lane found.");
+    }
+    const applied = applyClaimNext(selected, {
+      state,
+      options,
+      currentOwner,
+      staleAfterSeconds,
+    });
+    printApplied("claim-next", [
+      ...plan,
+      `wrote ${applied.path}`,
+      applied.message,
+      "assignment metadata only; no branch, PR, worktree, worker, or implementation mutation",
+    ]);
+  }
 
   console.log("Blocker evidence:");
-  for (const evaluation of evaluations) {
-    if (evaluation === selected) {
-      continue;
-    }
-    console.log(
-      [
-        `- ${evaluation.item.itemId}`,
-        evaluation.status,
-        `source_status=${evaluation.item.status || "unknown"}`,
-        `branch=${evaluation.item.branchName || "none"}`,
-        `reason=${evaluation.reason}`,
-        `next=${evaluation.nextAction}`,
-      ].join(" | "),
-    );
-  }
+  printClaimBlockers(evaluations, selected);
 }
 
 function resumeWorkspace(argv) {
@@ -1076,6 +1108,7 @@ function workspaceState(options = {}) {
   const root = resolve(String(configuredRoot));
   return {
     root,
+    assignmentsDir: join(root, "assignments"),
     tasksDir: join(root, "tasks"),
     worktreesDir: join(root, "worktrees"),
   };
@@ -1110,6 +1143,37 @@ function readManifests(state) {
 }
 
 function readManifest(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function readAssignments(state) {
+  if (!existsSync(state.assignmentsDir)) {
+    return [];
+  }
+
+  return readdirSync(state.assignmentsDir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => {
+      const path = join(state.assignmentsDir, name);
+      try {
+        const assignment = readAssignment(path);
+        validateAssignment(assignment, path);
+        return { path, assignment };
+      } catch (error) {
+        return { path, error };
+      }
+    })
+    .filter((record) => {
+      if (record.error) {
+        console.error(`WARN: skipping invalid assignment ${record.path}: ${record.error.message}`);
+        return false;
+      }
+      return true;
+    })
+    .sort((left, right) => left.assignment.assignment_id.localeCompare(right.assignment.assignment_id));
+}
+
+function readAssignment(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
@@ -1154,6 +1218,11 @@ function findManifest(state, query, options = {}) {
 function writeManifest(path, manifest) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function writeAssignment(path, assignment) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(assignment, null, 2)}\n`);
 }
 
 function resolveBaseRef(baseBranch) {
@@ -1252,6 +1321,16 @@ function validateManifest(manifest, path) {
     }
   }
   assertSafeBranch(manifest.branch);
+}
+
+function validateAssignment(assignment, path) {
+  for (const key of ["assignment_id", "branch", "status"]) {
+    if (!assignment[key]) {
+      throw new Error(`Assignment ${path} is missing required field: ${key}`);
+    }
+  }
+  assertSafeTaskId(String(assignment.assignment_id));
+  assertSafeBranch(String(assignment.branch));
 }
 
 function currentLaneOwner(options = {}) {
@@ -1380,7 +1459,7 @@ function laneOwnerIsStale(manifest, context) {
   return context.generatedAt.getTime() - timestamp > context.staleAfterSeconds * 1000;
 }
 
-function classifyBacklogItem(item, manifestBranchStates) {
+function classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates = new Map()) {
   if (item.status !== "ready" || item.recommendedSliceSize === "do_not_start") {
     return {
       status: "blocked_authority",
@@ -1391,6 +1470,19 @@ function classifyBacklogItem(item, manifestBranchStates) {
     return {
       status: "ambiguous",
       reason: "ready item has no source-owned lane start command",
+    };
+  }
+  const assignmentState = item.branchName ? assignmentBranchStates.get(item.branchName) : null;
+  if (assignmentState === "active") {
+    return {
+      status: "claimed",
+      reason: "lane assignment already exists for branch",
+    };
+  }
+  if (assignmentState === "ambiguous") {
+    return {
+      status: "ambiguous",
+      reason: "multiple active assignment records exist for branch",
     };
   }
   const branchState = item.branchName ? manifestBranchStates.get(item.branchName) : null;
@@ -1412,11 +1504,69 @@ function classifyBacklogItem(item, manifestBranchStates) {
   };
 }
 
-function evaluateClaimCandidate(item, manifests, context) {
+function classifyLaneAssignment(assignment, context) {
+  if (assignment.status === "closed") {
+    return {
+      status: "closed",
+      reason: "assignment is closed",
+      nextAction: "no assignment action",
+    };
+  }
+
+  if (String(assignment.status || "").startsWith("blocked_authority")) {
+    return {
+      status: "blocked_authority",
+      reason: "assignment is authority-blocked",
+      nextAction: "wait for explicit authority approval",
+    };
+  }
+
+  if (!assignment.owner) {
+    return {
+      status: "ambiguous",
+      reason: "assignment has no owner",
+      nextAction: "inspect assignment metadata before mutation",
+    };
+  }
+
+  if (assignment.owner !== context.currentOwner) {
+    if (laneAssignmentIsStale(assignment, context)) {
+      return {
+        status: "blocked_stale_owner_needs_takeover",
+        reason: `assignment heartbeat older than ${context.staleAfterSeconds} seconds`,
+        nextAction: "prepare takeover evidence and ask operator before mutation",
+      };
+    }
+    return {
+      status: "blocked_owned_active",
+      reason: `assigned to ${assignment.owner}`,
+      nextAction: "do not mutate without explicit takeover approval",
+    };
+  }
+
+  return {
+    status: "claimed",
+    reason: "assignment is owned by current runner",
+    nextAction: "continue lane or refresh claim evidence",
+  };
+}
+
+function laneAssignmentIsStale(assignment, context) {
+  const timestamp = Date.parse(
+    assignment.last_heartbeat_at || assignment.updated_at || assignment.assigned_at || assignment.created_at || "",
+  );
+  if (!Number.isFinite(timestamp)) {
+    return true;
+  }
+  return context.generatedAt.getTime() - timestamp > context.staleAfterSeconds * 1000;
+}
+
+function evaluateClaimCandidate(item, manifests, assignments, context) {
   const base = {
     item,
     claimable: false,
     action: "",
+    mutation: "",
     status: "ambiguous",
     reason: "",
     nextAction: "inspect safe backlog evidence before claiming",
@@ -1469,9 +1619,11 @@ function evaluateClaimCandidate(item, manifests, context) {
         ...base,
         claimable: true,
         action: `claim existing unowned workspace ${manifest.task_id}`,
+        mutation: "manifest_owner_claim",
+        targetTaskId: manifest.task_id,
         status: "assignable",
         reason: "ready safe backlog lane has an unowned active workspace",
-        nextAction: "future --apply may write assignment evidence only",
+        nextAction: "--apply may write owner evidence to the existing manifest",
       };
     }
     return {
@@ -1479,6 +1631,39 @@ function evaluateClaimCandidate(item, manifests, context) {
       status: assignment.status,
       reason: assignment.reason,
       nextAction: assignment.nextAction,
+    };
+  }
+
+  const openAssignments = activeAssignmentsForBranch(assignments, item.branchName);
+  if (openAssignments.length > 1) {
+    return {
+      ...base,
+      status: "ambiguous",
+      reason: `multiple active lane assignments exist for ${item.branchName}`,
+      nextAction: "inspect assignment metadata before claim",
+    };
+  }
+
+  if (openAssignments.length === 1) {
+    const assignment = openAssignments[0];
+    const classification = classifyLaneAssignment(assignment, context);
+    if (assignment.owner === context.currentOwner && classification.status === "claimed") {
+      return {
+        ...base,
+        claimable: true,
+        action: `refresh existing assignment ${assignment.assignment_id}`,
+        mutation: "assignment_refresh",
+        targetAssignmentId: assignment.assignment_id,
+        status: "claimed",
+        reason: "ready safe backlog lane is already claimed by current runner",
+        nextAction: "--apply may refresh assignment evidence",
+      };
+    }
+    return {
+      ...base,
+      status: classification.status,
+      reason: classification.reason,
+      nextAction: classification.nextAction,
     };
   }
 
@@ -1496,13 +1681,181 @@ function evaluateClaimCandidate(item, manifests, context) {
     ...base,
     claimable: true,
     action: "claim ready safe backlog lane",
+    mutation: "assignment_write",
+    targetAssignmentId: item.itemId,
     status: "assignable",
     reason:
       branchManifests.length > 0
         ? "only closed workspace manifests exist for branch"
         : "ready safe backlog lane has no workspace conflict",
-    nextAction: "future --apply may write assignment evidence only",
+    nextAction: "--apply may write assignment evidence only",
   };
+}
+
+function activeAssignmentsForBranch(assignments, branchName) {
+  return assignments.filter((assignment) => assignment.branch === branchName && assignment.status !== "closed");
+}
+
+function assignmentBranchStatesByBranch(assignments) {
+  const grouped = new Map();
+  for (const assignment of assignments) {
+    if (!assignment.branch || assignment.status === "closed") {
+      continue;
+    }
+    const count = grouped.get(assignment.branch) || 0;
+    grouped.set(assignment.branch, count + 1);
+  }
+
+  const states = new Map();
+  for (const [branch, count] of grouped) {
+    states.set(branch, count > 1 ? "ambiguous" : "active");
+  }
+  return states;
+}
+
+function applyClaimNext(selected, context) {
+  if (selected.mutation === "manifest_owner_claim") {
+    return applyManifestOwnerClaim(selected, context);
+  }
+
+  if (selected.mutation === "assignment_write" || selected.mutation === "assignment_refresh") {
+    return applyAssignmentClaim(selected, context);
+  }
+
+  throw new Error(`Unsupported claim mutation: ${selected.mutation || "unknown"}`);
+}
+
+function applyManifestOwnerClaim(selected, { state, options, currentOwner, staleAfterSeconds }) {
+  const taskId = String(selected.targetTaskId || "");
+  assertSafeTaskId(taskId);
+  const manifestPath = join(state.tasksDir, `${taskId}.json`);
+
+  return withManifestLock(state, taskId, () => {
+    const manifest = readManifest(manifestPath);
+    validateManifest(manifest, manifestPath);
+    reconcileManifest(manifest);
+    const manifests = readManifests(state).map(({ manifest: recordManifest }) =>
+      recordManifest.task_id === manifest.task_id ? manifest : recordManifest,
+    );
+    const assignments = readAssignments(state).map(({ assignment }) => assignment);
+    const freshEvaluation = evaluateClaimCandidate(selected.item, manifests, assignments, {
+      currentOwner,
+      generatedAt: new Date(),
+      staleAfterSeconds,
+    });
+    if (!freshEvaluation.claimable || freshEvaluation.mutation !== "manifest_owner_claim") {
+      throw new Error(`Claim target changed for ${selected.item.itemId}; rerun claim-next --dry-run.`);
+    }
+
+    claimLaneOwner(manifest, options);
+    manifest.updated_at = new Date().toISOString();
+    writeManifest(manifestPath, manifest);
+    return {
+      path: manifestPath,
+      message: `claimed existing unowned workspace ${taskId} for ${currentOwner}`,
+    };
+  });
+}
+
+function applyAssignmentClaim(selected, { state, options, currentOwner, staleAfterSeconds }) {
+  const assignmentId = String(selected.targetAssignmentId || selected.item.itemId || "");
+  assertSafeTaskId(assignmentId);
+
+  return withAssignmentLock(state, assignmentId, () => {
+    const manifests = readManifests(state).map(({ manifest }) => manifest);
+    const assignments = readAssignments(state);
+    const freshEvaluation = evaluateClaimCandidate(
+      selected.item,
+      manifests,
+      assignments.map(({ assignment }) => assignment),
+      {
+        currentOwner,
+        generatedAt: new Date(),
+        staleAfterSeconds,
+      },
+    );
+    if (
+      !freshEvaluation.claimable ||
+      !["assignment_write", "assignment_refresh"].includes(freshEvaluation.mutation)
+    ) {
+      throw new Error(`Claim target changed for ${selected.item.itemId}; rerun claim-next --dry-run.`);
+    }
+    if (freshEvaluation.targetAssignmentId && freshEvaluation.targetAssignmentId !== assignmentId) {
+      throw new Error(`Assignment target changed for ${selected.item.itemId}; rerun claim-next --dry-run.`);
+    }
+
+    const existing = activeAssignmentsForBranch(
+      assignments.map(({ assignment }) => assignment),
+      selected.item.branchName,
+    )[0];
+    const path = existing ? assignmentPath(state, existing.assignment_id) : assignmentPath(state, assignmentId);
+    const assignment = buildLaneAssignment(selected.item, existing, options);
+    writeAssignment(path, assignment);
+    return {
+      path,
+      message: existing
+        ? `refreshed existing assignment ${assignment.assignment_id} for ${currentOwner}`
+        : `claimed ready lane ${selected.item.itemId} for ${currentOwner}`,
+    };
+  });
+}
+
+function buildLaneAssignment(item, existingAssignment, options = {}) {
+  const now = new Date().toISOString();
+  const currentOwner = currentLaneOwner(options);
+  const isRefresh = Boolean(existingAssignment);
+  const assignmentId = String(existingAssignment?.assignment_id || item.itemId);
+  assertSafeTaskId(assignmentId);
+
+  return {
+    schema_version: 1,
+    assignment_id: assignmentId,
+    task_id: existingAssignment?.task_id || item.itemId,
+    lane_slug: existingAssignment?.lane_slug || laneSlugFromBranch(item.branchName),
+    branch: item.branchName,
+    worktree_path: existingAssignment?.worktree_path || null,
+    status: "claimed",
+    owner: currentOwner,
+    owner_thread_id: process.env.CODEX_THREAD_ID || null,
+    assigned_at: existingAssignment?.assigned_at || now,
+    updated_at: now,
+    source_backlog_item: {
+      item_id: item.itemId,
+      status: item.status || null,
+      recommended_slice_size: item.recommendedSliceSize || null,
+      branch_name: item.branchName || null,
+      start_command: item.startCommand || null,
+    },
+    authority_profile: existingAssignment?.authority_profile || "standard-delivery",
+    stop_lines: existingAssignment?.stop_lines || defaultAssignmentStopLines(),
+    events: [
+      ...(Array.isArray(existingAssignment?.events) ? existingAssignment.events : []),
+      taskEvent(
+        isRefresh ? "claim_refreshed" : "claimed",
+        `${item.itemId} claimed by ${currentOwner}; metadata only, no dispatch`,
+      ),
+    ],
+  };
+}
+
+function defaultAssignmentStopLines() {
+  return [
+    "no provider/model calls",
+    "no paid usage",
+    "no worker or process launch",
+    "no automatic takeover without evidence and approval",
+    "no authority-blocked work mutation",
+    "no branch, PR, merge, cleanup, or implementation mutation from claim-next --apply",
+  ];
+}
+
+function laneSlugFromBranch(branchName) {
+  return String(branchName || "").replace(/^codex\//, "") || "unknown-lane";
+}
+
+function assignmentPath(state, assignmentId) {
+  assertSafeTaskId(assignmentId);
+  return join(state.assignmentsDir, `${assignmentId}.json`);
 }
 
 function claimBranchNameBlocker(branchName) {
@@ -1732,6 +2085,28 @@ function withManifestLock(state, taskId, fn) {
   }
 }
 
+function withAssignmentLock(state, assignmentId, fn) {
+  assertSafeTaskId(assignmentId);
+  mkdirSync(state.assignmentsDir, { recursive: true });
+  const lockPath = join(state.assignmentsDir, `${assignmentId}.lock`);
+  let fd;
+  try {
+    fd = openSync(lockPath, "wx");
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw error;
+    }
+    throw new Error(`Assignment is locked by another session: ${lockPath}`);
+  }
+
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    rmSync(lockPath, { force: true });
+  }
+}
+
 function taskEvent(type, message) {
   return {
     at: new Date().toISOString(),
@@ -1942,6 +2317,38 @@ function printPlan(name, lines) {
   console.log(`DRY RUN: ${name}`);
   for (const line of lines) {
     console.log(`- ${line}`);
+  }
+}
+
+function printApplied(name, lines) {
+  console.log(`APPLY: ${name}`);
+  for (const line of lines) {
+    console.log(`- ${line}`);
+  }
+}
+
+function printBlocked(name, lines) {
+  console.log(`BLOCKED: ${name}`);
+  for (const line of lines) {
+    console.log(`- ${line}`);
+  }
+}
+
+function printClaimBlockers(evaluations, selected) {
+  for (const evaluation of evaluations) {
+    if (evaluation === selected) {
+      continue;
+    }
+    console.log(
+      [
+        `- ${evaluation.item.itemId}`,
+        evaluation.status,
+        `source_status=${evaluation.item.status || "unknown"}`,
+        `branch=${evaluation.item.branchName || "none"}`,
+        `reason=${evaluation.reason}`,
+        `next=${evaluation.nextAction}`,
+      ].join(" | "),
+    );
   }
 }
 
