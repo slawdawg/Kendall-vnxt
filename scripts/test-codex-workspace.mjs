@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -247,6 +247,99 @@ try {
     assert(before === after, "assignment-report mutated a workspace manifest");
   });
 
+  test("claim-next dry-run previews the next safe backlog lane without mutation", () => {
+    const tasksDir = join(stateRoot, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+    const before = taskSnapshot(tasksDir);
+
+    const result = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", stateRoot]);
+    const after = taskSnapshot(tasksDir);
+
+    assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("DRY RUN: claim-next"), result.stdout || result.stderr);
+    assert(result.stdout.includes("claim candidate safe-backlog-report-alignment"), result.stdout || result.stderr);
+    assert(result.stdout.includes("branch codex/safe-backlog-report-alignment"), result.stdout || result.stderr);
+    assert(
+      result.stdout.includes('start command node ./scripts/codex-workspace.mjs start "safe backlog report alignment"'),
+      result.stdout || result.stderr,
+    );
+    assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
+    assert(before === after, "claim-next --dry-run mutated workspace manifests");
+  });
+
+  test("claim-next refuses apply until the Phase 4 mutation contract exists", () => {
+    const result = run(["claim-next", "--apply", "--state-root", stateRoot]);
+    assert(result.code !== 0, "claim-next --apply unexpectedly passed");
+    assert(result.stderr.includes("Phase 4"), result.stderr || result.stdout);
+  });
+
+  test("claim-next dry-run can preview an existing unowned active workspace claim", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-unowned-"));
+    try {
+      const tasksDir = join(claimStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: "unowned-safe-backlog",
+            branch: "codex/safe-backlog-report-alignment",
+            worktree_path: rootDir,
+            base_branch: "main",
+            status: "active",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      const after = readFileSync(manifestPath, "utf8");
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("claim existing unowned workspace unowned-safe-backlog"), result.stdout || result.stderr);
+      assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
+      assert(before === after, "claim-next --dry-run mutated the unowned lane manifest");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next dry-run blocks an active lane owned by another runner", () => {
+    const tasksDir = join(stateRoot, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+    const manifestPath = join(tasksDir, "owned-safe-backlog.json");
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify(
+        {
+          task_id: "owned-safe-backlog",
+          branch: "codex/safe-backlog-report-alignment",
+          worktree_path: rootDir,
+          base_branch: "main",
+          status: "active",
+          owner: "runner-b",
+          owner_updated_at: new Date().toISOString(),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const before = readFileSync(manifestPath, "utf8");
+
+    const result = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", stateRoot]);
+    const after = readFileSync(manifestPath, "utf8");
+
+    assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("no claimable safe backlog lane found"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- safe-backlog-report-alignment | blocked_owned_active"), result.stdout || result.stderr);
+    assert(result.stdout.includes("do not mutate without explicit takeover approval"), result.stdout || result.stderr);
+    assert(before === after, "claim-next --dry-run mutated the owned lane manifest");
+  });
+
   test("finish-pr rejects unknown verification profile before mutation", () => {
     const tasksDir = join(stateRoot, "tasks");
     const worktreePath = rootDir;
@@ -441,6 +534,17 @@ function run(args) {
     stdout: result.stdout || "",
     stderr: result.stderr || "",
   };
+}
+
+function taskSnapshot(tasksDir) {
+  if (!existsSync(tasksDir)) {
+    return "";
+  }
+  return readdirSync(tasksDir)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => `${name}\n${readFileSync(join(tasksDir, name), "utf8")}`)
+    .join("\n---\n");
 }
 
 function createMergedCleanupFixture() {

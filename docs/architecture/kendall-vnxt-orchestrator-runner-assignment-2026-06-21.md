@@ -209,6 +209,14 @@ Initial CLI implementation:
 
 Add `claim-next --dry-run` with deterministic candidate selection and complete blocker evidence.
 
+Initial CLI implementation:
+
+- `node ./scripts/codex-workspace.mjs claim-next --dry-run`
+- selects the first ready safe-backlog lane with source-owned `nextLane` start metadata and no active workspace or branch conflict,
+- previews existing unowned-workspace claims when an unowned active manifest already exists for the selected branch,
+- prints blocker evidence for authority-blocked, ambiguous, owned-active, stale-owner, duplicate-manifest, and branch-conflict candidates,
+- refuses `--apply` until Phase 4 implements mutation under the assignment evidence contract.
+
 ### Phase 4: Claim Apply
 
 Allow `claim-next --apply` only for unowned ready lanes. It should create or update assignment metadata but not run implementation.

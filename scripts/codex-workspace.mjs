@@ -38,6 +38,9 @@ try {
     case "assignment-report":
       assignmentReport(commandArgs);
       break;
+    case "claim-next":
+      claimNext(commandArgs);
+      break;
     case "resume":
       resumeWorkspace(commandArgs);
       break;
@@ -77,6 +80,7 @@ Commands:
   start <description>       Create a task manifest, branch, and worktree.
   list                      Show known Codex workspaces.
   assignment-report         Show read-only runner assignment inventory and blockers.
+  claim-next                Preview the next claimable runner assignment lane.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
@@ -107,6 +111,10 @@ list options:
   --owner <id>              Show only workspaces owned by the given owner.
 
 assignment-report options:
+  --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
+
+claim-next options:
+  --dry-run                 Required for Phase 3. Preview only; no mutation.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 finish-pr options:
@@ -349,6 +357,67 @@ function assignmentReport(argv) {
         `worktree=${manifest.worktree_path}`,
         `reason=${classification.reason}`,
         `next=${classification.nextAction}`,
+      ].join(" | "),
+    );
+  }
+}
+
+function claimNext(argv) {
+  const { options } = parseOptions(argv);
+  if (options.apply && options.dryRun) {
+    throw new Error("claim-next accepts either --dry-run or --apply, not both.");
+  }
+  if (options.apply) {
+    throw new Error("claim-next --apply is reserved for Phase 4 and is not implemented yet.");
+  }
+  if (!options.dryRun) {
+    throw new Error("claim-next currently supports --dry-run only. Pass --dry-run to preview candidate selection.");
+  }
+
+  const state = workspaceState(options);
+  const currentOwner = currentLaneOwner(options);
+  const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
+  const generatedAt = new Date();
+  const manifests = readManifests(state).map(({ manifest }) => manifest);
+  const backlogItems = readSafeBacklogItems();
+  const evaluations = backlogItems.map((item) =>
+    evaluateClaimCandidate(item, manifests, {
+      currentOwner,
+      generatedAt,
+      staleAfterSeconds,
+    }),
+  );
+  const selected = evaluations.find((evaluation) => evaluation.claimable) || null;
+
+  const plan = [
+    `current owner ${currentOwner}`,
+    `state root ${state.root}`,
+    selected
+      ? `claim candidate ${selected.item.itemId} (${selected.action})`
+      : "no claimable safe backlog lane found",
+  ];
+  if (selected?.item.branchName) {
+    plan.push(`branch ${selected.item.branchName}`);
+  }
+  if (selected?.item.startCommand) {
+    plan.push(`start command ${selected.item.startCommand}`);
+  }
+  plan.push("preview only; no manifest, branch, PR, or worktree mutation");
+  printPlan("claim-next", plan);
+
+  console.log("Blocker evidence:");
+  for (const evaluation of evaluations) {
+    if (evaluation === selected) {
+      continue;
+    }
+    console.log(
+      [
+        `- ${evaluation.item.itemId}`,
+        evaluation.status,
+        `source_status=${evaluation.item.status || "unknown"}`,
+        `branch=${evaluation.item.branchName || "none"}`,
+        `reason=${evaluation.reason}`,
+        `next=${evaluation.nextAction}`,
       ].join(" | "),
     );
   }
@@ -1343,6 +1412,118 @@ function classifyBacklogItem(item, manifestBranchStates) {
   };
 }
 
+function evaluateClaimCandidate(item, manifests, context) {
+  const base = {
+    item,
+    claimable: false,
+    action: "",
+    status: "ambiguous",
+    reason: "",
+    nextAction: "inspect safe backlog evidence before claiming",
+  };
+
+  if (item.status !== "ready" || item.recommendedSliceSize === "do_not_start") {
+    return {
+      ...base,
+      status: "blocked_authority",
+      reason: "safe backlog item is not dispatchable from generic continuation",
+      nextAction: "wait for explicit authority approval",
+    };
+  }
+
+  if (!item.startCommand || !item.branchName) {
+    return {
+      ...base,
+      status: "ambiguous",
+      reason: "ready item has no source-owned lane start command and branch",
+      nextAction: "add source-owned nextLane metadata before claim",
+    };
+  }
+
+  const branchNameError = claimBranchNameBlocker(item.branchName);
+  if (branchNameError) {
+    return {
+      ...base,
+      status: "ambiguous",
+      reason: branchNameError,
+      nextAction: "resolve branch evidence before claim",
+    };
+  }
+
+  const branchManifests = manifests.filter((manifest) => manifest.branch === item.branchName);
+  const activeManifests = branchManifests.filter((manifest) => manifest.status !== "closed");
+  if (activeManifests.length > 1) {
+    return {
+      ...base,
+      status: "ambiguous",
+      reason: `multiple active workspace manifests exist for ${item.branchName}`,
+      nextAction: "run workspace doctor and resolve duplicate manifests before claim",
+    };
+  }
+
+  if (activeManifests.length === 1) {
+    const manifest = activeManifests[0];
+    const assignment = classifyWorkspaceAssignment(manifest, context);
+    if (!manifest.owner && assignment.status === "assignable") {
+      return {
+        ...base,
+        claimable: true,
+        action: `claim existing unowned workspace ${manifest.task_id}`,
+        status: "assignable",
+        reason: "ready safe backlog lane has an unowned active workspace",
+        nextAction: "future --apply may write assignment evidence only",
+      };
+    }
+    return {
+      ...base,
+      status: assignment.status,
+      reason: assignment.reason,
+      nextAction: assignment.nextAction,
+    };
+  }
+
+  const branchAvailabilityError = claimBranchAvailabilityBlocker(item.branchName);
+  if (branchAvailabilityError) {
+    return {
+      ...base,
+      status: "ambiguous",
+      reason: branchAvailabilityError,
+      nextAction: "resolve branch evidence before claim",
+    };
+  }
+
+  return {
+    ...base,
+    claimable: true,
+    action: "claim ready safe backlog lane",
+    status: "assignable",
+    reason:
+      branchManifests.length > 0
+        ? "only closed workspace manifests exist for branch"
+        : "ready safe backlog lane has no workspace conflict",
+    nextAction: "future --apply may write assignment evidence only",
+  };
+}
+
+function claimBranchNameBlocker(branchName) {
+  try {
+    assertSafeBranch(branchName);
+  } catch (error) {
+    return error.message;
+  }
+  return "";
+}
+
+function claimBranchAvailabilityBlocker(branchName) {
+  if (branchExists(branchName)) {
+    return `local branch already exists: ${branchName}`;
+  }
+  if (remoteBranchExists(branchName)) {
+    return `remote branch already exists: origin/${branchName}`;
+  }
+  return "";
+}
+
 function workspaceBranchStates(manifests) {
   const states = new Map();
   for (const manifest of manifests) {
@@ -1393,16 +1574,24 @@ function readSafeBacklogItems() {
 
 function readSafeBacklogNextLane(source) {
   const match = source.match(/def _report_evidence_navigation_next_lane[\s\S]*?return NextLaneRecommendationView\(([\s\S]*?)\n\s*\)/);
+  const functionSource = match?.[0] || "";
   const block = match?.[1] || "";
+  const laneSlug = pythonStringField(functionSource, "lane_slug");
   return {
     branchName: pythonStringField(block, "branchName"),
-    startCommand: pythonStringField(block, "startCommand"),
+    startCommand: interpolatePythonTemplate(pythonStringField(block, "startCommand"), { lane_slug: laneSlug }),
   };
 }
 
 function pythonStringField(source, fieldName) {
-  const match = source.match(new RegExp(`${fieldName}=["']([^"']+)["']`));
-  return match?.[1] || "";
+  const match = source.match(new RegExp(`${fieldName}\\s*=\\s*[fF]?(['"])([\\s\\S]*?)\\1`));
+  return match?.[2] || "";
+}
+
+function interpolatePythonTemplate(value, variables) {
+  return String(value || "")
+    .replace(/\{lane_slug\.replace\("-", " "\)\}/g, String(variables.lane_slug || "").replace(/-/g, " "))
+    .replace(/\{lane_slug\}/g, String(variables.lane_slug || ""));
 }
 
 function positiveInteger(value, fallback) {
