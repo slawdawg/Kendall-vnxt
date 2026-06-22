@@ -30,6 +30,7 @@ import type {
   MaintenanceReadinessReportView,
   MvpProofTrialReportView,
   RuntimeEvidenceReviewReportView,
+  RunnerAssignmentStatusReportView,
   RuntimeEvidenceExportView,
   RemoteCleanupSyncReadinessReportView,
   RoutingLaneEvidenceProfileView,
@@ -230,6 +231,10 @@ export async function getMaintenanceActionPlanReport(): Promise<MaintenanceActio
 
 export async function getSafeDevelopmentBacklogReport(): Promise<SafeDevelopmentBacklogReportView> {
   return requestJson<SafeDevelopmentBacklogReportView>("/supervisor/safe-development-backlog");
+}
+
+export async function getRunnerAssignmentStatusReport(): Promise<RunnerAssignmentStatusReportView> {
+  return requestJson<RunnerAssignmentStatusReportView>("/supervisor/runner-assignment-status-report");
 }
 
 export async function getDevelopmentRunwayReport(): Promise<DevelopmentRunwayReportView> {

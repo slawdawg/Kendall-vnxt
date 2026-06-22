@@ -1065,6 +1065,82 @@ class SafeDevelopmentBacklogReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class RunnerAssignmentWarningView(BaseModel):
+    code: str
+    severity: str
+    message: str
+
+
+class RunnerAssignmentDegradedInputView(BaseModel):
+    inputKind: str
+    path: str | None = None
+    severity: str
+    reason: str
+    skippedCount: int | None = None
+
+
+class RunnerAssignmentStatusSummaryView(BaseModel):
+    active: int = 0
+    stale: int = 0
+    blocked: int = 0
+    ambiguous: int = 0
+    assignable: int = 0
+    closed: int = 0
+    degraded: int = 0
+    missing: int = 0
+
+
+class RunnerAssignmentStatusRowView(BaseModel):
+    id: str
+    title: str
+    classification: str
+    degraded: bool = False
+    reasonCode: str
+    reason: str
+    warnings: list[RunnerAssignmentWarningView] = Field(default_factory=list)
+    nextSafeAction: str
+    owner: str | None = None
+    branch: str | None = None
+    taskId: str | None = None
+    assignmentId: str | None = None
+    backlogItemId: str | None = None
+    phase: str | None = None
+    runnerKind: str = "unknown"
+    heartbeatAt: datetime | None = None
+    heartbeatSource: str = "missing"
+    heartbeatAgeSeconds: int | None = None
+    heartbeatMissing: bool = True
+    staleAfterSeconds: int
+    currentCommand: str | None = None
+    lastResult: str | None = None
+    worktreePath: str | None = None
+    worktreeState: str = "not-applicable"
+    deliveryState: str = "unknown"
+    localEvidenceStatus: str = "available"
+    evidencePath: str | None = None
+
+
+RunnerWorkspaceAssignmentView = RunnerAssignmentStatusRowView
+RunnerLaneAssignmentView = RunnerAssignmentStatusRowView
+RunnerBacklogCandidateView = RunnerAssignmentStatusRowView
+
+
+class RunnerAssignmentStatusReportView(BaseModel):
+    reportStatus: str
+    errorMessage: str | None = None
+    generatedAt: datetime
+    stateRoot: str | None = None
+    stateRootStatus: str
+    partial: bool
+    currentOwner: str | None = None
+    staleAfterSeconds: int
+    summary: RunnerAssignmentStatusSummaryView
+    workspaceAssignments: list[RunnerWorkspaceAssignmentView] = Field(default_factory=list)
+    laneAssignments: list[RunnerLaneAssignmentView] = Field(default_factory=list)
+    backlogCandidates: list[RunnerBacklogCandidateView] = Field(default_factory=list)
+    degradedInputs: list[RunnerAssignmentDegradedInputView] = Field(default_factory=list)
+
+
 class MaintenanceActionPlanStepView(BaseModel):
     stepId: str
     label: str

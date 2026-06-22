@@ -1678,6 +1678,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/development-runway-report",
         "GET /supervisor/runtime-evidence-review-report",
         "GET /supervisor/safe-development-backlog",
+        "GET /supervisor/runner-assignment-status-report",
         "GET /supervisor/managed-recipe-policy-report",
         "GET /supervisor/github-workflow-policy-report",
         "GET /supervisor/git-hygiene-report",
@@ -8009,3 +8010,34 @@ def test_subscription_launch_approval_rejects_stale_policy_and_command_template(
 
     history = history_response.json()["data"]
     assert history[0]["status"] == "planned"
+
+
+def test_runner_assignment_status_report_degrades_missing_state_root_without_mutation(tmp_path, monkeypatch) -> None:
+    state_root = tmp_path / "missing-codex-state"
+    monkeypatch.setenv("CODEX_WORKSPACE_STATE_ROOT", state_root.as_posix())
+    client = _client(tmp_path, monkeypatch, "runner-assignment-status.db")
+
+    response = client.get("/supervisor/runner-assignment-status-report")
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    assert report["reportStatus"] == "partial"
+    assert report["stateRootStatus"] == "missing"
+    assert report["partial"] is True
+    assert report["workspaceAssignments"] == []
+    assert report["laneAssignments"] == []
+    assert any(item["inputKind"] == "state-root" for item in report["degradedInputs"])
+    assert report["summary"]["degraded"] >= 1
+    assert report["summary"]["missing"] >= 0
+    assert not state_root.exists()
+
+
+def test_runner_assignment_status_report_rejects_path_input_contract(tmp_path, monkeypatch) -> None:
+    client = _client(tmp_path, monkeypatch, "runner-assignment-status-no-path.db")
+
+    response = client.get("/supervisor/runner-assignment-status-report?stateRoot=/tmp/not-allowed")
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    assert report["stateRoot"] != "/tmp/not-allowed"
+    assert "workspaceAssignments" in report

@@ -13,6 +13,7 @@ export const reportAnchorByEndpoint: Record<string, string> = {
   "GET /supervisor/runtime-evidence-review-report": "#runtime-evidence-review-report",
   "GET /work-items/{id}/runtime-evidence-export": "#runtime-evidence-review-report",
   "GET /supervisor/safe-development-backlog": "#safe-development-backlog",
+  "GET /supervisor/runner-assignment-status-report": "#runner-assignment-status",
   "GET /supervisor/managed-recipe-policy-report": "#managed-recipe-policy-report",
   "GET /supervisor/github-workflow-policy-report": "#github-workflow-policy-report",
   "GET /supervisor/github-delivery-authority-report": "#github-delivery-authority-report",
