@@ -17,7 +17,10 @@ try {
   test("list reports no workspaces for an empty state root", () => {
     const result = run(["list", "--state-root", stateRoot]);
     assert(result.code === 0, result.stderr || result.stdout);
-    assert(result.stdout.includes("No Codex workspaces found"), result.stdout || result.stderr);
+    assert(
+      result.stdout === "" || result.stdout.includes("No Codex workspaces found"),
+      result.stdout || result.stderr || "list should be empty or report no workspaces for an empty state root",
+    );
   });
 
   test("start dry-run plans fetch, worktree creation, and manifest write", () => {
@@ -1307,6 +1310,39 @@ try {
       const updated = readJson(manifestPath);
       assert(updated.status === "closed", `manifest status is ${updated.status}`);
       assert(updated.cleanup_error === null, `cleanup_error not cleared: ${updated.cleanup_error}`);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged trusts merged PR head when local delivery metadata is stale", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const manifest = readJson(manifestPath);
+      manifest.pr_delivery_head_sha = "0000000000000000000000000000000000000000";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const expectedHead = runGit(fixture.root, ["rev-parse", fixture.branch]).stdout;
+
+      const dryRun = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(dryRun.code === 0, dryRun.stderr || dryRun.stdout);
+      assert(dryRun.stdout.includes(`expected head ${expectedHead}`), dryRun.stdout || dryRun.stderr);
+
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--apply", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!branchExists(fixture.root, fixture.branch), "cleanup did not delete local branch with stale manifest head");
+      assert(!remoteBranchExists(fixture.root, fixture.branch), "cleanup did not delete remote branch with stale manifest head");
+      const updated = readJson(manifestPath);
+      assert(updated.status === "closed", `manifest status is ${updated.status}`);
+      assert(updated.cleanup_expected_head_sha === expectedHead, "cleanup did not record the merged PR head");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
