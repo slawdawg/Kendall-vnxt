@@ -36,6 +36,7 @@ try {
     assert(result.stdout.includes("cleanup-branches [query]"), result.stdout || result.stderr);
     assert(result.stdout.includes("heartbeat <query>"), result.stdout || result.stderr);
     assert(result.stdout.includes("takeover <query>"), result.stdout || result.stderr);
+    assert(result.stdout.includes("dispatch-next"), result.stdout || result.stderr);
     assert(result.stdout.includes("--base <ref>"), result.stdout || result.stderr);
   });
 
@@ -691,6 +692,141 @@ try {
       assert(before === after, "missing assignment worktree takeover mutated assignment");
     } finally {
       rmSync(takeoverStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("dispatch-next dry-run previews handoff without mutation", () => {
+    const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-dry-run-"));
+    try {
+      const result = run([
+        "dispatch-next",
+        "--dry-run",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        dispatchStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- selected lane safe-backlog-report-alignment"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- workspace action claim_and_create_workspace"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- blockers none"), result.stdout || result.stderr);
+      assert(!existsSync(join(dispatchStateRoot, "assignments")), "dispatch dry-run created assignments");
+      assert(!existsSync(join(dispatchStateRoot, "tasks")), "dispatch dry-run created manifests");
+    } finally {
+      rmSync(dispatchStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("dispatch-next apply claims unowned workspace and records handoff evidence", () => {
+    const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-apply-workspace-"));
+    const worktreePath = mkdtempSync(join(tmpdir(), "codex-dispatch-worktree-"));
+    try {
+      runGit(worktreePath, ["init", "-q"]);
+      runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
+      runGit(worktreePath, ["config", "user.name", "Codex Workspace Test"]);
+      writeFileSync(join(worktreePath, "tracked.txt"), "base\n");
+      runGit(worktreePath, ["add", "tracked.txt"]);
+      runGit(worktreePath, ["commit", "-q", "-m", "base"]);
+
+      const tasksDir = join(dispatchStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "dispatch-workspace.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: "dispatch-workspace",
+            branch: "codex/safe-backlog-report-alignment",
+            worktree_path: worktreePath,
+            base_branch: "main",
+            status: "active",
+            owner: "",
+            created_at: "2026-06-22T00:00:00.000Z",
+            updated_at: "2026-06-22T00:00:00.000Z",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const result = run([
+        "dispatch-next",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--readiness",
+        "none",
+        "--state-root",
+        dispatchStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("APPLY: dispatch-next"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- workspace action claim_existing_workspace"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- readiness none"), result.stdout || result.stderr);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      assert(manifest.owner === "runner-a", "dispatch did not claim workspace owner");
+      assert(manifest.phase === "handoff", "dispatch did not mark manifest phase handoff");
+      assert(Array.isArray(manifest.dispatch_handoffs), "dispatch handoff evidence missing");
+      assert(manifest.dispatch_handoffs[0].readiness.status === "skipped", "readiness skip evidence missing");
+      assert(manifest.events.some((event) => event.type === "dispatch_handoff"), "dispatch event missing");
+      assert(!existsSync(join(dispatchStateRoot, "assignments")), "workspace dispatch created assignment metadata");
+    } finally {
+      rmSync(dispatchStateRoot, { recursive: true, force: true });
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("dispatch-next apply blocks active workspace owned by another runner", () => {
+    const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-owned-workspace-"));
+    const worktreePath = mkdtempSync(join(tmpdir(), "codex-dispatch-owned-worktree-"));
+    try {
+      runGit(worktreePath, ["init", "-q"]);
+      runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
+      runGit(worktreePath, ["config", "user.name", "Codex Workspace Test"]);
+      writeFileSync(join(worktreePath, "tracked.txt"), "base\n");
+      runGit(worktreePath, ["add", "tracked.txt"]);
+      runGit(worktreePath, ["commit", "-q", "-m", "base"]);
+
+      const tasksDir = join(dispatchStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "dispatch-workspace.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify({
+          task_id: "dispatch-workspace",
+          branch: "codex/safe-backlog-report-alignment",
+          worktree_path: worktreePath,
+          base_branch: "main",
+          status: "active",
+          owner: "runner-b",
+          owner_updated_at: new Date().toISOString(),
+        })}\n`,
+      );
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = run([
+        "dispatch-next",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--readiness",
+        "none",
+        "--state-root",
+        dispatchStateRoot,
+      ]);
+      const after = readFileSync(manifestPath, "utf8");
+
+      assert(result.code !== 0, "dispatch unexpectedly passed for workspace owned by another runner");
+      assert(result.stdout.includes("BLOCKED: dispatch-next"), result.stderr || result.stdout);
+      assert(result.stdout.includes("no dispatchable safe backlog lane found"), result.stderr || result.stdout);
+      assert(before === after, "blocked dispatch mutated owned workspace");
+    } finally {
+      rmSync(dispatchStateRoot, { recursive: true, force: true });
+      rmSync(worktreePath, { recursive: true, force: true });
     }
   });
 

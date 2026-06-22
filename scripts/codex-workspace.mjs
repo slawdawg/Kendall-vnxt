@@ -47,6 +47,9 @@ try {
     case "takeover":
       takeover(commandArgs);
       break;
+    case "dispatch-next":
+      dispatchNext(commandArgs);
+      break;
     case "resume":
       resumeWorkspace(commandArgs);
       break;
@@ -89,6 +92,7 @@ Commands:
   claim-next                Preview the next claimable runner assignment lane.
   heartbeat <query>         Update owner-only runner heartbeat evidence.
   takeover <query>          Build or apply explicit stale-owner takeover evidence.
+  dispatch-next             Claim or resume one safe lane and record handoff evidence.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
@@ -138,6 +142,16 @@ takeover options:
   --apply                   Apply takeover after evidence gates pass.
   --takeover-reason <text>  Required. Explains takeover in at least 10 non-whitespace characters.
   --approval <text>         Required with --apply. Operator approval evidence.
+  --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
+
+dispatch-next options:
+  --dry-run                 Preview dispatch without mutation.
+  --apply                   Claim/prepare one lane and record handoff evidence.
+  --readiness <profile>     Readiness profile: doctor, preflight, none. Defaults to doctor.
+  --base <branch>           Base branch for a created worktree. Defaults to main.
+  --task-id <id>            Override task id when creating a workspace.
+  --worktree <path>         Override worktree path when creating a workspace.
+  --no-fetch                Do not fetch origin before creating a workspace.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 finish-pr options:
@@ -575,6 +589,53 @@ function takeover(argv) {
   });
   printTakeoverPacket("APPLY", applied.packet);
   console.log(`Wrote: ${applied.path}`);
+}
+
+function dispatchNext(argv) {
+  const { options } = parseOptions(argv);
+  if (options.apply && options.dryRun) {
+    throw new Error("dispatch-next accepts either --dry-run or --apply, not both.");
+  }
+  if (!options.apply && !options.dryRun) {
+    throw new Error("dispatch-next requires either --dry-run or --apply.");
+  }
+
+  const readinessProfile = normalizeDispatchReadinessProfile(options.readiness || "doctor");
+  const state = workspaceState(options);
+  const currentOwner = currentLaneOwner(options);
+  const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
+  const generatedAt = new Date();
+  const context = {
+    state,
+    options,
+    currentOwner,
+    staleAfterSeconds,
+    generatedAt,
+    readinessProfile,
+  };
+  const plan = dispatchPlan(context);
+
+  if (options.dryRun) {
+    printDispatchPacket("DRY RUN", plan.packet);
+    printClaimBlockers(plan.evaluations, plan.selected);
+    return;
+  }
+
+  if (!plan.packet.allowed) {
+    printDispatchPacket("BLOCKED", plan.packet);
+    printClaimBlockers(plan.evaluations, plan.selected);
+    throw new Error("No dispatchable safe backlog lane found.");
+  }
+
+  const applied = applyDispatchNext(plan, context);
+  printDispatchPacket("APPLY", applied.packet);
+  console.log(`Wrote: ${applied.path}`);
+  if (applied.assignmentPath) {
+    console.log(`Assignment: ${applied.assignmentPath}`);
+  }
+  if (applied.manifestPath) {
+    console.log(`Workspace: ${applied.manifestPath}`);
+  }
 }
 
 function resumeWorkspace(argv) {
@@ -1873,6 +1934,402 @@ function applyClaimNext(selected, context) {
   }
 
   throw new Error(`Unsupported claim mutation: ${selected.mutation || "unknown"}`);
+}
+
+function dispatchPlan(context) {
+  const manifests = readManifests(context.state).map(({ manifest }) => manifest);
+  const assignments = readAssignments(context.state).map(({ assignment }) => assignment);
+  const backlogItems = readSafeBacklogItems();
+  const evaluations = backlogItems.map((item) =>
+    evaluateClaimCandidate(item, manifests, assignments, {
+      currentOwner: context.currentOwner,
+      generatedAt: context.generatedAt,
+      staleAfterSeconds: context.staleAfterSeconds,
+    }),
+  );
+  const selected = evaluations.find((evaluation) => evaluation.claimable) || null;
+  const packet = dispatchPacket(selected, evaluations, context);
+  return {
+    evaluations,
+    selected,
+    packet,
+  };
+}
+
+function dispatchPacket(selected, evaluations, context) {
+  const blockers = [];
+  if (!selected) {
+    blockers.push("no dispatchable safe backlog lane found");
+  }
+
+  return {
+    schema_version: 1,
+    selected_lane: selected?.item.itemId || null,
+    owner: context.currentOwner,
+    branch: selected?.item.branchName || null,
+    claim_action: selected?.action || null,
+    claim_mutation: selected?.mutation || null,
+    workspace_action: selected ? dispatchWorkspaceAction(selected) : null,
+    readiness_profile: context.readinessProfile,
+    next_command: selected ? dispatchNextCommand(selected, context.readinessProfile) : null,
+    handoff: selected ? "runner may resume prepared worktree; no worker or provider process launched" : null,
+    stop_lines: defaultDispatchStopLines(),
+    allowed: blockers.length === 0,
+    blockers,
+    generated_at: context.generatedAt.toISOString(),
+    blocked_candidates: evaluations
+      .filter((evaluation) => !evaluation.claimable)
+      .map((evaluation) => ({
+        item_id: evaluation.item.itemId,
+        status: evaluation.status,
+        reason: evaluation.reason,
+        next_action: evaluation.nextAction,
+      })),
+  };
+}
+
+function applyDispatchNext(plan, context) {
+  if (!plan.selected) {
+    throw new Error("No dispatchable safe backlog lane found.");
+  }
+
+  const claim = applyClaimNext(plan.selected, {
+    state: context.state,
+    options: context.options,
+    currentOwner: context.currentOwner,
+    staleAfterSeconds: context.staleAfterSeconds,
+  });
+
+  if (plan.selected.mutation === "manifest_owner_claim") {
+    return applyManifestDispatch(plan.selected, claim.path, context, {
+      assignmentPath: null,
+      workspaceAction: "claim_existing_workspace",
+    });
+  }
+
+  const assignmentPathForClaim = claim.path;
+  const assignment = readAssignment(assignmentPathForClaim);
+  validateAssignment(assignment, assignmentPathForClaim);
+  const existingManifest = dispatchManifestForAssignment(context.state, assignment);
+  const manifestResult = existingManifest
+    ? { path: existingManifest.path, manifest: existingManifest.manifest, workspaceAction: "resume_existing_workspace" }
+    : createDispatchWorkspace(plan.selected.item, assignment, context);
+
+  const readiness = runDispatchReadiness(manifestResult.manifest.worktree_path, context);
+  const packet = dispatchHandoffPacket(plan.selected, context, manifestResult.manifest, readiness, manifestResult.workspaceAction);
+
+  withManifestLock(context.state, manifestResult.manifest.task_id, () => {
+    const manifest = readManifest(manifestResult.path);
+    validateManifest(manifest, manifestResult.path);
+    recordManifestDispatchHandoff(manifest, packet, context);
+    writeManifest(manifestResult.path, manifest);
+  });
+
+  withAssignmentLock(context.state, assignment.assignment_id, () => {
+    const freshAssignment = readAssignment(assignmentPathForClaim);
+    validateAssignment(freshAssignment, assignmentPathForClaim);
+    recordAssignmentDispatchHandoff(freshAssignment, packet, manifestResult.manifest, context);
+    writeAssignment(assignmentPathForClaim, freshAssignment);
+  });
+
+  if (readiness.status === "failed") {
+    throw new Error(`Dispatch readiness failed for ${manifestResult.manifest.task_id}.`);
+  }
+
+  return {
+    path: manifestResult.path,
+    assignmentPath: assignmentPathForClaim,
+    manifestPath: manifestResult.path,
+    packet,
+  };
+}
+
+function applyManifestDispatch(selected, manifestPath, context, { assignmentPath, workspaceAction }) {
+  const manifest = readManifest(manifestPath);
+  validateManifest(manifest, manifestPath);
+  const readiness = runDispatchReadiness(manifest.worktree_path, context);
+  const packet = dispatchHandoffPacket(selected, context, manifest, readiness, workspaceAction);
+
+  withManifestLock(context.state, manifest.task_id, () => {
+    const freshManifest = readManifest(manifestPath);
+    validateManifest(freshManifest, manifestPath);
+    recordManifestDispatchHandoff(freshManifest, packet, context);
+    writeManifest(manifestPath, freshManifest);
+  });
+
+  if (readiness.status === "failed") {
+    throw new Error(`Dispatch readiness failed for ${manifest.task_id}.`);
+  }
+
+  return {
+    path: manifestPath,
+    assignmentPath,
+    manifestPath,
+    packet,
+  };
+}
+
+function dispatchManifestForAssignment(state, assignment) {
+  if (!assignment.worktree_path) {
+    return null;
+  }
+  const matches = readManifests(state).filter(
+    ({ manifest }) =>
+      manifest.status !== "closed" &&
+      manifest.branch === assignment.branch &&
+      manifest.worktree_path === assignment.worktree_path,
+  );
+  if (matches.length > 1) {
+    throw new Error(`Multiple active manifests match assignment ${assignment.assignment_id}.`);
+  }
+  return matches[0] || null;
+}
+
+function createDispatchWorkspace(item, assignment, context) {
+  const branch = String(item.branchName || assignment.branch || "");
+  assertSafeBranch(branch);
+  const baseBranch = String(context.options.base || defaultBaseBranch);
+  const taskId = String(context.options.taskId || nextDispatchTaskId(context.state, laneSlugFromBranch(branch)));
+  assertSafeTaskId(taskId);
+  const worktreePath = resolve(String(context.options.worktree || join(context.state.worktreesDir, taskId)));
+  const manifestPath = join(context.state.tasksDir, `${taskId}.json`);
+  const shouldFetch = !context.options.noFetch;
+
+  if (existsSync(manifestPath)) {
+    throw new Error(`Task manifest already exists: ${manifestPath}`);
+  }
+  if (existsSync(worktreePath)) {
+    throw new Error(`Worktree path already exists: ${worktreePath}`);
+  }
+  if (branchExists(branch)) {
+    throw new Error(`Branch already exists: ${branch}`);
+  }
+  if (remoteBranchExists(branch)) {
+    throw new Error(`Remote branch already exists: origin/${branch}`);
+  }
+  if (shouldFetch) {
+    runChecked("git", ["fetch", "origin", baseBranch], { cwd: repoRoot });
+  }
+  const baseRef = resolveBaseRef(baseBranch);
+
+  const now = new Date().toISOString();
+  const manifest = {
+    schema_version: 1,
+    task_id: taskId,
+    title: titleFromDescription(laneSlugFromBranch(branch).replace(/-/g, " ")),
+    description: `Dispatch workspace for ${item.itemId}`,
+    repo_name: workspaceKey(),
+    repo_root: repoRoot,
+    state_root: context.state.root,
+    base_branch: baseBranch,
+    base_ref: baseRef,
+    branch,
+    worktree_path: worktreePath,
+    status: "active",
+    owner: context.currentOwner,
+    owner_thread_id: process.env.CODEX_THREAD_ID || null,
+    owner_acquired_at: now,
+    owner_updated_at: now,
+    mode: "pr",
+    pr_url: null,
+    pr_number: null,
+    source_assignment_id: assignment.assignment_id,
+    source_backlog_item: assignment.source_backlog_item || {
+      item_id: item.itemId,
+      status: item.status || null,
+      recommended_slice_size: item.recommendedSliceSize || null,
+      branch_name: item.branchName || null,
+      start_command: item.startCommand || null,
+    },
+    created_at: now,
+    updated_at: now,
+    last_verified_at: null,
+    last_verification_command: null,
+    last_commit: null,
+    events: [taskEvent("dispatch_workspace_created", `dispatch prepared workspace for ${item.itemId}`)],
+  };
+
+  mkdirSync(context.state.tasksDir, { recursive: true });
+  mkdirSync(context.state.worktreesDir, { recursive: true });
+  withManifestLock(context.state, taskId, () => {
+    runChecked("git", ["worktree", "add", "-b", branch, worktreePath, baseRef], { cwd: repoRoot });
+    writeManifest(manifestPath, manifest);
+  });
+
+  return {
+    path: manifestPath,
+    manifest,
+    workspaceAction: "create_workspace",
+  };
+}
+
+function nextDispatchTaskId(state, laneSlug) {
+  const base = `${dateStamp()}-${laneSlug}`;
+  let candidate = base;
+  let suffix = 2;
+  while (existsSync(join(state.tasksDir, `${candidate}.json`)) || existsSync(join(state.worktreesDir, candidate))) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function dispatchWorkspaceAction(selected) {
+  if (selected.mutation === "manifest_owner_claim") {
+    return "claim_existing_workspace";
+  }
+  if (selected.mutation === "assignment_refresh") {
+    return "resume_or_prepare_workspace";
+  }
+  return "claim_and_create_workspace";
+}
+
+function dispatchNextCommand(selected, readinessProfile) {
+  const lane = selected?.item?.itemId || "selected lane";
+  if (readinessProfile === "none") {
+    return `resume prepared workspace for ${lane}`;
+  }
+  return `resume prepared workspace for ${lane} after ${readinessProfile} readiness`;
+}
+
+function normalizeDispatchReadinessProfile(value) {
+  const profile = String(value || "doctor").trim();
+  if (!["doctor", "preflight", "none"].includes(profile)) {
+    throw new Error("--readiness must be one of: doctor, preflight, none.");
+  }
+  return profile;
+}
+
+function runDispatchReadiness(worktreePath, context) {
+  if (!worktreePath || !existsSync(worktreePath)) {
+    return {
+      profile: context.readinessProfile,
+      status: "failed",
+      command: null,
+      exit_code: 1,
+      summary: "worktree is missing",
+    };
+  }
+
+  if (context.readinessProfile === "none") {
+    return {
+      profile: "none",
+      status: "skipped",
+      command: "none",
+      exit_code: 0,
+      summary: "readiness skipped by explicit profile",
+    };
+  }
+
+  const command =
+    context.readinessProfile === "preflight"
+      ? [process.execPath, ["./scripts/preflight.mjs"]]
+      : [process.execPath, ["./scripts/codex-workspace.mjs", "doctor", "--state-root", context.state.root]];
+  const result = spawnSync(command[0], command[1], {
+    cwd: worktreePath,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  const output = [result.stdout || "", result.stderr || ""].join("\n").trim();
+  const exitCode = result.status ?? 1;
+  return {
+    profile: context.readinessProfile,
+    status: exitCode === 0 ? "passed" : "failed",
+    command: [basename(command[0]), ...command[1]].join(" "),
+    exit_code: exitCode,
+    summary: summarizeCommandOutput(output),
+  };
+}
+
+function summarizeCommandOutput(output) {
+  const lines = String(output || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.slice(0, 12).join(" | ") || "no output";
+}
+
+function dispatchHandoffPacket(selected, context, manifest, readiness, workspaceAction) {
+  return {
+    schema_version: 1,
+    lane: selected.item.itemId,
+    owner: context.currentOwner,
+    branch: manifest.branch,
+    workspace_action: workspaceAction,
+    worktree_path: manifest.worktree_path,
+    task_id: manifest.task_id,
+    readiness,
+    next_command: `cd ${manifest.worktree_path}`,
+    handoff: "resume this prepared worktree; no worker or provider process launched",
+    stop_lines: defaultDispatchStopLines(),
+    generated_at: new Date().toISOString(),
+  };
+}
+
+function recordManifestDispatchHandoff(manifest, packet, context) {
+  const now = packet.generated_at;
+  manifest.owner = context.currentOwner;
+  manifest.owner_thread_id = process.env.CODEX_THREAD_ID || null;
+  manifest.owner_updated_at = now;
+  manifest.updated_at = now;
+  manifest.phase = "handoff";
+  manifest.runner_kind = "codex-cli";
+  manifest.current_command = "handoff ready";
+  manifest.last_result = packet.readiness.summary;
+  manifest.dispatch_handoffs = [...(Array.isArray(manifest.dispatch_handoffs) ? manifest.dispatch_handoffs : []), packet];
+  appendTaskEvent(manifest, "dispatch_handoff", `${packet.lane} ${packet.workspace_action} readiness ${packet.readiness.status}`);
+}
+
+function recordAssignmentDispatchHandoff(assignment, packet, manifest, context) {
+  const now = packet.generated_at;
+  assignment.owner = context.currentOwner;
+  assignment.owner_thread_id = process.env.CODEX_THREAD_ID || null;
+  assignment.task_id = manifest.task_id;
+  assignment.worktree_path = manifest.worktree_path;
+  assignment.status = "active";
+  assignment.phase = "handoff";
+  assignment.runner_kind = "codex-cli";
+  assignment.updated_at = now;
+  assignment.current_command = "handoff ready";
+  assignment.last_result = packet.readiness.summary;
+  assignment.dispatch_handoffs = [
+    ...(Array.isArray(assignment.dispatch_handoffs) ? assignment.dispatch_handoffs : []),
+    packet,
+  ];
+  assignment.events = [
+    ...(Array.isArray(assignment.events) ? assignment.events : []),
+    taskEvent("dispatch_handoff", `${packet.lane} ${packet.workspace_action} readiness ${packet.readiness.status}`),
+  ];
+}
+
+function defaultDispatchStopLines() {
+  return [
+    "no provider/model calls",
+    "no paid usage",
+    "no automatic worker or external process launch",
+    "no automatic takeover without evidence and approval",
+    "no authority-blocked work mutation",
+    "no PR, merge, or cleanup mutation from dispatch-next",
+  ];
+}
+
+function printDispatchPacket(label, packet) {
+  console.log(`${label}: dispatch-next`);
+  console.log(`- owner ${packet.owner}`);
+  console.log(`- selected lane ${packet.selected_lane || packet.lane || "none"}`);
+  console.log(`- branch ${packet.branch || "none"}`);
+  console.log(`- claim action ${packet.claim_action || "none"}`);
+  console.log(`- workspace action ${packet.workspace_action || "none"}`);
+  console.log(`- readiness ${packet.readiness_profile || packet.readiness?.profile || "none"}`);
+  console.log(`- next ${packet.next_command || "none"}`);
+  console.log(`- allowed ${packet.allowed !== false}`);
+  if (packet.blockers?.length) {
+    for (const blocker of packet.blockers) {
+      console.log(`- blocker ${blocker}`);
+    }
+  } else {
+    console.log("- blockers none");
+  }
 }
 
 function applyManifestOwnerClaim(selected, { state, options, currentOwner, staleAfterSeconds }) {
