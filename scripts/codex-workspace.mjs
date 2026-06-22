@@ -1254,6 +1254,21 @@ function doctor(argv) {
       : "core.hooksPath is not .githooks.",
   );
 
+  const prunableWorktrees = prunableGitWorktrees(repoRoot);
+  if (prunableWorktrees.length === 0) {
+    addFinding(findings, true, "No prunable git worktree registrations detected.");
+  } else {
+    for (const worktreePath of prunableWorktrees) {
+      addFinding(
+        findings,
+        false,
+        "",
+        `Prunable git worktree registration blocks branch cleanup: ${worktreePath}. Run git worktree prune before retrying branch cleanup.`,
+        true,
+      );
+    }
+  }
+
   addFinding(findings, existsSync(join(repoRoot, ".githooks", "pre-push")), "pre-push guard exists.");
   addFinding(
     findings,
@@ -1671,6 +1686,13 @@ function laneOwnerIsStale(manifest, context) {
 }
 
 function classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates = new Map()) {
+  if (item.status === "closed" || item.recommendedSliceSize === "complete") {
+    return {
+      status: "closed",
+      reason: "safe backlog item is already complete and must not be requeued",
+    };
+  }
+
   if (item.status !== "ready" || item.recommendedSliceSize === "do_not_start") {
     return {
       status: "blocked_authority",
@@ -1681,6 +1703,13 @@ function classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates 
     return {
       status: "ambiguous",
       reason: "ready item has no source-owned lane start command",
+    };
+  }
+  const branchNameError = item.branchName ? claimBranchNameBlocker(item.branchName) : "";
+  if (branchNameError) {
+    return {
+      status: "ambiguous",
+      reason: branchNameError,
     };
   }
   const assignmentState = item.branchName ? assignmentBranchStates.get(item.branchName) : null;
@@ -1705,8 +1734,15 @@ function classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates 
   }
   if (branchState === "closed") {
     return {
-      status: "closed",
+      status: "assignable",
       reason: "only closed workspace manifests exist for branch",
+    };
+  }
+  const branchAvailabilityError = item.branchName ? claimBranchAvailabilityBlocker(item.branchName) : "";
+  if (branchAvailabilityError) {
+    return {
+      status: "ambiguous",
+      reason: branchAvailabilityError,
     };
   }
   return {
@@ -1782,6 +1818,15 @@ function evaluateClaimCandidate(item, manifests, assignments, context) {
     reason: "",
     nextAction: "inspect safe backlog evidence before claiming",
   };
+
+  if (item.status === "closed" || item.recommendedSliceSize === "complete") {
+    return {
+      ...base,
+      status: "closed",
+      reason: "safe backlog item is already complete and must not be requeued",
+      nextAction: "choose the next ready safe backlog lane",
+    };
+  }
 
   if (item.status !== "ready" || item.recommendedSliceSize === "do_not_start") {
     return {
@@ -2924,7 +2969,7 @@ function readSafeBacklogItems() {
     return [];
   }
 
-  const nextLane = readSafeBacklogNextLane(source);
+  const nextLanes = readSafeBacklogNextLanes(source);
   return reportMatch[0]
     .split("SafeDevelopmentBacklogItemView(")
     .slice(1)
@@ -2936,7 +2981,9 @@ function readSafeBacklogItems() {
         branchName: "",
         startCommand: "",
       };
-      if (block.includes("nextLane=report_navigation_lane")) {
+      const nextLaneVariable = pythonIdentifierField(block, "nextLane");
+      const nextLane = nextLanes.get(nextLaneVariable);
+      if (nextLane) {
         item.branchName = nextLane.branchName;
         item.startCommand = nextLane.startCommand;
       }
@@ -2945,20 +2992,46 @@ function readSafeBacklogItems() {
     .filter((item) => item.itemId);
 }
 
-function readSafeBacklogNextLane(source) {
-  const match = source.match(/def _report_evidence_navigation_next_lane[\s\S]*?return NextLaneRecommendationView\(([\s\S]*?)\n\s*\)/);
-  const functionSource = match?.[0] || "";
-  const block = match?.[1] || "";
-  const laneSlug = pythonStringField(functionSource, "lane_slug");
-  return {
-    branchName: pythonStringField(block, "branchName"),
-    startCommand: interpolatePythonTemplate(pythonStringField(block, "startCommand"), { lane_slug: laneSlug }),
-  };
+function readSafeBacklogNextLanes(source) {
+  const nextLanes = new Map();
+  const reportMatch = source.match(/def get_safe_development_backlog_report[\s\S]*?return SafeDevelopmentBacklogReportView/);
+  const reportSource = reportMatch?.[0] || "";
+  const laneAssignmentPattern =
+    /(\w+)\s*=\s*self\._safe_backlog_next_lane\(\s*lane_slug="([^"]+)"[\s\S]*?\n\s*\)/g;
+
+  for (const match of reportSource.matchAll(laneAssignmentPattern)) {
+    const variableName = match[1];
+    const laneSlug = match[2];
+    nextLanes.set(variableName, {
+      branchName: `codex/${laneSlug}`,
+      startCommand: `node ./scripts/codex-workspace.mjs start "${laneSlug.replace(/-/g, " ")}"`,
+    });
+  }
+
+  const legacyMatch = source.match(
+    /def _report_evidence_navigation_next_lane[\s\S]*?return NextLaneRecommendationView\(([\s\S]*?)\n\s*\)/,
+  );
+  if (legacyMatch) {
+    const functionSource = legacyMatch[0] || "";
+    const block = legacyMatch[1] || "";
+    const laneSlug = pythonStringField(functionSource, "lane_slug");
+    nextLanes.set("report_navigation_lane", {
+      branchName: pythonStringField(block, "branchName"),
+      startCommand: interpolatePythonTemplate(pythonStringField(block, "startCommand"), { lane_slug: laneSlug }),
+    });
+  }
+
+  return nextLanes;
 }
 
 function pythonStringField(source, fieldName) {
   const match = source.match(new RegExp(`${fieldName}\\s*=\\s*[fF]?(['"])([\\s\\S]*?)\\1`));
   return match?.[2] || "";
+}
+
+function pythonIdentifierField(source, fieldName) {
+  const match = source.match(new RegExp(`${fieldName}\\s*=\\s*([A-Za-z_][A-Za-z0-9_]*)`));
+  return match?.[1] || "";
 }
 
 function interpolatePythonTemplate(value, variables) {
@@ -3216,6 +3289,16 @@ function worktreeListed(worktreePath, cwd = repoRoot) {
   return parseWorktreePorcelain(result.stdout).some((record) => samePath(record.path, worktreePath));
 }
 
+function prunableGitWorktrees(cwd = repoRoot) {
+  const result = git(["worktree", "list", "--porcelain"], { cwd });
+  if (result.code !== 0) {
+    return [];
+  }
+  return parseWorktreePorcelain(result.stdout)
+    .filter((record) => record.prunable)
+    .map((record) => record.path);
+}
+
 function parseWorktreePorcelain(value) {
   const records = [];
   let current = null;
@@ -3235,6 +3318,8 @@ function parseWorktreePorcelain(value) {
       current.head = data;
     } else if (current && key === "branch") {
       current.branch = data;
+    } else if (current && key === "prunable") {
+      current.prunable = true;
     }
   }
   if (current) {

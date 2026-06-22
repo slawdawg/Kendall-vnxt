@@ -14,6 +14,35 @@ try {
     assert(result.code === 0, result.stderr || result.stdout);
   });
 
+  test("doctor warns about prunable git worktree registrations", () => {
+    const staleWorktreePath = mkdtempSync(join(tmpdir(), "codex-stale-worktree-registration-"));
+    const staleStateRoot = mkdtempSync(join(tmpdir(), "codex-stale-worktree-state-"));
+    try {
+      rmSync(staleWorktreePath, { recursive: true, force: true });
+      const add = spawnSync("git", ["worktree", "add", "--detach", staleWorktreePath, "HEAD"], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      assert(add.status === 0, add.stderr || add.stdout);
+      rmSync(staleWorktreePath, { recursive: true, force: true });
+
+      const result = run(["doctor", "--state-root", staleStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("WARN: Prunable git worktree registration blocks branch cleanup"), result.stdout || result.stderr);
+      assert(result.stdout.includes("Run git worktree prune before retrying branch cleanup"), result.stdout || result.stderr);
+    } finally {
+      spawnSync("git", ["worktree", "prune"], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      rmSync(staleWorktreePath, { recursive: true, force: true });
+      rmSync(staleStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("list reports no workspaces for an empty state root", () => {
     const result = run(["list", "--state-root", stateRoot]);
     assert(result.code === 0, result.stderr || result.stdout);
@@ -84,6 +113,21 @@ try {
     assert(source.includes("resolveWorkspaceCommand"), "codex-workspace must import shared command resolver");
     assert(match[0].includes("const resolved = resolveWorkspaceCommand(commandName, commandArguments);"), "run must resolve workspace commands");
     assert(match[0].includes("env: resolved.env ?? process.env"), "run must pass resolved command environment");
+  });
+
+  test("assignment-report keeps ownership checks before branch availability checks", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function classifyBacklogItem[\s\S]*?function classifyLaneAssignment/);
+    assert(match, "classifyBacklogItem source not found");
+    const section = match[0];
+    const assignmentIndex = section.indexOf("assignmentBranchStates.get");
+    const manifestIndex = section.indexOf("manifestBranchStates.get");
+    const availabilityIndex = section.indexOf("claimBranchAvailabilityBlocker");
+    assert(assignmentIndex >= 0, "classifyBacklogItem must inspect lane assignments");
+    assert(manifestIndex >= 0, "classifyBacklogItem must inspect workspace manifests");
+    assert(availabilityIndex >= 0, "classifyBacklogItem must inspect branch availability");
+    assert(assignmentIndex < availabilityIndex, "assignment checks must precede branch availability checks");
+    assert(manifestIndex < availabilityIndex, "workspace manifest checks must precede branch availability checks");
   });
 
   test("cleanup-branches compares patch equivalence before local deletion", () => {
@@ -243,7 +287,8 @@ try {
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("Assignment Report"), result.stdout || result.stderr);
     assert(result.stdout.includes("Safe backlog candidates:"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- safe-backlog-report-alignment | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- safe-backlog-report-alignment | closed"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- verification-surface-hardening | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -263,10 +308,10 @@ try {
 
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("DRY RUN: claim-next"), result.stdout || result.stderr);
-    assert(result.stdout.includes("claim candidate safe-backlog-report-alignment"), result.stdout || result.stderr);
-    assert(result.stdout.includes("branch codex/safe-backlog-report-alignment"), result.stdout || result.stderr);
+    assert(result.stdout.includes("claim candidate verification-surface-hardening"), result.stdout || result.stderr);
+    assert(result.stdout.includes("branch codex/verification-surface-hardening"), result.stdout || result.stderr);
     assert(
-      result.stdout.includes('start command node ./scripts/codex-workspace.mjs start "safe backlog report alignment"'),
+      result.stdout.includes('start command node ./scripts/codex-workspace.mjs start "verification surface hardening"'),
       result.stdout || result.stderr,
     );
     assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
@@ -277,14 +322,14 @@ try {
   test("claim-next apply writes assignment metadata without creating a workspace", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-apply-"));
     try {
-      const branch = "codex/safe-backlog-report-alignment";
+      const branch = "codex/verification-surface-hardening";
       const branchBefore = branchExists(rootDir, branch);
 
       const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("APPLY: claim-next"), result.stdout || result.stderr);
-      assert(result.stdout.includes("claimed ready lane safe-backlog-report-alignment for runner-a"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claimed ready lane verification-surface-hardening for runner-a"), result.stdout || result.stderr);
       assert(
         result.stdout.includes("assignment metadata only; no branch, PR, worktree, worker, or implementation mutation"),
         result.stdout || result.stderr,
@@ -293,11 +338,11 @@ try {
       assert(!existsSync(join(claimStateRoot, "tasks")), "claim-next --apply created workspace task manifests");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next --apply created worktrees");
 
-      const assignmentPath = join(claimStateRoot, "assignments", "safe-backlog-report-alignment.json");
+      const assignmentPath = join(claimStateRoot, "assignments", "verification-surface-hardening.json");
       assert(existsSync(assignmentPath), "claim-next --apply did not write assignment metadata");
       const assignment = JSON.parse(readFileSync(assignmentPath, "utf8"));
-      assert(assignment.assignment_id === "safe-backlog-report-alignment", "assignment id mismatch");
-      assert(assignment.task_id === "safe-backlog-report-alignment", "assignment task id mismatch");
+      assert(assignment.assignment_id === "verification-surface-hardening", "assignment id mismatch");
+      assert(assignment.task_id === "verification-surface-hardening", "assignment task id mismatch");
       assert(assignment.status === "claimed", "assignment status mismatch");
       assert(assignment.owner === "runner-a", "assignment owner mismatch");
       assert(assignment.branch === branch, "assignment branch mismatch");
@@ -315,13 +360,13 @@ try {
       assert(first.code === 0, first.stderr || first.stdout);
       const second = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       assert(second.code === 0, second.stderr || second.stdout);
-      assert(second.stdout.includes("refresh existing assignment safe-backlog-report-alignment"), second.stdout || second.stderr);
+      assert(second.stdout.includes("refresh existing assignment verification-surface-hardening"), second.stdout || second.stderr);
 
       const assignmentsDir = join(claimStateRoot, "assignments");
       const assignmentFiles = readdirSync(assignmentsDir).filter((name) => name.endsWith(".json"));
       assert(assignmentFiles.length === 1, `expected one assignment file, saw ${assignmentFiles.join(", ")}`);
       const assignment = JSON.parse(
-        readFileSync(join(assignmentsDir, "safe-backlog-report-alignment.json"), "utf8"),
+        readFileSync(join(assignmentsDir, "verification-surface-hardening.json"), "utf8"),
       );
       assert(assignment.owner === "runner-a", "assignment owner changed during idempotent apply");
       assert(
@@ -342,10 +387,10 @@ try {
       const report = run(["assignment-report", "--owner", "runner-a", "--state-root", claimStateRoot]);
 
       assert(report.code === 0, report.stderr || report.stdout);
-      assert(report.stdout.includes("- safe-backlog-report-alignment | claimed"), report.stdout || report.stderr);
+      assert(report.stdout.includes("- verification-surface-hardening | claimed"), report.stdout || report.stderr);
       assert(
         report.stdout.includes(
-          "- safe-backlog-report-alignment | claimed | owner=runner-a | branch=codex/safe-backlog-report-alignment",
+          "- verification-surface-hardening | claimed | owner=runner-a | branch=codex/verification-surface-hardening",
         ),
         report.stdout || report.stderr,
       );
@@ -363,7 +408,7 @@ try {
 
       const result = run([
         "heartbeat",
-        "safe-backlog-report-alignment",
+        "verification-surface-hardening",
         "--owner",
         "runner-a",
         "--phase",
@@ -380,7 +425,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("APPLY: heartbeat"), result.stdout || result.stderr);
-      assert(result.stdout.includes("target assignment safe-backlog-report-alignment"), result.stdout || result.stderr);
+      assert(result.stdout.includes("target assignment verification-surface-hardening"), result.stdout || result.stderr);
       assert(
         result.stdout.includes("heartbeat metadata only; no branch, PR, cleanup, or ownership mutation"),
         result.stdout || result.stderr,
@@ -388,7 +433,7 @@ try {
       assert(!existsSync(join(claimStateRoot, "tasks")), "assignment heartbeat created workspace manifests");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "assignment heartbeat created worktrees");
 
-      const assignmentPath = join(claimStateRoot, "assignments", "safe-backlog-report-alignment.json");
+      const assignmentPath = join(claimStateRoot, "assignments", "verification-surface-hardening.json");
       const assignment = JSON.parse(readFileSync(assignmentPath, "utf8"));
       assert(assignment.status === "claimed", "heartbeat should not change assignment status");
       assert(assignment.owner === "runner-a", "heartbeat changed assignment owner");
@@ -403,7 +448,7 @@ try {
 
       const second = run([
         "heartbeat",
-        "safe-backlog-report-alignment",
+        "verification-surface-hardening",
         "--owner",
         "runner-a",
         "--phase",
@@ -433,12 +478,12 @@ try {
     try {
       const claim = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
       assert(claim.code === 0, claim.stderr || claim.stdout);
-      const assignmentPath = join(claimStateRoot, "assignments", "safe-backlog-report-alignment.json");
+      const assignmentPath = join(claimStateRoot, "assignments", "verification-surface-hardening.json");
       const before = readFileSync(assignmentPath, "utf8");
 
       const result = run([
         "heartbeat",
-        "safe-backlog-report-alignment",
+        "verification-surface-hardening",
         "--owner",
         "runner-a",
         "--phase",
@@ -712,7 +757,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
-      assert(result.stdout.includes("- selected lane safe-backlog-report-alignment"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- selected lane verification-surface-hardening"), result.stdout || result.stderr);
       assert(result.stdout.includes("- workspace action claim_and_create_workspace"), result.stdout || result.stderr);
       assert(result.stdout.includes("- blockers none"), result.stdout || result.stderr);
       assert(!existsSync(join(dispatchStateRoot, "assignments")), "dispatch dry-run created assignments");
@@ -741,7 +786,7 @@ try {
         `${JSON.stringify(
           {
             task_id: "dispatch-workspace",
-            branch: "codex/safe-backlog-report-alignment",
+            branch: "codex/verification-surface-hardening",
             worktree_path: worktreePath,
             base_branch: "main",
             status: "active",
@@ -796,20 +841,28 @@ try {
 
       const tasksDir = join(dispatchStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
-      const manifestPath = join(tasksDir, "dispatch-workspace.json");
-      writeFileSync(
-        manifestPath,
-        `${JSON.stringify({
-          task_id: "dispatch-workspace",
-          branch: "codex/safe-backlog-report-alignment",
-          worktree_path: worktreePath,
-          base_branch: "main",
-          status: "active",
-          owner: "runner-b",
-          owner_updated_at: new Date().toISOString(),
-        })}\n`,
-      );
-      const before = readFileSync(manifestPath, "utf8");
+      const blockedBranches = [
+        "codex/verification-surface-hardening",
+        "codex/github-delivery-hygiene",
+        "codex/read-only-evidence-polish",
+      ];
+      const manifestPaths = blockedBranches.map((branchName, index) => {
+        const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
+        writeFileSync(
+          manifestPath,
+          `${JSON.stringify({
+            task_id: `dispatch-workspace-${index}`,
+            branch: branchName,
+            worktree_path: worktreePath,
+            base_branch: "main",
+            status: "active",
+            owner: "runner-b",
+            owner_updated_at: new Date().toISOString(),
+          })}\n`,
+        );
+        return manifestPath;
+      });
+      const before = manifestPaths.map((manifestPath) => readFileSync(manifestPath, "utf8")).join("\n---\n");
 
       const result = run([
         "dispatch-next",
@@ -821,7 +874,7 @@ try {
         "--state-root",
         dispatchStateRoot,
       ]);
-      const after = readFileSync(manifestPath, "utf8");
+      const after = manifestPaths.map((manifestPath) => readFileSync(manifestPath, "utf8")).join("\n---\n");
 
       assert(result.code !== 0, "dispatch unexpectedly passed for workspace owned by another runner");
       assert(result.stdout.includes("BLOCKED: dispatch-next"), result.stderr || result.stdout);
@@ -838,14 +891,31 @@ try {
     try {
       const first = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
       assert(first.code === 0, first.stderr || first.stdout);
-      const assignmentPath = join(claimStateRoot, "assignments", "safe-backlog-report-alignment.json");
-      const before = readFileSync(assignmentPath, "utf8");
+      const assignmentsDir = join(claimStateRoot, "assignments");
+      for (const laneSlug of ["github-delivery-hygiene", "read-only-evidence-polish"]) {
+        writeFileSync(
+          join(assignmentsDir, `${laneSlug}.json`),
+          `${JSON.stringify({
+            assignment_id: laneSlug,
+            task_id: laneSlug,
+            lane_slug: laneSlug,
+            branch: `codex/${laneSlug}`,
+            status: "claimed",
+            owner: "runner-b",
+            last_heartbeat_at: new Date().toISOString(),
+          })}\n`,
+        );
+      }
+      const assignmentFiles = ["verification-surface-hardening", "github-delivery-hygiene", "read-only-evidence-polish"].map(
+        (laneSlug) => join(assignmentsDir, `${laneSlug}.json`),
+      );
+      const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
       const second = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
-      const after = readFileSync(assignmentPath, "utf8");
+      const after = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
       assert(second.code !== 0, "claim-next --apply unexpectedly claimed another owner's assignment");
-      assert(second.stdout.includes("- safe-backlog-report-alignment | blocked_owned_active"), second.stdout || second.stderr);
+      assert(second.stdout.includes("- verification-surface-hardening | blocked_owned_active"), second.stdout || second.stderr);
       assert(second.stderr.includes("No claimable safe backlog lane found"), second.stderr || second.stdout);
       assert(before === after, "blocked claim-next --apply mutated another owner's assignment");
     } finally {
@@ -864,7 +934,7 @@ try {
         `${JSON.stringify(
           {
             task_id: "unowned-safe-backlog",
-            branch: "codex/safe-backlog-report-alignment",
+            branch: "codex/verification-surface-hardening",
             worktree_path: rootDir,
             base_branch: "main",
             status: "active",
@@ -898,7 +968,7 @@ try {
         `${JSON.stringify(
           {
             task_id: "unowned-safe-backlog",
-            branch: "codex/safe-backlog-report-alignment",
+            branch: "codex/verification-surface-hardening",
             worktree_path: rootDir,
             base_branch: "main",
             status: "active",
@@ -934,7 +1004,7 @@ try {
         `${JSON.stringify(
           {
             task_id: "owned-safe-backlog",
-            branch: "codex/safe-backlog-report-alignment",
+            branch: "codex/verification-surface-hardening",
             worktree_path: rootDir,
             base_branch: "main",
             status: "active",
@@ -967,7 +1037,7 @@ try {
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       assert(manifest.status === "active", "heartbeat should not change workspace status");
       assert(manifest.owner === "runner-a", "heartbeat changed workspace owner");
-      assert(manifest.branch === "codex/safe-backlog-report-alignment", "heartbeat changed branch");
+      assert(manifest.branch === "codex/verification-surface-hardening", "heartbeat changed branch");
       assert(manifest.phase === "verification", "workspace heartbeat phase missing");
       assert(manifest.runner_kind === "codex-cli", "workspace heartbeat runner kind missing");
       assert(manifest.last_result === "tests passed", "workspace heartbeat result missing");
@@ -990,7 +1060,7 @@ try {
         `${JSON.stringify(
           {
             task_id: "owned-safe-backlog",
-            branch: "codex/safe-backlog-report-alignment",
+            branch: "codex/verification-surface-hardening",
             worktree_path: rootDir,
             base_branch: "main",
             status: "active",
@@ -1154,31 +1224,34 @@ try {
   test("claim-next dry-run blocks an active lane owned by another runner", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
-    const manifestPath = join(tasksDir, "owned-safe-backlog.json");
-    writeFileSync(
-      manifestPath,
-      `${JSON.stringify(
-        {
-          task_id: "owned-safe-backlog",
-          branch: "codex/safe-backlog-report-alignment",
-          worktree_path: rootDir,
-          base_branch: "main",
-          status: "active",
-          owner: "runner-b",
-          owner_updated_at: new Date().toISOString(),
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    const before = readFileSync(manifestPath, "utf8");
+    const manifestPaths = ["verification-surface-hardening", "github-delivery-hygiene", "read-only-evidence-polish"].map((laneSlug) => {
+      const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: `owned-${laneSlug}`,
+            branch: `codex/${laneSlug}`,
+            worktree_path: rootDir,
+            base_branch: "main",
+            status: "active",
+            owner: "runner-b",
+            owner_updated_at: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return manifestPath;
+    });
+    const before = manifestPaths.map((manifestPath) => readFileSync(manifestPath, "utf8")).join("\n---\n");
 
     const result = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", stateRoot]);
-    const after = readFileSync(manifestPath, "utf8");
+    const after = manifestPaths.map((manifestPath) => readFileSync(manifestPath, "utf8")).join("\n---\n");
 
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("no claimable safe backlog lane found"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- safe-backlog-report-alignment | blocked_owned_active"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- verification-surface-hardening | blocked_owned_active"), result.stdout || result.stderr);
     assert(result.stdout.includes("do not mutate without explicit takeover approval"), result.stdout || result.stderr);
     assert(before === after, "claim-next --dry-run mutated the owned lane manifest");
   });

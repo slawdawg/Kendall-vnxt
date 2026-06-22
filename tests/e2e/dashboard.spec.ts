@@ -799,11 +799,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/safe-backlog-report-alignment")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "safe backlog report alignment"')).toBeVisible();
-    await expect(runwayPanel.getByText("uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py")).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/verification-surface-hardening")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "verification surface hardening"')).toBeVisible();
+    await expect(runwayPanel.getByText("pnpm run check:verification-readiness").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
-    await expect(runwayPanel.getByText("Do not start or modify the active verification-surface-hardening lane while using this recommendation.")).toBeVisible();
+    await expect(runwayPanel.getByText("Do not start or modify another active lane while using this recommendation.").first()).toBeVisible();
     await expect(runwayPanel.getByText("verification-runbook-hardening-slice")).toBeVisible();
     await expect(runwayPanel.getByText("authority-blocker-maintenance-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Readiness checks").first()).toBeVisible();
@@ -853,20 +853,22 @@ test.describe("dashboard workflow coverage", () => {
     await expect(safeBacklogPanel.getByText("Large-slice development map")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Report-aligned backlog governance")).toBeVisible();
     const reportAlignmentCard = safeBacklogPanel.locator("article").filter({ hasText: "Report-aligned backlog governance" });
-    await expect(reportAlignmentCard.getByText("Next lane handoff")).toBeVisible();
-    await expect(reportAlignmentCard.getByText("Safe backlog report alignment", { exact: true })).toBeVisible();
-    await expect(reportAlignmentCard.getByText("branch: codex/safe-backlog-report-alignment")).toBeVisible();
-    await expect(reportAlignmentCard.getByText('start: node ./scripts/codex-workspace.mjs start "safe backlog report alignment"')).toBeVisible();
-    await expect(reportAlignmentCard.getByText("pnpm run check:safe-backlog")).toBeVisible();
-    await expect(reportAlignmentCard.getByText("uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py")).toBeVisible();
-    await expect(reportAlignmentCard.getByText("Do not start or modify the active verification-surface-hardening lane while using this recommendation.")).toBeVisible();
+    await expect(reportAlignmentCard.getByText("closed", { exact: true })).toBeVisible();
+    await expect(reportAlignmentCard.getByText("slice: complete", { exact: true })).toBeVisible();
+    await expect(reportAlignmentCard.getByText("Use this completed item as evidence only; do not requeue it as a new lane.")).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "Verification surface hardening" })).toBeVisible();
+    const verificationBacklogCards = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Verification surface hardening" }) });
+    await expect(verificationBacklogCards.getByText("Next lane handoff")).toBeVisible();
+    await expect(verificationBacklogCards.getByText("branch: codex/verification-surface-hardening")).toBeVisible();
+    await expect(verificationBacklogCards.getByText('start: node ./scripts/codex-workspace.mjs start "verification surface hardening"')).toBeVisible();
+    await expect(verificationBacklogCards.getByText("pnpm run check:verification-readiness")).toBeVisible();
+    await expect(verificationBacklogCards.getByText("uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py")).toBeVisible();
+    await expect(verificationBacklogCards.getByText("Do not start or modify another active lane while using this recommendation.")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Related report links").first()).toBeVisible();
     await expect(safeBacklogPanel.getByRole("link", { name: "GET /supervisor/maintenance-readiness-report" }).first()).toHaveAttribute(
       "href",
       "/controls#maintenance-readiness-report",
     );
-    const verificationBacklogCards = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Verification surface hardening" }) });
     await expect(verificationBacklogCards).toHaveCount(1);
     const verificationBacklogCard = verificationBacklogCards.first();
     await expect(verificationBacklogCard.getByText("ready", { exact: true })).toBeVisible();

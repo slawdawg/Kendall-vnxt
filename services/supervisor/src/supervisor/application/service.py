@@ -2060,7 +2060,12 @@ class SupervisorService:
                 reason_code = "backlog-assignable" if item.nextLane else "missing-lane-metadata"
                 reason = "safe backlog item has source-owned lane metadata" if item.nextLane else "ready item has no source-owned lane start command"
                 next_action = "Review lane before dispatch" if item.nextLane else "Add source-owned branch/start metadata before dispatch"
-                if item.status.startswith("blocked"):
+                if item.status == "closed" or item.recommendedSliceSize == "complete":
+                    classification = "closed"
+                    reason_code = "backlog-closed"
+                    reason = "safe backlog item is already complete and must not be requeued"
+                    next_action = "Use as evidence only; choose the next ready safe backlog lane"
+                elif item.status.startswith("blocked"):
                     classification = "blocked_authority"
                     reason_code = "blocked-authority"
                     reason = "safe backlog item is blocked pending explicit authority approval"
@@ -2595,7 +2600,23 @@ class SupervisorService:
         ready_backlog_item_ids = {item.itemId for item in backlog.items if item.status == "ready"}
         action_step_ids = {step.stepId for step in action_plan.steps}
         verification_command_ids = {command.commandId for command in verification.requiredCommands + verification.optionalCommands}
-        report_navigation_lane = self._report_evidence_navigation_next_lane()
+        verification_surface_lane = self._safe_backlog_next_lane(
+            lane_slug="verification-surface-hardening",
+            lane_title="Verification surface hardening",
+            scope=[
+                "verification readiness report entries and package scripts",
+                "runbook and handoff verification guidance",
+                "focused dashboard and static drift checks",
+                "supervisor integration tests for verification surfaces",
+            ],
+            verification_commands=[
+                "pnpm run check:verification-readiness",
+                "pnpm run check:runbooks",
+                "pnpm run check:e2e-report",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+        )
 
         slices = [
             DevelopmentRunwaySliceView(
@@ -2604,7 +2625,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice when improving read-only report navigation, runtime evidence shortcuts, or operator review surfaces.",
-                includedBacklogItems=["safe-backlog-report-alignment"],
+                includedBacklogItems=["verification-surface-hardening"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -2629,14 +2650,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "safe-backlog-report-alignment" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the slice maps to a safe backlog item that is not authority-blocked.",
-                        evidence=["safe-backlog-report-alignment"],
+                        status="ready" if "verification-surface-hardening" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the slice maps to the next safe backlog item that is not authority-blocked.",
+                        evidence=["verification-surface-hardening"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the safe backlog item ready before starting report/evidence navigation work.",
+                        nextAction="Keep the verification surface hardening item ready before starting report/evidence navigation work.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -2666,8 +2687,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=report_navigation_lane,
-                nextAction="Select this slice for read-only navigation or evidence-surface work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=verification_surface_lane,
+                nextAction="Select this slice for read-only verification, navigation, or evidence-surface work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -2968,16 +2989,65 @@ class SupervisorService:
         blocked_maintenance_tracks = [track.trackId for track in maintenance.tracks if "blocked" in track.status]
         required_verification = [command.command for command in verification.requiredCommands]
         report_count = len(catalog.reports)
-        report_navigation_lane = self._report_evidence_navigation_next_lane()
+        verification_surface_lane = self._safe_backlog_next_lane(
+            lane_slug="verification-surface-hardening",
+            lane_title="Verification surface hardening",
+            scope=[
+                "verification readiness report entries and package scripts",
+                "runbook and handoff verification guidance",
+                "focused dashboard and static drift checks",
+                "supervisor integration tests for verification surfaces",
+            ],
+            verification_commands=[
+                "pnpm run check:verification-readiness",
+                "pnpm run check:runbooks",
+                "pnpm run check:e2e-report",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+        )
+        github_delivery_lane = self._safe_backlog_next_lane(
+            lane_slug="github-delivery-hygiene",
+            lane_title="GitHub delivery hygiene",
+            scope=[
+                "GitHub workflow policy report guidance",
+                "delivery readiness policy report guidance",
+                "workspace finish, merge, and cleanup runbooks",
+                "static drift checks for GitHub delivery safety",
+            ],
+            verification_commands=[
+                "pnpm run check:github-workflow-policy",
+                "pnpm run check:delivery-readiness",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+        )
+        read_only_evidence_lane = self._safe_backlog_next_lane(
+            lane_slug="read-only-evidence-polish",
+            lane_title="Read-only evidence polish",
+            scope=[
+                "runtime evidence export review shortcuts",
+                "controls and work-item detail evidence links",
+                "read-only supervisor report references",
+                "dashboard and static drift checks",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:runtime-review",
+                "pnpm run check:reports",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+        )
 
         items = [
             SafeDevelopmentBacklogItemView(
                 itemId="safe-backlog-report-alignment",
                 label="Report-aligned backlog governance",
                 priority="P0",
-                status="ready",
-                summary="Keep future work selected from explicit safe backlog items that point to reports, docs, tests, and stop lines.",
-                recommendedSliceSize="large",
+                status="closed",
+                summary="Delivered backlog governance evidence that keeps future work selected from explicit safe backlog items with reports, docs, tests, and stop lines.",
+                recommendedSliceSize="complete",
                 evidence=[
                     f"{report_count} supervisor reports are indexed for operator review.",
                     "Maintenance readiness recommends coherent PRs across API, dashboard, docs, and tests.",
@@ -2997,8 +3067,7 @@ class SupervisorService:
                     "/controls#supervisor-report-catalog",
                     "/controls#verification-readiness-report",
                 ],
-                nextLane=report_navigation_lane,
-                nextAction="Batch future maintenance work into coherent report/API/dashboard/docs/test slices.",
+                nextAction="Use this completed item as evidence only; do not requeue it as a new lane.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="verification-surface-hardening",
@@ -3035,6 +3104,7 @@ class SupervisorService:
                     "/controls#supervisor-report-catalog",
                     "/controls#development-runway-report",
                 ],
+                nextLane=verification_surface_lane,
                 nextAction="Add or extend static drift checks in larger coherent PR slices whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
             ),
             SafeDevelopmentBacklogItemView(
@@ -3069,6 +3139,7 @@ class SupervisorService:
                     "/controls#verification-readiness-report",
                     "/controls#managed-recipe-policy-report",
                 ],
+                nextLane=github_delivery_lane,
                 nextAction="Before remote delivery changes, confirm Git/GCM or connector posture and keep the PR scoped as one larger coherent work package.",
             ),
             SafeDevelopmentBacklogItemView(
@@ -3106,6 +3177,7 @@ class SupervisorService:
                     "/controls#managed-recipe-policy-report",
                     "/controls#delivery-readiness-policy-report",
                 ],
+                nextLane=read_only_evidence_lane,
                 nextAction="Prefer review shortcuts that reduce operator navigation across existing read-only evidence.",
             ),
             SafeDevelopmentBacklogItemView(
@@ -3165,31 +3237,45 @@ class SupervisorService:
             ],
         )
 
-    def _report_evidence_navigation_next_lane(self) -> NextLaneRecommendationView:
-        lane_slug = "safe-backlog-report-alignment"
+    def _safe_backlog_next_lane(
+        self,
+        lane_slug: str,
+        lane_title: str,
+        scope: list[str],
+        verification_commands: list[str],
+        stop_lines: list[str] | None = None,
+    ) -> NextLaneRecommendationView:
+        default_stop_lines = [
+            "Do not add provider/model calls, process launch, premium execution, worker shell commands, source mutation, network access, or credential access.",
+            "Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.",
+            "Do not start or modify another active lane while using this recommendation.",
+        ]
         return NextLaneRecommendationView(
-            laneTitle="Safe backlog report alignment",
+            laneTitle=lane_title,
             laneSlug=lane_slug,
-            branchName="codex/safe-backlog-report-alignment",
+            branchName=f"codex/{lane_slug}",
             startCommand=f'node ./scripts/codex-workspace.mjs start "{lane_slug.replace("-", " ")}"',
+            scope=scope,
+            verificationCommands=verification_commands,
+            stopLines=stop_lines or default_stop_lines,
+        )
+
+    def _report_evidence_navigation_next_lane(self) -> NextLaneRecommendationView:
+        return self._safe_backlog_next_lane(
+            lane_slug="verification-surface-hardening",
+            lane_title="Verification surface hardening",
             scope=[
-                "safe backlog report contracts and service data",
-                "development runway report contracts and service data",
-                "controls dashboard report rendering",
-                "supervisor, browser, and static drift checks",
+                "verification readiness report entries and package scripts",
+                "runbook and handoff verification guidance",
+                "focused dashboard and static drift checks",
+                "supervisor integration tests for verification surfaces",
             ],
-            verificationCommands=[
-                "pnpm run check:safe-backlog",
-                "pnpm run check:development-runway",
-                "pnpm run check:reports",
-                "pnpm run check:runtime-export",
+            verification_commands=[
+                "pnpm run check:verification-readiness",
+                "pnpm run check:runbooks",
+                "pnpm run check:e2e-report",
                 "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
-                "pnpm run test:e2e:dashboard:controls",
-            ],
-            stopLines=[
-                "Do not add provider/model calls, process launch, premium execution, worker shell commands, source mutation, network access, or credential access.",
-                "Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.",
-                "Do not start or modify the active verification-surface-hardening lane while using this recommendation.",
+                "pnpm run check:static",
             ],
         )
 

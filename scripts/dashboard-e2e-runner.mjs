@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,12 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
   mkdirSync(tempDir, { recursive: true });
   mkdirSync(uvCacheDir, { recursive: true });
   mkdirSync(browserPath, { recursive: true });
+
+  const browserPreflight = playwrightBrowserPreflight(browserPath);
+  if (!browserPreflight.ok) {
+    console.error(browserPreflight.message);
+    return 1;
+  }
 
   const baseEnv = {
     ...process.env,
@@ -82,6 +88,33 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
   } finally {
     await Promise.allSettled(children.map(stopProcessTree));
   }
+}
+
+export function playwrightBrowserPreflight(browserPath) {
+  if (hasPlaywrightChromium(browserPath)) {
+    return { ok: true, message: "Playwright Chromium browser cache is ready." };
+  }
+
+  return {
+    ok: false,
+    message: [
+      `Missing Playwright Chromium browser in ${browserPath}.`,
+      "Run the e2e setup command before launching focused dashboard e2e:",
+      `PLAYWRIGHT_BROWSERS_PATH="${browserPath}" pnpm run setup:e2e`,
+      "This preflight stops before starting supervisor/dashboard servers to avoid tool churn.",
+    ].join("\n"),
+  };
+}
+
+export function hasPlaywrightChromium(browserPath) {
+  return expectedPlaywrightChromiumExecutables(browserPath).some((candidate) => existsSync(candidate));
+}
+
+export function expectedPlaywrightChromiumExecutables(browserPath) {
+  return [
+    join(browserPath, "chromium_headless_shell-1228", "chrome-headless-shell-linux64", "chrome-headless-shell"),
+    join(browserPath, "chromium-1228", "chrome-linux", "chrome"),
+  ];
 }
 
 function dashboardCommand() {
