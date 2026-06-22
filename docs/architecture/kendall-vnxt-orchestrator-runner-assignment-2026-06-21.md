@@ -263,6 +263,17 @@ Initial CLI implementation:
 
 Add a local orchestrator command that claims one lane, prepares the workspace, runs readiness, and records the handoff to a compatible runner.
 
+Initial CLI implementation:
+
+- `node ./scripts/codex-workspace.mjs dispatch-next --dry-run`
+- `node ./scripts/codex-workspace.mjs dispatch-next --apply`
+- reuses the proven `claim-next` candidate selection and blocker rules,
+- claims or refreshes exactly one safe backlog lane for the current runner,
+- claims an existing unowned workspace or creates a managed workspace from source-owned branch metadata when no active workspace exists,
+- records dispatch handoff evidence on the workspace manifest and assignment metadata when present,
+- supports bounded readiness profiles: `doctor`, `preflight`, and `none`,
+- stops after handoff evidence; it does not launch workers, make provider/model calls, push, open PRs, merge, clean up, or mutate authority-blocked work.
+
 ## Safety Invariants
 
 - No provider/model calls.
