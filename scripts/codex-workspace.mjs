@@ -44,6 +44,9 @@ try {
     case "heartbeat":
       heartbeat(commandArgs);
       break;
+    case "takeover":
+      takeover(commandArgs);
+      break;
     case "resume":
       resumeWorkspace(commandArgs);
       break;
@@ -85,6 +88,7 @@ Commands:
   assignment-report         Show read-only runner assignment inventory and blockers.
   claim-next                Preview the next claimable runner assignment lane.
   heartbeat <query>         Update owner-only runner heartbeat evidence.
+  takeover <query>          Build or apply explicit stale-owner takeover evidence.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
@@ -128,6 +132,13 @@ heartbeat options:
   --current-command <text>  Current command or wait state summary.
   --last-result <text>      Last result summary.
   --stale-after-seconds <n> Stale owner threshold to record. Defaults to 86400.
+
+takeover options:
+  --dry-run                 Print takeover packet without mutation.
+  --apply                   Apply takeover after evidence gates pass.
+  --takeover-reason <text>  Required. Explains takeover in at least 10 non-whitespace characters.
+  --approval <text>         Required with --apply. Operator approval evidence.
+  --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 finish-pr options:
   --message <text>          Commit message. Defaults to task title.
@@ -513,6 +524,57 @@ function heartbeat(argv) {
     `wrote ${result.path}`,
     "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
   ]);
+}
+
+function takeover(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (options.apply && options.dryRun) {
+    throw new Error("takeover accepts either --dry-run or --apply, not both.");
+  }
+  if (!options.apply && !options.dryRun) {
+    throw new Error("takeover requires either --dry-run or --apply.");
+  }
+  const query = positional.join(" ").trim();
+  if (!query) {
+    throw new Error("takeover requires an assignment or task query.");
+  }
+  if (!validTakeoverReason(options.takeoverReason)) {
+    throw new Error("--takeover-reason must explain the takeover in at least 10 non-whitespace characters.");
+  }
+  if (options.apply && !validTakeoverReason(options.approval)) {
+    throw new Error("--approval must cite explicit operator approval in at least 10 non-whitespace characters.");
+  }
+
+  const state = workspaceState(options);
+  const currentOwner = currentLaneOwner(options);
+  const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
+  const generatedAt = new Date();
+  const target = resolveTakeoverTarget(state, query);
+  const packet = takeoverPacket(target, {
+    currentOwner,
+    generatedAt,
+    staleAfterSeconds,
+    reason: String(options.takeoverReason || "").trim(),
+    approval: options.approval ? String(options.approval).trim() : "",
+  });
+
+  if (options.dryRun) {
+    printTakeoverPacket("DRY RUN", packet);
+    return;
+  }
+
+  if (!packet.allowed) {
+    printTakeoverPacket("BLOCKED", packet);
+    throw new Error(`Takeover blocked for ${packet.target_id}.`);
+  }
+
+  const applied = applyTakeover(state, target, {
+    currentOwner,
+    options,
+    staleAfterSeconds,
+  });
+  printTakeoverPacket("APPLY", applied.packet);
+  console.log(`Wrote: ${applied.path}`);
 }
 
 function resumeWorkspace(argv) {
@@ -2058,6 +2120,304 @@ function assertManifestHeartbeatOwner(manifest, options = {}) {
     throw new Error(
       `${manifest.task_id} is owned by ${manifest.owner}; current runner is ${currentOwner}. Heartbeat is owner-only.`,
     );
+  }
+}
+
+function resolveTakeoverTarget(state, query) {
+  const assignmentRecord = findAssignment(state, query);
+  if (assignmentRecord) {
+    return {
+      kind: "assignment",
+      path: assignmentRecord.path,
+      record: assignmentRecord.assignment,
+    };
+  }
+
+  const manifestRecord = findManifest(state, query, { preferCurrentWorktree: true });
+  return {
+    kind: "workspace",
+    path: manifestRecord.path,
+    record: manifestRecord.manifest,
+  };
+}
+
+function takeoverPacket(target, context) {
+  const record = target.record;
+  const previousOwner = record.owner || "";
+  const stale = takeoverHeartbeatEvidence(record, context);
+  const worktree = takeoverWorktreeEvidence(target);
+  const branch = takeoverBranchEvidence(record);
+  const pr = takeoverPrEvidence(record);
+  const dirty = takeoverDirtyStateEvidence(worktree);
+  const blockers = takeoverBlockers(target, context, {
+    stale,
+    worktree,
+    dirty,
+  });
+
+  return {
+    schema_version: 1,
+    target_kind: target.kind,
+    target_id: target.kind === "assignment" ? record.assignment_id : record.task_id,
+    previous_owner: previousOwner || "unowned",
+    requesting_owner: context.currentOwner,
+    reason: context.reason,
+    heartbeat_evidence: stale,
+    worktree_evidence: worktree,
+    branch_evidence: branch,
+    pr_evidence: pr,
+    dirty_state_evidence: dirty,
+    approval_evidence: context.approval || null,
+    decision: blockers.length === 0 ? "approved_for_apply" : "blocked",
+    allowed: blockers.length === 0,
+    blockers,
+    generated_at: context.generatedAt.toISOString(),
+  };
+}
+
+function takeoverHeartbeatEvidence(record, context) {
+  const source = record.last_heartbeat_at
+    ? "last_heartbeat_at"
+    : record.owner_updated_at
+      ? "owner_updated_at"
+      : record.updated_at
+        ? "updated_at"
+        : record.assigned_at
+          ? "assigned_at"
+          : "created_at";
+  const value = record[source] || "";
+  const timestamp = Date.parse(value);
+  const ageSeconds = Number.isFinite(timestamp)
+    ? Math.max(0, Math.floor((context.generatedAt.getTime() - timestamp) / 1000))
+    : null;
+  return {
+    source,
+    timestamp: value || null,
+    age_seconds: ageSeconds,
+    stale_after_seconds: context.staleAfterSeconds,
+    is_stale: ageSeconds === null ? true : ageSeconds > context.staleAfterSeconds,
+  };
+}
+
+function takeoverWorktreeEvidence(target) {
+  const worktreePath = target.record.worktree_path || null;
+  if (!worktreePath) {
+    return {
+      path: null,
+      exists: target.kind === "assignment",
+      required: target.kind === "workspace",
+      status: target.kind === "assignment" ? "not_applicable" : "missing",
+    };
+  }
+  if (!existsSync(worktreePath)) {
+    return {
+      path: worktreePath,
+      exists: false,
+      required: true,
+      status: "missing",
+    };
+  }
+  const status = parseStatus(worktreePath);
+  return {
+    path: worktreePath,
+    exists: true,
+    required: true,
+    status: status.any ? "dirty" : "clean",
+    dirty_lines: status.lines,
+  };
+}
+
+function takeoverBranchEvidence(record) {
+  const branch = record.branch || null;
+  if (!branch) {
+    return {
+      branch: null,
+      local_sha: null,
+      remote_sha: null,
+      status: "missing",
+    };
+  }
+  return {
+    branch,
+    local_sha: branchSha(branch) || null,
+    remote_sha: remoteBranchExists(branch) ? originBranchSha(branch) : null,
+    status: "inspected",
+  };
+}
+
+function takeoverPrEvidence(record) {
+  return {
+    pr_url: record.pr_url || null,
+    pr_number: record.pr_number || null,
+    status: record.pr_url || record.pr_number ? "present_unverified" : "none",
+  };
+}
+
+function takeoverDirtyStateEvidence(worktreeEvidence) {
+  if (!worktreeEvidence.required) {
+    return {
+      status: "not_applicable",
+      dirty: false,
+    };
+  }
+  return {
+    status: worktreeEvidence.status,
+    dirty: worktreeEvidence.status === "dirty",
+    lines: worktreeEvidence.dirty_lines || [],
+  };
+}
+
+function takeoverBlockers(target, context, evidence) {
+  const blockers = [];
+  const record = target.record;
+  if (!record.owner) {
+    blockers.push("target has no current owner; use claim flow instead");
+  }
+  if (record.owner === context.currentOwner) {
+    blockers.push("target is already owned by current runner");
+  }
+  if (!evidence.stale.is_stale) {
+    blockers.push("owner heartbeat is not stale");
+  }
+  if (target.kind === "workspace" && !evidence.worktree.exists) {
+    blockers.push("workspace worktree is missing");
+  }
+  if (target.kind === "assignment" && evidence.worktree.required && !evidence.worktree.exists) {
+    blockers.push("assignment worktree is missing");
+  }
+  if (evidence.dirty.dirty) {
+    blockers.push("workspace worktree is dirty");
+  }
+  if (!validTakeoverReason(context.reason)) {
+    blockers.push("takeover reason is missing or too short");
+  }
+  if (context.approval !== undefined && context.approval !== "" && !validTakeoverReason(context.approval)) {
+    blockers.push("approval evidence is too short");
+  }
+  if (!context.approval) {
+    blockers.push("explicit operator approval evidence is required for apply");
+  }
+  return blockers;
+}
+
+function applyTakeover(state, target, { currentOwner, options, staleAfterSeconds }) {
+  if (target.kind === "assignment") {
+    const assignmentId = String(target.record.assignment_id || "");
+    return withAssignmentLock(state, assignmentId, () => {
+      const path = target.path;
+      const assignment = readAssignment(path);
+      validateAssignment(assignment, path);
+      const packet = takeoverPacket(
+        {
+          kind: "assignment",
+          path,
+          record: assignment,
+        },
+        {
+          currentOwner,
+          generatedAt: new Date(),
+          staleAfterSeconds,
+          reason: String(options.takeoverReason || "").trim(),
+          approval: String(options.approval || "").trim(),
+        },
+      );
+      if (!packet.allowed) {
+        throw new Error(`Takeover blocked for ${packet.target_id}: ${packet.blockers.join("; ")}`);
+      }
+      applyAssignmentTakeover(assignment, packet);
+      writeAssignment(path, assignment);
+      return { path, packet };
+    });
+  }
+
+  const taskId = String(target.record.task_id || "");
+  return withManifestLock(state, taskId, () => {
+    const path = target.path;
+    const manifest = readManifest(path);
+    validateManifest(manifest, path);
+    const packet = takeoverPacket(
+      {
+        kind: "workspace",
+        path,
+        record: manifest,
+      },
+      {
+        currentOwner,
+        generatedAt: new Date(),
+        staleAfterSeconds,
+        reason: String(options.takeoverReason || "").trim(),
+        approval: String(options.approval || "").trim(),
+      },
+    );
+    if (!packet.allowed) {
+      throw new Error(`Takeover blocked for ${packet.target_id}: ${packet.blockers.join("; ")}`);
+    }
+    applyManifestTakeover(manifest, packet);
+    writeManifest(path, manifest);
+    return { path, packet };
+  });
+}
+
+function applyAssignmentTakeover(assignment, packet) {
+  const now = new Date().toISOString();
+  assignment.owner = packet.requesting_owner;
+  assignment.owner_thread_id = process.env.CODEX_THREAD_ID || null;
+  assignment.owner_acquired_at = now;
+  assignment.updated_at = now;
+  assignment.status = assignment.status === "closed" ? "closed" : "claimed";
+  assignment.phase = "claimed";
+  if (!Array.isArray(assignment.takeover_decisions)) {
+    assignment.takeover_decisions = [];
+  }
+  assignment.takeover_decisions.push({ ...packet, decision: "applied", applied_at: now });
+  assignment.events = [
+    ...(Array.isArray(assignment.events) ? assignment.events : []),
+    taskEvent("takeover_applied", `owner ${packet.previous_owner} -> ${packet.requesting_owner}: ${packet.reason}`),
+  ];
+}
+
+function applyManifestTakeover(manifest, packet) {
+  const now = new Date().toISOString();
+  manifest.owner = packet.requesting_owner;
+  manifest.owner_thread_id = process.env.CODEX_THREAD_ID || null;
+  manifest.owner_acquired_at = now;
+  manifest.owner_updated_at = now;
+  manifest.updated_at = now;
+  if (!Array.isArray(manifest.takeover_decisions)) {
+    manifest.takeover_decisions = [];
+  }
+  manifest.takeover_decisions.push({ ...packet, decision: "applied", applied_at: now });
+  if (!Array.isArray(manifest.ownership_takeovers)) {
+    manifest.ownership_takeovers = [];
+  }
+  manifest.ownership_takeovers.push({
+    at: now,
+    previous_owner: packet.previous_owner,
+    new_owner: packet.requesting_owner,
+    reason: packet.reason,
+    approval_evidence: packet.approval_evidence,
+  });
+  appendTaskEvent(manifest, "takeover_applied", `owner ${packet.previous_owner} -> ${packet.requesting_owner}: ${packet.reason}`);
+}
+
+function printTakeoverPacket(label, packet) {
+  console.log(`${label}: takeover`);
+  console.log(`- target ${packet.target_kind} ${packet.target_id}`);
+  console.log(`- previous owner ${packet.previous_owner}`);
+  console.log(`- requesting owner ${packet.requesting_owner}`);
+  console.log(`- decision ${packet.decision}`);
+  console.log(`- heartbeat stale ${packet.heartbeat_evidence.is_stale}`);
+  console.log(`- heartbeat age ${packet.heartbeat_evidence.age_seconds ?? "unknown"} seconds`);
+  console.log(`- worktree ${packet.worktree_evidence.status}`);
+  console.log(`- branch ${packet.branch_evidence.branch || "none"}`);
+  console.log(`- pr ${packet.pr_evidence.status}`);
+  console.log(`- approval ${packet.approval_evidence ? "present" : "missing"}`);
+  if (packet.blockers.length === 0) {
+    console.log("- blockers none");
+  } else {
+    for (const blocker of packet.blockers) {
+      console.log(`- blocker ${blocker}`);
+    }
   }
 }
 
