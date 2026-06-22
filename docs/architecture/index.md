@@ -24,6 +24,7 @@ Status: current navigation index
 
 - `kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md`: current LLM orchestration lane model for Ollama API, Codex CLI workers, Claude Code CLI review workers, and GitHub workflow rails.
 - `kendall-vnxt-orchestrator-spec-2026-06-10.md`: draft orchestrator specification with lane contracts, job states, failure handling, and MVP acceptance criteria.
+- `kendall-vnxt-orchestrator-runner-assignment-2026-06-21.md`: runner assignment extension for dispatchable lanes, ownership leases, heartbeats, takeover gates, and Dev Console assignment visibility.
 - `kendall-vnxt-orchestrator-mature-tool-comparison-2026-06-10.md`: mature/self-hosted tool comparison for orchestrator implementation, recommending a LangGraph fake-worker pilot and Prefect fallback before custom runtime code.
 - `kendall-vnxt-provider-disabled-fixtures-2026-06-08.md`: disabled provider fixture policy for Ollama, LM Studio, vLLM, and llama.cpp.
 - `kendall-vnxt-process-lifecycle-design-2026-06-08.md`: future subscription-agent process lifecycle design.

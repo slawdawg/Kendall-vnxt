@@ -12,6 +12,7 @@ After interactive BMAD product discovery, Epic 6 is broader than a standalone wo
 This spec builds on:
 
 - `docs/architecture/kendall-vnxt-llm-orchestration-lane-model-2026-06-10.md`
+- `docs/architecture/kendall-vnxt-orchestrator-runner-assignment-2026-06-21.md`
 - `docs/architecture/kendall-vnxt-orchestrator-mature-tool-comparison-2026-06-10.md`
 - `docs/product/kendall-vnxt-orchestrator-jtbd-and-mvp-2026-06-10.md`
 - `docs/workflows/product-requirements-boundary.md#kendall-vnxt-orchestrator-epic-6`
@@ -193,6 +194,12 @@ Not responsible for:
 - routine orchestration brain
 
 ## Job State Model
+
+Runner assignment state is defined in `docs/architecture/kendall-vnxt-orchestrator-runner-assignment-2026-06-21.md`.
+The assignment contract covers dispatchable lanes, ownership leases, heartbeats,
+stale-owner evidence, takeover gates, delivery tracking, and Dev Console
+assignment visibility. This spec keeps the broader job-state vocabulary; the
+assignment extension owns lane-claim and runner-handoff mechanics.
 
 Recommended states:
 
