@@ -35,6 +35,7 @@ try {
     assert(result.stdout.includes("assignment-report"), result.stdout || result.stderr);
     assert(result.stdout.includes("cleanup-branches [query]"), result.stdout || result.stderr);
     assert(result.stdout.includes("heartbeat <query>"), result.stdout || result.stderr);
+    assert(result.stdout.includes("takeover <query>"), result.stdout || result.stderr);
     assert(result.stdout.includes("--base <ref>"), result.stdout || result.stderr);
   });
 
@@ -451,6 +452,248 @@ try {
     }
   });
 
+  test("takeover dry-run emits packet and does not mutate stale assignment", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-dry-run-"));
+    try {
+      const assignmentsDir = join(takeoverStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      const assignmentPath = join(assignmentsDir, "stale-assignment.json");
+      writeFileSync(
+        assignmentPath,
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-assignment",
+            task_id: "stale-assignment",
+            lane_slug: "stale-assignment",
+            branch: "codex/stale-assignment",
+            status: "claimed",
+            owner: "runner-b",
+            updated_at: "2026-06-21T00:00:00.000Z",
+            last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const before = readFileSync(assignmentPath, "utf8");
+
+      const result = run([
+        "takeover",
+        "stale-assignment",
+        "--dry-run",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+      const after = readFileSync(assignmentPath, "utf8");
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("DRY RUN: takeover"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- target assignment stale-assignment"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- decision blocked"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- blocker explicit operator approval evidence is required for apply"), result.stdout || result.stderr);
+      assert(before === after, "takeover dry-run mutated assignment");
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("takeover apply requires approval evidence before assignment mutation", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-no-approval-"));
+    try {
+      const assignmentsDir = join(takeoverStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      const assignmentPath = join(assignmentsDir, "stale-assignment.json");
+      writeFileSync(
+        assignmentPath,
+        `${JSON.stringify({
+          assignment_id: "stale-assignment",
+          task_id: "stale-assignment",
+          lane_slug: "stale-assignment",
+          branch: "codex/stale-assignment",
+          status: "claimed",
+          owner: "runner-b",
+          last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+        })}\n`,
+      );
+      const before = readFileSync(assignmentPath, "utf8");
+
+      const result = run([
+        "takeover",
+        "stale-assignment",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+      const after = readFileSync(assignmentPath, "utf8");
+
+      assert(result.code !== 0, "takeover apply unexpectedly passed without approval");
+      assert(result.stderr.includes("--approval must cite explicit operator approval"), result.stderr || result.stdout);
+      assert(before === after, "failed takeover without approval mutated assignment");
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("takeover apply reassigns stale assignment with approval evidence", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-assignment-"));
+    try {
+      const assignmentsDir = join(takeoverStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      const assignmentPath = join(assignmentsDir, "stale-assignment.json");
+      writeFileSync(
+        assignmentPath,
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-assignment",
+            task_id: "stale-assignment",
+            lane_slug: "stale-assignment",
+            branch: "codex/stale-assignment",
+            status: "claimed",
+            owner: "runner-b",
+            owner_thread_id: "thread-b",
+            updated_at: "2026-06-21T00:00:00.000Z",
+            last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const result = run([
+        "takeover",
+        "stale-assignment",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--approval",
+        "operator approved takeover for stale lane",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("APPLY: takeover"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- decision approved_for_apply"), result.stdout || result.stderr);
+      const assignment = JSON.parse(readFileSync(assignmentPath, "utf8"));
+      assert(assignment.owner === "runner-a", "takeover did not update assignment owner");
+      assert(assignment.status === "claimed", "takeover changed assignment status unexpectedly");
+      assert(Array.isArray(assignment.takeover_decisions), "takeover decision evidence missing");
+      assert(assignment.takeover_decisions[0].decision === "applied", "takeover decision not marked applied");
+      assert(assignment.takeover_decisions[0].previous_owner === "runner-b", "previous owner evidence missing");
+      assert(assignment.events.some((event) => event.type === "takeover_applied"), "takeover event missing");
+      assert(!existsSync(join(takeoverStateRoot, "tasks")), "assignment takeover created workspace manifests");
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("takeover apply blocks non-stale assignment without mutation", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-nonstale-"));
+    try {
+      const assignmentsDir = join(takeoverStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      const assignmentPath = join(assignmentsDir, "fresh-assignment.json");
+      writeFileSync(
+        assignmentPath,
+        `${JSON.stringify({
+          assignment_id: "fresh-assignment",
+          task_id: "fresh-assignment",
+          lane_slug: "fresh-assignment",
+          branch: "codex/fresh-assignment",
+          status: "claimed",
+          owner: "runner-b",
+          last_heartbeat_at: new Date().toISOString(),
+        })}\n`,
+      );
+      const before = readFileSync(assignmentPath, "utf8");
+
+      const result = run([
+        "takeover",
+        "fresh-assignment",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--approval",
+        "operator approved takeover for stale lane",
+        "--stale-after-seconds",
+        "86400",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+      const after = readFileSync(assignmentPath, "utf8");
+
+      assert(result.code !== 0, "takeover apply unexpectedly passed for non-stale assignment");
+      assert(result.stdout.includes("owner heartbeat is not stale"), result.stderr || result.stdout);
+      assert(before === after, "blocked non-stale takeover mutated assignment");
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("takeover apply blocks assignment with missing recorded worktree", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-missing-assignment-worktree-"));
+    try {
+      const assignmentsDir = join(takeoverStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      const missingWorktree = join(takeoverStateRoot, "missing-worktree");
+      const assignmentPath = join(assignmentsDir, "stale-assignment.json");
+      writeFileSync(
+        assignmentPath,
+        `${JSON.stringify({
+          assignment_id: "stale-assignment",
+          task_id: "stale-assignment",
+          lane_slug: "stale-assignment",
+          branch: "codex/stale-assignment",
+          worktree_path: missingWorktree,
+          status: "claimed",
+          owner: "runner-b",
+          last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+        })}\n`,
+      );
+      const before = readFileSync(assignmentPath, "utf8");
+
+      const result = run([
+        "takeover",
+        "stale-assignment",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--approval",
+        "operator approved takeover for stale lane",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+      const after = readFileSync(assignmentPath, "utf8");
+
+      assert(result.code !== 0, "takeover apply unexpectedly passed with missing assignment worktree");
+      assert(result.stdout.includes("assignment worktree is missing"), result.stderr || result.stdout);
+      assert(before === after, "missing assignment worktree takeover mutated assignment");
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next apply blocks a lane assigned to another owner", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-owned-assignment-"));
     try {
@@ -639,6 +882,133 @@ try {
       assert(before === after, "failed heartbeat mutated another owner's workspace");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("takeover apply blocks dirty workspace manifest without mutation", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-manifest-"));
+    const worktreePath = mkdtempSync(join(tmpdir(), "codex-takeover-dirty-worktree-"));
+    try {
+      runGit(worktreePath, ["init", "-q"]);
+      runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
+      runGit(worktreePath, ["config", "user.name", "Codex Workspace Test"]);
+      writeFileSync(join(worktreePath, "tracked.txt"), "base\n");
+      runGit(worktreePath, ["add", "tracked.txt"]);
+      runGit(worktreePath, ["commit", "-q", "-m", "base"]);
+      writeFileSync(join(worktreePath, "dirty.txt"), "dirty\n");
+
+      const tasksDir = join(takeoverStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "stale-workspace.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: "stale-workspace",
+            branch: "codex/stale-workspace",
+            worktree_path: worktreePath,
+            base_branch: "main",
+            status: "active",
+            owner: "runner-b",
+            owner_updated_at: "2026-06-21T00:00:00.000Z",
+            last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = run([
+        "takeover",
+        "stale-workspace",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--approval",
+        "operator approved takeover for stale lane",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+      const after = readFileSync(manifestPath, "utf8");
+
+      assert(result.code !== 0, "takeover apply unexpectedly passed for dirty workspace");
+      assert(result.stdout.includes("workspace worktree is dirty"), result.stderr || result.stdout);
+      assert(before === after, "dirty workspace takeover mutated manifest");
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("takeover apply reassigns stale clean workspace manifest with approval evidence", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-clean-manifest-"));
+    const worktreePath = mkdtempSync(join(tmpdir(), "codex-takeover-clean-worktree-"));
+    try {
+      runGit(worktreePath, ["init", "-q"]);
+      runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
+      runGit(worktreePath, ["config", "user.name", "Codex Workspace Test"]);
+      writeFileSync(join(worktreePath, "tracked.txt"), "base\n");
+      runGit(worktreePath, ["add", "tracked.txt"]);
+      runGit(worktreePath, ["commit", "-q", "-m", "base"]);
+
+      const tasksDir = join(takeoverStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "stale-workspace.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: "stale-workspace",
+            branch: "codex/stale-workspace",
+            worktree_path: worktreePath,
+            base_branch: "main",
+            status: "active",
+            owner: "runner-b",
+            owner_thread_id: "thread-b",
+            owner_updated_at: "2026-06-21T00:00:00.000Z",
+            last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const result = run([
+        "takeover",
+        "stale-workspace",
+        "--apply",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--approval",
+        "operator approved takeover for stale lane",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("APPLY: takeover"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- worktree clean"), result.stdout || result.stderr);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      assert(manifest.owner === "runner-a", "takeover did not update workspace owner");
+      assert(manifest.status === "active", "takeover changed workspace status");
+      assert(Array.isArray(manifest.takeover_decisions), "workspace takeover decision evidence missing");
+      assert(manifest.takeover_decisions[0].dirty_state_evidence.dirty === false, "clean evidence missing");
+      assert(Array.isArray(manifest.ownership_takeovers), "workspace ownership takeover evidence missing");
+      assert(manifest.events.some((event) => event.type === "takeover_applied"), "workspace takeover event missing");
+      assert(!existsSync(join(takeoverStateRoot, "assignments")), "workspace takeover created assignment metadata");
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+      rmSync(worktreePath, { recursive: true, force: true });
     }
   });
 

@@ -248,6 +248,17 @@ Initial CLI implementation:
 
 Add explicit takeover packets. Takeover requires operator approval unless a future source-owned policy grants a narrow low-risk takeover class.
 
+Initial CLI implementation:
+
+- `node ./scripts/codex-workspace.mjs takeover <task-or-assignment> --dry-run`
+- `node ./scripts/codex-workspace.mjs takeover <task-or-assignment> --apply`
+- emits a `TakeoverDecision` packet with previous owner, requesting owner, reason, heartbeat evidence, worktree evidence, branch evidence, PR evidence, dirty-state evidence, approval evidence, decision, and blockers,
+- requires stale heartbeat evidence before ownership mutation,
+- requires clean worktree evidence for workspace-manifest takeover,
+- requires explicit operator approval evidence and a takeover reason before `--apply`,
+- updates owner metadata only after re-reading the target under the relevant local lock,
+- blocks non-stale, unowned, current-owner, missing-worktree, dirty-worktree, and missing-approval takeover attempts without mutation.
+
 ### Phase 7: Dispatch Loop
 
 Add a local orchestrator command that claims one lane, prepares the workspace, runs readiness, and records the handoff to a compatible runner.
