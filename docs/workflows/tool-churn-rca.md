@@ -39,6 +39,7 @@ Classify the failure before choosing another action:
 | `dependency` | Dependencies are missing, stale, or not installed for the current worktree | module not found, lockfile install required |
 | `verification` | The check itself ran but failed for code/docs behavior | assertion failure, docs drift, lint error |
 | `stale-state` | Local manifests, worktrees, branches, caches, or generated files are stale | missing manifest, orphan path, stale branch/head |
+| `review-state` | GitHub PR review/conversation state is incomplete or was read through the wrong surface | merge blocked with green checks, unresolved review thread, flat comments empty |
 | `unknown` | Evidence is insufficient to classify safely | partial output, ambiguous failure |
 
 ## RCA Packet
@@ -81,6 +82,13 @@ Choose one narrow action that can actually reduce uncertainty:
 - Replace a complex shell shape with a simpler direct shell command.
 - Read the existing script or docs before invoking package-manager indirection.
 - Request approval for the exact read-only verification command when sandbox behavior is the blocker.
+- For `uv run --directory services/supervisor ...` failures that report a
+  read-only user cache path, request approval for the same read-only command
+  outside the sandbox instead of changing package-manager or Python command
+  shapes.
+- For merge blockers with green checks, run the thread-aware GitHub review
+  comment workflow from the PR branch worktree before retrying merge commands
+  or speculating about branch policy.
 - Park the blocked lane and continue safe local/read-only work if the goal has other useful tasks.
 
 ## Durable Fix Paths

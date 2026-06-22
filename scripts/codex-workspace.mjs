@@ -966,7 +966,7 @@ function preflightCleanupBranchHeads(manifest, cleanupCwd, expectedHeadSha, dele
 }
 
 function expectedCleanupHeadSha(manifest, pr) {
-  return String(manifest.pr_delivery_head_sha || pr?.headRefOid || "").trim();
+  return String(pr?.headRefOid || manifest.pr_delivery_head_sha || "").trim();
 }
 
 function requireCleanupHeadSha(manifest, pr) {

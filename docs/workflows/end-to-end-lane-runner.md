@@ -80,6 +80,8 @@ remote branch deletion outside the merged managed lane.
    the PR, and monitor checks and review state.
 8. **Merge.** Merge only when the low-risk checklist is proven for the exact
    head SHA or when an explicit higher-risk approval covers the residual risk.
+   If merge is blocked after checks are green, inspect thread-aware review
+   threads before assuming branch policy, approval state, or GitHub lag.
 9. **Cleanup.** Prefer `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
    run first. Apply cleanup only when the dry-run output names the expected PR,
@@ -126,7 +128,8 @@ Merge under `standard-delivery` only when current evidence proves all of these:
 - Required and reported checks for that exact head are successful or
   intentionally skipped.
 - Review threads are resolved and there are no requested changes or pending
-  review requests.
+  review requests. This must be proven with thread-aware review data, such as
+  GraphQL `reviewThreads`; flat PR comments or check rollups are not enough.
 - Local verification has completed for the changed surface.
 - The changed-file list avoids high-blast-radius surfaces.
 - A rollback or revert path is known.
@@ -169,6 +172,10 @@ Use controls such as:
 - Add tests, static drift checks, or verification scripts for new contracts.
 - Require clean-worktree, merged-PR, exact branch, owner, and path-allowlist
   evidence before cleanup.
+- Prefer the merged PR `headRefOid` as cleanup head evidence when available;
+  local manifest delivery-head metadata can be stale after follow-up PR commits,
+  but local and remote branch deletion must still fail closed if either branch
+  head differs from the merged PR head.
 - Make cleanup resumable so already-removed worktrees or already-deleted
   branches are verified as absent and recorded instead of treated as blockers.
 - Record rollback, revert, resume, retry, and inspection paths.

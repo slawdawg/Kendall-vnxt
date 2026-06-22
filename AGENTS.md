@@ -154,6 +154,12 @@ durable, milestone-driven workflow rather than a single unbounded task.
   verification command output for repo-specific checks; and a reviewed diff
   file list for excluded high-blast-radius surfaces. If a source is unavailable
   or ambiguous, the criterion is not proven.
+- If GitHub reports a merge state such as `BLOCKED`, `UNKNOWN`, or otherwise
+  refuses a merge while checks appear green, inspect thread-aware review state
+  before any other hypothesis. Use the `github:gh-address-comments` workflow or
+  its GraphQL review-thread fetch from the PR branch worktree; flat PR comments,
+  `gh pr view` status summaries, and CI rollups are not sufficient evidence
+  that review feedback is resolved.
 - Reduce higher-risk merge candidates by adding evidence and controls before
   merge: split broad diffs into smaller PRs, keep the PR as draft until review
   is complete, require status checks/reviews/conversation resolution where the
@@ -257,6 +263,9 @@ surface is `node ./scripts/codex-workspace.mjs`.
   standing delivery approval covers merge and the low-risk delivery criteria
   above are proven; otherwise wait for explicit merge approval after showing
   the PR state.
+- Before merge, always perform a thread-aware review-comment check from the PR
+  branch worktree. Do not treat a green check rollup or an empty flat comment
+  list as proof that there are no unresolved review threads.
 - When the operator says "clean up merged work", run
   `node ./scripts/codex-workspace.mjs cleanup-current --delete-remote` from
   inside the lane, or `node ./scripts/codex-workspace.mjs cleanup-merged
