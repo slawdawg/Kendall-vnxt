@@ -268,10 +268,105 @@ try {
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
-  test("claim-next refuses apply until the Phase 4 mutation contract exists", () => {
-    const result = run(["claim-next", "--apply", "--state-root", stateRoot]);
-    assert(result.code !== 0, "claim-next --apply unexpectedly passed");
-    assert(result.stderr.includes("Phase 4"), result.stderr || result.stdout);
+  test("claim-next apply writes assignment metadata without creating a workspace", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-apply-"));
+    try {
+      const branch = "codex/safe-backlog-report-alignment";
+      const branchBefore = branchExists(rootDir, branch);
+
+      const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("APPLY: claim-next"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claimed ready lane safe-backlog-report-alignment for runner-a"), result.stdout || result.stderr);
+      assert(
+        result.stdout.includes("assignment metadata only; no branch, PR, worktree, worker, or implementation mutation"),
+        result.stdout || result.stderr,
+      );
+      assert(branchExists(rootDir, branch) === branchBefore, "claim-next --apply changed branch state");
+      assert(!existsSync(join(claimStateRoot, "tasks")), "claim-next --apply created workspace task manifests");
+      assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next --apply created worktrees");
+
+      const assignmentPath = join(claimStateRoot, "assignments", "safe-backlog-report-alignment.json");
+      assert(existsSync(assignmentPath), "claim-next --apply did not write assignment metadata");
+      const assignment = JSON.parse(readFileSync(assignmentPath, "utf8"));
+      assert(assignment.assignment_id === "safe-backlog-report-alignment", "assignment id mismatch");
+      assert(assignment.task_id === "safe-backlog-report-alignment", "assignment task id mismatch");
+      assert(assignment.status === "claimed", "assignment status mismatch");
+      assert(assignment.owner === "runner-a", "assignment owner mismatch");
+      assert(assignment.branch === branch, "assignment branch mismatch");
+      assert(Array.isArray(assignment.stop_lines) && assignment.stop_lines.length > 0, "stop lines missing");
+      assert(assignment.events.some((event) => event.type === "claimed"), "claimed event missing");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next apply is idempotent for the current owner", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-idempotent-"));
+    try {
+      const first = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(first.code === 0, first.stderr || first.stdout);
+      const second = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(second.code === 0, second.stderr || second.stdout);
+      assert(second.stdout.includes("refresh existing assignment safe-backlog-report-alignment"), second.stdout || second.stderr);
+
+      const assignmentsDir = join(claimStateRoot, "assignments");
+      const assignmentFiles = readdirSync(assignmentsDir).filter((name) => name.endsWith(".json"));
+      assert(assignmentFiles.length === 1, `expected one assignment file, saw ${assignmentFiles.join(", ")}`);
+      const assignment = JSON.parse(
+        readFileSync(join(assignmentsDir, "safe-backlog-report-alignment.json"), "utf8"),
+      );
+      assert(assignment.owner === "runner-a", "assignment owner changed during idempotent apply");
+      assert(
+        assignment.events.filter((event) => event.type === "claimed" || event.type === "claim_refreshed").length === 2,
+        "idempotent apply should append refresh evidence without duplicating assignments",
+      );
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("assignment-report surfaces claimed lane assignment metadata", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-report-claimed-"));
+    try {
+      const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(claim.code === 0, claim.stderr || claim.stdout);
+
+      const report = run(["assignment-report", "--owner", "runner-a", "--state-root", claimStateRoot]);
+
+      assert(report.code === 0, report.stderr || report.stdout);
+      assert(report.stdout.includes("- safe-backlog-report-alignment | claimed"), report.stdout || report.stderr);
+      assert(
+        report.stdout.includes(
+          "- safe-backlog-report-alignment | claimed | owner=runner-a | branch=codex/safe-backlog-report-alignment",
+        ),
+        report.stdout || report.stderr,
+      );
+      assert(report.stdout.includes("reason=assignment is owned by current runner"), report.stdout || report.stderr);
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next apply blocks a lane assigned to another owner", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-owned-assignment-"));
+    try {
+      const first = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
+      assert(first.code === 0, first.stderr || first.stdout);
+      const assignmentPath = join(claimStateRoot, "assignments", "safe-backlog-report-alignment.json");
+      const before = readFileSync(assignmentPath, "utf8");
+
+      const second = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      const after = readFileSync(assignmentPath, "utf8");
+
+      assert(second.code !== 0, "claim-next --apply unexpectedly claimed another owner's assignment");
+      assert(second.stdout.includes("- safe-backlog-report-alignment | blocked_owned_active"), second.stdout || second.stderr);
+      assert(second.stderr.includes("No claimable safe backlog lane found"), second.stderr || second.stdout);
+      assert(before === after, "blocked claim-next --apply mutated another owner's assignment");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
   });
 
   test("claim-next dry-run can preview an existing unowned active workspace claim", () => {
@@ -303,6 +398,42 @@ try {
       assert(result.stdout.includes("claim existing unowned workspace unowned-safe-backlog"), result.stdout || result.stderr);
       assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
       assert(before === after, "claim-next --dry-run mutated the unowned lane manifest");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next apply claims an existing unowned active workspace manifest", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-unowned-apply-"));
+    try {
+      const tasksDir = join(claimStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: "unowned-safe-backlog",
+            branch: "codex/safe-backlog-report-alignment",
+            worktree_path: rootDir,
+            base_branch: "main",
+            status: "active",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("claimed existing unowned workspace unowned-safe-backlog"), result.stdout || result.stderr);
+      assert(!existsSync(join(claimStateRoot, "assignments")), "manifest claim should not create assignment metadata");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      assert(manifest.owner === "runner-a", "claim-next --apply did not claim the unowned manifest");
+      assert(Object.hasOwn(manifest, "owner_thread_id"), "owner thread id evidence missing");
+      assert(Array.isArray(manifest.ownership_takeovers), "ownership takeover evidence missing");
+      assert(manifest.events.some((event) => event.type === "ownership_claimed"), "ownership event missing");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }

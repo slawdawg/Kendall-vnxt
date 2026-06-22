@@ -221,6 +221,16 @@ Initial CLI implementation:
 
 Allow `claim-next --apply` only for unowned ready lanes. It should create or update assignment metadata but not run implementation.
 
+Initial CLI implementation:
+
+- `node ./scripts/codex-workspace.mjs claim-next --apply`
+- writes `LaneAssignment` metadata under the local Codex workspace state root for an unowned ready safe-backlog lane,
+- refreshes the same assignment idempotently when the current runner already owns it,
+- blocks another runner from claiming an existing assignment owned by a different runner,
+- claims an existing unowned active workspace by updating only that manifest's owner evidence,
+- re-reads manifests and assignments under the relevant local lock before writing, and fails closed if the candidate changed,
+- does not create branches, create worktrees, push, open PRs, launch workers, start implementation, or mutate authority-blocked work.
+
 ### Phase 5: Lease And Heartbeat
 
 Persist runner heartbeat and phase. Use heartbeat only as evidence; do not use it as sole authority for takeover.
