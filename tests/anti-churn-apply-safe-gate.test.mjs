@@ -53,6 +53,7 @@ test("dirty evidence is required and overlapping dirty targets require higher au
       },
     }),
     candidates: [candidate()],
+    now: "2026-06-22T12:00:00Z",
   });
   const nonOverlap = evaluateApplySafeGate({
     manifest: manifest({
@@ -125,10 +126,12 @@ test("unavailable PR state downgrades PR-dependent candidates while local-only g
   const prDependent = evaluateApplySafeGate({
     manifest: manifest({ pr: null }),
     candidates: [candidate({ requiresPrState: true })],
+    now: "2026-06-22T12:00:00Z",
   });
   const localOnly = evaluateApplySafeGate({
     manifest: manifest({ pr: null }),
     candidates: [candidate()],
+    now: "2026-06-22T12:00:00Z",
   });
 
   assert.equal(prDependent.status, "proposal-only");

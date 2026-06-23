@@ -244,7 +244,28 @@ async function seedRunnerAssignmentHandoffState() {
   const stateRoot = process.env.CODEX_WORKSPACE_STATE_ROOT;
   expect(stateRoot).toBeTruthy();
   const tasksDir = path.join(stateRoot!, "tasks");
+  const assignmentsDir = path.join(stateRoot!, "assignments");
   await fs.mkdir(tasksDir, { recursive: true });
+  await fs.mkdir(assignmentsDir, { recursive: true });
+  await fs.writeFile(
+    path.join(assignmentsDir, "dispatcher-cleanup-assignment-closure-refresh.json"),
+    `${JSON.stringify(
+      {
+        assignment_id: "dispatcher-cleanup-assignment-closure-refresh",
+        task_id: "20260623-dispatcher-cleanup-closes-lane-assignment-and-qu",
+        lane_slug: "dispatcher-cleanup-assignment-closure-refresh",
+        branch: "codex/dispatcher-cleanup-assignment-closure-refresh",
+        status: "closed",
+        owner: "playwright-runner",
+        phase: "closed",
+        closed_at: "2026-06-23T11:47:52.000Z",
+        updated_at: "2026-06-23T11:47:52.000Z",
+        last_result: "closed after cleanup of 20260623-dispatcher-cleanup-closes-lane-assignment-and-qu",
+      },
+      null,
+      2,
+    )}\n`,
+  );
   await fs.writeFile(
     path.join(tasksDir, "e2e-dispatcher-queue-handoff-badges-refresh.json"),
     `${JSON.stringify(
@@ -905,8 +926,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/dispatcher-cleanup-assignment-report-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-assignment-panel-filter-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher assignment panel filter refresh"')).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
@@ -1126,14 +1147,23 @@ test.describe("dashboard workflow coverage", () => {
     const cleanupAssignmentReportCard = safeBacklogPanel
       .locator("article")
       .filter({ has: page.getByRole("heading", { name: "Dispatcher cleanup assignment report refresh", exact: true }) });
-    await expect(cleanupAssignmentReportCard.getByText("branch: codex/dispatcher-cleanup-assignment-report-refresh")).toBeVisible();
-    await expect(cleanupAssignmentReportCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"')).toBeVisible();
-    await expect(cleanupAssignmentReportCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
+    await expect(cleanupAssignmentReportCard.getByText("slice: complete")).toBeVisible();
+    await expect(cleanupAssignmentReportCard.getByText("do not requeue dispatcher-cleanup-assignment-report-refresh")).toBeVisible();
+    const assignmentPanelFilterCard = safeBacklogPanel
+      .locator("article")
+      .filter({ has: page.getByRole("heading", { name: "Dispatcher assignment panel filter refresh", exact: true }) });
+    await expect(assignmentPanelFilterCard.getByText("branch: codex/dispatcher-assignment-panel-filter-refresh")).toBeVisible();
+    await expect(assignmentPanelFilterCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher assignment panel filter refresh"')).toBeVisible();
+    await expect(assignmentPanelFilterCard.getByText("pnpm run test:e2e:dashboard:controls")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 
     const runnerAssignmentPanel = page.locator("#runner-assignment-status");
     await expect(runnerAssignmentPanel.getByText("Runner Assignment Status")).toBeVisible();
+    const closedAssignmentEvidence = runnerAssignmentPanel.getByTestId("closed-assignment-evidence");
+    await expect(closedAssignmentEvidence.getByText("Closed assignment evidence", { exact: true })).toBeVisible();
+    await expect(closedAssignmentEvidence.getByText("dispatcher-cleanup-assignment-closure-refresh: lane-closed branch codex/dispatcher-cleanup-assignment-closure-refresh - No assignment action")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("dispatcher-assignment-panel-filter-refresh: assignable (backlog-assignable) branch codex/dispatcher-assignment-panel-filter-refresh")).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Resume packet")).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Lifecycle: prepared", { exact: true })).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Recovery action: inspect-handoff-evidence", { exact: true })).toBeVisible();

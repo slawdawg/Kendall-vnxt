@@ -2858,6 +2858,7 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
+            "dispatcher-assignment-panel-filter-refresh",
             "dispatcher-cleanup-assignment-report-refresh",
             "dispatcher-cleanup-assignment-closure-refresh",
             "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
@@ -3687,6 +3688,23 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_assignment_panel_filter_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-assignment-panel-filter-refresh",
+            lane_title="Dispatcher assignment panel filter refresh",
+            scope=[
+                "dashboard controls for filtering runner assignment status rows by classification and source",
+                "browser assertions that active, blocked, assignable, and closed evidence can be isolated without losing dispatcher continuity",
+                "static drift coverage for assignment panel filter controls and non-dispatchable closed evidence",
+                "metadata-only report evidence without provider calls, worker launches, or lane takeovers",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3694,7 +3712,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-cleanup-assignment-report-refresh"],
+                includedBacklogItems=["dispatcher-assignment-panel-filter-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3719,14 +3737,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-cleanup-assignment-report-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher cleanup assignment report item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-cleanup-assignment-report-refresh"],
+                        status="ready" if "dispatcher-assignment-panel-filter-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the dispatcher assignment panel filter item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["dispatcher-assignment-panel-filter-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher cleanup assignment report item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the dispatcher assignment panel filter item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3756,8 +3774,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_cleanup_assignment_report_lane,
-                nextAction="Select this slice for dispatcher cleanup assignment report work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_assignment_panel_filter_lane,
+                nextAction="Select this slice for dispatcher assignment panel filter work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4387,6 +4405,23 @@ class SupervisorService:
                 "pnpm run check:safe-backlog",
                 "pnpm run check:development-runway",
                 "pnpm run check:runner-assignment-status",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_assignment_panel_filter_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-assignment-panel-filter-refresh",
+            lane_title="Dispatcher assignment panel filter refresh",
+            scope=[
+                "dashboard controls for filtering runner assignment status rows by classification and source",
+                "browser assertions that active, blocked, assignable, and closed evidence can be isolated without losing dispatcher continuity",
+                "static drift coverage for assignment panel filter controls and non-dispatchable closed evidence",
+                "metadata-only report evidence without provider calls, worker launches, or lane takeovers",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
                 "pnpm run check:static",
                 "pnpm run test:e2e:dashboard:controls",
             ],
@@ -5155,13 +5190,13 @@ class SupervisorService:
                 itemId="dispatcher-cleanup-assignment-report-refresh",
                 label="Dispatcher cleanup assignment report refresh",
                 priority="P2",
-                status="ready",
-                summary="Add runner assignment status and dashboard evidence that closed cleanup assignments are classified as closed evidence while the next ready lane remains dispatchable.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered runner assignment status and dashboard evidence that closed cleanup assignments are classified as closed evidence while the next ready lane remains dispatchable.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Cleanup closure now prevents stale assignment records from reselecting cleaned lanes.",
-                    "The next lane should make the report and dashboard distinction explicit for closed assignment records and the selected successor lane.",
-                    "Keep the evidence metadata-only and source-owned without retaining raw prompts, completions, provider payloads, secrets, or source copies.",
+                    "Runner assignment status tests now include a closed dispatcher-cleanup-assignment-closure-refresh assignment record with lane-closed, cleaned lifecycle, and no-action recovery evidence.",
+                    "The dashboard keeps closed workspace and lane assignment rows visible as non-dispatchable proof even when active or assignable rows are present.",
+                    "Dispatcher continuity now advances after dispatcher-cleanup-assignment-report-refresh closes.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -5178,8 +5213,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_cleanup_assignment_report_lane,
-                nextAction="Refresh dispatcher cleanup assignment report evidence so closed assignments stay visible as closed evidence and cannot mask the next ready lane.",
+                nextAction="Use this completed dispatcher cleanup assignment report evidence only; do not requeue dispatcher-cleanup-assignment-report-refresh. Continue with dispatcher-assignment-panel-filter-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-assignment-panel-filter-refresh",
+                label="Dispatcher assignment panel filter refresh",
+                priority="P2",
+                status="ready",
+                summary="Add dashboard filtering for runner assignment rows so generated lane workers can isolate active, blocked, assignable, and closed evidence without losing dispatcher continuity.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "The runner assignment panel now retains closed assignment evidence alongside active rows, increasing the amount of visible row state.",
+                    "The next lane should add compact classification/source filters and browser assertions that selected filters preserve the dispatcher continuity snapshot.",
+                    "Keep filtering local to dashboard state and metadata-only report fields; do not mutate assignment records, launch workers, or call providers.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_assignment_panel_filter_lane,
+                nextAction="Refresh dispatcher assignment panel filters so generated lane workers can isolate assignment evidence classes without changing dispatch state.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
