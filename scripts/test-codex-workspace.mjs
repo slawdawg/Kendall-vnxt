@@ -521,7 +521,8 @@ try {
     assert(result.stdout.includes("- dispatcher-queue-state-fixtures-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-queue-handoff-badges-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-queue-handoff-status-refresh | closed"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- dispatcher-queue-handoff-lifecycle-refresh | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-queue-handoff-lifecycle-refresh | closed"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-queue-handoff-recovery-refresh | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -557,7 +558,7 @@ try {
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
-  test("claim-next advances to dispatcher queue handoff lifecycle lane after completed status refresh", () => {
+  test("claim-next advances to dispatcher queue handoff recovery lane after completed lifecycle refresh", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-generated-queue-"));
     try {
       const assignmentsDir = join(queueStateRoot, "assignments");
@@ -586,8 +587,8 @@ try {
       const after = taskSnapshot(assignmentsDir);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("claim candidate dispatcher-queue-handoff-lifecycle-refresh"), result.stdout || result.stderr);
-      assert(result.stdout.includes("branch codex/dispatcher-queue-handoff-lifecycle-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate dispatcher-queue-handoff-recovery-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("branch codex/dispatcher-queue-handoff-recovery-refresh"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
       assert(result.stdout.includes("- worker-backlog-queue-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- lane-handoff-evidence-refresh | closed"), result.stdout || result.stderr);
@@ -597,6 +598,7 @@ try {
       assert(result.stdout.includes("- dispatcher-queue-state-fixtures-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- dispatcher-queue-handoff-badges-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- dispatcher-queue-handoff-status-refresh | closed"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- dispatcher-queue-handoff-lifecycle-refresh | closed"), result.stdout || result.stderr);
       assert(before === after, "generated queue dry-run mutated assignment metadata");
     } finally {
       rmSync(queueStateRoot, { recursive: true, force: true });
@@ -1201,6 +1203,7 @@ try {
         "codex/dispatcher-queue-handoff-badges-refresh",
         "codex/dispatcher-queue-handoff-status-refresh",
         "codex/dispatcher-queue-handoff-lifecycle-refresh",
+        "codex/dispatcher-queue-handoff-recovery-refresh",
       ];
       const manifestPaths = blockedBranches.map((branchName, index) => {
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
@@ -1266,6 +1269,7 @@ try {
         "dispatcher-queue-handoff-badges-refresh",
         "dispatcher-queue-handoff-status-refresh",
         "dispatcher-queue-handoff-lifecycle-refresh",
+        "dispatcher-queue-handoff-recovery-refresh",
       ]) {
         writeFileSync(
           join(assignmentsDir, `${laneSlug}.json`),
@@ -1292,6 +1296,7 @@ try {
         "dispatcher-queue-handoff-badges-refresh",
         "dispatcher-queue-handoff-status-refresh",
         "dispatcher-queue-handoff-lifecycle-refresh",
+        "dispatcher-queue-handoff-recovery-refresh",
       ].map((laneSlug) => join(assignmentsDir, `${laneSlug}.json`));
       const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
@@ -1625,6 +1630,7 @@ try {
         "dispatcher-queue-handoff-badges-refresh",
         "dispatcher-queue-handoff-status-refresh",
         "dispatcher-queue-handoff-lifecycle-refresh",
+        "dispatcher-queue-handoff-recovery-refresh",
       ].map((laneSlug) => {
         const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
         writeFileSync(
