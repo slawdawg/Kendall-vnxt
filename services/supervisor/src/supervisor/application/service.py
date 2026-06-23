@@ -121,6 +121,7 @@ from supervisor.api.schemas import (
     RunnerAssignmentStatusRowView,
     RunnerAssignmentStatusSummaryView,
     RunnerAssignmentWarningView,
+    RunnerSourceCompletionRollupView,
     RuntimeEvidenceExportView,
     SafeDevelopmentBacklogItemView,
     SafeDevelopmentBacklogReportView,
@@ -2617,6 +2618,25 @@ class SupervisorService:
                 summary.degraded += 1
         return summary
 
+    def _runner_source_completion_rollup(self, rows: list[RunnerAssignmentStatusRowView]) -> RunnerSourceCompletionRollupView:
+        source_backlog_item_ids: list[str] = []
+        seen_item_ids: set[str] = set()
+        rollup = RunnerSourceCompletionRollupView()
+        for row in rows:
+            evidence = row.sourceCompletionEvidence
+            if evidence is None:
+                continue
+            rollup.total += 1
+            if evidence.evidenceKind == "assignment":
+                rollup.assignment += 1
+            elif evidence.evidenceKind == "workspace":
+                rollup.workspace += 1
+            if evidence.sourceBacklogItemId not in seen_item_ids:
+                seen_item_ids.add(evidence.sourceBacklogItemId)
+                source_backlog_item_ids.append(evidence.sourceBacklogItemId)
+        rollup.sourceBacklogItemIds = source_backlog_item_ids
+        return rollup
+
     def _runner_assignment_row(
         self,
         record: dict,
@@ -2936,7 +2956,9 @@ class SupervisorService:
 
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
+        source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         preferred_successor_ids = (
+            "dispatcher-closed-source-guard-rollup-filter-refresh",
             "dispatcher-closed-source-guard-rollup-refresh",
             "dispatcher-closed-source-guard-drilldown-refresh",
             "dispatcher-closed-source-guard-report-refresh",
@@ -3019,6 +3041,7 @@ class SupervisorService:
             currentOwner=current_owner,
             staleAfterSeconds=stale_after_seconds,
             summary=summary,
+            sourceCompletionRollup=source_completion_rollup,
             dispatcherContinuity=dispatcher_continuity,
             workspaceAssignments=workspace_rows,
             laneAssignments=lane_rows,
@@ -3860,6 +3883,24 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_closed_source_guard_rollup_filter_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-rollup-filter-refresh",
+            lane_title="Dispatcher closed source guard rollup filter refresh",
+            scope=[
+                "runner assignment filters or summaries that let generated lane workers isolate assignment-backed versus workspace-backed source completion rows",
+                "dashboard assertions that rollup counts and row drilldowns stay aligned when the source-completion evidence set grows",
+                "static drift coverage for successor queue advancement and metadata-only rollup filter messaging",
+                "metadata-only report evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3867,7 +3908,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-closed-source-guard-rollup-refresh"],
+                includedBacklogItems=["dispatcher-closed-source-guard-rollup-filter-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3892,14 +3933,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-closed-source-guard-rollup-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the closed source guard rollup item is the next safe backlog item for dispatcher queue integrity work.",
-                        evidence=["dispatcher-closed-source-guard-rollup-refresh"],
+                        status="ready" if "dispatcher-closed-source-guard-rollup-filter-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the closed source guard rollup filter item is the next safe backlog item for dispatcher queue integrity work.",
+                        evidence=["dispatcher-closed-source-guard-rollup-filter-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the closed source guard rollup item ready before changing dispatcher queue snapshot or assignment surfaces.",
+                        nextAction="Keep the closed source guard rollup filter item ready before changing dispatcher queue snapshot or assignment surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3929,8 +3970,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_closed_source_guard_rollup_lane,
-                nextAction="Select this slice for dispatcher closed source guard rollup work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_closed_source_guard_rollup_filter_lane,
+                nextAction="Select this slice for dispatcher closed source guard rollup filter work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4642,6 +4683,24 @@ class SupervisorService:
                 "runner assignment rollup evidence that counts closed source completion decisions by assignment and workspace source",
                 "dashboard assertions that source completion drilldowns remain visible while rollup counts identify stale-ready closure volume",
                 "static drift coverage for successor queue advancement and metadata-only guard rollup messaging",
+                "metadata-only report evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_closed_source_guard_rollup_filter_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-rollup-filter-refresh",
+            lane_title="Dispatcher closed source guard rollup filter refresh",
+            scope=[
+                "runner assignment filters or summaries that let generated lane workers isolate assignment-backed versus workspace-backed source completion rows",
+                "dashboard assertions that rollup counts and row drilldowns stay aligned when the source-completion evidence set grows",
+                "static drift coverage for successor queue advancement and metadata-only rollup filter messaging",
                 "metadata-only report evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
             ],
             verification_commands=[
@@ -5563,13 +5622,13 @@ class SupervisorService:
                 itemId="dispatcher-closed-source-guard-rollup-refresh",
                 label="Dispatcher closed source guard rollup refresh",
                 priority="P2",
-                status="ready",
-                summary="Add rollup evidence that counts closed source completion decisions by assignment and workspace source.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered metadata-only rollup evidence that counts closed source completion decisions by assignment and workspace source.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Closed source completion drilldowns now expose the matching closed source record for stale-ready closure decisions.",
-                    "The next lane should summarize assignment-backed and workspace-backed closed source decisions without retaining raw prompts, provider payloads, or unnecessary source copies.",
-                    "Keep the rollup refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                    "Runner assignment status reports now expose sourceCompletionRollup totals for assignment-backed and workspace-backed source completion evidence.",
+                    "Dashboard controls render source completion total, assignment, workspace, and source backlog item counts without retaining raw prompts, provider payloads, or unnecessary source copies.",
+                    "Supervisor and browser tests cover source completion rollup counts alongside row-level drilldown evidence.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -5586,8 +5645,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_closed_source_guard_rollup_lane,
-                nextAction="Refresh dispatcher closed source guard rollup evidence so generated lane workers can see stale-ready closure counts by source record kind.",
+                nextAction="Use this completed dispatcher closed source guard rollup evidence only; do not requeue dispatcher-closed-source-guard-rollup-refresh. Continue with dispatcher-closed-source-guard-rollup-filter-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-closed-source-guard-rollup-filter-refresh",
+                label="Dispatcher closed source guard rollup filter refresh",
+                priority="P2",
+                status="ready",
+                summary="Add filtering or summaries that isolate assignment-backed versus workspace-backed source completion rows.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Closed source completion rollups now count assignment-backed and workspace-backed decisions.",
+                    "The next lane should make those source kinds easier to isolate from runner assignment rows without retaining raw prompts, provider payloads, or unnecessary source copies.",
+                    "Keep the rollup filter refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_closed_source_guard_rollup_filter_lane,
+                nextAction="Refresh dispatcher closed source guard rollup filter evidence so generated lane workers can isolate source completion rows by evidence kind.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",

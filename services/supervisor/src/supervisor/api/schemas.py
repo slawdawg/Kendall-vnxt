@@ -1090,6 +1090,13 @@ class RunnerAssignmentStatusSummaryView(BaseModel):
     missing: int = 0
 
 
+class RunnerSourceCompletionRollupView(BaseModel):
+    total: int = 0
+    assignment: int = 0
+    workspace: int = 0
+    sourceBacklogItemIds: list[str] = Field(default_factory=list)
+
+
 class RunnerDispatcherQueueProofRowView(BaseModel):
     backlogItemId: str
     classification: str
@@ -1223,6 +1230,7 @@ class RunnerAssignmentStatusReportView(BaseModel):
     currentOwner: str | None = None
     staleAfterSeconds: int
     summary: RunnerAssignmentStatusSummaryView
+    sourceCompletionRollup: RunnerSourceCompletionRollupView = Field(default_factory=RunnerSourceCompletionRollupView)
     dispatcherContinuity: RunnerDispatcherContinuitySnapshotView
     workspaceAssignments: list[RunnerWorkspaceAssignmentView] = Field(default_factory=list)
     laneAssignments: list[RunnerLaneAssignmentView] = Field(default_factory=list)

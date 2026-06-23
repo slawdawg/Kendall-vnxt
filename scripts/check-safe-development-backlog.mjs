@@ -164,6 +164,7 @@ for (const itemId of [
   "dispatcher-closed-source-guard-report-refresh",
   "dispatcher-closed-source-guard-drilldown-refresh",
   "dispatcher-closed-source-guard-rollup-refresh",
+  "dispatcher-closed-source-guard-rollup-filter-refresh",
   "authority-blocked-work",
 ]) {
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Safe backlog service must include item ${itemId}`, failures);
@@ -391,8 +392,8 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/dispatcher-closed-source-guard-rollup-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard rollup refresh"',
+  "branch: codex/dispatcher-closed-source-guard-rollup-filter-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard rollup filter refresh"',
   "pnpm run check:runner-assignment-status",
   "pnpm run check:safe-backlog",
   "Related report links",
@@ -459,8 +460,10 @@ for (const browserText of [
   "Dispatcher closed source guard drilldown refresh",
   "do not requeue dispatcher-closed-source-guard-drilldown-refresh",
   "Dispatcher closed source guard rollup refresh",
-  "branch: codex/dispatcher-closed-source-guard-rollup-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard rollup refresh"',
+  "do not requeue dispatcher-closed-source-guard-rollup-refresh",
+  "Dispatcher closed source guard rollup filter refresh",
+  "branch: codex/dispatcher-closed-source-guard-rollup-filter-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard rollup filter refresh"',
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
   "Do not start or modify another active lane while using this recommendation.",
@@ -488,8 +491,8 @@ assertCondition(
     supervisorTests.includes('dispatcher_closed_source_guard_report_item["nextLane"] is None') &&
     supervisorTests.includes('dispatcher_closed_source_guard_drilldown_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_closed_source_guard_drilldown_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-closed-source-guard-rollup-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed source guard rollup refresh"') &&
+    supervisorTests.includes('"codex/dispatcher-closed-source-guard-rollup-filter-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed source guard rollup filter refresh"') &&
     supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
@@ -523,7 +526,9 @@ assertCondition(
     supervisorTests.includes('dispatcher_cleanup_assignment_item["nextLane"] is None') &&
     supervisorTests.includes('dispatcher_assignment_panel_filter_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_closed_lane_requeue_guard_item["status"] == "closed"') &&
-    supervisorTests.includes('dispatcher_closed_source_guard_rollup_item["status"] == "ready"'),
+    supervisorTests.includes('dispatcher_closed_source_guard_rollup_item["status"] == "closed"') &&
+    supervisorTests.includes('dispatcher_closed_source_guard_rollup_item["nextLane"] is None') &&
+    supervisorTests.includes('dispatcher_closed_source_guard_rollup_filter_item["status"] == "ready"'),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );

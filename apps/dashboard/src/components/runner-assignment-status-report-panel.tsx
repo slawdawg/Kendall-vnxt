@@ -541,6 +541,16 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
         ))}
       </div>
 
+      <div data-testid="source-completion-rollup" className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Source completion rollup</p>
+        <div className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)] sm:grid-cols-2">
+          <p>Total: {report.sourceCompletionRollup.total}</p>
+          <p>Assignment: {report.sourceCompletionRollup.assignment}</p>
+          <p>Workspace: {report.sourceCompletionRollup.workspace}</p>
+          <p className="break-all">Source backlog items: {report.sourceCompletionRollup.sourceBacklogItemIds.join(", ") || "none"}</p>
+        </div>
+      </div>
+
       <div className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Dispatcher continuity snapshot</p>
         <p className="mt-1 text-sm font-semibold">{report.dispatcherContinuity.snapshotId}</p>
