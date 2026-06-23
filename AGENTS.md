@@ -224,10 +224,15 @@ through merge and cleanup", or "see this lane through end to end".
   useful, implement, verify, review, commit, push, open or update the PR, merge
   low-risk PRs, and clean up the merged local worktree, local branch, and remote
   lane branch when the evidence gates pass. BMAD party mode or spawned BMAD
-  subagents require explicit provider, model-selection, and spending approval
-  for the lane.
+  subagents are included automatically when useful for the lane and do not
+  require separate per-lane approval when they run inside the current lane's
+  existing agent/subagent execution context.
 - Keep generated BMAD artifacts local. Rewrite durable decisions into
   source-owned docs, tests, scripts, or policy before delivery.
+- Automatic BMAD party mode does not authorize new provider/model selection,
+  explicit spend or budget changes, credential access, raw provider payload
+  retention, external worker/process launch, or committing generated party-mode
+  output without rewriting it into source-owned docs, tests, scripts, or policy.
 - Do not interrupt for routine mechanics. Interrupt only for product steering,
   residual high-risk approval, failed checks that cannot be fixed within the
   lane, scope expansion, scarce paid or review resources, unsafe behavior, or

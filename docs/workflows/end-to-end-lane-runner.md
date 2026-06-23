@@ -37,9 +37,13 @@ It authorizes, for the named lane only:
   depends on current tool, API, or ecosystem behavior.
 - Use BMAD workflows and code review when the lane benefits from requirements,
   architecture, QA, or multi-perspective review.
-- Use BMAD party mode or spawned BMAD subagents only when the operator has
-  explicitly approved the provider, model-selection, and spending authority for
-  that lane.
+- Use BMAD party mode or spawned BMAD subagents automatically when the lane
+  benefits from multi-agent requirements, architecture, UX, QA, review, or
+  planning discussion, as long as they run inside the current lane's existing
+  agent/subagent execution context. This does not require a separate per-lane
+  operator approval and does not authorize new provider selection, model
+  selection, explicit spend, credential access, or raw provider-payload
+  retention.
 - Create local BMAD planning artifacts under ignored local output folders.
 - Rewrite durable decisions from local planning into source-owned docs, tests,
   scripts, or policy.
@@ -67,7 +71,7 @@ remote branch deletion outside the merged managed lane.
 3. **Plan only as needed.** Use the matching BMAD skill for PRDs, epics,
    stories, architecture, UX, QA, research, or code review when the work
    benefits from that method. Use BMAD party mode or spawned BMAD subagents
-   only with explicit provider, model-selection, and spending approval. Keep
+   automatically when multiple BMAD perspectives would improve the lane. Keep
    generated BMAD work products local.
 4. **Implement.** Make scoped source-owned changes. Prefer existing repository
    patterns over new abstractions.
@@ -148,8 +152,11 @@ These surfaces are not automatically covered by `standard-delivery`:
 
 - Secrets, credentials, tokens, or authentication state.
 - Provider calls, paid execution, model selection, or budget changes.
-- BMAD party mode or spawned BMAD subagents that make provider calls or choose
-  models.
+- BMAD party mode or spawned BMAD subagents outside the standard-delivery
+  automatic profile: new provider/model selection, explicit budget changes,
+  credential access, raw provider payload retention, external worker/process
+  launch, or any party-mode output that would be committed without rewriting it
+  into source-owned docs, tests, scripts, or policy.
 - Worker or process launch.
 - Production deploys or release automation.
 - Database, schema, migration, or retention changes.
