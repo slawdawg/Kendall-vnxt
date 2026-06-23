@@ -106,11 +106,12 @@ function evaluateLane(args, options) {
     const effectiveClassified = parsed.lesson ? scopedClassified : classified;
     const effectiveReadResult = parsed.lesson ? scopedReadResult : readResult;
 
-    const applySafeCandidates = [
+    const candidatePool = [
       ...effectiveClassified.candidates,
       ...scopedDeduped.candidates,
       ...scopedDeduped.proposals,
     ];
+    const applySafeCandidates = candidatePool.filter(isApplySafeWritableCandidate);
     const applySafeGate = parsed.mode === "apply-safe"
       ? evaluateApplySafeGate({
         manifest: options.laneManifest,
@@ -168,6 +169,18 @@ function evaluateLane(args, options) {
   } catch (error) {
     return shapeInputError(error.message, { lane: parsed.lane || null, ignoredPathVerified: false });
   }
+}
+
+function isApplySafeWritableCandidate(candidate = {}) {
+  const requiredAuthority = [
+    ...copyArray(candidate.requiresAuthority),
+    ...copyArray(candidate.verificationPlan?.requiresAuthority),
+  ];
+  return candidate.autonomyTier !== "tier-3-block-and-ask"
+    && candidate.noOpReason !== "requires-higher-authority"
+    && candidate.status !== "requires-higher-authority"
+    && candidate.verificationPlan?.status !== "requires-higher-authority"
+    && requiredAuthority.length === 0;
 }
 
 function parseRecordEventArgs(args) {

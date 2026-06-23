@@ -20,13 +20,18 @@ export class HookSourceApplyError extends Error {
 }
 
 export function applyPreparedHookTransaction(input = {}, options = {}) {
+  let transaction = null;
+  let path = null;
+  let currentContent = null;
+  let wroteTarget = false;
   try {
-    const transaction = normalizeTransaction(input.transaction);
+    transaction = normalizeTransaction(input.transaction);
     validateAllowlistedTarget(transaction.targetFile);
-    const path = resolve(options.cwd || process.cwd(), transaction.targetFile);
-    const currentContent = readTargetFile(path, transaction.targetFile);
+    path = resolve(options.cwd || process.cwd(), transaction.targetFile);
+    currentContent = readTargetFile(path, transaction.targetFile);
     const nextContent = applyTransactionToContent(currentContent, transaction);
     writeTargetFile(path, nextContent, transaction.targetFile);
+    wroteTarget = true;
     if (input.transactionPath) {
       updateTransactionStatus(input.transactionPath, transaction, options.now);
     }
@@ -54,6 +59,15 @@ export function applyPreparedHookTransaction(input = {}, options = {}) {
     };
   } catch (error) {
     if (error instanceof HookSourceApplyError) {
+      if (wroteTarget && transaction && path && currentContent !== null) {
+        return handlePostWriteFailure({
+          error,
+          path,
+          currentContent,
+          transaction,
+          candidateId: input.candidateId || null,
+        });
+      }
       return {
         status: "requires-higher-authority",
         transactionId: input.transaction?.transactionId || null,
@@ -72,6 +86,66 @@ export function applyPreparedHookTransaction(input = {}, options = {}) {
       };
     }
     throw error;
+  }
+}
+
+function handlePostWriteFailure({ error, path, currentContent, transaction, candidateId }) {
+  try {
+    writeTargetFile(path, currentContent, transaction.targetFile);
+    return {
+      status: "requires-higher-authority",
+      transactionId: transaction.transactionId,
+      filesChanged: [],
+      applied: [],
+      verification: [],
+      warnings: [
+        `source-apply-blocked:${error.code}`,
+        `source-application-rolled-back:${transaction.targetFile}`,
+      ],
+      requiresAuthority: [
+        {
+          reason: error.code,
+          authority: ["operator-review"],
+          behavior: "block-source-application",
+        },
+      ],
+      residualRisks: ["source-application-rolled-back-after-transaction-status-update-failed"],
+    };
+  } catch (rollbackError) {
+    return {
+      status: "requires-higher-authority",
+      transactionId: transaction.transactionId,
+      filesChanged: [transaction.targetFile],
+      applied: [
+        {
+          candidateId,
+          targetFile: transaction.targetFile,
+          transactionId: transaction.transactionId,
+          status: "manual-inspection-required",
+        },
+      ],
+      verification: [
+        {
+          target: transaction.targetFile,
+          command: transaction.verificationCommand,
+        },
+      ],
+      warnings: [
+        `source-apply-blocked:${error.code}`,
+        `source-application-rollback-failed:${rollbackError.code || "TARGET_ROLLBACK_FAILED"}`,
+      ],
+      requiresAuthority: [
+        {
+          reason: error.code,
+          authority: ["operator-review"],
+          behavior: "inspect-unverified-source-application",
+        },
+      ],
+      residualRisks: [
+        "source-application-status-update-failed-after-file-write",
+        "manual-inspection-required-for-hook-owned-edit",
+      ],
+    };
   }
 }
 

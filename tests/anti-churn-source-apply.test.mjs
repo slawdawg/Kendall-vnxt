@@ -86,6 +86,43 @@ test("applyPreparedHookTransaction edits only exact unmarked paragraph preimages
   }
 });
 
+test("applyPreparedHookTransaction rolls back when transaction status update fails after write", () => {
+  const fixture = createFixture();
+  try {
+    const targetFile = "docs/workflows/tool-churn-rca-examples.md";
+    writeTarget(fixture.worktree, targetFile, "- retry inside sandbox\n");
+    const prepared = prepareAndPersistHookTransaction({
+      lane: "lane-123",
+      candidate: candidate({ durableTarget: targetFile }),
+      targetContent: readTarget(fixture.worktree, targetFile),
+      preimageHunk: "- retry inside sandbox",
+      plannedPostimageHunk: "- request outside-sandbox approval",
+      now: "2026-06-22T12:00:00Z",
+    }, {
+      stateRoot: fixture.stateRoot,
+    });
+    rmSync(dirname(prepared.transactionPath), { recursive: true, force: true });
+
+    const result = applyPreparedHookTransaction({
+      transaction: prepared.transaction,
+      transactionPath: prepared.transactionPath,
+      candidateId: "candidate-source-apply",
+    }, {
+      cwd: fixture.worktree,
+      now: "2026-06-22T12:01:00Z",
+    });
+
+    assert.equal(result.status, "requires-higher-authority");
+    assert.deepEqual(result.filesChanged, []);
+    assert.deepEqual(result.applied, []);
+    assert.match(result.warnings.join(";"), /TRANSACTION_STATUS_UPDATE_FAILED/);
+    assert.match(result.warnings.join(";"), /source-application-rolled-back/);
+    assert.equal(readTarget(fixture.worktree, targetFile), "- retry inside sandbox\n");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("applyPreparedHookTransaction refuses disallowed targets and embedded substrings without writing", () => {
   const fixture = createFixture();
   try {
@@ -138,6 +175,54 @@ test("applyPreparedHookTransaction refuses disallowed targets and embedded subst
     });
     assert.equal(missingResult.status, "requires-higher-authority");
     assert.match(missingResult.warnings.join(";"), /TARGET_READ_FAILED/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("apply-safe does not write allowlisted candidates that still require higher authority", () => {
+  const fixture = createFixture();
+  try {
+    const targetFile = "docs/workflows/tool-churn-rca-examples.md";
+    writeTarget(fixture.worktree, targetFile, "- retry inside sandbox\n");
+    recordChurnEvent(event({
+      eventId: "churn-source-apply-higher-authority",
+      durableUpdate: targetFile,
+      nextSafeAction: "Request provider approval before applying the durable update.",
+    }), {
+      stateRoot: fixture.stateRoot,
+    });
+
+    const result = runAntiChurnGuidanceHookCli(
+      ["evaluate", "--lane", "lane-123", "--apply-safe", "--format", "json"],
+      {
+        cwd: fixture.worktree,
+        env: {
+          ...process.env,
+          CODEX_WORKSPACE_ROOT: fixture.stateRoot,
+        },
+        laneManifest: manifest(),
+        now: "2026-06-22T12:00:00Z",
+        verificationResult: {
+          status: "passed",
+          command: "pnpm run check:token-economy",
+          summary: "target-bound check passed",
+        },
+        plannedSourceUpdates: [
+          {
+            targetFile,
+            preimageHunk: "- retry inside sandbox",
+            plannedPostimageHunk: "- request outside-sandbox approval",
+          },
+        ],
+      },
+    );
+
+    assert.equal(result.status, "success");
+    assert.deepEqual(result.filesChanged, []);
+    assert.deepEqual(result.applied, []);
+    assert.equal(result.transactionId, null);
+    assert.equal(readTarget(fixture.worktree, targetFile), "- retry inside sandbox\n");
   } finally {
     fixture.cleanup();
   }
