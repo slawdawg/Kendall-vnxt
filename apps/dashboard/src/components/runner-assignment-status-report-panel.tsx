@@ -11,6 +11,8 @@ function labelFor(classification: string): string {
 }
 
 function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
+  const hasAvailableHandoff = row.handoffStatus === "available";
+
   return (
     <article className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -35,16 +37,48 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
       <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--accent)]">{row.nextSafeAction}</p>
       {row.currentCommand ? <p className="mt-2 text-xs leading-5 text-[var(--muted)]">Current command: {row.currentCommand}</p> : null}
       {row.lastResult ? <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Last result: {row.lastResult}</p> : null}
-      {row.handoffNextCommand ? <p className="mt-1 break-all text-xs leading-5 text-[var(--muted)]">Handoff next: {row.handoffNextCommand}</p> : null}
-      {row.handoffGeneratedAt ? <p className="mt-1 break-all text-xs leading-5 text-[var(--muted)]">Handoff generated: {row.handoffGeneratedAt}</p> : null}
-      {row.handoffReadinessStatus || row.handoffReadinessCommand ? (
+      {hasAvailableHandoff ? (
+        <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+          <p className="font-semibold text-[var(--foreground)]">Resume packet</p>
+          <p className="break-all">Owner: {row.owner ?? "none"}</p>
+          <p className="break-all">Branch: {row.branch ?? "none"}</p>
+          <p>Worktree state: {row.worktreeState}</p>
+          {row.handoffNextCommand ? <p className="break-all">Next command: {row.handoffNextCommand}</p> : null}
+          {row.handoffGeneratedAt ? <p className="break-all">Generated: {row.handoffGeneratedAt}</p> : null}
+          {row.handoffReadinessStatus || row.handoffReadinessCommand ? (
+            <p className="break-all">
+              Readiness: {row.handoffReadinessStatus ?? "missing"}
+              {row.handoffReadinessCommand ? ` via ${row.handoffReadinessCommand}` : ""}
+            </p>
+          ) : null}
+          {row.handoffSummary ? <p className="break-all">Summary: {row.handoffSummary}</p> : null}
+          {row.handoffTakeoverStopLines.length > 0 ? (
+            <ul className="mt-1 grid gap-1 text-[var(--warn)]">
+              {row.handoffTakeoverStopLines.map((stopLine) => (
+                <li key={`${row.id}:resume-stop:${stopLine}`} className="break-all">
+                  Stop: {stopLine}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+      {!hasAvailableHandoff && row.handoffNextCommand ? (
+        <p className="mt-1 break-all text-xs leading-5 text-[var(--muted)]">Handoff next: {row.handoffNextCommand}</p>
+      ) : null}
+      {!hasAvailableHandoff && row.handoffGeneratedAt ? (
+        <p className="mt-1 break-all text-xs leading-5 text-[var(--muted)]">Handoff generated: {row.handoffGeneratedAt}</p>
+      ) : null}
+      {!hasAvailableHandoff && (row.handoffReadinessStatus || row.handoffReadinessCommand) ? (
         <p className="mt-1 break-all text-xs leading-5 text-[var(--muted)]">
           Handoff readiness: {row.handoffReadinessStatus ?? "missing"}
           {row.handoffReadinessCommand ? ` via ${row.handoffReadinessCommand}` : ""}
         </p>
       ) : null}
-      {row.handoffSummary ? <p className="mt-1 break-all text-xs leading-5 text-[var(--muted)]">Handoff summary: {row.handoffSummary}</p> : null}
-      {row.handoffTakeoverStopLines.length > 0 ? (
+      {!hasAvailableHandoff && row.handoffSummary ? (
+        <p className="mt-1 break-all text-xs leading-5 text-[var(--muted)]">Handoff summary: {row.handoffSummary}</p>
+      ) : null}
+      {!hasAvailableHandoff && row.handoffTakeoverStopLines.length > 0 ? (
         <ul className="mt-2 grid gap-1 text-xs leading-5 text-[var(--warn)]">
           {row.handoffTakeoverStopLines.map((stopLine) => (
             <li key={`${row.id}:handoff-stop:${stopLine}`} className="break-all">

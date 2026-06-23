@@ -551,7 +551,7 @@ try {
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
-  test("claim-next advances to generated handoff lane after completed worker queue refresh", () => {
+  test("claim-next advances to report shortcut lane after completed handoff refresh", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-generated-queue-"));
     try {
       const assignmentsDir = join(queueStateRoot, "assignments");
@@ -580,11 +580,11 @@ try {
       const after = taskSnapshot(assignmentsDir);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("claim candidate lane-handoff-evidence-refresh"), result.stdout || result.stderr);
-      assert(result.stdout.includes("branch codex/lane-handoff-evidence-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate report-catalog-shortcut-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("branch codex/report-catalog-shortcut-refresh"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
       assert(result.stdout.includes("- worker-backlog-queue-refresh | closed"), result.stdout || result.stderr);
-      assert(result.stdout.includes("- report-catalog-shortcut-refresh | assignable"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- lane-handoff-evidence-refresh | closed"), result.stdout || result.stderr);
       assert(before === after, "generated queue dry-run mutated assignment metadata");
     } finally {
       rmSync(queueStateRoot, { recursive: true, force: true });
