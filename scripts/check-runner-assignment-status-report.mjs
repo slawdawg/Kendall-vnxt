@@ -382,7 +382,9 @@ for (const browserText of [
   "dispatcher-cleanup-assignment-closure-refresh",
   "Closed assignment evidence",
   "lane-closed branch codex/dispatcher-cleanup-assignment-closure-refresh",
-  "dispatcher-assignment-panel-filter-refresh: assignable (backlog-assignable)",
+  "closedAssignmentPanelFilterRow",
+  "backlog-closed",
+  "dispatcher-closed-lane-requeue-guard-refresh: assignable (backlog-assignable)",
   "Assignment row filters",
   "Showing 1\\/\\d+ rows for active from Workspace",
   "source: Workspace",
@@ -403,7 +405,8 @@ for (const supervisorTestText of [
   'cleanup_lane["handoffLifecycleState"] == "cleaned"',
   'cleanup_lane["handoffRecoveryAction"] == "no-action"',
   'dispatcher_cleanup_assignment_report_backlog["classification"] == "closed"',
-  'dispatcher_assignment_panel_filter_backlog["classification"] == "assignable"',
+  'dispatcher_assignment_panel_filter_backlog["classification"] == "closed"',
+  'dispatcher_closed_lane_requeue_guard_backlog["classification"] == "assignable"',
 ]) {
   assertCondition(supervisorTests.includes(supervisorTestText), `Supervisor tests must assert cleanup assignment report evidence: ${supervisorTestText}`, failures);
 }
