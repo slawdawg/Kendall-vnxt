@@ -1938,14 +1938,14 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
-    assert report_slice["includedBacklogItems"] == ["report-catalog-shortcut-refresh"]
+    assert report_slice["includedBacklogItems"] == ["dispatcher-continuity-snapshot-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "report-catalog-shortcut-refresh"
-    assert report_slice["nextLane"]["branchName"] == "codex/report-catalog-shortcut-refresh"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"'
-    assert "pnpm run check:reports" in report_slice["nextLane"]["verificationCommands"]
+    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-continuity-snapshot-refresh"
+    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-continuity-snapshot-refresh"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"'
+    assert "pnpm run check:runner-assignment-status" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
-    assert "pnpm run test:dashboard-e2e-runner" in report_slice["nextLane"]["verificationCommands"]
+    assert "pnpm run test:codex-workspace" in report_slice["nextLane"]["verificationCommands"]
     assert any("merge, cleanup, issue-sync" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
     assert any("another active lane" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
@@ -8172,14 +8172,14 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     tasks_dir = state_root / "tasks"
     assignments_dir.mkdir(parents=True)
     tasks_dir.mkdir()
-    assignment_path = assignments_dir / "report-catalog-shortcut-refresh.json"
+    assignment_path = assignments_dir / "dispatcher-continuity-snapshot-refresh.json"
     assignment_path.write_text(
         json.dumps(
             {
-                "assignment_id": "report-catalog-shortcut-refresh",
-                "task_id": "report-catalog-shortcut-refresh",
-                "lane_slug": "report-catalog-shortcut-refresh",
-                "branch": "codex/report-catalog-shortcut-refresh",
+                "assignment_id": "dispatcher-continuity-snapshot-refresh",
+                "task_id": "dispatcher-continuity-snapshot-refresh",
+                "lane_slug": "dispatcher-continuity-snapshot-refresh",
+                "branch": "codex/dispatcher-continuity-snapshot-refresh",
                 "status": "claimed",
                 "owner": "runner-a",
                 "phase": "claimed",
@@ -8194,12 +8194,15 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
 
     assert response.status_code == 200
     report = response.json()["data"]
-    lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "report-catalog-shortcut-refresh")
+    lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "dispatcher-continuity-snapshot-refresh")
     assert lane["classification"] == "claimed"
-    assert lane["branch"] == "codex/report-catalog-shortcut-refresh"
+    assert lane["branch"] == "codex/dispatcher-continuity-snapshot-refresh"
     backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "report-catalog-shortcut-refresh")
-    assert backlog["classification"] == "claimed"
-    assert backlog["reasonCode"] == "backlog-lane-claimed"
+    assert backlog["classification"] == "closed"
+    assert backlog["reasonCode"] == "backlog-closed"
+    dispatcher_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-continuity-snapshot-refresh")
+    assert dispatcher_backlog["classification"] == "claimed"
+    assert dispatcher_backlog["reasonCode"] == "backlog-lane-claimed"
     github_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "github-delivery-hygiene")
     assert github_backlog["classification"] == "closed"
     assert github_backlog["reasonCode"] == "backlog-closed"

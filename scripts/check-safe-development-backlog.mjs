@@ -327,9 +327,9 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/report-catalog-shortcut-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"',
-  "pnpm run check:reports",
+  "branch: codex/dispatcher-continuity-snapshot-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"',
+  "pnpm run check:runner-assignment-status",
   "pnpm run check:safe-backlog",
   "Related report links",
   "Source evidence labels",
@@ -372,9 +372,9 @@ assertCondition(
     supervisorTests.includes('github_item["nextLane"] is None') &&
     supervisorTests.includes('worker_queue_item["status"] == "closed"') &&
     supervisorTests.includes('worker_queue_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/report-catalog-shortcut-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"') &&
-    supervisorTests.includes("pnpm run check:reports") &&
+    supervisorTests.includes('"codex/dispatcher-continuity-snapshot-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"') &&
+    supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
     supervisorTests.includes('handoff_item["nextLane"] is None') &&

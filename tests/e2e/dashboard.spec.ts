@@ -848,9 +848,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/report-catalog-shortcut-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"')).toBeVisible();
-    await expect(runwayPanel.getByText("pnpm run check:reports").first()).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-continuity-snapshot-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
     await expect(runwayPanel.getByText("Do not start or modify another active lane while using this recommendation.").first()).toBeVisible();
