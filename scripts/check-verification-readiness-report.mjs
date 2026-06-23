@@ -18,15 +18,22 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const aggregateCommandIdOverrides = {
+  "test:supervisor": "supervisor-tests",
+};
+
 function extractAggregateCheckCommands(script) {
   const commands = [];
-  const commandPattern = /\bpnpm\s+run\s+(check:[A-Za-z0-9:-]+)/g;
+  const commandPattern = /\bpnpm\s+run\s+((?:check|test):[A-Za-z0-9:-]+)/g;
   let match;
 
   while ((match = commandPattern.exec(script ?? "")) !== null) {
+    const scriptName = match[1];
     commands.push({
-      command: `pnpm run ${match[1]}`,
-      commandId: match[1].replace("check:", "check-").replaceAll(":", "-"),
+      command: `pnpm run ${scriptName}`,
+      commandId:
+        aggregateCommandIdOverrides[scriptName]
+        ?? scriptName.replace("check:", "check-").replace("test:", "test-").replaceAll(":", "-"),
     });
   }
 
@@ -84,7 +91,7 @@ const aggregateCheckCommands = uniqueCommands([
 
 assertCondition(
   aggregateCheckCommands.length > 0,
-  "package.json aggregate check scripts must include at least one pnpm run check:* command",
+  "package.json aggregate check scripts must include at least one pnpm run check:* or test:* command",
   failures,
 );
 

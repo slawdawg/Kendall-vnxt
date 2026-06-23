@@ -675,7 +675,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:mise-workflow", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:linux-install-lane", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:bmad-work-products", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:clean-install-boundary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:clean-install-boundary", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:codex-workspace", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:workspace-command-resolution", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:dashboard-e2e-runner", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:controls", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:detail", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:mobile", { exact: true })).toBeVisible();

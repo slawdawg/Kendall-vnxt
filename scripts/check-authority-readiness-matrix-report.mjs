@@ -214,8 +214,10 @@ assertCondition(
   failures,
 );
 assertCondition(
-  verificationCheck.includes("aggregateCheckCommands") && verificationCheck.includes("commandId"),
-  "Verification readiness drift check must derive aggregate command IDs, including check-authority-readiness",
+  verificationCheck.includes("aggregateCheckCommands")
+    && verificationCheck.includes("(?:check|test):")
+    && verificationCheck.includes("commandId"),
+  "Verification readiness drift check must derive aggregate check/test command IDs, including check-authority-readiness",
   failures,
 );
 assertCondition(

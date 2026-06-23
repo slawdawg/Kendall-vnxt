@@ -159,8 +159,10 @@ for (const testText of [
 }
 
 assertCondition(
-  verificationCheck.includes("aggregateCheckCommands") && verificationCheck.includes("commandId"),
-  "verification readiness drift check must derive aggregate command IDs, including check-adaptive-scoring",
+  verificationCheck.includes("aggregateCheckCommands")
+    && verificationCheck.includes("(?:check|test):")
+    && verificationCheck.includes("commandId"),
+  "verification readiness drift check must derive aggregate check/test command IDs, including check-adaptive-scoring",
   failures,
 );
 

@@ -1594,7 +1594,11 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-mise-workflow",
         "check-linux-install-lane",
         "check-bmad-work-products",
+        "test-clean-install-boundary",
         "check-clean-install-boundary",
+        "test-codex-workspace",
+        "test-workspace-command-resolution",
+        "test-dashboard-e2e-runner",
         "dashboard-build",
         "supervisor-tests",
         "full-check",
@@ -1623,7 +1627,11 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "check-development-runway" in static_group["commandIds"]
     assert "check-runner-assignment-status" in static_group["commandIds"]
     assert "check-token-economy" in static_group["commandIds"]
+    assert "test-clean-install-boundary" in static_group["commandIds"]
     assert "check-clean-install-boundary" in static_group["commandIds"]
+    assert "test-codex-workspace" in static_group["commandIds"]
+    assert "test-workspace-command-resolution" in static_group["commandIds"]
+    assert "test-dashboard-e2e-runner" in static_group["commandIds"]
     assert "check-adaptive-scoring" in static_group["commandIds"]
     adaptive_scoring_command = next(
         command for command in report["requiredCommands"] if command["commandId"] == "check-adaptive-scoring"
