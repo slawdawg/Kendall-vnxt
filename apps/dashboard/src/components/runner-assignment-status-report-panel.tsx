@@ -10,8 +10,29 @@ function labelFor(classification: string): string {
   return classification.replaceAll("_", " ");
 }
 
+function handoffCountEntries(row: RunnerAssignmentStatusRowView): [string, number][] {
+  const preferredOrder = [
+    "assignable",
+    "active",
+    "claimed",
+    "ambiguous",
+    "blocked_authority",
+    "blocked_owned_active",
+    "blocked_stale_owner_needs_takeover",
+    "closed",
+  ];
+  const counts = row.handoffCandidateStateCounts ?? {};
+  return [
+    ...preferredOrder.filter((key) => Object.hasOwn(counts, key)),
+    ...Object.keys(counts)
+      .filter((key) => !preferredOrder.includes(key))
+      .sort(),
+  ].map((key) => [key, counts[key]]);
+}
+
 function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
   const hasAvailableHandoff = row.handoffStatus === "available";
+  const countEntries = handoffCountEntries(row);
 
   return (
     <article className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
@@ -52,6 +73,15 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
             </p>
           ) : null}
           {row.handoffSummary ? <p className="break-all">Summary: {row.handoffSummary}</p> : null}
+          {countEntries.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {countEntries.map(([state, count]) => (
+                <span key={`${row.id}:handoff-count:${state}`} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+                  {state.replaceAll("_", " ")}: {count}
+                </span>
+              ))}
+            </div>
+          ) : null}
           {row.handoffTakeoverStopLines.length > 0 ? (
             <ul className="mt-1 grid gap-1 text-[var(--warn)]">
               {row.handoffTakeoverStopLines.map((stopLine) => (

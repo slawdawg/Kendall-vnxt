@@ -20,6 +20,7 @@ const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx
 const panelSource = readWorkspaceFile("apps/dashboard/src/components/runner-assignment-status-report-panel.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const currentRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
+const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 
 const failures = [];
 
@@ -56,12 +57,16 @@ for (const serviceText of [
   "handoffNextCommand",
   "handoffReadinessStatus",
   "handoffTakeoverStopLines",
+  "handoffCandidateStateCounts",
+  "_runner_handoff_candidate_state_counts",
+  "candidate_state_counts",
   "dispatcherContinuity",
   "dispatcher-continuity-snapshot-v1",
   "dispatch-next --dry-run --owner <owner>",
   "queueProofRows",
   "dispatcher-queue-state-fixtures-refresh",
   "dispatcher-queue-handoff-badges-refresh",
+  "dispatcher-queue-handoff-status-refresh",
   "stop_lines",
   "worktree-outside-managed-root",
   "runner-assignment-status-report-v1",
@@ -92,6 +97,8 @@ for (const panelText of [
   "Handoff readiness:",
   "Handoff stop:",
   "Resume packet",
+  "handoffCountEntries",
+  "handoffCandidateStateCounts",
   "Owner:",
   "Branch:",
   "Worktree state:",
@@ -131,9 +138,20 @@ for (const contractText of [
   "handoffGeneratedAt",
   "handoffSummary",
   "handoffTakeoverStopLines",
+  "handoffCandidateStateCounts",
 ]) {
   assertCondition(contractSource.includes(contractText), `Shared contracts must include ${contractText}`, failures);
   assertCondition(schemaSource.includes(contractText), `Supervisor schemas must include ${contractText}`, failures);
+}
+
+for (const browserText of [
+  "seedRunnerAssignmentHandoffState",
+  "active: 1",
+  "blocked authority: 1",
+  "blocked owned active: 1",
+  "closed: 9",
+]) {
+  assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert runner assignment handoff badge text: ${browserText}`, failures);
 }
 
 if (failures.length > 0) {

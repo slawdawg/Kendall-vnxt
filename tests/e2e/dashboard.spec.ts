@@ -240,6 +240,58 @@ async function createSubscriptionLaunchExpiredExactApprovalEvent(request: APIReq
   expect(response.ok()).toBeTruthy();
 }
 
+async function seedRunnerAssignmentHandoffState() {
+  const stateRoot = process.env.CODEX_WORKSPACE_STATE_ROOT;
+  expect(stateRoot).toBeTruthy();
+  const tasksDir = path.join(stateRoot!, "tasks");
+  await fs.mkdir(tasksDir, { recursive: true });
+  await fs.writeFile(
+    path.join(tasksDir, "e2e-dispatcher-queue-handoff-badges-refresh.json"),
+    `${JSON.stringify(
+      {
+        task_id: "e2e-dispatcher-queue-handoff-badges-refresh",
+        branch: "codex/dispatcher-queue-handoff-badges-refresh",
+        worktree_path: path.join(stateRoot!, "worktrees", "e2e-dispatcher-queue-handoff-badges-refresh"),
+        base_branch: "main",
+        status: "active",
+        owner: "playwright-runner",
+        owner_thread_id: "playwright-thread",
+        owner_updated_at: "2026-06-23T04:20:47.461Z",
+        dispatch_handoffs: [
+          {
+            schema_version: 1,
+            lane: "dispatcher-queue-handoff-badges-refresh",
+            owner: "playwright-runner",
+            branch: "codex/dispatcher-queue-handoff-badges-refresh",
+            workspace_action: "create_workspace",
+            worktree_path: path.join(stateRoot!, "worktrees", "e2e-dispatcher-queue-handoff-badges-refresh"),
+            task_id: "e2e-dispatcher-queue-handoff-badges-refresh",
+            next_command: "cd e2e-dispatcher-queue-handoff-badges-refresh",
+            handoff: "resume this prepared worktree; no worker or provider process launched",
+            stop_lines: ["no provider/model calls", "no automatic takeover without evidence and approval"],
+            candidate_state_counts: {
+              active: 1,
+              blocked_authority: 1,
+              blocked_owned_active: 1,
+              closed: 9,
+            },
+            readiness: {
+              profile: "doctor",
+              status: "passed",
+              command: "node ./scripts/codex-workspace.mjs doctor",
+              exit_code: 0,
+              summary: "OK: e2e dispatcher handoff fixture",
+            },
+            generated_at: "2026-06-23T04:20:47.461Z",
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
 function seedSubscriptionLaunchVerificationEvent(workItemId: string) {
   const dbPath = process.env.PLAYWRIGHT_E2E_DB_PATH;
   expect(dbPath).toBeTruthy();
@@ -613,6 +665,7 @@ test.describe("dashboard workflow coverage", () => {
       .toBeTruthy();
   });
   test("shows compact routing fleet data on controls", async ({ page, request }) => {
+    await seedRunnerAssignmentHandoffState();
     const workItemId = await createWorkItem(request, {
       title: "Routing fleet evidence",
       requestedOutcome: "Record a route decision so the controls panel can show lane evidence.",
@@ -850,8 +903,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/dispatcher-queue-handoff-badges-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff badges refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-queue-handoff-status-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff status refresh"')).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
@@ -1007,11 +1060,22 @@ test.describe("dashboard workflow coverage", () => {
     await expect(fixtureCard.getByText("slice: complete")).toBeVisible();
     await expect(fixtureCard.getByText("do not requeue dispatcher-queue-state-fixtures-refresh")).toBeVisible();
     const handoffBadgesCard = safeBacklogPanel.locator("article").filter({ hasText: "Dispatcher queue handoff badges refresh" });
-    await expect(handoffBadgesCard.getByText("branch: codex/dispatcher-queue-handoff-badges-refresh")).toBeVisible();
-    await expect(handoffBadgesCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff badges refresh"')).toBeVisible();
-    await expect(handoffBadgesCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
+    await expect(handoffBadgesCard.getByText("slice: complete")).toBeVisible();
+    await expect(handoffBadgesCard.getByText("do not requeue dispatcher-queue-handoff-badges-refresh")).toBeVisible();
+    const handoffStatusCard = safeBacklogPanel.locator("article").filter({ hasText: "Dispatcher queue handoff status refresh" });
+    await expect(handoffStatusCard.getByText("branch: codex/dispatcher-queue-handoff-status-refresh")).toBeVisible();
+    await expect(handoffStatusCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff status refresh"')).toBeVisible();
+    await expect(handoffStatusCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
+
+    const runnerAssignmentPanel = page.locator("#runner-assignment-status");
+    await expect(runnerAssignmentPanel.getByText("Runner Assignment Status")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Resume packet")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("active: 1", { exact: true })).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("blocked authority: 1", { exact: true })).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("blocked owned active: 1", { exact: true })).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("closed: 9", { exact: true })).toBeVisible();
 
     const managedRecipePolicyPanel = page
       .locator("section")

@@ -2186,6 +2186,7 @@ export interface RunnerAssignmentStatusRowView {
   handoffGeneratedAt?: string | null;
   handoffSummary?: string | null;
   handoffTakeoverStopLines: string[];
+  handoffCandidateStateCounts: Record<string, number>;
   deliveryState: "no-pr" | "draft-pr" | "pr-open" | "pr-closed-unmerged" | "merged" | "cleanup-ready" | "cleanup-partial" | "closed" | "unknown-pr-state" | "unknown";
   localEvidenceStatus: "available" | "missing" | "unreadable" | "malformed" | "skipped";
   evidencePath?: string | null;

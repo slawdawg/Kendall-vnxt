@@ -15,10 +15,12 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
   const dashboardPort = new URL(dashboardUrl).port || "3100";
   const supervisorPort = new URL(supervisorUrl).port || "8100";
   const dbPath = (process.env.PLAYWRIGHT_E2E_DB_PATH ?? join(dataDir, `${databaseName}-${process.pid}.db`)).replaceAll("\\", "/");
+  const workspaceStateRoot = process.env.CODEX_WORKSPACE_STATE_ROOT ?? join(dataDir, `${databaseName}-workspace-state-${process.pid}`);
 
   mkdirSync(tempDir, { recursive: true });
   mkdirSync(uvCacheDir, { recursive: true });
   mkdirSync(browserPath, { recursive: true });
+  mkdirSync(workspaceStateRoot, { recursive: true });
 
   const browserPreflight = playwrightBrowserPreflight(browserPath);
   if (!browserPreflight.ok) {
@@ -32,6 +34,7 @@ export async function runFocusedDashboardE2E({ databaseName, grep, testFile = "d
     TMP: tempDir,
     UV_CACHE_DIR: uvCacheDir,
     PLAYWRIGHT_BROWSERS_PATH: browserPath,
+    CODEX_WORKSPACE_STATE_ROOT: workspaceStateRoot,
   };
 
   const children = [];
