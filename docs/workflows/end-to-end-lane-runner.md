@@ -39,8 +39,10 @@ It authorizes, for the named lane only:
   architecture, QA, or multi-perspective review.
 - Use BMAD party mode or spawned BMAD subagents automatically when the lane
   benefits from multi-agent analysis, using the repository's configured
-  provider/model defaults and bounded party-mode budget. No lane-specific
-  operator approval is required for that party-mode step.
+  provider/model defaults. The end-to-end lane request is standing approval for
+  that bounded party-mode use; do not ask for separate lane-specific provider,
+  model-selection, or spending approval while the run stays inside the
+  allowance below.
 - Create local BMAD planning artifacts under ignored local output folders.
 - Rewrite durable decisions from local planning into source-owned docs, tests,
   scripts, or policy.
@@ -58,6 +60,31 @@ party-mode allowance, production deploys, database or schema migration
 execution, cleanup outside the managed lane, or remote branch deletion outside
 the merged managed lane.
 
+## Bounded Party-Mode Allowance
+
+Under `standard-delivery`, BMAD party mode and spawned BMAD subagents may run
+automatically when they materially improve discovery, planning, review, or
+verification for the named lane.
+
+The default allowance is:
+
+- Use the repository's configured provider and model defaults. If the party-mode
+  skill chooses a lighter configured model for a brief round, treat that as
+  covered model selection.
+- Run no more than one party-mode or subagent round per lane phase unless the
+  next round is needed to address a concrete finding, failed verification, or
+  unresolved design risk.
+- Spawn only the agents needed for the lane decision, normally two to four
+  BMAD agents per round.
+- Keep generated BMAD artifacts local and retain summaries, file paths, issue
+  lists, and verification evidence rather than raw prompts, reasoning traces,
+  completions, or provider payloads.
+
+Stop for explicit operator approval only when party mode would override the
+configured provider/model defaults, exceed the allowance above, require missing
+credentials, retain raw provider payloads, or combine with another high-risk
+surface.
+
 ## Lane Lifecycle
 
 1. **Start or resume lane.** Use `node ./scripts/codex-workspace.mjs` as the
@@ -70,7 +97,8 @@ the merged managed lane.
    stories, architecture, UX, QA, research, or code review when the work
    benefits from that method. Use BMAD party mode or spawned BMAD subagents
    automatically when multi-agent analysis would improve the lane, staying
-   within configured provider/model defaults and the bounded party-mode budget.
+   within configured provider/model defaults and the bounded party-mode
+   allowance.
    Keep generated BMAD work products local.
 4. **Implement.** Make scoped source-owned changes. Prefer existing repository
    patterns over new abstractions.
@@ -153,7 +181,7 @@ These surfaces are not automatically covered by `standard-delivery`:
 - Provider calls, paid execution, model selection, or budget changes outside
   the bounded party-mode allowance.
 - BMAD party mode or spawned BMAD subagents that override configured
-  provider/model defaults, exceed the bounded party-mode budget, or retain raw
+  provider/model defaults, exceed the bounded party-mode allowance, or retain raw
   provider payloads.
 - Worker or process launch.
 - Production deploys or release automation.
@@ -202,7 +230,8 @@ Interrupt the operator only for:
 - Approval for residual high-risk authority.
 - Failed verification that cannot be fixed within the lane.
 - Scope expansion beyond the named objective.
-- Scarce paid, review, or runtime resources.
+- Scarce paid, review, or runtime resources outside the bounded party-mode
+  allowance.
 - Unsafe behavior, missing credentials, or external-state blockers.
 
 Routine mechanics, command selection, context reads, local planning, test

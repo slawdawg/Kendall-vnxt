@@ -233,8 +233,11 @@ through merge and cleanup", or "see this lane through end to end".
   low-risk PRs, and clean up the merged local worktree, local branch, and remote
   lane branch when the evidence gates pass. BMAD party mode or spawned BMAD
   subagents may run automatically when useful, using configured provider/model
-  defaults and the bounded party-mode budget without lane-specific operator
-  approval.
+  defaults and the bounded party-mode allowance without lane-specific provider,
+  model-selection, or spending approval. The default allowance is one
+  party-mode or subagent round per lane phase, normally two to four BMAD agents
+  per round, with local artifact retention limited to summaries, paths,
+  findings, and verification evidence rather than raw provider payloads.
 - Keep generated BMAD artifacts local. Rewrite durable decisions into
   source-owned docs, tests, scripts, or policy before delivery.
 - Do not interrupt for routine mechanics. Interrupt only for product steering,
