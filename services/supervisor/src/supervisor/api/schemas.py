@@ -1145,6 +1145,7 @@ class RunnerAssignmentStatusRowView(BaseModel):
     handoffGeneratedAt: str | None = None
     handoffSummary: str | None = None
     handoffTakeoverStopLines: list[str] = Field(default_factory=list)
+    handoffCandidateStateCounts: dict[str, int] = Field(default_factory=dict)
     deliveryState: str = "unknown"
     localEvidenceStatus: str = "available"
     evidencePath: str | None = None
