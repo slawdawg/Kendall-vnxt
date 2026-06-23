@@ -116,6 +116,7 @@ from supervisor.api.schemas import (
     RunnerAssignmentDegradedInputView,
     RunnerDispatcherContinuitySnapshotView,
     RunnerDispatcherQueueProofRowView,
+    RunnerHandoffAuditEntryView,
     RunnerAssignmentStatusReportView,
     RunnerAssignmentStatusRowView,
     RunnerAssignmentStatusSummaryView,
@@ -2195,12 +2196,34 @@ class SupervisorService:
     def _runner_handoff_text(self, value: object) -> str | None:
         return value.strip() if isinstance(value, str) and value.strip() else None
 
+    def _runner_handoff_audit_text(self, value: object, max_length: int = 240) -> str | None:
+        text = self._runner_handoff_text(value)
+        if not text:
+            return None
+        return text if len(text) <= max_length else f"{text[: max_length - 3]}..."
+
+    def _runner_handoff_audit_lifecycle_state(self, value: object) -> str:
+        state = str(value or "").strip()
+        return state if state in {"prepared", "claimed", "delivered", "cleaned", "missing", "not-applicable"} else "not-applicable"
+
+    def _runner_handoff_audit_recovery_action(self, value: object) -> str:
+        action = str(value or "").strip()
+        return action if action in {
+            "resume-prepared-handoff",
+            "wait-for-owner",
+            "request-takeover-approval",
+            "request-explicit-approval",
+            "inspect-handoff-evidence",
+            "resume-cleanup",
+            "no-action",
+        } else "no-action"
+
     def _runner_handoff_stop_lines(self, handoff: dict) -> list[str]:
         raw_stop_lines = handoff.get("stop_lines") or handoff.get("stopLines")
         if not isinstance(raw_stop_lines, list):
             raw_stop_line = handoff.get("takeover_stop_line") or handoff.get("takeoverStopLine")
             raw_stop_lines = [raw_stop_line] if raw_stop_line else []
-        return list(dict.fromkeys(item.strip() for item in raw_stop_lines if isinstance(item, str) and item.strip()))
+        return list(dict.fromkeys(self._runner_handoff_audit_text(item, 180) for item in raw_stop_lines if self._runner_handoff_audit_text(item, 180)))
 
     def _runner_handoff_candidate_state_counts(self, handoff: dict) -> dict[str, int]:
         raw_counts = handoff["candidate_state_counts"] if "candidate_state_counts" in handoff else handoff.get("candidateStateCounts")
@@ -2341,6 +2364,107 @@ class SupervisorService:
             "handoffCandidateStateCountsStatus": self._runner_handoff_candidate_state_counts_status(latest),
         }
 
+    def _runner_handoff_audit_trail(
+        self,
+        manifest: dict,
+    ) -> list[RunnerHandoffAuditEntryView]:
+        handoffs = manifest.get("dispatch_handoffs")
+        if not isinstance(handoffs, list) or not handoffs:
+            return []
+
+        entries: list[RunnerHandoffAuditEntryView] = []
+        omitted_count = max(0, len(handoffs) - 20)
+        if omitted_count:
+            entries.append(
+                RunnerHandoffAuditEntryView(
+                    sequence=omitted_count,
+                    lane=self._runner_handoff_audit_text(manifest.get("task_id")),
+                    branch=self._runner_handoff_audit_text(manifest.get("branch")),
+                    taskId=self._runner_handoff_audit_text(manifest.get("task_id")),
+                    lifecycleState="not-applicable",
+                    recoveryAction="no-action",
+                    recoverySummary="No handoff recovery action required.",
+                    evidenceStatus="partial",
+                    evidenceSummary=f"retention capped; {omitted_count} older handoff packet(s) omitted.",
+                )
+            )
+        visible_handoffs = handoffs[-20:]
+        sequence_offset = len(handoffs) - len(visible_handoffs)
+        for index, handoff in enumerate(visible_handoffs, start=sequence_offset + 1):
+            if not isinstance(handoff, dict):
+                entries.append(
+                    RunnerHandoffAuditEntryView(
+                        sequence=index,
+                        lane=self._runner_handoff_audit_text(manifest.get("task_id")),
+                        branch=self._runner_handoff_audit_text(manifest.get("branch")),
+                        taskId=self._runner_handoff_audit_text(manifest.get("task_id")),
+                        lifecycleState="not-applicable",
+                        recoveryAction="no-action",
+                        recoverySummary="No handoff recovery action required.",
+                        evidenceStatus="invalid",
+                        evidenceSummary="invalid handoff packet; entry is not an object.",
+                    )
+                )
+                continue
+            readiness = handoff.get("readiness") if isinstance(handoff.get("readiness"), dict) else {}
+            readiness_status = self._runner_handoff_audit_text(readiness.get("status"), 80)
+            readiness_command = self._runner_handoff_audit_text(readiness.get("command"))
+            readiness_summary = self._runner_handoff_audit_text(readiness.get("summary"))
+            next_command = self._runner_handoff_audit_text(handoff.get("next_command"))
+            generated_at = self._runner_handoff_audit_text(handoff.get("generated_at"), 80)
+            lane = self._runner_handoff_audit_text(handoff.get("lane"))
+            branch = self._runner_handoff_audit_text(handoff.get("branch")) or self._runner_handoff_audit_text(manifest.get("branch"))
+            task_id = self._runner_handoff_audit_text(handoff.get("task_id")) or self._runner_handoff_audit_text(manifest.get("task_id"))
+            workspace_action = self._runner_handoff_audit_text(handoff.get("workspace_action"), 80)
+            queue_counts = self._runner_handoff_candidate_state_counts(handoff)
+            queue_counts_status = self._runner_handoff_candidate_state_counts_status(handoff)
+            stop_lines = self._runner_handoff_stop_lines(handoff)
+
+            lifecycle_snapshot = self._runner_handoff_audit_lifecycle_state(handoff.get("lifecycle_state") or handoff.get("lifecycleState"))
+            recovery_snapshot = self._runner_handoff_audit_recovery_action(handoff.get("recovery_action") or handoff.get("recoveryAction"))
+            recovery_snapshot_summary = (
+                self._runner_handoff_audit_text(handoff.get("recovery_summary") or handoff.get("recoverySummary"))
+                or "No handoff recovery action required."
+            )
+            readiness_normalized = str(readiness_status or "").lower()
+            missing_core = not all([lane, branch, task_id, workspace_action, next_command, generated_at])
+            readiness_complete = readiness_normalized in {"passed", "skipped"}
+            readiness_invalid = readiness_normalized in {"failed", "failure", "error", "timeout", "timed-out", "invalid"}
+            counts_complete = queue_counts_status in {"available", "empty"}
+            if queue_counts_status == "invalid" or readiness_invalid:
+                evidence_status = "invalid"
+            elif missing_core or not readiness_complete or not counts_complete:
+                evidence_status = "partial"
+            else:
+                evidence_status = "complete"
+            evidence_summary = (
+                f"{evidence_status} handoff packet; readiness {readiness_status or 'missing'}; "
+                f"queue counts {queue_counts_status}; stop lines {len(stop_lines)}."
+            )
+            entries.append(
+                RunnerHandoffAuditEntryView(
+                    sequence=index,
+                    lane=lane,
+                    branch=branch,
+                    taskId=task_id,
+                    workspaceAction=workspace_action,
+                    nextCommand=next_command,
+                    generatedAt=generated_at,
+                    readinessStatus=readiness_status,
+                    readinessCommand=readiness_command,
+                    readinessSummary=readiness_summary,
+                    queueCounts=queue_counts,
+                    queueCountsStatus=queue_counts_status,
+                    stopLines=stop_lines,
+                    lifecycleState=lifecycle_snapshot,
+                    recoveryAction=recovery_snapshot,
+                    recoverySummary=recovery_snapshot_summary,
+                    evidenceStatus=evidence_status,
+                    evidenceSummary=evidence_summary,
+                )
+            )
+        return entries
+
     def _runner_worktree_state(self, worktree_path: str | None, state_root: Path, deadline: float) -> tuple[str, list[RunnerAssignmentWarningView]]:
         if not worktree_path:
             return "not-applicable", []
@@ -2461,6 +2585,9 @@ class SupervisorService:
             worktree_state,
             handoff_lifecycle_state,
         )
+        handoff_audit_trail = self._runner_handoff_audit_trail(
+            record,
+        )
 
         return RunnerAssignmentStatusRowView(
             id=record_id,
@@ -2498,6 +2625,7 @@ class SupervisorService:
             handoffLifecycleState=handoff_lifecycle_state,
             handoffRecoveryAction=recovery_action,
             handoffRecoverySummary=recovery_summary,
+            handoffAuditTrail=handoff_audit_trail,
             deliveryState=delivery_state,
             localEvidenceStatus="available",
             evidencePath=str(path),
@@ -2633,6 +2761,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
             "read-only-evidence-polish",
+            "dispatcher-queue-handoff-audit-retention-refresh",
             "dispatcher-queue-handoff-audit-refresh",
             "dispatcher-queue-handoff-recovery-refresh",
             "dispatcher-queue-handoff-lifecycle-refresh",
@@ -3281,14 +3410,14 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
-        dispatcher_queue_handoff_audit_lane = self._safe_backlog_next_lane(
-            lane_slug="dispatcher-queue-handoff-audit-refresh",
-            lane_title="Dispatcher queue handoff audit refresh",
+        dispatcher_queue_handoff_audit_retention_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-retention-refresh",
+            lane_title="Dispatcher queue handoff audit retention refresh",
             scope=[
-                "dispatch handoff audit visibility",
-                "runner assignment lifecycle and recovery audit alignment",
-                "workspace dispatcher evidence tests for generated lane handoff packets",
-                "dashboard assertions for handoff audit facts",
+                "dispatch handoff audit retention and capping policy",
+                "metadata-only generated-worker handoff evidence",
+                "workspace dispatcher evidence tests for retained audit summaries",
+                "dashboard assertions for audit retention stop lines",
             ],
             verification_commands=[
                 "pnpm run check:runner-assignment-status",
@@ -3304,7 +3433,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-queue-handoff-audit-refresh"],
+                includedBacklogItems=["dispatcher-queue-handoff-audit-retention-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3329,14 +3458,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-queue-handoff-audit-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher queue handoff audit item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-queue-handoff-audit-refresh"],
+                        status="ready" if "dispatcher-queue-handoff-audit-retention-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the dispatcher queue handoff audit retention item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["dispatcher-queue-handoff-audit-retention-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher queue handoff audit item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the dispatcher queue handoff audit retention item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3366,8 +3495,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_queue_handoff_audit_lane,
-                nextAction="Select this slice for dispatcher queue handoff audit work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_queue_handoff_audit_retention_lane,
+                nextAction="Select this slice for dispatcher queue handoff audit retention work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -3831,14 +3960,14 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
-        dispatcher_queue_handoff_audit_lane = self._safe_backlog_next_lane(
-            lane_slug="dispatcher-queue-handoff-audit-refresh",
-            lane_title="Dispatcher queue handoff audit refresh",
+        dispatcher_queue_handoff_audit_retention_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-retention-refresh",
+            lane_title="Dispatcher queue handoff audit retention refresh",
             scope=[
-                "dispatch handoff audit visibility",
-                "runner assignment lifecycle and recovery audit alignment",
-                "workspace dispatcher evidence tests for generated lane handoff packets",
-                "dashboard assertions for handoff audit facts",
+                "dispatch handoff audit retention and capping policy",
+                "metadata-only generated-worker handoff evidence",
+                "workspace dispatcher evidence tests for retained audit summaries",
+                "dashboard assertions for audit retention stop lines",
             ],
             verification_commands=[
                 "pnpm run check:runner-assignment-status",
@@ -4321,13 +4450,13 @@ class SupervisorService:
                 itemId="dispatcher-queue-handoff-audit-refresh",
                 label="Dispatcher queue handoff audit refresh",
                 priority="P2",
-                status="ready",
-                summary="Add an operator-visible audit trail for generated worker handoffs across lifecycle, recovery action, queue counts, stop lines, and readiness evidence.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered an operator-visible audit trail for generated worker handoffs across lifecycle, recovery action, queue counts, stop lines, and readiness evidence.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Handoff lifecycle and recovery fields now exist, but generated-worker review still needs a compact audit view over the complete handoff packet.",
-                    "The next lane must stay read-only/source-owned and avoid provider calls, worker launches, or lane takeovers.",
-                    "Generated lane continuity should remain explicit after dispatcher-queue-handoff-recovery-refresh closes.",
+                    "Runner assignment status rows now expose handoffAuditTrail through the API schema, shared dashboard contract, and dashboard resume packet.",
+                    "Audit entries normalize generated worker handoff metadata including readiness, queue counts, stop lines, lifecycle state, recovery action, and evidence status.",
+                    "Generated lane continuity remains explicit after dispatcher-queue-handoff-recovery-refresh closes.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -4344,8 +4473,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_queue_handoff_audit_lane,
-                nextAction="Refresh dispatcher queue handoff audit evidence while keeping generated-worker evidence read-only and source-owned.",
+                nextAction="Use this completed dispatcher queue handoff audit evidence only; do not requeue dispatcher-queue-handoff-audit-refresh. Continue with dispatcher-queue-handoff-audit-retention-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-queue-handoff-audit-retention-refresh",
+                label="Dispatcher queue handoff audit retention refresh",
+                priority="P2",
+                status="ready",
+                summary="Add source-owned retention and capping evidence for generated worker handoff audit trails without retaining raw prompts, completions, provider payloads, or unnecessary source copies.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Handoff audit entries now expose metadata summaries, but retention and capping rules need explicit source-owned verification before broader generated-worker use.",
+                    "The next lane must stay read-only/source-owned and avoid provider calls, worker launches, raw payload retention, or lane takeovers.",
+                    "Generated lane continuity should remain explicit after dispatcher-queue-handoff-audit-refresh closes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_queue_handoff_audit_retention_lane,
+                nextAction="Refresh dispatcher queue handoff audit retention evidence while keeping generated-worker evidence metadata-only and source-owned.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",

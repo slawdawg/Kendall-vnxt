@@ -34,6 +34,7 @@ for (const typeName of [
   "RunnerAssignmentStatusSummaryView",
   "RunnerDispatcherContinuitySnapshotView",
   "RunnerDispatcherQueueProofRowView",
+  "RunnerHandoffAuditEntryView",
   "RunnerAssignmentWarningView",
 ]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
@@ -62,6 +63,11 @@ for (const serviceText of [
   "handoffLifecycleState",
   "handoffRecoveryAction",
   "handoffRecoverySummary",
+  "handoffAuditTrail",
+  "RunnerHandoffAuditEntryView",
+  "_runner_handoff_audit_trail",
+  "evidenceStatus",
+  "queueCountsStatus",
   "_runner_handoff_candidate_state_counts",
   "_runner_handoff_candidate_state_counts_status",
   "_runner_handoff_lifecycle_state",
@@ -113,6 +119,13 @@ for (const panelText of [
   "handoffLifecycleState",
   "handoffRecoveryAction",
   "handoffRecoverySummary",
+  "handoffAuditTrail",
+  "Handoff audit trail",
+  "Readiness evidence:",
+  "Readiness summary:",
+  "Queue evidence:",
+  "Audit stop:",
+  "evidenceSummary",
   "Owner:",
   "Branch:",
   "Worktree state:",
@@ -161,6 +174,19 @@ for (const contractText of [
   "handoffLifecycleState",
   "handoffRecoveryAction",
   "handoffRecoverySummary",
+  "RunnerHandoffAuditEntryView",
+  "handoffAuditTrail",
+  "workspaceAction",
+  "nextCommand",
+  "readinessSummary",
+  "queueCounts",
+  "queueCountsStatus",
+  "stopLines",
+  "lifecycleState",
+  "recoveryAction",
+  "recoverySummary",
+  "evidenceStatus",
+  "evidenceSummary",
 ]) {
   assertCondition(contractSource.includes(contractText), `Shared contracts must include ${contractText}`, failures);
   assertCondition(schemaSource.includes(contractText), `Supervisor schemas must include ${contractText}`, failures);
@@ -175,6 +201,12 @@ for (const browserText of [
   "Lifecycle: prepared",
   "Recovery action: inspect-handoff-evidence",
   "Queue counts: available",
+  "Handoff audit trail",
+  "Audit #1: complete",
+  "Readiness evidence: passed",
+  "Queue evidence: available",
+  "Audit stop: no automatic takeover",
+  "complete handoff packet; readiness passed; queue counts available",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert runner assignment handoff badge text: ${browserText}`, failures);
 }
