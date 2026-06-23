@@ -168,6 +168,7 @@ for (const itemId of [
   "dispatcher-closed-source-guard-source-kind-summary-refresh",
   "dispatcher-closed-source-guard-filter-reset-refresh",
   "dispatcher-closed-source-guard-filter-presets-refresh",
+  "dispatcher-closed-source-guard-filter-counts-refresh",
   "authority-blocked-work",
 ]) {
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Safe backlog service must include item ${itemId}`, failures);
@@ -335,7 +336,7 @@ for (const safetyText of [
   'lane_slug="dispatcher-closed-source-guard-rollup-refresh"',
   'lane_slug="dispatcher-closed-source-guard-rollup-filter-refresh"',
   'lane_slug="dispatcher-closed-source-guard-source-kind-summary-refresh"',
-  'lane_slug="dispatcher-closed-source-guard-filter-presets-refresh"',
+  'lane_slug="dispatcher-closed-source-guard-filter-counts-refresh"',
   "complete",
   "Use this completed item as evidence only; do not requeue it as a new lane.",
   "Use this completed queue refresh as evidence only; do not requeue worker-backlog-queue-refresh.",
@@ -398,8 +399,8 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/dispatcher-closed-source-guard-filter-presets-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter presets refresh"',
+  "branch: codex/dispatcher-closed-source-guard-filter-counts-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter counts refresh"',
   "pnpm run check:runner-assignment-status",
   "pnpm run check:safe-backlog",
   "Related report links",
@@ -474,8 +475,10 @@ for (const browserText of [
   "Dispatcher closed source guard filter reset refresh",
   "do not requeue dispatcher-closed-source-guard-filter-reset-refresh",
   "Dispatcher closed source guard filter presets refresh",
-  "branch: codex/dispatcher-closed-source-guard-filter-presets-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter presets refresh"',
+  "do not requeue dispatcher-closed-source-guard-filter-presets-refresh",
+  "Dispatcher closed source guard filter counts refresh",
+  "branch: codex/dispatcher-closed-source-guard-filter-counts-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter counts refresh"',
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
   "Do not start or modify another active lane while using this recommendation.",
@@ -507,8 +510,8 @@ assertCondition(
     supervisorTests.includes('dispatcher_closed_source_guard_rollup_filter_item["nextLane"] is None') &&
     supervisorTests.includes('dispatcher_closed_source_guard_source_kind_summary_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_closed_source_guard_source_kind_summary_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-closed-source-guard-filter-presets-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter presets refresh"') &&
+    supervisorTests.includes('"codex/dispatcher-closed-source-guard-filter-counts-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter counts refresh"') &&
     supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
@@ -548,7 +551,9 @@ assertCondition(
     supervisorTests.includes('dispatcher_closed_source_guard_source_kind_summary_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_closed_source_guard_filter_reset_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_closed_source_guard_filter_reset_item["nextLane"] is None') &&
-    supervisorTests.includes('dispatcher_closed_source_guard_filter_presets_item["status"] == "ready"'),
+    supervisorTests.includes('dispatcher_closed_source_guard_filter_presets_item["status"] == "closed"') &&
+    supervisorTests.includes('dispatcher_closed_source_guard_filter_presets_item["nextLane"] is None') &&
+    supervisorTests.includes('dispatcher_closed_source_guard_filter_counts_item["status"] == "ready"'),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );
