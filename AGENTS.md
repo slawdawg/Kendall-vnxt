@@ -232,9 +232,10 @@ through merge and cleanup", or "see this lane through end to end".
   useful, implement, verify, review, commit, push, open or update the PR, merge
   low-risk PRs, and clean up the merged local worktree, local branch, and remote
   lane branch when the evidence gates pass. BMAD party mode or spawned BMAD
-  subagents may run automatically when useful, using configured provider/model
-  defaults and the bounded party-mode allowance without lane-specific provider,
-  model-selection, or spending approval. This is standing operator approval for
+  subagents should run automatically when useful, using configured
+  provider/model defaults and the bounded party-mode allowance without
+  lane-specific provider, model-selection, spending, or party-mode approval.
+  This is standing operator approval for
   bounded automatic party-mode use; do not ask for additional operator approval
   merely because party mode or BMAD subagents will run within the allowance.
   The default allowance is one party-mode or subagent round per lane phase,

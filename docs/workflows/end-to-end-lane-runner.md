@@ -40,9 +40,9 @@ It authorizes, for the named lane only:
 - Use BMAD party mode or spawned BMAD subagents automatically when the lane
   benefits from multi-agent analysis, using the repository's configured
   provider/model defaults. The end-to-end lane request is standing approval for
-  that bounded party-mode use; do not ask for separate lane-specific provider,
-  model-selection, or spending approval while the run stays inside the
-  allowance below.
+  that bounded party-mode use. Do not ask for separate lane-specific provider,
+  model-selection, spending, or party-mode approval while the run stays inside
+  the allowance below.
 - Create local BMAD planning artifacts under ignored local output folders.
 - Rewrite durable decisions from local planning into source-owned docs, tests,
   scripts, or policy.
@@ -62,7 +62,7 @@ the merged managed lane.
 
 ## Bounded Party-Mode Allowance
 
-Under `standard-delivery`, BMAD party mode and spawned BMAD subagents may run
+Under `standard-delivery`, BMAD party mode and spawned BMAD subagents should run
 automatically when they materially improve discovery, planning, review, or
 verification for the named lane.
 
@@ -105,7 +105,7 @@ cannot be completed without expanded party-mode authority.
    benefits from that method. Use BMAD party mode or spawned BMAD subagents
    automatically when multi-agent analysis would improve the lane, staying
    within configured provider/model defaults and the bounded party-mode
-   allowance.
+   allowance, without pausing for approval.
    Keep generated BMAD work products local.
 4. **Implement.** Make scoped source-owned changes. Prefer existing repository
    patterns over new abstractions.
