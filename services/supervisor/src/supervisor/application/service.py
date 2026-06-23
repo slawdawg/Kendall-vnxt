@@ -2858,6 +2858,7 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
+            "dispatcher-closed-lane-requeue-guard-refresh",
             "dispatcher-assignment-panel-filter-refresh",
             "dispatcher-cleanup-assignment-report-refresh",
             "dispatcher-cleanup-assignment-closure-refresh",
@@ -3705,6 +3706,24 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_closed_lane_requeue_guard_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-lane-requeue-guard-refresh",
+            lane_title="Dispatcher closed lane requeue guard refresh",
+            scope=[
+                "dispatcher queue proof that a merged and cleaned safe backlog lane cannot be selected again",
+                "browser assertions that completed dispatcher-assignment-panel-filter-refresh evidence remains closed while the new guard lane is assignable",
+                "static drift coverage for closed backlog state and next-lane advancement after cleanup",
+                "metadata-only report evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3712,7 +3731,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-assignment-panel-filter-refresh"],
+                includedBacklogItems=["dispatcher-closed-lane-requeue-guard-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3737,14 +3756,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-assignment-panel-filter-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher assignment panel filter item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-assignment-panel-filter-refresh"],
+                        status="ready" if "dispatcher-closed-lane-requeue-guard-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the closed lane requeue guard item is the next safe backlog item for dispatcher queue integrity work.",
+                        evidence=["dispatcher-closed-lane-requeue-guard-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher assignment panel filter item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the closed lane requeue guard item ready before changing dispatcher queue snapshot or assignment surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3774,8 +3793,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_assignment_panel_filter_lane,
-                nextAction="Select this slice for dispatcher assignment panel filter work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_closed_lane_requeue_guard_lane,
+                nextAction="Select this slice for dispatcher closed-lane requeue guard work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4423,6 +4442,24 @@ class SupervisorService:
                 "pnpm run check:safe-backlog",
                 "pnpm run check:development-runway",
                 "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_closed_lane_requeue_guard_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-lane-requeue-guard-refresh",
+            lane_title="Dispatcher closed lane requeue guard refresh",
+            scope=[
+                "dispatcher queue proof that a merged and cleaned safe backlog lane cannot be selected again",
+                "browser assertions that completed dispatcher-assignment-panel-filter-refresh evidence remains closed while the new guard lane is assignable",
+                "static drift coverage for closed backlog state and next-lane advancement after cleanup",
+                "metadata-only report evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
@@ -5213,19 +5250,19 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher cleanup assignment report evidence only; do not requeue dispatcher-cleanup-assignment-report-refresh. Continue with dispatcher-assignment-panel-filter-refresh.",
+                nextAction="Use this completed dispatcher cleanup assignment report evidence only; do not requeue dispatcher-cleanup-assignment-report-refresh. Continue with closed lane requeue guard work.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-assignment-panel-filter-refresh",
                 label="Dispatcher assignment panel filter refresh",
                 priority="P2",
-                status="ready",
-                summary="Add dashboard filtering for runner assignment rows so generated lane workers can isolate active, blocked, assignable, and closed evidence without losing dispatcher continuity.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered dashboard filtering for runner assignment rows so generated lane workers can isolate active, blocked, assignable, and closed evidence without losing dispatcher continuity.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "The runner assignment panel now retains closed assignment evidence alongside active rows, increasing the amount of visible row state.",
-                    "The next lane should add compact classification/source filters and browser assertions that selected filters preserve the dispatcher continuity snapshot.",
-                    "Keep filtering local to dashboard state and metadata-only report fields; do not mutate assignment records, launch workers, or call providers.",
+                    "Runner assignment panel filters now isolate assignment rows by classification and source while retaining dispatcher continuity evidence.",
+                    "Dashboard controls coverage asserts active workspace, assignable backlog, blocked backlog, and closed lane assignment filters.",
+                    "Static drift coverage pins assignment filter controls and source labels as metadata-only UI state.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -5242,8 +5279,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_assignment_panel_filter_lane,
-                nextAction="Refresh dispatcher assignment panel filters so generated lane workers can isolate assignment evidence classes without changing dispatch state.",
+                nextAction="Use this completed dispatcher assignment panel filter evidence only; do not requeue dispatcher-assignment-panel-filter-refresh. Continue with dispatcher-closed-lane-requeue-guard-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-closed-lane-requeue-guard-refresh",
+                label="Dispatcher closed lane requeue guard refresh",
+                priority="P2",
+                status="ready",
+                summary="Add explicit dispatcher proof that merged and cleaned backlog lanes are closed before generating the next end-to-end worker lane.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "The latest dispatcher dry-run exposed that source-owned backlog state must advance immediately after a lane closes.",
+                    "The next lane should assert dispatcher-assignment-panel-filter-refresh is closed in safe backlog, runner assignment, development runway, and workspace dispatch evidence.",
+                    "Keep the guard metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_closed_lane_requeue_guard_lane,
+                nextAction="Refresh dispatcher closed-lane requeue guards so generated lane workers advance without reselecting completed backlog work.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",

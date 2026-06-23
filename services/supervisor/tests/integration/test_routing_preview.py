@@ -1945,11 +1945,11 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
-    assert report_slice["includedBacklogItems"] == ["dispatcher-assignment-panel-filter-refresh"]
+    assert report_slice["includedBacklogItems"] == ["dispatcher-closed-lane-requeue-guard-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-assignment-panel-filter-refresh"
-    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-assignment-panel-filter-refresh"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher assignment panel filter refresh"'
+    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-closed-lane-requeue-guard-refresh"
+    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-closed-lane-requeue-guard-refresh"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher closed lane requeue guard refresh"'
     assert "pnpm run check:runner-assignment-status" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run test:e2e:dashboard:controls" in report_slice["nextLane"]["verificationCommands"]
@@ -2271,6 +2271,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "dispatcher-cleanup-assignment-closure-refresh",
         "dispatcher-cleanup-assignment-report-refresh",
         "dispatcher-assignment-panel-filter-refresh",
+        "dispatcher-closed-lane-requeue-guard-refresh",
         "authority-blocked-work",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
@@ -2490,10 +2491,15 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert dispatcher_cleanup_assignment_report_item["nextLane"] is None
     assert "do not requeue dispatcher-cleanup-assignment-report-refresh" in dispatcher_cleanup_assignment_report_item["nextAction"]
     dispatcher_assignment_panel_filter_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-assignment-panel-filter-refresh")
-    assert dispatcher_assignment_panel_filter_item["status"] == "ready"
-    assert dispatcher_assignment_panel_filter_item["nextLane"]["branchName"] == "codex/dispatcher-assignment-panel-filter-refresh"
-    assert dispatcher_assignment_panel_filter_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher assignment panel filter refresh"'
-    assert "pnpm run test:e2e:dashboard:controls" in dispatcher_assignment_panel_filter_item["nextLane"]["verificationCommands"]
+    assert dispatcher_assignment_panel_filter_item["status"] == "closed"
+    assert dispatcher_assignment_panel_filter_item["recommendedSliceSize"] == "complete"
+    assert dispatcher_assignment_panel_filter_item["nextLane"] is None
+    assert "do not requeue dispatcher-assignment-panel-filter-refresh" in dispatcher_assignment_panel_filter_item["nextAction"]
+    dispatcher_closed_lane_requeue_guard_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-closed-lane-requeue-guard-refresh")
+    assert dispatcher_closed_lane_requeue_guard_item["status"] == "ready"
+    assert dispatcher_closed_lane_requeue_guard_item["nextLane"]["branchName"] == "codex/dispatcher-closed-lane-requeue-guard-refresh"
+    assert dispatcher_closed_lane_requeue_guard_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher closed lane requeue guard refresh"'
+    assert "pnpm run test:e2e:dashboard:controls" in dispatcher_closed_lane_requeue_guard_item["nextLane"]["verificationCommands"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
@@ -8388,10 +8394,11 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     dispatcher_cleanup_assignment_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-cleanup-assignment-closure-refresh")
     dispatcher_cleanup_assignment_report_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-cleanup-assignment-report-refresh")
     dispatcher_assignment_panel_filter_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-assignment-panel-filter-refresh")
+    dispatcher_closed_lane_requeue_guard_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-closed-lane-requeue-guard-refresh")
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "dispatcher-assignment-panel-filter-refresh"
-    assert continuity["selectedBranch"] == "codex/dispatcher-assignment-panel-filter-refresh"
+    assert continuity["selectedBacklogItemId"] == "dispatcher-closed-lane-requeue-guard-refresh"
+    assert continuity["selectedBranch"] == "codex/dispatcher-closed-lane-requeue-guard-refresh"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["assignableCount"] >= 1
     assert "blocked-authority" in continuity["blockerCodes"]
@@ -8420,8 +8427,10 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert dispatcher_cleanup_assignment_backlog["reasonCode"] == "backlog-closed"
     assert dispatcher_cleanup_assignment_report_backlog["classification"] == "closed"
     assert dispatcher_cleanup_assignment_report_backlog["reasonCode"] == "backlog-closed"
-    assert dispatcher_assignment_panel_filter_backlog["classification"] == "assignable"
-    assert dispatcher_assignment_panel_filter_backlog["reasonCode"] == "backlog-assignable"
+    assert dispatcher_assignment_panel_filter_backlog["classification"] == "closed"
+    assert dispatcher_assignment_panel_filter_backlog["reasonCode"] == "backlog-closed"
+    assert dispatcher_closed_lane_requeue_guard_backlog["classification"] == "assignable"
+    assert dispatcher_closed_lane_requeue_guard_backlog["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-export-refresh"]["classification"] == "closed"
@@ -8440,8 +8449,10 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert queue_proof_rows["dispatcher-cleanup-assignment-closure-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-cleanup-assignment-report-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-cleanup-assignment-report-refresh"]["reasonCode"] == "backlog-closed"
-    assert queue_proof_rows["dispatcher-assignment-panel-filter-refresh"]["classification"] == "assignable"
-    assert queue_proof_rows["dispatcher-assignment-panel-filter-refresh"]["reasonCode"] == "backlog-assignable"
+    assert queue_proof_rows["dispatcher-assignment-panel-filter-refresh"]["classification"] == "closed"
+    assert queue_proof_rows["dispatcher-assignment-panel-filter-refresh"]["reasonCode"] == "backlog-closed"
+    assert queue_proof_rows["dispatcher-closed-lane-requeue-guard-refresh"]["classification"] == "assignable"
+    assert queue_proof_rows["dispatcher-closed-lane-requeue-guard-refresh"]["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-state-fixtures-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-continuity-snapshot-refresh"]["classification"] == "closed"
     assert queue_proof_rows["assignment-report-queue-proof-refresh"]["classification"] == "closed"
