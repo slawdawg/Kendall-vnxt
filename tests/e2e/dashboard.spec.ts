@@ -904,8 +904,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/dispatcher-queue-handoff-audit-query-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit query refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-queue-handoff-audit-export-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit export refresh"')).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
@@ -1085,9 +1085,14 @@ test.describe("dashboard workflow coverage", () => {
     const handoffQueryCard = safeBacklogPanel
       .locator("article")
       .filter({ has: page.getByRole("heading", { name: "Dispatcher queue handoff audit query refresh", exact: true }) });
-    await expect(handoffQueryCard.getByText("branch: codex/dispatcher-queue-handoff-audit-query-refresh")).toBeVisible();
-    await expect(handoffQueryCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit query refresh"')).toBeVisible();
-    await expect(handoffQueryCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
+    await expect(handoffQueryCard.getByText("slice: complete")).toBeVisible();
+    await expect(handoffQueryCard.getByText("do not requeue dispatcher-queue-handoff-audit-query-refresh")).toBeVisible();
+    const handoffExportCard = safeBacklogPanel
+      .locator("article")
+      .filter({ has: page.getByRole("heading", { name: "Dispatcher queue handoff audit export refresh", exact: true }) });
+    await expect(handoffExportCard.getByText("branch: codex/dispatcher-queue-handoff-audit-export-refresh")).toBeVisible();
+    await expect(handoffExportCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit export refresh"')).toBeVisible();
+    await expect(handoffExportCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 
