@@ -80,10 +80,13 @@ The default allowance is:
   lists, and verification evidence rather than raw prompts, reasoning traces,
   completions, or provider payloads.
 
-Stop for explicit operator approval only when party mode would override the
-configured provider/model defaults, exceed the allowance above, require missing
+Do not interrupt the operator just because a possible party-mode run would
+fall outside the allowance. If party mode would override the configured
+provider/model defaults, exceed the allowance above, require missing
 credentials, retain raw provider payloads, or combine with another high-risk
-surface.
+surface, skip party mode and continue with the normal single-agent lane flow
+when that still satisfies the objective. Stop only when the lane objective
+cannot be completed without expanded party-mode authority.
 
 ## Lane Lifecycle
 
@@ -182,7 +185,8 @@ These surfaces are not automatically covered by `standard-delivery`:
   the bounded party-mode allowance.
 - BMAD party mode or spawned BMAD subagents that override configured
   provider/model defaults, exceed the bounded party-mode allowance, or retain raw
-  provider payloads.
+  provider payloads. These are not automatic; fall back to the normal lane flow
+  unless the named objective requires expanded party-mode authority.
 - Worker or process launch.
 - Production deploys or release automation.
 - Database, schema, migration, or retention changes.
@@ -231,7 +235,8 @@ Interrupt the operator only for:
 - Failed verification that cannot be fixed within the lane.
 - Scope expansion beyond the named objective.
 - Scarce paid, review, or runtime resources outside the bounded party-mode
-  allowance.
+  allowance only when the lane objective requires them and the normal lane flow
+  cannot satisfy the request.
 - Unsafe behavior, missing credentials, or external-state blockers.
 
 Routine mechanics, command selection, context reads, local planning, test
