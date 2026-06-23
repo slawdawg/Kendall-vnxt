@@ -1945,14 +1945,14 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
-    assert report_slice["includedBacklogItems"] == ["dispatcher-cleanup-assignment-report-refresh"]
+    assert report_slice["includedBacklogItems"] == ["dispatcher-assignment-panel-filter-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-cleanup-assignment-report-refresh"
-    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-cleanup-assignment-report-refresh"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"'
+    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-assignment-panel-filter-refresh"
+    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-assignment-panel-filter-refresh"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher assignment panel filter refresh"'
     assert "pnpm run check:runner-assignment-status" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
-    assert "pnpm run test:codex-workspace" in report_slice["nextLane"]["verificationCommands"]
+    assert "pnpm run test:e2e:dashboard:controls" in report_slice["nextLane"]["verificationCommands"]
     assert any("merge, cleanup, issue-sync" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
     assert any("another active lane" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
@@ -2270,6 +2270,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
         "dispatcher-cleanup-assignment-closure-refresh",
         "dispatcher-cleanup-assignment-report-refresh",
+        "dispatcher-assignment-panel-filter-refresh",
         "authority-blocked-work",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
@@ -2484,10 +2485,15 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert dispatcher_cleanup_assignment_item["nextLane"] is None
     assert "do not requeue dispatcher-cleanup-assignment-closure-refresh" in dispatcher_cleanup_assignment_item["nextAction"]
     dispatcher_cleanup_assignment_report_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-cleanup-assignment-report-refresh")
-    assert dispatcher_cleanup_assignment_report_item["status"] == "ready"
-    assert dispatcher_cleanup_assignment_report_item["nextLane"]["branchName"] == "codex/dispatcher-cleanup-assignment-report-refresh"
-    assert dispatcher_cleanup_assignment_report_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"'
-    assert "pnpm run test:codex-workspace" in dispatcher_cleanup_assignment_report_item["nextLane"]["verificationCommands"]
+    assert dispatcher_cleanup_assignment_report_item["status"] == "closed"
+    assert dispatcher_cleanup_assignment_report_item["recommendedSliceSize"] == "complete"
+    assert dispatcher_cleanup_assignment_report_item["nextLane"] is None
+    assert "do not requeue dispatcher-cleanup-assignment-report-refresh" in dispatcher_cleanup_assignment_report_item["nextAction"]
+    dispatcher_assignment_panel_filter_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-assignment-panel-filter-refresh")
+    assert dispatcher_assignment_panel_filter_item["status"] == "ready"
+    assert dispatcher_assignment_panel_filter_item["nextLane"]["branchName"] == "codex/dispatcher-assignment-panel-filter-refresh"
+    assert dispatcher_assignment_panel_filter_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher assignment panel filter refresh"'
+    assert "pnpm run test:e2e:dashboard:controls" in dispatcher_assignment_panel_filter_item["nextLane"]["verificationCommands"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
@@ -8306,6 +8312,23 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
             }
         )
     )
+    cleanup_assignment_path = assignments_dir / "dispatcher-cleanup-assignment-closure-refresh.json"
+    cleanup_assignment_path.write_text(
+        json.dumps(
+            {
+                "assignment_id": "dispatcher-cleanup-assignment-closure-refresh",
+                "task_id": "20260623-dispatcher-cleanup-closes-lane-assignment-and-qu",
+                "lane_slug": "dispatcher-cleanup-assignment-closure-refresh",
+                "branch": "codex/dispatcher-cleanup-assignment-closure-refresh",
+                "status": "closed",
+                "owner": "runner-a",
+                "phase": "closed",
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "last_result": "closed after cleanup of 20260623-dispatcher-cleanup-closes-lane-assignment-and-qu",
+            }
+        )
+    )
     monkeypatch.setenv("CODEX_WORKSPACE_STATE_ROOT", state_root.as_posix())
     client = _client(tmp_path, monkeypatch, "runner-assignment-status-assignment.db")
 
@@ -8318,6 +8341,13 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert lane["branch"] == "codex/dispatcher-continuity-snapshot-refresh"
     assert lane["handoffLifecycleState"] == "claimed"
     assert lane["handoffRecoveryAction"] == "wait-for-owner"
+    cleanup_lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "dispatcher-cleanup-assignment-closure-refresh")
+    assert cleanup_lane["classification"] == "closed"
+    assert cleanup_lane["reasonCode"] == "lane-closed"
+    assert cleanup_lane["branch"] == "codex/dispatcher-cleanup-assignment-closure-refresh"
+    assert cleanup_lane["handoffLifecycleState"] == "cleaned"
+    assert cleanup_lane["handoffRecoveryAction"] == "no-action"
+    assert cleanup_lane["nextSafeAction"] == "No assignment action"
     backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "report-catalog-shortcut-refresh")
     assert backlog["classification"] == "closed"
     assert backlog["reasonCode"] == "backlog-closed"
@@ -8357,10 +8387,11 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     handoff_json_validation_fixtures_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh")
     dispatcher_cleanup_assignment_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-cleanup-assignment-closure-refresh")
     dispatcher_cleanup_assignment_report_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-cleanup-assignment-report-refresh")
+    dispatcher_assignment_panel_filter_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-assignment-panel-filter-refresh")
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "dispatcher-cleanup-assignment-report-refresh"
-    assert continuity["selectedBranch"] == "codex/dispatcher-cleanup-assignment-report-refresh"
+    assert continuity["selectedBacklogItemId"] == "dispatcher-assignment-panel-filter-refresh"
+    assert continuity["selectedBranch"] == "codex/dispatcher-assignment-panel-filter-refresh"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["assignableCount"] >= 1
     assert "blocked-authority" in continuity["blockerCodes"]
@@ -8387,8 +8418,10 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert handoff_json_validation_fixtures_backlog["reasonCode"] == "backlog-closed"
     assert dispatcher_cleanup_assignment_backlog["classification"] == "closed"
     assert dispatcher_cleanup_assignment_backlog["reasonCode"] == "backlog-closed"
-    assert dispatcher_cleanup_assignment_report_backlog["classification"] == "assignable"
-    assert dispatcher_cleanup_assignment_report_backlog["reasonCode"] == "backlog-assignable"
+    assert dispatcher_cleanup_assignment_report_backlog["classification"] == "closed"
+    assert dispatcher_cleanup_assignment_report_backlog["reasonCode"] == "backlog-closed"
+    assert dispatcher_assignment_panel_filter_backlog["classification"] == "assignable"
+    assert dispatcher_assignment_panel_filter_backlog["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-export-refresh"]["classification"] == "closed"
@@ -8405,8 +8438,10 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert queue_proof_rows["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-cleanup-assignment-closure-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-cleanup-assignment-closure-refresh"]["reasonCode"] == "backlog-closed"
-    assert queue_proof_rows["dispatcher-cleanup-assignment-report-refresh"]["classification"] == "assignable"
-    assert queue_proof_rows["dispatcher-cleanup-assignment-report-refresh"]["reasonCode"] == "backlog-assignable"
+    assert queue_proof_rows["dispatcher-cleanup-assignment-report-refresh"]["classification"] == "closed"
+    assert queue_proof_rows["dispatcher-cleanup-assignment-report-refresh"]["reasonCode"] == "backlog-closed"
+    assert queue_proof_rows["dispatcher-assignment-panel-filter-refresh"]["classification"] == "assignable"
+    assert queue_proof_rows["dispatcher-assignment-panel-filter-refresh"]["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-state-fixtures-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-continuity-snapshot-refresh"]["classification"] == "closed"
     assert queue_proof_rows["assignment-report-queue-proof-refresh"]["classification"] == "closed"

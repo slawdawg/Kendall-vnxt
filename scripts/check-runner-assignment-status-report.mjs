@@ -24,6 +24,7 @@ const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcu
 const currentRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const auditJsonValidationSpec = readWorkspaceFile("tests/runner-handoff-audit-json-validation.test.mjs");
+const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration/test_routing_preview.py");
 
 const failures = [];
 
@@ -200,6 +201,10 @@ for (const panelText of [
   "Blockers:",
   "Queue proof",
   "report.dispatcherContinuity.queueProofRows.map",
+  "closedAssignmentEvidenceRows",
+  "Closed assignment evidence",
+  "closed assignment evidence",
+  "non-dispatchable proof",
 ]) {
   assertCondition(panelSource.includes(panelText), `Runner assignment panel must render ${panelText}`, failures);
 }
@@ -366,8 +371,24 @@ for (const browserText of [
   "Retention summary:",
   "Audit stop: no automatic takeover",
   "complete handoff packet; readiness passed; queue counts available",
+  "dispatcher-cleanup-assignment-closure-refresh",
+  "Closed assignment evidence",
+  "lane-closed branch codex/dispatcher-cleanup-assignment-closure-refresh",
+  "dispatcher-assignment-panel-filter-refresh: assignable (backlog-assignable)",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert runner assignment handoff badge text: ${browserText}`, failures);
+}
+
+for (const supervisorTestText of [
+  "cleanup_lane",
+  'cleanup_lane["classification"] == "closed"',
+  'cleanup_lane["reasonCode"] == "lane-closed"',
+  'cleanup_lane["handoffLifecycleState"] == "cleaned"',
+  'cleanup_lane["handoffRecoveryAction"] == "no-action"',
+  'dispatcher_cleanup_assignment_report_backlog["classification"] == "closed"',
+  'dispatcher_assignment_panel_filter_backlog["classification"] == "assignable"',
+]) {
+  assertCondition(supervisorTests.includes(supervisorTestText), `Supervisor tests must assert cleanup assignment report evidence: ${supervisorTestText}`, failures);
 }
 
 if (failures.length > 0) {

@@ -461,6 +461,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
   const rows = [...report.workspaceAssignments, ...report.laneAssignments, ...report.backlogCandidates];
   const urgentRows = rows.filter((row) => row.classification !== "closed");
   const visibleRows = urgentRows.length > 0 ? urgentRows : rows.slice(0, 3);
+  const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
   return (
     <section className="rounded-[1rem] border bg-[var(--surface)] p-4 shadow-sm">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -519,6 +520,23 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
         </div>
         <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{report.dispatcherContinuity.nextAction}</p>
       </div>
+
+      {closedAssignmentEvidenceRows.length > 0 ? (
+        <div data-testid="closed-assignment-evidence" className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Closed assignment evidence</p>
+          <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+            {closedAssignmentEvidenceRows.length} closed assignment evidence {closedAssignmentEvidenceRows.length === 1 ? "row" : "rows"} retained as
+            non-dispatchable proof.
+          </p>
+          <div className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
+            {closedAssignmentEvidenceRows.slice(0, 8).map((row) => (
+              <p key={`${row.id}:closed-assignment-evidence`} className="break-all">
+                {row.assignmentId ?? row.id}: {row.reasonCode} {row.branch ? `branch ${row.branch}` : "no branch"} - {row.nextSafeAction}
+              </p>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {visibleRows.length === 0 ? (
         <p className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)]">
