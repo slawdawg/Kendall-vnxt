@@ -158,8 +158,15 @@ for (const testText of [
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert adaptive scoring text: ${testText}`, failures);
 }
 
+assertCondition(
+  verificationCheck.includes("aggregateCheckCommands")
+    && verificationCheck.includes("(?:check|test):")
+    && verificationCheck.includes("commandId"),
+  "verification readiness drift check must derive aggregate check/test command IDs, including check-adaptive-scoring",
+  failures,
+);
+
 for (const fileText of [
-  [verificationCheck, "check-adaptive-scoring", "verification readiness drift check"],
   [controlsSpec, "pnpm run check:adaptive-scoring", "controls e2e"],
   [readme, "pnpm run check:adaptive-scoring", "README"],
   [currentRunbook, "pnpm run check:adaptive-scoring", "current session runbook"],
