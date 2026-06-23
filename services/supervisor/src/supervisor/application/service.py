@@ -2742,7 +2742,7 @@ class SupervisorService:
         item: SafeDevelopmentBacklogItemView,
         workspace_records: list[dict],
         assignment_records: list[dict],
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, dict[str, object]] | None:
         item_id = item.itemId
         branch_name = item.nextLane.branchName if item.nextLane else None
 
@@ -2751,20 +2751,50 @@ class SupervisorService:
                 continue
             source_item_id = self._record_source_backlog_item_id(assignment)
             if assignment.get("assignment_id") == item_id or assignment.get("lane_slug") == item_id or source_item_id == item_id:
-                return ("backlog-closed-source-assignment", f"closed assignment evidence exists for {item_id}")
+                return (
+                    "backlog-closed-source-assignment",
+                    f"closed assignment evidence exists for {item_id}",
+                    self._source_completion_evidence("assignment", item_id, assignment),
+                )
             if branch_name and assignment.get("branch") == branch_name and source_item_id == item_id:
-                return ("backlog-closed-source-assignment", f"closed assignment evidence exists for {item_id}")
+                return (
+                    "backlog-closed-source-assignment",
+                    f"closed assignment evidence exists for {item_id}",
+                    self._source_completion_evidence("assignment", item_id, assignment),
+                )
 
         for manifest in workspace_records:
             if manifest.get("status") != "closed":
                 continue
             source_item_id = self._record_source_backlog_item_id(manifest)
             if manifest.get("source_assignment_id") == item_id or source_item_id == item_id:
-                return ("backlog-closed-source-workspace", f"closed workspace evidence exists for {item_id}")
+                return (
+                    "backlog-closed-source-workspace",
+                    f"closed workspace evidence exists for {item_id}",
+                    self._source_completion_evidence("workspace", item_id, manifest),
+                )
             if branch_name and manifest.get("branch") == branch_name and (manifest.get("source_assignment_id") == item_id or source_item_id == item_id):
-                return ("backlog-closed-source-workspace", f"closed workspace evidence exists for {item_id}")
+                return (
+                    "backlog-closed-source-workspace",
+                    f"closed workspace evidence exists for {item_id}",
+                    self._source_completion_evidence("workspace", item_id, manifest),
+                )
 
         return None
+
+    def _source_completion_evidence(self, evidence_kind: str, item_id: str, record: dict) -> dict[str, object]:
+        record_id = record.get("assignment_id") or record.get("lane_slug") or record.get("task_id") or item_id
+        evidence = {
+            "evidenceKind": evidence_kind,
+            "recordId": str(record_id),
+            "sourceBacklogItemId": item_id,
+            "branch": record.get("branch"),
+            "taskId": record.get("task_id"),
+            "sourceAssignmentId": record.get("source_assignment_id"),
+            "evidencePath": record.get("_evidence_path"),
+            "evidenceSummary": f"Closed {evidence_kind} record {record_id} matches source backlog item {item_id}.",
+        }
+        return {key: value for key, value in evidence.items() if value is not None}
 
     def get_runner_assignment_status_report(self) -> RunnerAssignmentStatusReportView:
         now = datetime.now(timezone.utc)
@@ -2818,7 +2848,7 @@ class SupervisorService:
                     degraded_inputs.append(self._runner_degraded_input("task-manifest", str(path), "blocking", "Task manifest is malformed or unreadable."))
                     continue
 
-                workspace_records.append(manifest)
+                workspace_records.append({**manifest, "_evidence_path": str(path)})
                 owner = manifest.get("owner") or manifest.get("owner_thread_id")
                 if current_owner is None and owner:
                     current_owner = str(owner)
@@ -2835,7 +2865,7 @@ class SupervisorService:
                 except Exception:
                     degraded_inputs.append(self._runner_degraded_input("assignment-record", str(path), "blocking", "Assignment record is malformed or unreadable."))
                     continue
-                assignment_records.append(assignment)
+                assignment_records.append({**assignment, "_evidence_path": str(path)})
                 owner = assignment.get("owner") or assignment.get("owner_thread_id")
                 if current_owner is None and owner:
                     current_owner = str(owner)
@@ -2850,6 +2880,7 @@ class SupervisorService:
                 reason_code = "backlog-assignable" if item.nextLane else "missing-lane-metadata"
                 reason = "safe backlog item has source-owned lane metadata" if item.nextLane else "ready item has no source-owned lane start command"
                 next_action = "Review lane before dispatch" if item.nextLane else "Add source-owned branch/start metadata before dispatch"
+                source_completion_evidence = None
                 if item.status == "closed" or item.recommendedSliceSize == "complete":
                     classification = "closed"
                     reason_code = "backlog-closed"
@@ -2864,7 +2895,7 @@ class SupervisorService:
                     closed_source_completion = self._closed_source_completion_reason(item, workspace_records, assignment_records)
                     if closed_source_completion:
                         classification = "closed"
-                        reason_code, reason = closed_source_completion
+                        reason_code, reason, source_completion_evidence = closed_source_completion
                         next_action = "Use closed source completion evidence only; choose the next ready safe backlog lane"
                     elif (item.nextLane and item.nextLane.branchName in occupied_branches) or item.itemId in occupied_backlog_ids:
                         classification = "claimed"
@@ -2897,6 +2928,7 @@ class SupervisorService:
                         handoffRecoverySummary=backlog_recovery_summary,
                         deliveryState="unknown",
                         localEvidenceStatus="available",
+                        sourceCompletionEvidence=source_completion_evidence,
                     )
                 )
         except Exception as exc:
@@ -2905,6 +2937,7 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
+            "dispatcher-closed-source-guard-rollup-refresh",
             "dispatcher-closed-source-guard-drilldown-refresh",
             "dispatcher-closed-source-guard-report-refresh",
             "dispatcher-closed-lane-requeue-guard-refresh",
@@ -3809,6 +3842,24 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_closed_source_guard_rollup_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-rollup-refresh",
+            lane_title="Dispatcher closed source guard rollup refresh",
+            scope=[
+                "runner assignment rollup evidence that counts closed source completion decisions by assignment and workspace source",
+                "dashboard assertions that source completion drilldowns remain visible while rollup counts identify stale-ready closure volume",
+                "static drift coverage for successor queue advancement and metadata-only guard rollup messaging",
+                "metadata-only report evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3816,7 +3867,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-closed-source-guard-drilldown-refresh"],
+                includedBacklogItems=["dispatcher-closed-source-guard-rollup-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3841,14 +3892,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-closed-source-guard-drilldown-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the closed source guard drilldown item is the next safe backlog item for dispatcher queue integrity work.",
-                        evidence=["dispatcher-closed-source-guard-drilldown-refresh"],
+                        status="ready" if "dispatcher-closed-source-guard-rollup-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the closed source guard rollup item is the next safe backlog item for dispatcher queue integrity work.",
+                        evidence=["dispatcher-closed-source-guard-rollup-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the closed source guard drilldown item ready before changing dispatcher queue snapshot or assignment surfaces.",
+                        nextAction="Keep the closed source guard rollup item ready before changing dispatcher queue snapshot or assignment surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3878,8 +3929,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_closed_source_guard_drilldown_lane,
-                nextAction="Select this slice for dispatcher closed source guard drilldown work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_closed_source_guard_rollup_lane,
+                nextAction="Select this slice for dispatcher closed source guard rollup work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4573,6 +4624,24 @@ class SupervisorService:
                 "runner assignment drilldown evidence that links closed source completion decisions to their matching assignment or workspace record",
                 "dashboard assertions that closed source guard reasons stay inspectable after the report lane closes",
                 "static drift coverage for successor queue advancement and metadata-only guard drilldown messaging",
+                "metadata-only report evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_closed_source_guard_rollup_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-rollup-refresh",
+            lane_title="Dispatcher closed source guard rollup refresh",
+            scope=[
+                "runner assignment rollup evidence that counts closed source completion decisions by assignment and workspace source",
+                "dashboard assertions that source completion drilldowns remain visible while rollup counts identify stale-ready closure volume",
+                "static drift coverage for successor queue advancement and metadata-only guard rollup messaging",
                 "metadata-only report evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
             ],
             verification_commands=[
@@ -5465,13 +5534,13 @@ class SupervisorService:
                 itemId="dispatcher-closed-source-guard-drilldown-refresh",
                 label="Dispatcher closed source guard drilldown refresh",
                 priority="P2",
-                status="ready",
-                summary="Add drilldown evidence that links closed source completion decisions to the matching closed assignment or workspace record.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered metadata-only drilldown evidence that links closed source completion decisions to the matching closed assignment or workspace record.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Closed source completion report reasons now distinguish assignment-backed and workspace-backed closure evidence.",
-                    "The next lane should make the matching closed record inspectable from runner assignment status evidence without retaining raw prompts, provider payloads, or unnecessary source copies.",
-                    "Keep the drilldown refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                    "Runner assignment status rows now expose metadata-only sourceCompletionEvidence for assignment-backed and workspace-backed closure evidence.",
+                    "Dashboard controls render the closed source record kind, id, branch, task, path, and summary without retaining raw prompts, provider payloads, or unnecessary source copies.",
+                    "Supervisor tests cover assignment and workspace source-completion evidence objects for stale ready backlog rows.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -5488,8 +5557,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_closed_source_guard_drilldown_lane,
-                nextAction="Refresh dispatcher closed source guard drilldown evidence so generated lane workers can inspect the closed source record behind stale-ready closure decisions.",
+                nextAction="Use this completed dispatcher closed source guard drilldown evidence only; do not requeue dispatcher-closed-source-guard-drilldown-refresh. Continue with dispatcher-closed-source-guard-rollup-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-closed-source-guard-rollup-refresh",
+                label="Dispatcher closed source guard rollup refresh",
+                priority="P2",
+                status="ready",
+                summary="Add rollup evidence that counts closed source completion decisions by assignment and workspace source.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Closed source completion drilldowns now expose the matching closed source record for stale-ready closure decisions.",
+                    "The next lane should summarize assignment-backed and workspace-backed closed source decisions without retaining raw prompts, provider payloads, or unnecessary source copies.",
+                    "Keep the rollup refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_closed_source_guard_rollup_lane,
+                nextAction="Refresh dispatcher closed source guard rollup evidence so generated lane workers can see stale-ready closure counts by source record kind.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
