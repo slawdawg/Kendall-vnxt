@@ -1942,11 +1942,11 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
-    assert report_slice["includedBacklogItems"] == ["dispatcher-continuity-snapshot-refresh"]
+    assert report_slice["includedBacklogItems"] == ["assignment-report-queue-proof-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-continuity-snapshot-refresh"
-    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-continuity-snapshot-refresh"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"'
+    assert report_slice["nextLane"]["laneSlug"] == "assignment-report-queue-proof-refresh"
+    assert report_slice["nextLane"]["branchName"] == "codex/assignment-report-queue-proof-refresh"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "assignment report queue proof refresh"'
     assert "pnpm run check:runner-assignment-status" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run test:codex-workspace" in report_slice["nextLane"]["verificationCommands"]
@@ -2250,6 +2250,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "lane-handoff-evidence-refresh",
         "report-catalog-shortcut-refresh",
         "dispatcher-continuity-snapshot-refresh",
+        "assignment-report-queue-proof-refresh",
         "authority-blocked-work",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
@@ -2368,11 +2369,18 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "/controls#supervisor-report-catalog" in shortcut_item["dashboardAnchors"]
     assert "/controls#runner-assignment-status" in shortcut_item["dashboardAnchors"]
     dispatcher_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-continuity-snapshot-refresh")
-    assert dispatcher_item["nextLane"]["branchName"] == "codex/dispatcher-continuity-snapshot-refresh"
-    assert dispatcher_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"'
-    assert "pnpm run test:codex-workspace" in dispatcher_item["nextLane"]["verificationCommands"]
+    assert dispatcher_item["status"] == "closed"
+    assert dispatcher_item["recommendedSliceSize"] == "complete"
+    assert dispatcher_item["nextLane"] is None
+    assert "do not requeue dispatcher-continuity-snapshot-refresh" in dispatcher_item["nextAction"]
+    assert any("dispatcher continuity snapshot" in evidence for evidence in dispatcher_item["evidence"])
     assert "GET /supervisor/runner-assignment-status-report" in dispatcher_item["relatedReports"]
     assert "/controls#runner-assignment-status" in dispatcher_item["dashboardAnchors"]
+    queue_proof_item = next(item for item in report["items"] if item["itemId"] == "assignment-report-queue-proof-refresh")
+    assert queue_proof_item["nextLane"]["branchName"] == "codex/assignment-report-queue-proof-refresh"
+    assert queue_proof_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "assignment report queue proof refresh"'
+    assert "pnpm run test:codex-workspace" in queue_proof_item["nextLane"]["verificationCommands"]
+    assert "GET /supervisor/runner-assignment-status-report" in queue_proof_item["relatedReports"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
@@ -8205,8 +8213,18 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert backlog["classification"] == "closed"
     assert backlog["reasonCode"] == "backlog-closed"
     dispatcher_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-continuity-snapshot-refresh")
-    assert dispatcher_backlog["classification"] == "claimed"
-    assert dispatcher_backlog["reasonCode"] == "backlog-lane-claimed"
+    assert dispatcher_backlog["classification"] == "closed"
+    assert dispatcher_backlog["reasonCode"] == "backlog-closed"
+    queue_proof_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "assignment-report-queue-proof-refresh")
+    assert queue_proof_backlog["classification"] == "assignable"
+    assert queue_proof_backlog["reasonCode"] == "backlog-assignable"
+    continuity = report["dispatcherContinuity"]
+    assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
+    assert continuity["selectedBacklogItemId"] == "assignment-report-queue-proof-refresh"
+    assert continuity["selectedBranch"] == "codex/assignment-report-queue-proof-refresh"
+    assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
+    assert continuity["assignableCount"] >= 1
+    assert "blocked-authority" in continuity["blockerCodes"]
     github_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "github-delivery-hygiene")
     assert github_backlog["classification"] == "closed"
     assert github_backlog["reasonCode"] == "backlog-closed"

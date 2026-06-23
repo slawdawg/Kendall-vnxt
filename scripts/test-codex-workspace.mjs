@@ -516,7 +516,8 @@ try {
     assert(result.stdout.includes("- verification-surface-hardening | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- github-delivery-hygiene | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- report-catalog-shortcut-refresh | closed"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- dispatcher-continuity-snapshot-refresh | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-continuity-snapshot-refresh | closed"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- assignment-report-queue-proof-refresh | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -552,7 +553,7 @@ try {
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
-  test("claim-next advances to dispatcher continuity lane after completed report shortcut refresh", () => {
+  test("claim-next advances to assignment queue proof lane after completed dispatcher continuity refresh", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-generated-queue-"));
     try {
       const assignmentsDir = join(queueStateRoot, "assignments");
@@ -581,12 +582,13 @@ try {
       const after = taskSnapshot(assignmentsDir);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("claim candidate dispatcher-continuity-snapshot-refresh"), result.stdout || result.stderr);
-      assert(result.stdout.includes("branch codex/dispatcher-continuity-snapshot-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate assignment-report-queue-proof-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("branch codex/assignment-report-queue-proof-refresh"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
       assert(result.stdout.includes("- worker-backlog-queue-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- lane-handoff-evidence-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- report-catalog-shortcut-refresh | closed"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- dispatcher-continuity-snapshot-refresh | closed"), result.stdout || result.stderr);
       assert(before === after, "generated queue dry-run mutated assignment metadata");
     } finally {
       rmSync(queueStateRoot, { recursive: true, force: true });
@@ -1179,6 +1181,7 @@ try {
         "codex/lane-handoff-evidence-refresh",
         "codex/report-catalog-shortcut-refresh",
         "codex/dispatcher-continuity-snapshot-refresh",
+        "codex/assignment-report-queue-proof-refresh",
       ];
       const manifestPaths = blockedBranches.map((branchName, index) => {
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
@@ -1239,6 +1242,7 @@ try {
         "lane-handoff-evidence-refresh",
         "report-catalog-shortcut-refresh",
         "dispatcher-continuity-snapshot-refresh",
+        "assignment-report-queue-proof-refresh",
       ]) {
         writeFileSync(
           join(assignmentsDir, `${laneSlug}.json`),
@@ -1260,6 +1264,7 @@ try {
         "lane-handoff-evidence-refresh",
         "report-catalog-shortcut-refresh",
         "dispatcher-continuity-snapshot-refresh",
+        "assignment-report-queue-proof-refresh",
       ].map((laneSlug) => join(assignmentsDir, `${laneSlug}.json`));
       const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
@@ -1588,6 +1593,7 @@ try {
         "lane-handoff-evidence-refresh",
         "report-catalog-shortcut-refresh",
         "dispatcher-continuity-snapshot-refresh",
+        "assignment-report-queue-proof-refresh",
       ].map((laneSlug) => {
         const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
         writeFileSync(
