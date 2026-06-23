@@ -2512,7 +2512,15 @@ class SupervisorService:
 
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
-        selected_backlog = next((row for row in backlog_rows if row.classification == "assignable"), None)
+        queued_successor = next(
+            (
+                row
+                for row in backlog_rows
+                if row.backlogItemId == "assignment-report-queue-proof-refresh" and row.classification == "assignable"
+            ),
+            None,
+        )
+        selected_backlog = queued_successor or next((row for row in backlog_rows if row.classification == "assignable"), None)
         blocker_codes = list(
             dict.fromkeys(
                 row.reasonCode

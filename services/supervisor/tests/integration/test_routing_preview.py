@@ -8220,8 +8220,8 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert queue_proof_backlog["reasonCode"] == "backlog-assignable"
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "read-only-evidence-polish"
-    assert continuity["selectedBranch"] == "codex/read-only-evidence-polish"
+    assert continuity["selectedBacklogItemId"] == "assignment-report-queue-proof-refresh"
+    assert continuity["selectedBranch"] == "codex/assignment-report-queue-proof-refresh"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["assignableCount"] >= 1
     assert "blocked-authority" in continuity["blockerCodes"]
