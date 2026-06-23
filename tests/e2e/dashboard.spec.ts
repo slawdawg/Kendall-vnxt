@@ -848,16 +848,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/github-delivery-hygiene")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "github delivery hygiene"')).toBeVisible();
-    await expect(runwayPanel.getByText("pnpm run check:github-workflow-policy").first()).toBeVisible();
-    await expect(runwayPanel.getByText("pnpm run check:delivery-readiness").first()).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/report-catalog-shortcut-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("pnpm run check:reports").first()).toBeVisible();
+    await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
     await expect(runwayPanel.getByText("Do not start or modify another active lane while using this recommendation.").first()).toBeVisible();
     await expect(runwayPanel.getByText("verification-runbook-hardening-slice")).toBeVisible();
     await expect(runwayPanel.getByText("authority-blocker-maintenance-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Readiness checks").first()).toBeVisible();
-    await expect(runwayPanel.getByText("completed-backlog-item")).toBeVisible();
+    await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("Batching policy")).toBeVisible();
     await expect(runwayPanel.getByText("PR batching checklist")).toBeVisible();
     await expect(runwayPanel.getByText("larger reviewable PRs")).toBeVisible();
@@ -952,11 +952,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(safeBacklogPanel.getByRole("link", { name: "/controls#github-workflow-policy-report" })).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "GitHub delivery hygiene" })).toBeVisible();
     const githubDeliveryBacklogCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "GitHub delivery hygiene" }) });
-    await expect(githubDeliveryBacklogCard.getByText("Next lane handoff")).toBeVisible();
-    await expect(githubDeliveryBacklogCard.getByText("branch: codex/github-delivery-hygiene")).toBeVisible();
-    await expect(githubDeliveryBacklogCard.getByText('start: node ./scripts/codex-workspace.mjs start "github delivery hygiene"')).toBeVisible();
-    await expect(githubDeliveryBacklogCard.getByText("pnpm run check:github-workflow-policy")).toBeVisible();
-    await expect(githubDeliveryBacklogCard.getByText("uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py")).toBeVisible();
+    await expect(
+      githubDeliveryBacklogCard.getByText("Use this completed GitHub delivery hygiene lane as evidence only; do not requeue codex/github-delivery-hygiene as a new lane."),
+    ).toBeVisible();
     await expect(githubDeliveryBacklogCard.getByText("docs/github-connector-workflow.md", { exact: true })).toHaveCount(1);
     await expect(githubDeliveryBacklogCard.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true })).toHaveCount(1);
     await expect(safeBacklogPanel.getByText("persistent plaintext gh token storage")).toBeVisible();

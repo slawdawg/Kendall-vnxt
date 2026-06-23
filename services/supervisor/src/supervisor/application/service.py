@@ -2986,19 +2986,19 @@ class SupervisorService:
         ready_backlog_item_ids = {item.itemId for item in backlog.items if item.status == "ready"}
         action_step_ids = {step.stepId for step in action_plan.steps}
         verification_command_ids = {command.commandId for command in verification.requiredCommands + verification.optionalCommands}
-        github_delivery_lane = self._safe_backlog_next_lane(
-            lane_slug="github-delivery-hygiene",
-            lane_title="GitHub delivery hygiene",
+        report_catalog_shortcut_lane = self._safe_backlog_next_lane(
+            lane_slug="report-catalog-shortcut-refresh",
+            lane_title="Report catalog shortcut refresh",
             scope=[
-                "GitHub workflow policy report guidance",
-                "delivery readiness policy report guidance",
-                "workspace finish, merge, and cleanup runbooks",
-                "static drift checks for GitHub delivery safety",
+                "operator shortcuts from safe backlog items to existing supervisor reports",
+                "dashboard report-link coverage for generated worker lanes",
+                "report catalog references that avoid execution-authority expansion",
+                "browser assertions for read-only report navigation",
             ],
             verification_commands=[
-                "pnpm run check:github-workflow-policy",
-                "pnpm run check:delivery-readiness",
-                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:reports",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:dashboard-e2e-runner",
                 "pnpm run check:static",
             ],
         )
@@ -3007,10 +3007,10 @@ class SupervisorService:
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
                 label="Report and evidence navigation slice",
-                status="closed",
+                status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
-                summary="Completed verification surface hardening remains evidence for future read-only report navigation, runtime evidence shortcuts, and operator review surfaces.",
-                includedBacklogItems=["verification-surface-hardening"],
+                summary="Use this slice for report catalog shortcut refresh work that improves read-only navigation without expanding execution authority.",
+                includedBacklogItems=["report-catalog-shortcut-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3033,16 +3033,16 @@ class SupervisorService:
                 ],
                 readinessChecks=[
                     DevelopmentRunwayReadinessCheckView(
-                        checkId="completed-backlog-item",
-                        label="Completed backlog item",
-                        status="closed",
-                        summary="Confirms the verification surface hardening slice is completed evidence and not the next dispatchable lane.",
-                        evidence=["verification-surface-hardening"],
+                        checkId="ready-backlog-item",
+                        label="Ready backlog item",
+                        status="ready" if "report-catalog-shortcut-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the report catalog shortcut refresh item is the next safe backlog item for read-only navigation work.",
+                        evidence=["report-catalog-shortcut-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Use the completed verification surface hardening item as evidence only; do not requeue it.",
+                        nextAction="Keep the report catalog shortcut item ready before changing report navigation surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3072,13 +3072,13 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=None,
-                nextAction="Use this completed slice as evidence for future read-only navigation work and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=report_catalog_shortcut_lane,
+                nextAction="Select this slice for report shortcut navigation work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
                 label="Verification and runbook hardening slice",
-                status="ready",
+                status="closed",
                 recommendedPrScope="Bundle package script changes, verification readiness entries, runbook text, focused tests, dashboard assertions, and static drift checks in one PR.",
                 summary="Use this slice when verification commands, setup guidance, or fresh-VM/handoff instructions change.",
                 includedBacklogItems=["github-delivery-hygiene"],
@@ -3107,15 +3107,15 @@ class SupervisorService:
                 readinessChecks=[
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-items",
-                        label="Ready backlog items",
-                        status="ready" if "github-delivery-hygiene" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the GitHub delivery hygiene backlog item is safe to work.",
+                        label="Completed backlog item",
+                        status="closed",
+                        summary="Confirms the GitHub delivery hygiene backlog item is completed evidence and not the next dispatchable lane.",
                         evidence=["github-delivery-hygiene"],
                         requiredCommandIds=["check-safe-backlog", "check-development-runway"],
                         relatedReports=["GET /supervisor/safe-development-backlog", "GET /supervisor/development-runway-report"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog", "/controls#development-runway-report"],
-                        nextAction="Keep the GitHub delivery hygiene item ready before changing delivery or runbook guidance.",
+                        nextAction="Use the completed GitHub delivery hygiene item as evidence only; do not requeue it.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="handoff-checkpoint-coverage",
@@ -3146,8 +3146,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=github_delivery_lane,
-                nextAction="Select this slice when a verification command or runbook changes, and prove the full local chain still names the new command.",
+                nextLane=None,
+                nextAction="Use this completed slice as evidence when future delivery or runbook guidance changes.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="authority-blocker-maintenance-slice",
@@ -3528,9 +3528,9 @@ class SupervisorService:
                 itemId="github-delivery-hygiene",
                 label="GitHub delivery hygiene",
                 priority="P1",
-                status="ready",
-                summary="Keep Git/GCM, Codex connector, optional gh auth, PR sizing, and delivery verification guidance aligned before remote work depends on it.",
-                recommendedSliceSize="large",
+                status="closed",
+                summary="Delivered GitHub delivery hygiene guidance for Git/GCM, Codex connector, optional gh auth, PR sizing, and delivery verification.",
+                recommendedSliceSize="complete",
                 evidence=[
                     "GitHub workflow policy report documents Git/GCM, Codex connector, optional gh auth, and plaintext-token stop lines.",
                     "Future PRs should be larger coherent slices that bundle related API, dashboard, docs, tests, and drift checks.",
@@ -3554,8 +3554,7 @@ class SupervisorService:
                     "/controls#verification-readiness-report",
                     "/controls#managed-recipe-policy-report",
                 ],
-                nextLane=github_delivery_lane,
-                nextAction="Before remote delivery changes, confirm Git/GCM or connector posture and keep the PR scoped as one larger coherent work package.",
+                nextAction="Use this completed GitHub delivery hygiene lane as evidence only; do not requeue codex/github-delivery-hygiene as a new lane.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="read-only-evidence-polish",

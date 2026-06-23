@@ -514,7 +514,8 @@ try {
     assert(result.stdout.includes("Safe backlog candidates:"), result.stdout || result.stderr);
     assert(result.stdout.includes("- safe-backlog-report-alignment | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- verification-surface-hardening | closed"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- github-delivery-hygiene | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- github-delivery-hygiene | closed"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- report-catalog-shortcut-refresh | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -1076,7 +1077,8 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
-      assert(result.stdout.includes("- selected lane github-delivery-hygiene"), result.stdout || result.stderr);
+      const expected = expectedClaimCandidate();
+      assert(result.stdout.includes(`- selected lane ${expected.slug}`), result.stdout || result.stderr);
       assert(
         result.stdout.includes("- workspace action claim_and_create_workspace") ||
           result.stdout.includes("- workspace action claim_existing_workspace"),
@@ -1104,12 +1106,13 @@ try {
       const tasksDir = join(dispatchStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "dispatch-workspace.json");
+      const expected = expectedClaimCandidate();
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
           {
             task_id: "dispatch-workspace",
-            branch: "codex/github-delivery-hygiene",
+            branch: expected.branch,
             worktree_path: worktreePath,
             base_branch: "main",
             status: "active",
@@ -1256,7 +1259,7 @@ try {
       const after = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
       assert(second.code !== 0, "claim-next --apply unexpectedly claimed another owner's assignment");
-      assert(second.stdout.includes("- github-delivery-hygiene | blocked_owned_active"), second.stdout || second.stderr);
+      assert(second.stdout.includes(`- ${expectedClaimCandidate().slug} | blocked_owned_active`), second.stdout || second.stderr);
       assert(second.stderr.includes("No claimable safe backlog lane found"), second.stderr || second.stdout);
       assert(before === after, "blocked claim-next --apply mutated another owner's assignment");
     } finally {
@@ -1270,12 +1273,13 @@ try {
       const tasksDir = join(claimStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
+      const expected = expectedClaimCandidate();
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
           {
             task_id: "unowned-safe-backlog",
-            branch: "codex/github-delivery-hygiene",
+            branch: expected.branch,
             worktree_path: rootDir,
             base_branch: "main",
             status: "active",
@@ -1304,12 +1308,13 @@ try {
       const tasksDir = join(claimStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
+      const expected = expectedClaimCandidate();
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
           {
             task_id: "unowned-safe-backlog",
-            branch: "codex/github-delivery-hygiene",
+            branch: expected.branch,
             worktree_path: rootDir,
             base_branch: "main",
             status: "active",
@@ -1602,7 +1607,7 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("no claimable safe backlog lane found"), result.stdout || result.stderr);
       assert(result.stdout.includes("- verification-surface-hardening | closed"), result.stdout || result.stderr);
-      assert(result.stdout.includes("- github-delivery-hygiene | blocked_owned_active"), result.stdout || result.stderr);
+      assert(result.stdout.includes(`- ${expectedClaimCandidate().slug} | blocked_owned_active`), result.stdout || result.stderr);
       assert(result.stdout.includes("do not mutate without explicit takeover approval"), result.stdout || result.stderr);
       assert(before === after, "claim-next --dry-run mutated the owned lane manifest");
     } finally {
@@ -2079,9 +2084,9 @@ function remoteBranchExists(cwd, branch) {
 
 function expectedClaimCandidate() {
   return {
-    slug: "github-delivery-hygiene",
-    title: "github delivery hygiene",
-    branch: "codex/github-delivery-hygiene",
+    slug: "read-only-evidence-polish",
+    title: "read only evidence polish",
+    branch: "codex/read-only-evidence-polish",
   };
 }
 
