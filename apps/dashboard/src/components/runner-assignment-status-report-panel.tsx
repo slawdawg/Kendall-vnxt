@@ -55,8 +55,14 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
         <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">delivery: {row.deliveryState}</span>
         <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">handoff: {row.handoffStatus}</span>
         <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">lifecycle: {row.handoffLifecycleState}</span>
+        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">recovery: {row.handoffRecoveryAction}</span>
       </div>
       <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--accent)]">{row.nextSafeAction}</p>
+      {row.handoffRecoveryAction !== "no-action" ? (
+        <p className="mt-2 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+          Recovery: {row.handoffRecoverySummary}
+        </p>
+      ) : null}
       {row.currentCommand ? <p className="mt-2 text-xs leading-5 text-[var(--muted)]">Current command: {row.currentCommand}</p> : null}
       {row.lastResult ? <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Last result: {row.lastResult}</p> : null}
       {hasAvailableHandoff ? (
@@ -75,6 +81,8 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
           ) : null}
           {row.handoffSummary ? <p className="break-all">Summary: {row.handoffSummary}</p> : null}
           <p>Lifecycle: {row.handoffLifecycleState}</p>
+          <p>Recovery action: {row.handoffRecoveryAction}</p>
+          <p>Recovery: {row.handoffRecoverySummary}</p>
           <p>Queue counts: {row.handoffCandidateStateCountsStatus}</p>
           {countEntries.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-2">

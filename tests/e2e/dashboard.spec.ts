@@ -904,8 +904,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/dispatcher-queue-handoff-recovery-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff recovery refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-queue-handoff-audit-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit refresh"')).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
@@ -1070,9 +1070,12 @@ test.describe("dashboard workflow coverage", () => {
     await expect(handoffLifecycleCard.getByText("slice: complete")).toBeVisible();
     await expect(handoffLifecycleCard.getByText("do not requeue dispatcher-queue-handoff-lifecycle-refresh")).toBeVisible();
     const handoffRecoveryCard = safeBacklogPanel.locator("article").filter({ hasText: "Dispatcher queue handoff recovery refresh" });
-    await expect(handoffRecoveryCard.getByText("branch: codex/dispatcher-queue-handoff-recovery-refresh")).toBeVisible();
-    await expect(handoffRecoveryCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff recovery refresh"')).toBeVisible();
-    await expect(handoffRecoveryCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
+    await expect(handoffRecoveryCard.getByText("slice: complete")).toBeVisible();
+    await expect(handoffRecoveryCard.getByText("do not requeue dispatcher-queue-handoff-recovery-refresh")).toBeVisible();
+    const handoffAuditCard = safeBacklogPanel.locator("article").filter({ hasText: "Dispatcher queue handoff audit refresh" });
+    await expect(handoffAuditCard.getByText("branch: codex/dispatcher-queue-handoff-audit-refresh")).toBeVisible();
+    await expect(handoffAuditCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit refresh"')).toBeVisible();
+    await expect(handoffAuditCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 
@@ -1080,6 +1083,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runnerAssignmentPanel.getByText("Runner Assignment Status")).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Resume packet")).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Lifecycle: prepared", { exact: true })).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Recovery action: inspect-handoff-evidence", { exact: true })).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Queue counts: available", { exact: true })).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("active: 1", { exact: true })).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("blocked authority: 1", { exact: true })).toBeVisible();
