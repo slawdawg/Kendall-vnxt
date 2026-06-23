@@ -11,6 +11,13 @@
   `pnpm run check:*`, or `pnpm run check`, if the sandbox runner times out
   before output twice, stop retrying inside the sandbox and request approval to
   run the same read-only verification command outside the sandbox.
+- For read-only verification commands that fail inside the sandbox with a
+  read-only filesystem error against required tool state, such as
+  `.git/worktrees` for Git worktree tests, `$HOME/.cache/uv` for
+  `uv run --directory services/supervisor ...`, or managed-worktree pnpm temp
+  files, do not change test scope or command shape. Record the sandbox boundary
+  and request approval to rerun the exact same read-only verification command
+  outside the sandbox.
 - Verify direct tool availability before resolver scripts or package-manager
   indirection. Use `node --version`, `uv --version`, `pnpm --version`, or
   `uv run --directory services/supervisor python --version` before retrying
@@ -265,7 +272,10 @@ surface is `node ./scripts/codex-workspace.mjs`.
   the PR state.
 - Before merge, always perform a thread-aware review-comment check from the PR
   branch worktree. Do not treat a green check rollup or an empty flat comment
-  list as proof that there are no unresolved review threads.
+  list as proof that there are no unresolved review threads. Repeat this check
+  after every PR head update or amend before merge; resolve only review threads
+  that were actually addressed by code, docs, tests, or an explicit operator
+  decision.
 - When the operator says "clean up merged work", run
   `node ./scripts/codex-workspace.mjs cleanup-current --delete-remote` from
   inside the lane, or `node ./scripts/codex-workspace.mjs cleanup-merged

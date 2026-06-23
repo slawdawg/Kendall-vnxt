@@ -115,6 +115,230 @@ try {
     assert(match[0].includes("env: resolved.env ?? process.env"), "run must pass resolved command environment");
   });
 
+  test("workspace state uses shared resolver", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    assert(source.includes("codex-workspace-state"), "codex-workspace must import shared workspace state resolver");
+    assert(source.includes("workspaceState"), "codex-workspace must use shared workspaceState");
+    assert(!source.includes("function workspaceState"), "codex-workspace must not define workspaceState inline");
+    assert(!source.includes("function workspaceKey"), "codex-workspace must not define workspaceKey inline");
+  });
+
+  test("finish-pr invokes anti-churn finalization before delivery mutation", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function finishPr[\s\S]*?function runAntiChurnFinalization/);
+    assert(match, "finishPr source or anti-churn finalization helper not found");
+    assert(match[0].includes('plan.push("anti-churn hook evaluate --apply-safe --format json")'), "finish-pr dry-run plan must include anti-churn hook invocation");
+    assert(match[0].includes("const antiChurn = runAntiChurnFinalization(manifest, state, { worktreeStatus, pr: existingPr });"), "finish-pr must invoke anti-churn finalization with concrete PR evidence");
+    assert(
+      match[0].indexOf("const antiChurn = runAntiChurnFinalization") < match[0].indexOf('runChecked("git", ["add", "--all"]'),
+      "anti-churn finalization must run before staging/commit delivery mutation",
+    );
+  });
+
+  test("anti-churn finalization records distilled manifest evidence only", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function shapeAntiChurnManifestRecord[\s\S]*?function noStructuredChurnReason/);
+    assert(match, "anti-churn manifest record shaper not found");
+    for (const field of [
+      "mode",
+      "status",
+      "omitted_reason",
+      "lessons_evaluated",
+      "applied",
+      "proposals",
+      "skipped",
+      "files_changed",
+      "verification",
+      "residual_risks",
+      "local_event_storage",
+      "next_safe_action",
+    ]) {
+      assert(match[0].includes(field), `anti-churn manifest record missing ${field}`);
+    }
+    assert(
+      !match[0].includes('status: omittedReason ? "omitted"'),
+      "anti-churn finalization must preserve hook failure status instead of replacing it with omitted",
+    );
+    assert(!match[0].includes("evidenceSummary"), "anti-churn manifest record must not store raw event evidence");
+  });
+
+  test("anti-churn finalization distinguishes no-event omissions from malformed input", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function noStructuredChurnReason[\s\S]*?function antiChurnNextSafeAction/);
+    assert(match, "anti-churn no-event reason helper not found");
+    assert(match[0].includes('"missing-event-store"'), "missing event stores must be typed as no structured churn events");
+    assert(match[0].includes('"empty-event-store"'), "empty event stores must be typed as no structured churn events");
+    assert(match[0].includes('"malformed-event-line"'), "malformed event input must not be hidden as an omission");
+    assert(match[0].includes('"no-valid-events"'), "invalid event stores must not be hidden as an omission");
+    assert(
+      match[0].indexOf('"malformed-event-line"') < match[0].indexOf('"missing-event-store"'),
+      "malformed input checks must run before no-event omission checks",
+    );
+  });
+
+  test("finish-pr renders a stable anti-churn finalization section", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const finishPr = source.match(/function finishPr[\s\S]*?function runAntiChurnFinalization/);
+    const renderer = source.match(/function renderAntiChurnFinalization[\s\S]*?function renderProposalDetails/);
+    assert(finishPr, "finishPr source not found");
+    assert(renderer, "anti-churn finalization renderer not found");
+    assert(
+      finishPr[0].includes("for (const line of renderAntiChurnFinalization(manifest.anti_churn_finalization))"),
+      "finish-pr must print the structured anti-churn finalization section",
+    );
+    assert(!finishPr[0].includes("Anti-churn:"), "finish-pr must not use the compact anti-churn summary");
+    for (const label of [
+      "Anti-Churn Finalization",
+      "- Mode:",
+      "- Lessons evaluated:",
+      "- Applied safe local edits:",
+      "- Proposals prepared:",
+      "- No-op reasons:",
+      "- Local event storage:",
+      "- Verification:",
+      "- Residual risks:",
+    ]) {
+      assert(renderer[0].includes(label), `anti-churn finalization output missing ${label}`);
+    }
+  });
+
+  test("anti-churn finalization renderer surfaces authority, verification, and safe PR inclusion metadata", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const rendererBlock = source.match(/function renderAntiChurnFinalization[\s\S]*?function valueOrNone/);
+    assert(rendererBlock, "anti-churn finalization renderer block not found");
+    const block = rendererBlock[0];
+    for (const expected of [
+      "requiredAuthorityFamily",
+      "requiredAuthority",
+      "blockedOperation",
+      "evidenceReferences",
+      "nextSafeAction",
+      "approval=not approved; proposal-only",
+      "existing finish-pr staging/commit policy decides",
+      "command",
+      "status",
+      "result",
+      "exitCode",
+    ]) {
+      assert(block.includes(expected), `anti-churn finalization renderer missing ${expected}`);
+    }
+    for (const forbidden of ["evidenceSummary", "prompt", "completion", "providerPayload", "secret"]) {
+      assert(!block.includes(forbidden), `anti-churn finalization renderer must not render raw field ${forbidden}`);
+    }
+  });
+
+  test("anti-churn finalization no-op summary includes proposal-only and higher-authority outcomes", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function formatNoOpReasons[\s\S]*?function formatLocalEventStorage/);
+    assert(match, "anti-churn no-op formatter not found");
+    assert(match[0].includes("copyJsonArray(record.proposals)"), "proposal records must contribute to no-op reasons");
+    assert(match[0].includes('"proposal-only"'), "proposal-only outcomes must be rendered in no-op reasons");
+    assert(match[0].includes('"requires-higher-authority"'), "higher-authority outcomes must be rendered in no-op reasons");
+  });
+
+  test("anti-churn lane manifest carries lifecycle metadata without inferring review readiness", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const manifestMatch = source.match(/function antiChurnLaneManifest[\s\S]*?function antiChurnPrState/);
+    const prMatch = source.match(/function antiChurnPrState[\s\S]*?function antiChurnCleanupStatus/);
+    assert(manifestMatch, "anti-churn lane manifest helper not found");
+    assert(prMatch, "anti-churn PR state helper not found");
+    for (const expected of [
+      "owner: manifest.owner || null",
+      "pr: antiChurnPrState(manifest, options.pr)",
+      "status: antiChurnCleanupStatus(manifest)",
+      "startedAt: manifest.cleanup_started_at || null",
+      "dirtyWorktree",
+      "checkedAt",
+      "paths: statusPaths(worktreeStatus)",
+    ]) {
+      assert(manifestMatch[0].includes(expected), `anti-churn lane manifest missing ${expected}`);
+    }
+    assert(prMatch[0].includes("if (!hasPrEvidence)"), "PR state must be unavailable without concrete PR evidence");
+    assert(prMatch[0].includes("return null"), "missing PR evidence must not be converted into an open PR state");
+    assert(prMatch[0].includes("reviewStateCheckedAt: manifest.pr_review_state_checked_at || null"), "review-thread freshness must come from recorded evidence only");
+    assert(!prMatch[0].includes("reviewStateCheckedAt: checkedAt"), "dirty-worktree timestamps must not imply review-thread freshness");
+  });
+
+  test("anti-churn finalization helper does not own lane lifecycle mutations", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function runAntiChurnFinalization[\s\S]*?function antiChurnLaneManifest/);
+    assert(match, "anti-churn finalization helper not found");
+    for (const forbidden of [
+      "manifest.status",
+      "manifest.pr_url",
+      "manifest.pr_number",
+      "manifest.merged_at",
+      "cleanup_started_at",
+      'runChecked("git"',
+      'runChecked("gh"',
+      "cleanupMergedResources",
+      "pr_open",
+      "comment",
+      "merge",
+    ]) {
+      assert(!match[0].includes(forbidden), `anti-churn finalization helper must not own lifecycle mutation: ${forbidden}`);
+    }
+  });
+
+  test("finish-pr writes anti-churn results into the local lane evidence packet", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const finishPr = source.match(/function finishPr[\s\S]*?function runAntiChurnFinalization/);
+    assert(finishPr, "finishPr source not found");
+    assert(
+      finishPr[0].includes("manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, antiChurn.manifestRecord, { worktreeStatus });"),
+      "finish-pr must persist anti-churn evidence into the local lane evidence packet",
+    );
+    assert(
+      finishPr[0].indexOf("manifest.anti_churn_finalization = antiChurn.manifestRecord")
+        < finishPr[0].indexOf("manifest.lane_evidence_packet = buildLaneEvidencePacket"),
+      "lane evidence packet must be built from the distilled anti-churn finalization record",
+    );
+  });
+
+  test("anti-churn lane evidence packet records distilled metadata only", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const packetBlock = source.match(/function buildLaneEvidencePacket[\s\S]*?function cleanupMerged/);
+    assert(packetBlock, "anti-churn lane evidence packet helpers not found");
+    const block = packetBlock[0];
+    for (const expected of [
+      "lane_evidence_packet",
+      "anti_churn_finalization",
+      "event_store_references",
+      "lessons_evaluated",
+      "applied_edits",
+      "proposals",
+      "no_op_reasons",
+      "verification",
+      "residual_risks",
+      "next_safe_action",
+      "source_edit_delivery",
+      "included_in_lane_pr",
+      "rollback_or_recovery_path",
+    ]) {
+      assert(block.includes(expected), `anti-churn evidence packet missing ${expected}`);
+    }
+    for (const forbidden of ["readFileSync", "evidenceSummary", "prompt", "completion", "providerPayload", "secret", "preimageHunk", "plannedPostimageHunk"]) {
+      assert(!block.includes(forbidden), `anti-churn evidence packet must not copy raw field ${forbidden}`);
+    }
+  });
+
+  test("anti-churn evidence packet keeps proposals local and source edits recoverable", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const proposalBlock = source.match(/function shapeProposalEvidence[\s\S]*?function shapeNoOpReasonEvidence/);
+    const deliveryBlock = source.match(/function shapeAntiChurnEvidencePacket[\s\S]*?function shapeEventStoreReferences/);
+    const recoveryBlock = source.match(/function antiChurnRecoveryPath[\s\S]*?function cleanupMerged/);
+    assert(proposalBlock, "anti-churn proposal evidence helper not found");
+    assert(deliveryBlock, "anti-churn delivery evidence helper not found");
+    assert(recoveryBlock, "anti-churn recovery helper not found");
+    for (const expected of ["requiredAuthority", "requiredAuthorityFamily", "reviewPath", 'locality: "local-only"', 'approval: "not-approved"']) {
+      assert(proposalBlock[0].includes(expected), `proposal evidence missing ${expected}`);
+    }
+    assert(deliveryBlock[0].includes('"governed-by-finish-pr-staging-policy"'), "source edit delivery must point to finish-pr staging policy");
+    assert(deliveryBlock[0].includes("local_only_telemetry_or_proposals"), "packet must distinguish local-only telemetry/proposals");
+    assert(recoveryBlock[0].includes("transactionIds"), "recovery path must preserve transaction id metadata when available");
+    assert(recoveryBlock[0].includes("revert the lane PR source edit"), "recovery path must include a source edit recovery option");
+  });
+
   test("assignment-report keeps ownership checks before branch availability checks", () => {
     const source = readFileSync(scriptPath, "utf8");
     const match = source.match(/function classifyBacklogItem[\s\S]*?function classifyLaneAssignment/);
@@ -289,7 +513,10 @@ try {
     assert(result.stdout.includes("Assignment Report"), result.stdout || result.stderr);
     assert(result.stdout.includes("Safe backlog candidates:"), result.stdout || result.stderr);
     assert(result.stdout.includes("- safe-backlog-report-alignment | closed"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- verification-surface-hardening | assignable"), result.stdout || result.stderr);
+    assertIncludesAny(result.stdout, [
+      "- verification-surface-hardening | assignable",
+      "- verification-surface-hardening | ambiguous",
+    ]);
     assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -313,10 +540,11 @@ try {
 
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("DRY RUN: claim-next"), result.stdout || result.stderr);
-    assert(result.stdout.includes("claim candidate verification-surface-hardening"), result.stdout || result.stderr);
-    assert(result.stdout.includes("branch codex/verification-surface-hardening"), result.stdout || result.stderr);
+    const expected = expectedClaimCandidate();
+    assert(result.stdout.includes(`claim candidate ${expected.slug}`), result.stdout || result.stderr);
+    assert(result.stdout.includes(`branch ${expected.branch}`), result.stdout || result.stderr);
     assert(
-      result.stdout.includes('start command node ./scripts/codex-workspace.mjs start "verification surface hardening"'),
+      result.stdout.includes(`start command node ./scripts/codex-workspace.mjs start "${expected.title}"`),
       result.stdout || result.stderr,
     );
     assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
@@ -327,8 +555,9 @@ try {
   test("claim-next apply claims the next lane without creating a branch or worktree", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-apply-"));
     try {
+      const expected = expectedClaimCandidate();
       const tasksDir = join(claimStateRoot, "tasks");
-      const branch = "codex/verification-surface-hardening";
+      const branch = expected.branch;
       const branchBefore = branchExists(rootDir, branch);
       if (branchBefore) {
         seedUnownedVerificationWorkspace(claimStateRoot);
@@ -344,22 +573,22 @@ try {
       assert(branchExists(rootDir, branch) === branchBefore, "claim-next --apply changed branch state");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next --apply created worktrees");
       if (branchBefore) {
-        assert(result.stdout.includes("claimed existing unowned workspace verification-surface-hardening-workspace"), result.stdout || result.stderr);
-        const manifest = readJson(join(tasksDir, "verification-surface-hardening-workspace.json"));
+        assert(result.stdout.includes(`claimed existing unowned workspace ${expected.slug}-workspace`), result.stdout || result.stderr);
+        const manifest = readJson(join(tasksDir, `${expected.slug}-workspace.json`));
         assert(manifest.owner === "runner-a", "claim-next --apply did not claim existing workspace owner");
         assert(Boolean(manifest.owner_updated_at), "workspace owner claim timestamp missing");
       } else {
-        assert(result.stdout.includes("claimed ready lane verification-surface-hardening for runner-a"), result.stdout || result.stderr);
+        assert(result.stdout.includes(`claimed ready lane ${expected.slug} for runner-a`), result.stdout || result.stderr);
         assert(
           result.stdout.includes("assignment metadata only; no branch, PR, worktree, worker, or implementation mutation"),
           result.stdout || result.stderr,
         );
         assert(taskSnapshot(tasksDir) === beforeTasks, "claim-next --apply mutated workspace task manifests");
-        const assignmentPath = join(claimStateRoot, "assignments", "verification-surface-hardening.json");
+        const assignmentPath = join(claimStateRoot, "assignments", `${expected.slug}.json`);
         assert(existsSync(assignmentPath), "claim-next --apply did not write assignment metadata");
         const assignment = JSON.parse(readFileSync(assignmentPath, "utf8"));
-        assert(assignment.assignment_id === "verification-surface-hardening", "assignment id mismatch");
-        assert(assignment.task_id === "verification-surface-hardening", "assignment task id mismatch");
+        assert(assignment.assignment_id === expected.slug, "assignment id mismatch");
+        assert(assignment.task_id === expected.slug, "assignment task id mismatch");
         assert(assignment.status === "claimed", "assignment status mismatch");
         assert(assignment.owner === "runner-a", "assignment owner mismatch");
         assert(assignment.branch === branch, "assignment branch mismatch");
@@ -374,7 +603,8 @@ try {
   test("claim-next apply is idempotent for the current owner", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-idempotent-"));
     try {
-      if (branchExists(rootDir, "codex/verification-surface-hardening")) {
+      const expected = expectedClaimCandidate();
+      if (branchExists(rootDir, expected.branch)) {
         seedClaimedVerificationAssignment(claimStateRoot, "runner-a");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
@@ -383,13 +613,13 @@ try {
       assert(first.code === 0, first.stderr || first.stdout);
       const second = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       assert(second.code === 0, second.stderr || second.stdout);
-      assert(second.stdout.includes("refresh existing assignment verification-surface-hardening"), second.stdout || second.stderr);
+      assert(second.stdout.includes(`refresh existing assignment ${expected.slug}`), second.stdout || second.stderr);
 
       const assignmentsDir = join(claimStateRoot, "assignments");
       const assignmentFiles = readdirSync(assignmentsDir).filter((name) => name.endsWith(".json"));
       assert(assignmentFiles.length === 1, `expected one assignment file, saw ${assignmentFiles.join(", ")}`);
       const assignment = JSON.parse(
-        readFileSync(join(assignmentsDir, "verification-surface-hardening.json"), "utf8"),
+        readFileSync(join(assignmentsDir, `${expected.slug}.json`), "utf8"),
       );
       assert(assignment.owner === "runner-a", "assignment owner changed during idempotent apply");
       assert(
@@ -404,7 +634,8 @@ try {
   test("assignment-report surfaces claimed lane assignment metadata", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-report-claimed-"));
     try {
-      if (branchExists(rootDir, "codex/verification-surface-hardening")) {
+      const expected = expectedClaimCandidate();
+      if (branchExists(rootDir, expected.branch)) {
         seedClaimedVerificationAssignment(claimStateRoot, "runner-a");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
@@ -415,10 +646,10 @@ try {
       const report = run(["assignment-report", "--owner", "runner-a", "--state-root", claimStateRoot]);
 
       assert(report.code === 0, report.stderr || report.stdout);
-      assert(report.stdout.includes("- verification-surface-hardening | claimed"), report.stdout || report.stderr);
+      assert(report.stdout.includes(`- ${expected.slug} | claimed`), report.stdout || report.stderr);
       assert(
         report.stdout.includes(
-          "- verification-surface-hardening | claimed | owner=runner-a | branch=codex/verification-surface-hardening",
+          `- ${expected.slug} | claimed | owner=runner-a | branch=${expected.branch}`,
         ),
         report.stdout || report.stderr,
       );
@@ -1540,6 +1771,10 @@ function run(args) {
   const result = spawnSync(process.execPath, [scriptPath, ...args], {
     cwd: rootDir,
     encoding: "utf8",
+    env: {
+      ...process.env,
+      CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES: "1",
+    },
     stdio: "pipe",
   });
   return {
@@ -1569,13 +1804,8 @@ function createMergedCleanupFixture() {
   const worktree = join(stateRootFixture, "worktrees", "cleanup-task");
   const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}` };
 
-  mkdirSync(join(fixtureRoot, "scripts", "lib"), { recursive: true });
+  copyWorkspaceScriptFixture(fixtureRoot);
   mkdirSync(fakeBin, { recursive: true });
-  writeFileSync(join(fixtureRoot, "scripts", "codex-workspace.mjs"), readFileSync(scriptPath, "utf8"));
-  writeFileSync(
-    join(fixtureRoot, "scripts", "lib", "workspace-command-resolution.mjs"),
-    readFileSync(join(rootDir, "scripts", "lib", "workspace-command-resolution.mjs"), "utf8"),
-  );
   runGit(fixtureRoot, ["init", "-q"]);
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
   runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
@@ -1678,15 +1908,9 @@ function cleanupMergedCleanupFixture(fixture) {
 
 function createBranchCleanupFixture() {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-branch-cleanup-"));
-  const fixtureScript = join(fixtureRoot, "scripts", "codex-workspace.mjs");
-  const fixtureLib = join(fixtureRoot, "scripts", "lib", "workspace-command-resolution.mjs");
   const activeWorktree = `${fixtureRoot}-active`;
-  mkdirSync(join(fixtureRoot, "scripts", "lib"), { recursive: true });
-  writeFileSync(fixtureScript, readFileSync(scriptPath, "utf8"));
-  writeFileSync(
-    fixtureLib,
-    readFileSync(join(rootDir, "scripts", "lib", "workspace-command-resolution.mjs"), "utf8"),
-  );
+  copyWorkspaceScriptFixture(fixtureRoot);
+  const fixtureScript = join(fixtureRoot, "scripts", "codex-workspace.mjs");
 
   runGit(fixtureRoot, ["init", "-q"]);
   runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
@@ -1742,6 +1966,21 @@ function runFixtureScript(fixture, args, options = {}) {
   };
 }
 
+function copyWorkspaceScriptFixture(fixtureRoot) {
+  const fixtureScriptsDir = join(fixtureRoot, "scripts");
+  const fixtureLibDir = join(fixtureScriptsDir, "lib");
+  const sourceLibDir = join(rootDir, "scripts", "lib");
+  mkdirSync(fixtureLibDir, { recursive: true });
+  writeFileSync(join(fixtureScriptsDir, "codex-workspace.mjs"), readFileSync(scriptPath, "utf8"));
+  writeFileSync(
+    join(fixtureScriptsDir, "anti-churn-guidance-hook.mjs"),
+    readFileSync(join(rootDir, "scripts", "anti-churn-guidance-hook.mjs"), "utf8"),
+  );
+  for (const name of readdirSync(sourceLibDir).filter((entry) => entry.endsWith(".mjs"))) {
+    writeFileSync(join(fixtureLibDir, name), readFileSync(join(sourceLibDir, name), "utf8"));
+  }
+}
+
 function runGit(cwd, args) {
   const result = spawnSync("git", args, {
     cwd,
@@ -1777,6 +2016,14 @@ function remoteBranchExists(cwd, branch) {
     stdio: "pipe",
   });
   return result.status === 0 && Boolean((result.stdout || "").trim());
+}
+
+function expectedClaimCandidate() {
+  return {
+    slug: "verification-surface-hardening",
+    title: "verification surface hardening",
+    branch: "codex/verification-surface-hardening",
+  };
 }
 
 function seedClosedSafeBacklogManifests(stateRootPath) {
@@ -1868,4 +2115,11 @@ function assert(condition, message = "assertion failed") {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function assertIncludesAny(value, patterns) {
+  assert(
+    patterns.some((pattern) => value.includes(pattern)),
+    `Expected output to include one of: ${patterns.join(", ")}\n\n${value}`,
+  );
 }

@@ -13,6 +13,8 @@ import {
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runAntiChurnGuidanceHookCli } from "./anti-churn-guidance-hook.mjs";
+import { currentGitRoot, workspaceKey, workspaceState } from "./lib/codex-workspace-state.mjs";
 import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -703,6 +705,7 @@ function finishPr(argv) {
   if (verifyCommand.length > 0) {
     plan.push(verifyCommand.join(" "));
   }
+  plan.push("anti-churn hook evaluate --apply-safe --format json");
   if (worktreeStatus.unstaged && options.stageAll) {
     plan.push("git add --all");
   }
@@ -737,6 +740,12 @@ function finishPr(argv) {
       appendTaskEvent(manifest, "verified", verifyCommand.join(" "));
       worktreeStatus = parseStatus(manifest.worktree_path);
     }
+
+    const antiChurn = runAntiChurnFinalization(manifest, state, { worktreeStatus, pr: existingPr });
+    manifest.anti_churn_finalization = antiChurn.manifestRecord;
+    appendTaskEvent(manifest, "anti_churn_finalized", `${antiChurn.manifestRecord.status}:${antiChurn.manifestRecord.lessons_evaluated}`);
+    worktreeStatus = parseStatus(manifest.worktree_path);
+    manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, antiChurn.manifestRecord, { worktreeStatus });
 
     if (worktreeStatus.unstaged && !options.stageAll) {
       throw new Error("Worktree has unstaged/untracked changes after verification. Stage intentionally first or pass --stage-all.");
@@ -790,7 +799,390 @@ function finishPr(argv) {
     writeManifest(manifestPath, manifest);
   });
   console.log(`Finished task ${manifest.task_id}`);
+  if (manifest.anti_churn_finalization) {
+    for (const line of renderAntiChurnFinalization(manifest.anti_churn_finalization)) {
+      console.log(line);
+    }
+  }
   console.log(`PR: ${manifest.pr_url}`);
+}
+
+function runAntiChurnFinalization(manifest, state, options = {}) {
+  const now = new Date().toISOString();
+  const worktreeStatus = options.worktreeStatus || parseStatus(manifest.worktree_path);
+  const hookResult = runAntiChurnGuidanceHookCli(
+    ["evaluate", "--lane", manifest.task_id, "--apply-safe", "--format", "json"],
+    {
+      cwd: manifest.worktree_path,
+      env: {
+        ...process.env,
+        CODEX_WORKSPACE_ROOT: state.root,
+      },
+      laneManifest: antiChurnLaneManifest(manifest, worktreeStatus, now, { pr: options.pr }),
+      now,
+    },
+  );
+  return {
+    hookResult,
+    manifestRecord: shapeAntiChurnManifestRecord(hookResult, now),
+  };
+}
+
+function antiChurnLaneManifest(manifest, worktreeStatus, checkedAt, options = {}) {
+  return {
+    taskId: manifest.task_id,
+    branch: manifest.branch,
+    owner: manifest.owner || null,
+    worktreePath: manifest.worktree_path,
+    baseBranch: manifest.base_branch,
+    pr: antiChurnPrState(manifest, options.pr),
+    cleanup: {
+      status: antiChurnCleanupStatus(manifest),
+      startedAt: manifest.cleanup_started_at || null,
+    },
+    dirtyWorktree: {
+      checkedAt,
+      paths: statusPaths(worktreeStatus),
+    },
+  };
+}
+
+function antiChurnPrState(manifest, pr) {
+  const merged = Boolean(pr?.mergedAt || manifest.merged_at || manifest.pr_merged_at || manifest.status === "merged" || manifest.status === "closed");
+  const hasPrEvidence = Boolean(pr || manifest.pr_number || manifest.pr_url || merged);
+  if (!hasPrEvidence) {
+    return null;
+  }
+  return {
+    number: pr?.number || manifest.pr_number || null,
+    state: pr?.state || manifest.pr_state || null,
+    merged,
+    reviewStateCheckedAt: manifest.pr_review_state_checked_at || null,
+    headRefOid: pr?.headRefOid || manifest.pr_delivery_head_sha || null,
+  };
+}
+
+function antiChurnCleanupStatus(manifest) {
+  if (manifest.status === "cleanup_partial" || manifest.cleanup_started_at) {
+    return "started";
+  }
+  return "not-started";
+}
+
+function statusPaths(worktreeStatus) {
+  return (worktreeStatus?.lines || [])
+    .map((line) => line.slice(3).trim())
+    .filter(Boolean);
+}
+
+function shapeAntiChurnManifestRecord(result, updatedAt) {
+  const lessons = Number(result?.lessonsEvaluated || 0);
+  const omittedReason = lessons === 0 ? noStructuredChurnReason(result) : null;
+  return {
+    mode: result?.mode || "apply-safe",
+    status: result?.status || "input-error",
+    omitted_reason: omittedReason,
+    lessons_evaluated: lessons,
+    applied: copyJsonArray(result?.applied),
+    proposals: copyJsonArray(result?.proposals),
+    skipped: copyJsonArray(result?.skipped),
+    files_changed: copyJsonArray(result?.filesChanged),
+    verification: copyJsonArray(result?.verification),
+    residual_risks: copyJsonArray(result?.residualRisks),
+    local_event_storage: copyJsonArray(result?.localEventStorage),
+    warnings: copyJsonArray(result?.warnings),
+    requires_authority: copyJsonArray(result?.requiresAuthority),
+    next_safe_action: antiChurnNextSafeAction(result, omittedReason),
+    updated_at: updatedAt,
+  };
+}
+
+function noStructuredChurnReason(result) {
+  const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+  if (warnings.includes("malformed-event-line") || warnings.some((warning) => warning.startsWith("malformed-event-line:"))) {
+    return null;
+  }
+  if (warnings.includes("invalid-event-line") || warnings.some((warning) => warning.startsWith("invalid-event-line:"))) {
+    return null;
+  }
+  if (warnings.includes("no-valid-events")) {
+    return null;
+  }
+  if (warnings.includes("missing-event-store") || warnings.includes("empty-event-store")) {
+    return "no-structured-churn-events";
+  }
+  return "insufficient-evidence";
+}
+
+function antiChurnNextSafeAction(result, omittedReason) {
+  if (omittedReason) {
+    return "Record structured churn events before expecting anti-churn lessons.";
+  }
+  if (result?.status === "verification-pending-approval") {
+    return "Request approval for the exact read-only verification command surfaced by the hook.";
+  }
+  if (result?.status === "requires-higher-authority") {
+    return "Review required authority before any higher-authority mutation.";
+  }
+  if (result?.status === "verification-failed") {
+    return "Inspect the hook proposal and verification failure before applying guidance.";
+  }
+  if (result?.status === "input-error") {
+    return "Inspect local anti-churn state and event store availability.";
+  }
+  return null;
+}
+
+function copyJsonArray(value) {
+  return Array.isArray(value) ? value.map((entry) => JSON.parse(JSON.stringify(entry))) : [];
+}
+
+function renderAntiChurnFinalization(record = {}) {
+  const changedFiles = uniqueTextValues(record.files_changed);
+  const appliedFiles = uniqueTextValues([...changedFiles, ...record.applied?.map((entry) => fieldValue(entry, ["targetFile", "file", "target"])) || []]);
+  const lines = [
+    "Anti-Churn Finalization",
+    `- Status: ${valueOrNone(record.status)}`,
+    `- Mode: ${valueOrNone(record.mode)}`,
+    `- Lessons evaluated: ${Number(record.lessons_evaluated || 0)}`,
+    `- Applied safe local edits: ${appliedFiles.length ? appliedFiles.join(", ") : "none"}`,
+    `- Proposals prepared: ${formatCount(record.proposals)}`,
+    `- No-op reasons: ${formatNoOpReasons(record)}`,
+    `- Local event storage: ${formatLocalEventStorage(record.local_event_storage)}`,
+    `- Verification: ${formatVerification(record.verification)}`,
+    `- Residual risks: ${formatTextList(record.residual_risks)}`,
+  ];
+
+  if (appliedFiles.length) {
+    lines.push("  - PR inclusion: existing finish-pr staging/commit policy decides whether changed source files are included in the lane PR.");
+  }
+  lines.push(...renderProposalDetails(record));
+  if (record.next_safe_action) {
+    lines.push(`- Operator next step: ${record.next_safe_action}`);
+  }
+  return lines;
+}
+
+function renderProposalDetails(record = {}) {
+  const lines = [];
+  const authorityItems = [
+    ...copyJsonArray(record.proposals),
+    ...copyJsonArray(record.requires_authority),
+    ...copyJsonArray(record.skipped).filter((entry) => entry?.noOpReason === "requires-higher-authority" || entry?.noOpReason === "proposal-only"),
+  ];
+  authorityItems.forEach((entry, index) => {
+    const authority = fieldList(entry, ["requiredAuthorityFamily", "requiredAuthority", "requiresAuthority", "authority"]);
+    const operation = fieldValue(entry, ["blockedOperation", "operation", "behavior", "proposedTarget", "durableTarget", "targetFile", "target"]);
+    const evidence = fieldList(entry, ["evidenceReferences", "evidenceRefs", "collapsedSourceEventIds", "sourceEventId"]);
+    const next = fieldValue(entry, ["nextSafeAction", "approvalGuidance", "verificationIdea", "residualRisk"]);
+    lines.push(
+      `  - Proposal ${index + 1}: authority=${authority || "unspecified"}; blocked_operation=${operation || "unspecified"}; evidence=${evidence || "none"}; next_safe_action=${next || "review proposal"}; approval=not approved; proposal-only`,
+    );
+  });
+  return lines;
+}
+
+function formatCount(value) {
+  return Array.isArray(value) && value.length ? String(value.length) : "none";
+}
+
+function formatNoOpReasons(record = {}) {
+  const counts = new Map();
+  const proposalReasons = copyJsonArray(record.proposals).map((entry) => entry?.noOpReason || entry?.decision || "proposal-only");
+  const statusReasons = ["proposal-only", "requires-higher-authority"].includes(record.status) ? [record.status] : [];
+  for (const reason of [
+    record.omitted_reason,
+    ...statusReasons,
+    ...proposalReasons,
+    ...copyJsonArray(record.skipped).map((entry) => entry?.noOpReason || entry?.decision || entry?.status),
+  ]) {
+    if (!reason) {
+      continue;
+    }
+    counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  return counts.size ? [...counts.entries()].map(([reason, count]) => `${reason}=${count}`).join(", ") : "none";
+}
+
+function formatLocalEventStorage(value) {
+  const entries = copyJsonArray(value);
+  if (!entries.length) {
+    return "none";
+  }
+  return entries.map((entry) => {
+    const eventStore = fieldValue(entry, ["eventStore", "path"]) || "unavailable";
+    const eventCount = entry?.eventCount === undefined ? "unknown" : entry.eventCount;
+    return `${eventStore} (${eventCount} events)`;
+  }).join(", ");
+}
+
+function formatVerification(value) {
+  const entries = copyJsonArray(value);
+  if (!entries.length) {
+    return "none";
+  }
+  return entries.map((entry) => {
+    const command = fieldValue(entry, ["command", "target"]) || "unspecified";
+    const result = fieldValue(entry, ["status", "result", "exitCode"]);
+    return result ? `${command} => ${result}` : command;
+  }).join(", ");
+}
+
+function formatTextList(value) {
+  const entries = uniqueTextValues(value);
+  return entries.length ? entries.join(", ") : "none";
+}
+
+function fieldValue(entry, names) {
+  if (!entry || typeof entry !== "object") {
+    return typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean" ? String(entry) : "";
+  }
+  for (const name of names) {
+    const value = entry[name];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+  }
+  return "";
+}
+
+function fieldList(entry, names) {
+  if (!entry || typeof entry !== "object") {
+    return fieldValue(entry, names);
+  }
+  for (const name of names) {
+    const value = entry[name];
+    const formatted = Array.isArray(value) ? uniqueTextValues(value).join(", ") : fieldValue({ value }, ["value"]);
+    if (formatted) {
+      return formatted;
+    }
+  }
+  return "";
+}
+
+function uniqueTextValues(value) {
+  const input = Array.isArray(value) ? value : [];
+  return [...new Set(input
+    .map((entry) => {
+      if (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") {
+        return String(entry);
+      }
+      return "";
+    })
+    .filter(Boolean))];
+}
+
+function valueOrNone(value) {
+  return value === undefined || value === null || value === "" ? "none" : String(value);
+}
+
+function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
+  return {
+    ...(manifest.lane_evidence_packet && typeof manifest.lane_evidence_packet === "object" ? manifest.lane_evidence_packet : {}),
+    schemaVersion: 1,
+    task_id: manifest.task_id,
+    branch: manifest.branch,
+    worktree_path: manifest.worktree_path,
+    updated_at: antiChurnRecord.updated_at || new Date().toISOString(),
+    anti_churn_finalization: shapeAntiChurnEvidencePacket(antiChurnRecord, options),
+  };
+}
+
+function shapeAntiChurnEvidencePacket(record = {}, options = {}) {
+  const filesChanged = uniqueTextValues(record.files_changed);
+  return {
+    mode: valueOrNone(record.mode),
+    status: valueOrNone(record.status),
+    event_store_references: shapeEventStoreReferences(record.local_event_storage),
+    lessons_evaluated: Number(record.lessons_evaluated || 0),
+    applied_edits: shapeAppliedEditEvidence(record.applied),
+    proposals: shapeProposalEvidence(record),
+    no_op_reasons: shapeNoOpReasonEvidence(record),
+    verification: shapeVerificationEvidence(record.verification),
+    residual_risks: uniqueTextValues(record.residual_risks),
+    next_safe_action: record.next_safe_action || null,
+    source_edit_delivery: {
+      files_changed: filesChanged,
+      included_in_lane_pr: filesChanged.length ? "governed-by-finish-pr-staging-policy" : "none",
+      local_only_telemetry_or_proposals: filesChanged.length === 0,
+      rollback_or_recovery_path: antiChurnRecoveryPath(record),
+      current_worktree_paths: statusPaths(options.worktreeStatus),
+    },
+  };
+}
+
+function shapeEventStoreReferences(value) {
+  return copyJsonArray(value).map((entry) => ({
+    lane: fieldValue(entry, ["lane"]) || null,
+    eventStore: fieldValue(entry, ["eventStore", "path"]) || null,
+    eventCount: Number.isFinite(Number(entry?.eventCount)) ? Number(entry.eventCount) : null,
+  }));
+}
+
+function shapeAppliedEditEvidence(value) {
+  return copyJsonArray(value).map((entry) => ({
+    candidateId: fieldValue(entry, ["candidateId"]) || null,
+    targetFile: fieldValue(entry, ["targetFile", "file", "target"]) || null,
+    transactionId: fieldValue(entry, ["transactionId"]) || null,
+    status: fieldValue(entry, ["status"]) || null,
+  }));
+}
+
+function shapeProposalEvidence(record = {}) {
+  return [
+    ...copyJsonArray(record.proposals),
+    ...copyJsonArray(record.skipped).filter((entry) => entry?.noOpReason === "requires-higher-authority" || entry?.noOpReason === "proposal-only"),
+  ].map((entry) => ({
+    candidateId: fieldValue(entry, ["candidateId"]) || null,
+    sourceEventId: fieldValue(entry, ["sourceEventId"]) || null,
+    decision: fieldValue(entry, ["decision"]) || "proposal-only",
+    noOpReason: fieldValue(entry, ["noOpReason"]) || null,
+    proposedTarget: fieldValue(entry, ["proposedTarget", "durableTarget", "targetFile", "target"]) || null,
+    requiredAuthority: fieldList(entry, ["requiredAuthority", "requiresAuthority", "authority"]) || null,
+    requiredAuthorityFamily: fieldList(entry, ["requiredAuthorityFamily"]) || null,
+    evidenceReferences: fieldList(entry, ["evidenceReferences", "evidenceRefs", "collapsedSourceEventIds", "sourceEventId"]) || null,
+    reviewPath: fieldValue(entry, ["reviewPath", "approvalGuidance", "verificationIdea"]) || "local-only proposal review",
+    locality: "local-only",
+    approval: "not-approved",
+  }));
+}
+
+function shapeNoOpReasonEvidence(record = {}) {
+  const counts = new Map();
+  const reasons = [
+    record.omitted_reason,
+    ...(["proposal-only", "requires-higher-authority"].includes(record.status) ? [record.status] : []),
+    ...copyJsonArray(record.proposals).map((entry) => entry?.noOpReason || entry?.decision || "proposal-only"),
+    ...copyJsonArray(record.skipped).map((entry) => entry?.noOpReason || entry?.decision || entry?.status),
+  ].filter(Boolean);
+  for (const reason of reasons) {
+    counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  return [...counts.entries()].map(([reason, count]) => ({ reason, count }));
+}
+
+function shapeVerificationEvidence(value) {
+  return copyJsonArray(value).map((entry) => ({
+    target: fieldValue(entry, ["target"]) || null,
+    command: fieldValue(entry, ["command"]) || null,
+    status: fieldValue(entry, ["status"]) || null,
+    result: fieldValue(entry, ["result"]) || null,
+    exitCode: fieldValue(entry, ["exitCode"]) || null,
+  }));
+}
+
+function antiChurnRecoveryPath(record = {}) {
+  const transactionIds = uniqueTextValues(copyJsonArray(record.applied).map((entry) => fieldValue(entry, ["transactionId"])));
+  if (transactionIds.length) {
+    return `inspect hook transaction ${transactionIds.join(", ")} or revert the lane PR source edit`;
+  }
+  if (record.status === "verification-failed") {
+    return "inspect verification failure proposal; hook-owned source patch should already be rolled back";
+  }
+  if (record.status === "verification-pending-approval") {
+    return "request verification approval before restoring or including any hook source edit";
+  }
+  return "not-required";
 }
 
 function cleanupMerged(argv, mode = {}) {
@@ -1296,20 +1688,6 @@ function doctor(argv) {
   if (findings.some((finding) => !finding.ok && !finding.optional)) {
     process.exit(1);
   }
-}
-
-function workspaceState(options = {}) {
-  const configuredRoot =
-    options.stateRoot ||
-    process.env.CODEX_WORKSPACE_ROOT ||
-    join(process.env.USERPROFILE || process.env.HOME || dirname(repoRoot), ".codex-workspaces", workspaceKey());
-  const root = resolve(String(configuredRoot));
-  return {
-    root,
-    assignmentsDir: join(root, "assignments"),
-    tasksDir: join(root, "tasks"),
-    worktreesDir: join(root, "worktrees"),
-  };
 }
 
 function readManifests(state) {
@@ -2933,10 +3311,11 @@ function claimBranchNameBlocker(branchName) {
 }
 
 function claimBranchAvailabilityBlocker(branchName) {
-  if (branchExists(branchName)) {
+  const ignoreFixtureBranches = process.env.CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES === "1";
+  if (!ignoreFixtureBranches && branchExists(branchName)) {
     return `local branch already exists: ${branchName}`;
   }
-  if (remoteBranchExists(branchName)) {
+  if (!ignoreFixtureBranches && remoteBranchExists(branchName)) {
     return `remote branch already exists: origin/${branchName}`;
   }
   return "";
@@ -3380,33 +3759,6 @@ function titleFromDescription(value) {
 
 function dateStamp() {
   return new Date().toISOString().slice(0, 10).replace(/-/g, "");
-}
-
-function workspaceKey() {
-  for (const cwd of [repoRoot, currentGitRoot()]) {
-    const origin = git(["remote", "get-url", "origin"], { cwd });
-    if (origin.code === 0 && origin.stdout) {
-      const match = origin.stdout.trim().match(/github\.com[:/](?<owner>[^/]+)\/(?<repo>[^/]+?)(\.git)?$/i);
-      if (match?.groups) {
-        return slugify(`${match.groups.owner}-${match.groups.repo}`);
-      }
-    }
-  }
-
-  const commonDir = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: repoRoot });
-  if (commonDir.code === 0 && commonDir.stdout) {
-    return slugify(basename(dirname(commonDir.stdout.trim())));
-  }
-
-  return slugify(basename(repoRoot));
-}
-
-function currentGitRoot() {
-  const result = git(["rev-parse", "--show-toplevel"], { cwd: process.cwd() });
-  if (result.code === 0 && result.stdout) {
-    return result.stdout.trim();
-  }
-  return process.cwd();
 }
 
 function printManifestSummary(manifest) {

@@ -699,6 +699,18 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:clean-install-boundary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:clean-install-boundary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:codex-workspace", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:codex-workspace-state", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-event-writer", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-signature-classifier", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-event-reader", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-guidance-candidate-classifier", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-guidance-dedupe", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-guidance-output", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-verification-routing", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-apply-safe-gate", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-hook-transaction-store", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-source-apply", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:anti-churn-verification-rollback", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:workspace-command-resolution", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:dashboard-e2e-runner", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:e2e:dashboard:controls", { exact: true })).toBeVisible();

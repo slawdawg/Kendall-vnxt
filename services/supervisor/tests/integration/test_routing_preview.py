@@ -1597,6 +1597,18 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-clean-install-boundary",
         "check-clean-install-boundary",
         "test-codex-workspace",
+        "test-codex-workspace-state",
+        "test-anti-churn-event-writer",
+        "test-anti-churn-signature-classifier",
+        "test-anti-churn-event-reader",
+        "test-anti-churn-guidance-candidate-classifier",
+        "test-anti-churn-guidance-dedupe",
+        "test-anti-churn-guidance-output",
+        "test-anti-churn-verification-routing",
+        "test-anti-churn-apply-safe-gate",
+        "test-anti-churn-hook-transaction-store",
+        "test-anti-churn-source-apply",
+        "test-anti-churn-verification-rollback",
         "test-workspace-command-resolution",
         "test-dashboard-e2e-runner",
         "dashboard-build",
@@ -1630,6 +1642,18 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "test-clean-install-boundary" in static_group["commandIds"]
     assert "check-clean-install-boundary" in static_group["commandIds"]
     assert "test-codex-workspace" in static_group["commandIds"]
+    assert "test-codex-workspace-state" in static_group["commandIds"]
+    assert "test-anti-churn-event-writer" in static_group["commandIds"]
+    assert "test-anti-churn-signature-classifier" in static_group["commandIds"]
+    assert "test-anti-churn-event-reader" in static_group["commandIds"]
+    assert "test-anti-churn-guidance-candidate-classifier" in static_group["commandIds"]
+    assert "test-anti-churn-guidance-dedupe" in static_group["commandIds"]
+    assert "test-anti-churn-guidance-output" in static_group["commandIds"]
+    assert "test-anti-churn-verification-routing" in static_group["commandIds"]
+    assert "test-anti-churn-apply-safe-gate" in static_group["commandIds"]
+    assert "test-anti-churn-hook-transaction-store" in static_group["commandIds"]
+    assert "test-anti-churn-source-apply" in static_group["commandIds"]
+    assert "test-anti-churn-verification-rollback" in static_group["commandIds"]
     assert "test-workspace-command-resolution" in static_group["commandIds"]
     assert "test-dashboard-e2e-runner" in static_group["commandIds"]
     assert "check-adaptive-scoring" in static_group["commandIds"]

@@ -82,6 +82,11 @@ Choose one narrow action that can actually reduce uncertainty:
 - Replace a complex shell shape with a simpler direct shell command.
 - Read the existing script or docs before invoking package-manager indirection.
 - Request approval for the exact read-only verification command when sandbox behavior is the blocker.
+- For Node workspace tests that fail with a read-only `.git/worktrees` write
+  while creating temporary worktree metadata, request approval for the exact
+  same read-only verification command outside the sandbox instead of changing
+  the test file, skipping the worktree test, or narrowing the command to hide
+  the boundary.
 - For `uv run --directory services/supervisor ...` failures that report a
   read-only user cache path, request approval for the same read-only command
   outside the sandbox instead of changing package-manager or Python command
