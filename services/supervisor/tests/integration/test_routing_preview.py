@@ -2324,14 +2324,19 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
     worker_queue_item = next(item for item in report["items"] if item["itemId"] == "worker-backlog-queue-refresh")
     assert worker_queue_item["priority"] == "P1"
-    assert worker_queue_item["recommendedSliceSize"] == "large"
-    assert worker_queue_item["nextLane"]["laneSlug"] == "worker-backlog-queue-refresh"
-    assert worker_queue_item["nextLane"]["branchName"] == "codex/worker-backlog-queue-refresh"
-    assert worker_queue_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "worker backlog queue refresh"'
-    assert "pnpm run test:codex-workspace" in worker_queue_item["nextLane"]["verificationCommands"]
+    assert worker_queue_item["status"] == "closed"
+    assert worker_queue_item["recommendedSliceSize"] == "complete"
+    assert worker_queue_item["nextLane"] is None
+    assert "do not requeue worker-backlog-queue-refresh" in worker_queue_item["nextAction"]
+    assert worker_queue_item["sourceEvidenceLabels"] == [
+        "3-27-safe-development-backlog-report.md",
+        "3-32-safe-development-backlog-drift-check.md",
+        "3-60-safe-backlog-report-anchors.md",
+    ]
     assert "GET /supervisor/runner-assignment-status-report" in worker_queue_item["relatedReports"]
     assert "/controls#runner-assignment-status" in worker_queue_item["dashboardAnchors"]
     assert any("claim-next evidence can become starved" in evidence for evidence in worker_queue_item["evidence"])
+    assert any("claim-next should advance to lane-handoff-evidence-refresh" in evidence for evidence in worker_queue_item["evidence"])
     handoff_item = next(item for item in report["items"] if item["itemId"] == "lane-handoff-evidence-refresh")
     assert handoff_item["nextLane"]["branchName"] == "codex/lane-handoff-evidence-refresh"
     assert handoff_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "lane handoff evidence refresh"'

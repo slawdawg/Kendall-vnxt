@@ -962,10 +962,12 @@ test.describe("dashboard workflow coverage", () => {
     await expect(safeBacklogPanel.getByText("persistent plaintext gh token storage")).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "Worker backlog queue refresh" })).toBeVisible();
     const workerQueueCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Worker backlog queue refresh" }) });
-    await expect(workerQueueCard.getByText("branch: codex/worker-backlog-queue-refresh")).toBeVisible();
-    await expect(workerQueueCard.getByText('start: node ./scripts/codex-workspace.mjs start "worker backlog queue refresh"')).toBeVisible();
+    await expect(workerQueueCard.getByText("closed", { exact: true })).toBeVisible();
+    await expect(workerQueueCard.getByText("slice: complete")).toBeVisible();
     await expect(workerQueueCard.getByText("claim-next evidence can become starved")).toBeVisible();
-    await expect(workerQueueCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
+    await expect(workerQueueCard.getByText("do not requeue worker-backlog-queue-refresh")).toBeVisible();
+    await expect(workerQueueCard.getByText("claim-next should advance to lane-handoff-evidence-refresh")).toBeVisible();
+    await expect(workerQueueCard.getByText("3-32-safe-development-backlog-drift-check.md")).toBeVisible();
     await expect(workerQueueCard.getByRole("link", { name: "GET /supervisor/runner-assignment-status-report" })).toHaveAttribute(
       "href",
       "/controls#runner-assignment-status",
