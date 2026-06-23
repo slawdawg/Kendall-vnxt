@@ -105,8 +105,19 @@ function slugify(value) {
     .slice(0, 80) || "memory-proposal";
 }
 
+function safeIdComponent(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error("MemoryProposal id must contain only letters, numbers, underscores, and hyphens.");
+  }
+  return value;
+}
+
 function timestampId(prefix, date = new Date()) {
   return `${prefix}-${date.toISOString().replace(/[-:.]/g, "").slice(0, 15)}Z`;
+}
+
+function vaultFolderPath(vaultRoot, folder) {
+  return resolve(vaultRoot, normalize(folder));
 }
 
 export function validateConfig(config, options = {}) {
@@ -116,6 +127,9 @@ export function validateConfig(config, options = {}) {
   const proposalQueueFolder = config.proposal_queue_folder ?? DEFAULT_CONFIG.proposal_queue_folder;
   const allowedReadFolders = asArray(config.allowed_read_folders);
   const excludedFolders = asArray(config.excluded_folders);
+  const proposalQueuePath = vaultFolderPath(resolvedVaultRoot, proposalQueueFolder);
+  const allowedReadFolderPaths = allowedReadFolders.map((folder) => vaultFolderPath(resolvedVaultRoot, folder));
+  const excludedFolderPaths = excludedFolders.map((folder) => vaultFolderPath(resolvedVaultRoot, folder));
   const findings = [];
 
   if (!VALID_PROFILES.has(config.profile)) {
@@ -144,8 +158,8 @@ export function validateConfig(config, options = {}) {
     }
   }
 
-  for (const folder of excludedFolders) {
-    if (allowedReadFolders.includes(folder)) {
+  for (const [index, folder] of excludedFolders.entries()) {
+    if (allowedReadFolderPaths.includes(excludedFolderPaths[index])) {
       findings.push({
         severity: "fail",
         code: "folder-in-allowlist-and-exclusions",
@@ -154,7 +168,7 @@ export function validateConfig(config, options = {}) {
     }
   }
 
-  if (allowedReadFolders.includes(proposalQueueFolder)) {
+  if (allowedReadFolderPaths.includes(proposalQueuePath)) {
     findings.push({
       severity: "fail",
       code: "queue-folder-readable",
@@ -162,7 +176,7 @@ export function validateConfig(config, options = {}) {
     });
   }
 
-  if (!excludedFolders.includes(proposalQueueFolder)) {
+  if (!excludedFolderPaths.includes(proposalQueuePath)) {
     findings.push({
       severity: "concern",
       code: "queue-folder-not-excluded",
@@ -338,7 +352,10 @@ export function writeApprovedDraft(config, proposal, options = {}) {
   const backup = backupVault(config, options);
   const draftsDir = join(validation.vault_root, validation.proposal_queue_folder, "AI Drafts");
   mkdirSync(draftsDir, { recursive: true });
-  const draftPath = join(draftsDir, `${slugify(proposal.title)}-${proposal.id}.md`);
+  const draftPath = join(draftsDir, `${slugify(proposal.title)}-${safeIdComponent(proposal.id)}.md`);
+  if (!isPathInside(draftPath, draftsDir)) {
+    throw new Error("Draft path must remain inside the AI Drafts queue.");
+  }
   const sourceRefs = proposal.source_refs.map((ref) => `  - "${ref.path}"`).join("\n");
   const body = [
     "---",

@@ -53,6 +53,23 @@ test("queue folder cannot be configured as readable", () => {
   assert.ok(result.findings.some((finding) => finding.code === "queue-folder-readable"));
 });
 
+test("queue folder aliases cannot be configured as readable", () => {
+  const workDir = mkdtempSync(join(tmpdir(), "kom-test-"));
+  const { vaultRoot, backupRoot } = createSyntheticVault(workDir);
+  const config = createDefaultConfig({
+    vault_root: vaultRoot,
+    backup_root: backupRoot,
+    allowed_read_folders: ["00 Inbox", "01 Dashboard Queue/."],
+    excluded_folders: ["Private"],
+  });
+
+  const result = validateConfig(config);
+
+  assert.equal(result.status, "FAIL");
+  assert.ok(result.findings.some((finding) => finding.code === "queue-folder-readable"));
+  assert.ok(result.findings.some((finding) => finding.code === "queue-folder-not-excluded"));
+});
+
 test("vault folder config rejects traversal", () => {
   const workDir = mkdtempSync(join(tmpdir(), "kom-test-"));
   const { vaultRoot, backupRoot } = createSyntheticVault(workDir);
@@ -84,4 +101,20 @@ test("draft write-back requires approval", () => {
   const draft = writeApprovedDraft(config, approved);
   assert.match(draft.relative_path, /^01 Dashboard Queue\/AI Drafts\//);
   assert.ok(existsSync(draft.backup.backup_path));
+});
+
+test("draft write-back rejects unsafe proposal ids", () => {
+  const workDir = mkdtempSync(join(tmpdir(), "kom-test-"));
+  const { vaultRoot, backupRoot } = createSyntheticVault(workDir);
+  const config = createDefaultConfig({
+    vault_root: vaultRoot,
+    backup_root: backupRoot,
+  });
+  const [note] = listApprovedNotes(config).notes;
+  const proposal = approveProposal({
+    ...createMemoryProposal(config, note),
+    id: "x/../../../outside",
+  });
+
+  assert.throws(() => writeApprovedDraft(config, proposal), /proposal id/i);
 });
