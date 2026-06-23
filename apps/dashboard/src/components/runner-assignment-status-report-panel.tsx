@@ -6,6 +6,32 @@ import type { RunnerAssignmentStatusReportView, RunnerAssignmentStatusRowView, R
 type AuditEvidenceFilter = "all" | RunnerHandoffAuditEntryView["evidenceStatus"];
 type AuditPayloadFilter = "all" | RunnerHandoffAuditEntryView["payloadRetention"];
 
+const AUDIT_JSON_SCHEMA_ID = "kendall.runner-handoff-audit.filtered-export.v1";
+const AUDIT_JSON_SCHEMA_VERSION = 1;
+const AUDIT_JSON_RETAINED_ENTRY_FIELDS = [
+  "sequence",
+  "lane",
+  "branch",
+  "taskId",
+  "workspaceAction",
+  "nextCommand",
+  "generatedAt",
+  "readinessStatus",
+  "readinessCommand",
+  "readinessSummary",
+  "queueCountsStatus",
+  "queueCounts",
+  "stopLines",
+  "lifecycleState",
+  "recoveryAction",
+  "recoverySummary",
+  "evidenceStatus",
+  "evidenceSummary",
+  "retentionPolicy",
+  "payloadRetention",
+  "retentionSummary",
+] as const;
+
 function formatGenerated(value: string): string {
   return new Date(value).toLocaleString();
 }
@@ -118,11 +144,18 @@ function auditExportJson(
   const query = filters.query.trim();
   return JSON.stringify(
     {
+      schemaId: AUDIT_JSON_SCHEMA_ID,
+      schemaVersion: AUDIT_JSON_SCHEMA_VERSION,
       exportKind: "filtered-handoff-audit",
       retention: {
         policy: "metadata-only",
         payload: "not-retained",
         excluded: ["raw prompts", "completions", "provider payloads", "reasoning traces", "secrets", "source copies"],
+      },
+      schema: {
+        retainedEntryFields: AUDIT_JSON_RETAINED_ENTRY_FIELDS,
+        requiredTopLevelFields: ["schemaId", "schemaVersion", "exportKind", "retention", "entries", "filters", "auditTrail"],
+        metadataContract: "generated-worker-handoff-audit-metadata-only",
       },
       entries: {
         filtered: entries.length,

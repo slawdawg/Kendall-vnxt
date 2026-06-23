@@ -1133,8 +1133,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(handoffAuditTrail.getByLabel("Filtered audit export")).toContainText("retention: metadata-only");
     await expect(handoffAuditTrail.getByText(/filename: handoff-audit-.*-1-of-1\.txt/)).toBeVisible();
     await expect(handoffAuditTrail.getByText(/json filename: handoff-audit-.*-1-of-1\.json/)).toBeVisible();
+    await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"schemaId": "kendall.runner-handoff-audit.filtered-export.v1"');
+    await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"schemaVersion": 1');
     await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"exportKind": "filtered-handoff-audit"');
     await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"payload": "not-retained"');
+    await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"retainedEntryFields"');
     await expect(handoffAuditTrail.getByText("active: 1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("blocked authority: 1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("blocked owned active: 1", { exact: true })).toBeVisible();
@@ -1164,10 +1167,16 @@ test.describe("dashboard workflow coverage", () => {
     expect(auditJsonDownloadPath).toBeTruthy();
     const auditJsonDownloadPayload = JSON.parse(await fs.readFile(auditJsonDownloadPath!, "utf8"));
     expect(auditJsonDownloadPayload).toMatchObject({
+      schemaId: "kendall.runner-handoff-audit.filtered-export.v1",
+      schemaVersion: 1,
       exportKind: "filtered-handoff-audit",
       retention: {
         policy: "metadata-only",
         payload: "not-retained",
+      },
+      schema: {
+        metadataContract: "generated-worker-handoff-audit-metadata-only",
+        requiredTopLevelFields: ["schemaId", "schemaVersion", "exportKind", "retention", "entries", "filters", "auditTrail"],
       },
       entries: {
         filtered: 1,
@@ -1184,6 +1193,8 @@ test.describe("dashboard workflow coverage", () => {
       payloadRetention: "not-retained",
       retentionPolicy: "metadata-only",
     });
+    expect(auditJsonDownloadPayload.schema.retainedEntryFields).toContain("evidenceStatus");
+    expect(auditJsonDownloadPayload.schema.retainedEntryFields).toContain("payloadRetention");
     await expect(handoffAuditTrail.getByText("JSON download prepared for 1 audit entry.")).toBeVisible();
     await handoffAuditTrail.getByLabel("Query").fill("not-present-in-audit");
     await expect(handoffAuditTrail.getByText("Audit query: 0/1", { exact: true })).toBeVisible();
