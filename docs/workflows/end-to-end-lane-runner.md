@@ -37,9 +37,10 @@ It authorizes, for the named lane only:
   depends on current tool, API, or ecosystem behavior.
 - Use BMAD workflows and code review when the lane benefits from requirements,
   architecture, QA, or multi-perspective review.
-- Use BMAD party mode or spawned BMAD subagents only when the operator has
-  explicitly approved the provider, model-selection, and spending authority for
-  that lane.
+- Use BMAD party mode or spawned BMAD subagents automatically when the lane
+  benefits from multi-agent analysis, using the repository's configured
+  provider/model defaults and bounded party-mode budget. No lane-specific
+  operator approval is required for that party-mode step.
 - Create local BMAD planning artifacts under ignored local output folders.
 - Rewrite durable decisions from local planning into source-owned docs, tests,
   scripts, or policy.
@@ -52,9 +53,10 @@ It authorizes, for the named lane only:
   after a valid dry run names only expected lane resources.
 
 It does not authorize unrelated repositories, unrelated branches, force-push,
-history rewrites, secret access, provider spending, production deploys,
-database or schema migration execution, cleanup outside the managed lane, or
-remote branch deletion outside the merged managed lane.
+history rewrites, secret access, provider spending outside the bounded
+party-mode allowance, production deploys, database or schema migration
+execution, cleanup outside the managed lane, or remote branch deletion outside
+the merged managed lane.
 
 ## Lane Lifecycle
 
@@ -67,8 +69,9 @@ remote branch deletion outside the merged managed lane.
 3. **Plan only as needed.** Use the matching BMAD skill for PRDs, epics,
    stories, architecture, UX, QA, research, or code review when the work
    benefits from that method. Use BMAD party mode or spawned BMAD subagents
-   only with explicit provider, model-selection, and spending approval. Keep
-   generated BMAD work products local.
+   automatically when multi-agent analysis would improve the lane, staying
+   within configured provider/model defaults and the bounded party-mode budget.
+   Keep generated BMAD work products local.
 4. **Implement.** Make scoped source-owned changes. Prefer existing repository
    patterns over new abstractions.
 5. **Review.** Route implemented code changes through `bmad-code-review` when a
@@ -147,9 +150,11 @@ for the changed surface, do not classify the merge as low risk.
 These surfaces are not automatically covered by `standard-delivery`:
 
 - Secrets, credentials, tokens, or authentication state.
-- Provider calls, paid execution, model selection, or budget changes.
-- BMAD party mode or spawned BMAD subagents that make provider calls or choose
-  models.
+- Provider calls, paid execution, model selection, or budget changes outside
+  the bounded party-mode allowance.
+- BMAD party mode or spawned BMAD subagents that override configured
+  provider/model defaults, exceed the bounded party-mode budget, or retain raw
+  provider payloads.
 - Worker or process launch.
 - Production deploys or release automation.
 - Database, schema, migration, or retention changes.
@@ -173,7 +178,7 @@ Use controls such as:
 - Use dry-run modes before write actions.
 - Use fake adapters, fixtures, or replay before provider or worker execution.
 - Add budget caps and explicit provider/model configuration before any paid
-  path.
+  path outside the bounded party-mode allowance.
 - Add tests, static drift checks, or verification scripts for new contracts.
 - Require clean-worktree, merged-PR, exact branch, owner, and path-allowlist
   evidence before cleanup.
