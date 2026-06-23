@@ -237,12 +237,16 @@ through merge and cleanup", or "see this lane through end to end".
   model-selection, or spending approval. The default allowance is one
   party-mode or subagent round per lane phase, normally two to four BMAD agents
   per round, with local artifact retention limited to summaries, paths,
-  findings, and verification evidence rather than raw provider payloads.
+  findings, and verification evidence rather than raw provider payloads. If a
+  possible party-mode run would exceed the allowance, skip party mode and
+  continue the normal lane flow unless the named objective requires expanded
+  party-mode authority.
 - Keep generated BMAD artifacts local. Rewrite durable decisions into
   source-owned docs, tests, scripts, or policy before delivery.
 - Do not interrupt for routine mechanics. Interrupt only for product steering,
   residual high-risk approval, failed checks that cannot be fixed within the
-  lane, scope expansion, scarce paid or review resources, unsafe behavior, or
+  lane, scope expansion, scarce paid or review resources required by the named
+  objective and outside the bounded party-mode allowance, unsafe behavior, or
   external blockers.
 - High-risk surfaces do not immediately require operator approval. First run a
   risk-reduction pass: split broad diffs, add exact-head checks, dry-runs,
