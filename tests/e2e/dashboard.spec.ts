@@ -1127,6 +1127,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(handoffAuditTrail.getByLabel("Filtered audit export")).toContainText("payload=not-retained");
     await expect(handoffAuditTrail.getByLabel("Filtered audit export")).toContainText("retention: metadata-only");
     await expect(handoffAuditTrail.getByText(/filename: handoff-audit-.*-1-of-1\.txt/)).toBeVisible();
+    await expect(handoffAuditTrail.getByText(/json filename: handoff-audit-.*-1-of-1\.json/)).toBeVisible();
+    await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"exportKind": "filtered-handoff-audit"');
+    await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"payload": "not-retained"');
     await expect(handoffAuditTrail.getByText("active: 1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("blocked authority: 1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("blocked owned active: 1", { exact: true })).toBeVisible();
@@ -1148,11 +1151,42 @@ test.describe("dashboard workflow coverage", () => {
     expect(auditDownloadText).toContain("payload=not-retained");
     expect(auditDownloadText).toContain("retention: metadata-only");
     await expect(handoffAuditTrail.getByText("Download prepared for 1 audit entry.")).toBeVisible();
+    const auditJsonDownloadPromise = page.waitForEvent("download");
+    await handoffAuditTrail.getByRole("button", { name: "Download .json" }).click();
+    const auditJsonDownload = await auditJsonDownloadPromise;
+    expect(auditJsonDownload.suggestedFilename()).toMatch(/^handoff-audit-.*-1-of-1\.json$/);
+    const auditJsonDownloadPath = await auditJsonDownload.path();
+    expect(auditJsonDownloadPath).toBeTruthy();
+    const auditJsonDownloadPayload = JSON.parse(await fs.readFile(auditJsonDownloadPath!, "utf8"));
+    expect(auditJsonDownloadPayload).toMatchObject({
+      exportKind: "filtered-handoff-audit",
+      retention: {
+        policy: "metadata-only",
+        payload: "not-retained",
+      },
+      entries: {
+        filtered: 1,
+        total: 1,
+      },
+      filters: {
+        query: "doctor",
+        evidence: "complete",
+        payload: "not-retained",
+      },
+    });
+    expect(auditJsonDownloadPayload.auditTrail[0]).toMatchObject({
+      evidenceStatus: "complete",
+      payloadRetention: "not-retained",
+      retentionPolicy: "metadata-only",
+    });
+    await expect(handoffAuditTrail.getByText("JSON download prepared for 1 audit entry.")).toBeVisible();
     await handoffAuditTrail.getByLabel("Query").fill("not-present-in-audit");
     await expect(handoffAuditTrail.getByText("Audit query: 0/1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("No audit entries match the current query.")).toBeVisible();
     await expect(handoffAuditTrail.getByLabel("Filtered audit export")).toContainText("No filtered audit entries to export.");
     await expect(handoffAuditTrail.getByText(/filename: handoff-audit-.*-0-of-1\.txt/)).toBeVisible();
+    await expect(handoffAuditTrail.getByText(/json filename: handoff-audit-.*-0-of-1\.json/)).toBeVisible();
+    await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"filtered": 0');
 
     const managedRecipePolicyPanel = page
       .locator("section")
