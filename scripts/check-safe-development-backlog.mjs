@@ -295,8 +295,10 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/verification-surface-hardening",
-  'start: node ./scripts/codex-workspace.mjs start "verification surface hardening"',
+  "branch: codex/github-delivery-hygiene",
+  'start: node ./scripts/codex-workspace.mjs start "github delivery hygiene"',
+  "pnpm run check:github-workflow-policy",
+  "pnpm run check:delivery-readiness",
   "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
   "Related report links",
   "Source evidence labels",
@@ -320,11 +322,11 @@ assertCondition(
   failures,
 );
 assertCondition(
-  supervisorTests.includes('report_alignment_item["status"] == "closed"') &&
+    supervisorTests.includes('report_alignment_item["status"] == "closed"') &&
     supervisorTests.includes('report_alignment_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/verification-surface-hardening"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "verification surface hardening"') &&
-    supervisorTests.includes("pnpm run check:verification-readiness"),
+    supervisorTests.includes('"codex/github-delivery-hygiene"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "github delivery hygiene"') &&
+    supervisorTests.includes("pnpm run check:github-workflow-policy"),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );
