@@ -1090,6 +1090,14 @@ class RunnerAssignmentStatusSummaryView(BaseModel):
     missing: int = 0
 
 
+class RunnerDispatcherQueueProofRowView(BaseModel):
+    backlogItemId: str
+    classification: str
+    reasonCode: str
+    branch: str | None = None
+    nextSafeAction: str
+
+
 class RunnerDispatcherContinuitySnapshotView(BaseModel):
     snapshotId: str
     selectedBacklogItemId: str | None = None
@@ -1101,6 +1109,7 @@ class RunnerDispatcherContinuitySnapshotView(BaseModel):
     ambiguousCount: int
     closedCount: int
     blockerCodes: list[str] = Field(default_factory=list)
+    queueProofRows: list[RunnerDispatcherQueueProofRowView] = Field(default_factory=list)
     nextAction: str
 
 

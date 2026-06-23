@@ -850,8 +850,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/assignment-report-queue-proof-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "assignment report queue proof refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-queue-state-fixtures-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue state fixtures refresh"')).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
@@ -951,9 +951,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(
       verificationBacklogCard.getByText("Verification surface hardening is read-only planning guidance, not execution-authority approval."),
     ).toBeVisible();
-    await expect(safeBacklogPanel.getByRole("link", { name: "/controls#github-workflow-policy-report" })).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "GitHub delivery hygiene" })).toBeVisible();
     const githubDeliveryBacklogCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "GitHub delivery hygiene" }) });
+    await expect(githubDeliveryBacklogCard.getByRole("link", { name: "/controls#github-workflow-policy-report" })).toBeVisible();
     await expect(
       githubDeliveryBacklogCard.getByText("Use this completed GitHub delivery hygiene lane as evidence only; do not requeue codex/github-delivery-hygiene as a new lane."),
     ).toBeVisible();
@@ -997,13 +997,16 @@ test.describe("dashboard workflow coverage", () => {
     const dispatcherCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Dispatcher continuity snapshot refresh" }) });
     await expect(dispatcherCard.getByText("closed", { exact: true })).toBeVisible();
     await expect(dispatcherCard.getByText("slice: complete")).toBeVisible();
-    await expect(dispatcherCard.getByText("dispatcher continuity snapshot")).toBeVisible();
+    await expect(dispatcherCard.getByText("Runner assignment status now exposes a dispatcher continuity snapshot")).toBeVisible();
     await expect(dispatcherCard.getByText("do not requeue dispatcher-continuity-snapshot-refresh")).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "Assignment report queue proof refresh" })).toBeVisible();
     const queueProofCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Assignment report queue proof refresh" }) });
-    await expect(queueProofCard.getByText("branch: codex/assignment-report-queue-proof-refresh")).toBeVisible();
-    await expect(queueProofCard.getByText('start: node ./scripts/codex-workspace.mjs start "assignment report queue proof refresh"')).toBeVisible();
-    await expect(queueProofCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
+    await expect(queueProofCard.getByText("slice: complete")).toBeVisible();
+    await expect(queueProofCard.getByText("do not requeue assignment-report-queue-proof-refresh")).toBeVisible();
+    const fixtureCard = safeBacklogPanel.locator("article").filter({ hasText: "Dispatcher queue state fixtures refresh" });
+    await expect(fixtureCard.getByText("branch: codex/dispatcher-queue-state-fixtures-refresh")).toBeVisible();
+    await expect(fixtureCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue state fixtures refresh"')).toBeVisible();
+    await expect(fixtureCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 
