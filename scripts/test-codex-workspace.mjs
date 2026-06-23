@@ -631,6 +631,7 @@ try {
       const branch = expected.branch;
       const branchBefore = branchExists(rootDir, branch);
       if (branchBefore) {
+        seedGeneratedSuccessorPrerequisites(claimStateRoot);
         seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug);
       } else {
         seedGeneratedSuccessorPrerequisites(claimStateRoot);
@@ -676,6 +677,7 @@ try {
     try {
       const expected = expectedClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
+        seedGeneratedSuccessorPrerequisites(claimStateRoot);
         seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
       } else {
         seedGeneratedSuccessorPrerequisites(claimStateRoot);
@@ -1095,6 +1097,7 @@ try {
     try {
       const expected = expectedClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
+        seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
         seedUnownedSafeBacklogWorkspace(dispatchStateRoot, expected.slug);
       } else {
         seedGeneratedSuccessorPrerequisites(dispatchStateRoot);

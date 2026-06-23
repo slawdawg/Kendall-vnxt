@@ -245,8 +245,11 @@ async function seedRunnerAssignmentHandoffState() {
   expect(stateRoot).toBeTruthy();
   const tasksDir = path.join(stateRoot!, "tasks");
   const assignmentsDir = path.join(stateRoot!, "assignments");
+  const handoffWorktreePath = path.join(stateRoot!, "worktrees", "e2e-dispatcher-queue-handoff-badges-refresh");
   await fs.mkdir(tasksDir, { recursive: true });
   await fs.mkdir(assignmentsDir, { recursive: true });
+  await fs.mkdir(handoffWorktreePath, { recursive: true });
+  execFileSync("git", ["init"], { cwd: handoffWorktreePath, stdio: "ignore" });
   await fs.writeFile(
     path.join(assignmentsDir, "dispatcher-cleanup-assignment-closure-refresh.json"),
     `${JSON.stringify(
@@ -272,7 +275,7 @@ async function seedRunnerAssignmentHandoffState() {
       {
         task_id: "e2e-dispatcher-queue-handoff-badges-refresh",
         branch: "codex/dispatcher-queue-handoff-badges-refresh",
-        worktree_path: path.join(stateRoot!, "worktrees", "e2e-dispatcher-queue-handoff-badges-refresh"),
+        worktree_path: handoffWorktreePath,
         base_branch: "main",
         status: "active",
         owner: "playwright-runner",
@@ -286,7 +289,7 @@ async function seedRunnerAssignmentHandoffState() {
             owner: "playwright-runner",
             branch: "codex/dispatcher-queue-handoff-badges-refresh",
             workspace_action: "create_workspace",
-            worktree_path: path.join(stateRoot!, "worktrees", "e2e-dispatcher-queue-handoff-badges-refresh"),
+            worktree_path: handoffWorktreePath,
             task_id: "e2e-dispatcher-queue-handoff-badges-refresh",
             next_command: "cd e2e-dispatcher-queue-handoff-badges-refresh",
             handoff: "resume this prepared worktree; no worker or provider process launched",
@@ -1164,9 +1167,32 @@ test.describe("dashboard workflow coverage", () => {
     await expect(closedAssignmentEvidence.getByText("Closed assignment evidence", { exact: true })).toBeVisible();
     await expect(closedAssignmentEvidence.getByText("dispatcher-cleanup-assignment-closure-refresh: lane-closed branch codex/dispatcher-cleanup-assignment-closure-refresh - No assignment action")).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("dispatcher-assignment-panel-filter-refresh: assignable (backlog-assignable) branch codex/dispatcher-assignment-panel-filter-refresh")).toBeVisible();
+    const assignmentRowFilters = runnerAssignmentPanel.getByTestId("assignment-row-filters");
+    await expect(assignmentRowFilters.getByText("Assignment row filters", { exact: true })).toBeVisible();
+    await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for Needs attention from All sources\./)).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-assignment-panel-filter-refresh")).toBeVisible();
+    await assignmentRowFilters.getByLabel("Classification").selectOption("active");
+    await assignmentRowFilters.getByLabel("Source").selectOption("workspace");
+    await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for active from Workspace\./)).toBeVisible();
+    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "e2e-dispatcher-queue-handoff-badges-refresh" }).getByText("source: Workspace")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-assignment-panel-filter-refresh")).toBeVisible();
+    await assignmentRowFilters.getByLabel("Classification").selectOption("assignable");
+    await assignmentRowFilters.getByLabel("Source").selectOption("backlog");
+    await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for assignable from Backlog\./)).toBeVisible();
+    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Dispatcher assignment panel filter refresh" }).getByText("source: Backlog")).toBeVisible();
+    await assignmentRowFilters.getByLabel("Classification").selectOption("blocked");
+    await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for blocked from Backlog\./)).toBeVisible();
+    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Execution-authority stories" }).getByText("source: Backlog")).toBeVisible();
+    await assignmentRowFilters.getByLabel("Classification").selectOption("closed");
+    await assignmentRowFilters.getByLabel("Source").selectOption("lane");
+    await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for closed from Lane assignment\./)).toBeVisible();
+    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "codex/dispatcher-cleanup-assignment-closure-refresh" }).getByText("source: Lane assignment")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-assignment-panel-filter-refresh")).toBeVisible();
+    await assignmentRowFilters.getByLabel("Classification").selectOption("attention");
+    await assignmentRowFilters.getByLabel("Source").selectOption("all");
     await expect(runnerAssignmentPanel.getByText("Resume packet")).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Lifecycle: prepared", { exact: true })).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("Recovery action: inspect-handoff-evidence", { exact: true })).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Recovery action: resume-prepared-handoff", { exact: true })).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Queue counts: available", { exact: true })).toBeVisible();
     const handoffAuditTrail = runnerAssignmentPanel.getByTestId("handoff-audit-trail").first();
     await expect(handoffAuditTrail.getByText("Handoff audit trail", { exact: true })).toBeVisible();
