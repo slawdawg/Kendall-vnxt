@@ -13,6 +13,7 @@ type AuditEvidenceFilter = "all" | RunnerHandoffAuditEntryView["evidenceStatus"]
 type AuditPayloadFilter = "all" | RunnerHandoffAuditEntryView["payloadRetention"];
 type AssignmentClassificationFilter = "attention" | "active" | "blocked" | "assignable" | "closed" | "all";
 type AssignmentSourceFilter = "all" | "workspace" | "lane" | "backlog";
+type SourceCompletionFilter = "all" | "any" | "assignment" | "workspace" | "none";
 type SourcedAssignmentRow = {
   row: RunnerAssignmentStatusRowView;
   source: Exclude<AssignmentSourceFilter, "all">;
@@ -41,12 +42,27 @@ function classificationFilterLabel(filter: AssignmentClassificationFilter): stri
   return labelFor(filter);
 }
 
+function sourceCompletionFilterLabel(filter: SourceCompletionFilter): string {
+  if (filter === "all") return "all source-completion states";
+  if (filter === "any") return "any source completion";
+  if (filter === "none") return "no source completion";
+  return `${filter} source completion`;
+}
+
 function classificationMatches(row: RunnerAssignmentStatusRowView, filter: AssignmentClassificationFilter): boolean {
   if (filter === "all") return true;
   if (filter === "attention") return row.classification !== "closed";
   if (filter === "active") return row.classification === "active" || row.classification === "claimed";
   if (filter === "blocked") return row.classification.startsWith("blocked_") || row.classification === "unknown";
   return row.classification === filter;
+}
+
+function sourceCompletionMatches(row: RunnerAssignmentStatusRowView, filter: SourceCompletionFilter): boolean {
+  const evidenceKind = row.sourceCompletionEvidence?.evidenceKind;
+  if (filter === "all") return true;
+  if (filter === "any") return Boolean(evidenceKind);
+  if (filter === "none") return !evidenceKind;
+  return evidenceKind === filter;
 }
 
 function orderedCountEntries(counts: Record<string, number>): [string, number][] {
@@ -501,6 +517,7 @@ function Row({ row, source }: { row: RunnerAssignmentStatusRowView; source: Excl
 export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAssignmentStatusReportView }) {
   const [classificationFilter, setClassificationFilter] = useState<AssignmentClassificationFilter>("attention");
   const [sourceFilter, setSourceFilter] = useState<AssignmentSourceFilter>("all");
+  const [sourceCompletionFilter, setSourceCompletionFilter] = useState<SourceCompletionFilter>("all");
   const rows: SourcedAssignmentRow[] = [
     ...report.workspaceAssignments.map((row) => ({ row, source: "workspace" as const })),
     ...report.laneAssignments.map((row) => ({ row, source: "lane" as const })),
@@ -508,6 +525,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
   ];
   const filteredRows = rows.filter(({ row, source }) => {
     if (sourceFilter !== "all" && source !== sourceFilter) return false;
+    if (!sourceCompletionMatches(row, sourceCompletionFilter)) return false;
     return classificationMatches(row, classificationFilter);
   });
   const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
@@ -602,13 +620,15 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Assignment row filters</p>
             <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-              Showing {filteredRows.length}/{rows.length} rows for {classificationFilterLabel(classificationFilter)} from {sourceLabel(sourceFilter)}.
+              Showing {filteredRows.length}/{rows.length} rows for {classificationFilterLabel(classificationFilter)} from {sourceLabel(sourceFilter)} with{" "}
+              {sourceCompletionFilterLabel(sourceCompletionFilter)}.
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2 sm:grid-cols-3">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Classification</span>
               <select
+                aria-label="Classification"
                 className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-2 text-xs text-[var(--foreground)]"
                 value={classificationFilter}
                 onChange={(event) => setClassificationFilter(event.target.value as AssignmentClassificationFilter)}
@@ -624,6 +644,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Source</span>
               <select
+                aria-label="Source"
                 className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-2 text-xs text-[var(--foreground)]"
                 value={sourceFilter}
                 onChange={(event) => setSourceFilter(event.target.value as AssignmentSourceFilter)}
@@ -632,6 +653,21 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
                 <option value="workspace">workspace</option>
                 <option value="lane">lane assignment</option>
                 <option value="backlog">backlog</option>
+              </select>
+            </label>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Source completion</span>
+              <select
+                aria-label="Source completion"
+                className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-2 text-xs text-[var(--foreground)]"
+                value={sourceCompletionFilter}
+                onChange={(event) => setSourceCompletionFilter(event.target.value as SourceCompletionFilter)}
+              >
+                <option value="all">all</option>
+                <option value="any">any</option>
+                <option value="assignment">assignment</option>
+                <option value="workspace">workspace</option>
+                <option value="none">none</option>
               </select>
             </label>
           </div>

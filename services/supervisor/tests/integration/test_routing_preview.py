@@ -1945,11 +1945,11 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
-    assert report_slice["includedBacklogItems"] == ["dispatcher-closed-source-guard-rollup-filter-refresh"]
+    assert report_slice["includedBacklogItems"] == ["dispatcher-closed-source-guard-source-kind-summary-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-closed-source-guard-rollup-filter-refresh"
-    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-closed-source-guard-rollup-filter-refresh"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher closed source guard rollup filter refresh"'
+    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-closed-source-guard-source-kind-summary-refresh"
+    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-closed-source-guard-source-kind-summary-refresh"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher closed source guard source kind summary refresh"'
     assert "pnpm run check:runner-assignment-status" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run test:e2e:dashboard:controls" in report_slice["nextLane"]["verificationCommands"]
@@ -2276,6 +2276,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "dispatcher-closed-source-guard-drilldown-refresh",
         "dispatcher-closed-source-guard-rollup-refresh",
         "dispatcher-closed-source-guard-rollup-filter-refresh",
+        "dispatcher-closed-source-guard-source-kind-summary-refresh",
         "authority-blocked-work",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
@@ -2520,10 +2521,15 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert dispatcher_closed_source_guard_rollup_item["nextLane"] is None
     assert "do not requeue dispatcher-closed-source-guard-rollup-refresh" in dispatcher_closed_source_guard_rollup_item["nextAction"]
     dispatcher_closed_source_guard_rollup_filter_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-closed-source-guard-rollup-filter-refresh")
-    assert dispatcher_closed_source_guard_rollup_filter_item["status"] == "ready"
-    assert dispatcher_closed_source_guard_rollup_filter_item["nextLane"]["branchName"] == "codex/dispatcher-closed-source-guard-rollup-filter-refresh"
-    assert dispatcher_closed_source_guard_rollup_filter_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher closed source guard rollup filter refresh"'
-    assert "pnpm run test:e2e:dashboard:controls" in dispatcher_closed_source_guard_rollup_filter_item["nextLane"]["verificationCommands"]
+    assert dispatcher_closed_source_guard_rollup_filter_item["status"] == "closed"
+    assert dispatcher_closed_source_guard_rollup_filter_item["recommendedSliceSize"] == "complete"
+    assert dispatcher_closed_source_guard_rollup_filter_item["nextLane"] is None
+    assert "do not requeue dispatcher-closed-source-guard-rollup-filter-refresh" in dispatcher_closed_source_guard_rollup_filter_item["nextAction"]
+    dispatcher_closed_source_guard_source_kind_summary_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-closed-source-guard-source-kind-summary-refresh")
+    assert dispatcher_closed_source_guard_source_kind_summary_item["status"] == "ready"
+    assert dispatcher_closed_source_guard_source_kind_summary_item["nextLane"]["branchName"] == "codex/dispatcher-closed-source-guard-source-kind-summary-refresh"
+    assert dispatcher_closed_source_guard_source_kind_summary_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher closed source guard source kind summary refresh"'
+    assert "pnpm run test:e2e:dashboard:controls" in dispatcher_closed_source_guard_source_kind_summary_item["nextLane"]["verificationCommands"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
@@ -8423,10 +8429,11 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     dispatcher_closed_source_guard_drilldown_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-closed-source-guard-drilldown-refresh")
     dispatcher_closed_source_guard_rollup_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-closed-source-guard-rollup-refresh")
     dispatcher_closed_source_guard_rollup_filter_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-closed-source-guard-rollup-filter-refresh")
+    dispatcher_closed_source_guard_source_kind_summary_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-closed-source-guard-source-kind-summary-refresh")
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "dispatcher-closed-source-guard-rollup-filter-refresh"
-    assert continuity["selectedBranch"] == "codex/dispatcher-closed-source-guard-rollup-filter-refresh"
+    assert continuity["selectedBacklogItemId"] == "dispatcher-closed-source-guard-source-kind-summary-refresh"
+    assert continuity["selectedBranch"] == "codex/dispatcher-closed-source-guard-source-kind-summary-refresh"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["assignableCount"] >= 1
     assert "blocked-authority" in continuity["blockerCodes"]
@@ -8465,8 +8472,10 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert dispatcher_closed_source_guard_drilldown_backlog["reasonCode"] == "backlog-closed"
     assert dispatcher_closed_source_guard_rollup_backlog["classification"] == "closed"
     assert dispatcher_closed_source_guard_rollup_backlog["reasonCode"] == "backlog-closed"
-    assert dispatcher_closed_source_guard_rollup_filter_backlog["classification"] == "assignable"
-    assert dispatcher_closed_source_guard_rollup_filter_backlog["reasonCode"] == "backlog-assignable"
+    assert dispatcher_closed_source_guard_rollup_filter_backlog["classification"] == "closed"
+    assert dispatcher_closed_source_guard_rollup_filter_backlog["reasonCode"] == "backlog-closed"
+    assert dispatcher_closed_source_guard_source_kind_summary_backlog["classification"] == "assignable"
+    assert dispatcher_closed_source_guard_source_kind_summary_backlog["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-export-refresh"]["classification"] == "closed"
@@ -8495,8 +8504,10 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert queue_proof_rows["dispatcher-closed-source-guard-drilldown-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-closed-source-guard-rollup-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-closed-source-guard-rollup-refresh"]["reasonCode"] == "backlog-closed"
-    assert queue_proof_rows["dispatcher-closed-source-guard-rollup-filter-refresh"]["classification"] == "assignable"
-    assert queue_proof_rows["dispatcher-closed-source-guard-rollup-filter-refresh"]["reasonCode"] == "backlog-assignable"
+    assert queue_proof_rows["dispatcher-closed-source-guard-rollup-filter-refresh"]["classification"] == "closed"
+    assert queue_proof_rows["dispatcher-closed-source-guard-rollup-filter-refresh"]["reasonCode"] == "backlog-closed"
+    assert queue_proof_rows["dispatcher-closed-source-guard-source-kind-summary-refresh"]["classification"] == "assignable"
+    assert queue_proof_rows["dispatcher-closed-source-guard-source-kind-summary-refresh"]["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-state-fixtures-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-continuity-snapshot-refresh"]["classification"] == "closed"
     assert queue_proof_rows["assignment-report-queue-proof-refresh"]["classification"] == "closed"
@@ -8523,22 +8534,22 @@ def test_runner_assignment_status_report_closes_stale_ready_items_with_source_co
     tasks_dir = state_root / "tasks"
     assignments_dir.mkdir(parents=True)
     tasks_dir.mkdir()
-    assignments_dir.joinpath("dispatcher-closed-source-guard-rollup-filter-refresh.json").write_text(
+    assignments_dir.joinpath("dispatcher-closed-source-guard-source-kind-summary-refresh.json").write_text(
         json.dumps(
             {
-                "assignment_id": "dispatcher-closed-source-guard-rollup-filter-refresh",
-                "task_id": "20260623-dispatcher-closed-source-guard-rollup-filter-refresh",
-                "lane_slug": "dispatcher-closed-source-guard-rollup-filter-refresh",
-                "branch": "codex/dispatcher-closed-source-guard-rollup-filter-refresh",
+                "assignment_id": "dispatcher-closed-source-guard-source-kind-summary-refresh",
+                "task_id": "20260623-dispatcher-closed-source-guard-source-kind-summary-refresh",
+                "lane_slug": "dispatcher-closed-source-guard-source-kind-summary-refresh",
+                "branch": "codex/dispatcher-closed-source-guard-source-kind-summary-refresh",
                 "status": "closed",
                 "owner": "runner-a",
                 "phase": "closed",
                 "closed_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "source_backlog_item": {
-                    "item_id": "dispatcher-closed-source-guard-rollup-filter-refresh",
+                    "item_id": "dispatcher-closed-source-guard-source-kind-summary-refresh",
                     "status": "ready",
-                    "branch_name": "codex/dispatcher-closed-source-guard-rollup-filter-refresh",
+                    "branch_name": "codex/dispatcher-closed-source-guard-source-kind-summary-refresh",
                 },
             }
         )
@@ -8573,22 +8584,22 @@ def test_runner_assignment_status_report_closes_stale_ready_items_with_source_co
         "total": 2,
         "assignment": 1,
         "workspace": 1,
-        "sourceBacklogItemIds": ["read-only-evidence-polish", "dispatcher-closed-source-guard-rollup-filter-refresh"],
+        "sourceBacklogItemIds": ["read-only-evidence-polish", "dispatcher-closed-source-guard-source-kind-summary-refresh"],
     }
-    rollup_filter_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-closed-source-guard-rollup-filter-refresh")
-    assert rollup_filter_backlog["classification"] == "closed"
-    assert rollup_filter_backlog["reasonCode"] == "backlog-closed-source-assignment"
-    assert rollup_filter_backlog["reason"] == "closed assignment evidence exists for dispatcher-closed-source-guard-rollup-filter-refresh"
-    assert rollup_filter_backlog["nextSafeAction"] == "Use closed source completion evidence only; choose the next ready safe backlog lane"
-    assert rollup_filter_backlog["sourceCompletionEvidence"] == {
+    source_kind_summary_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-closed-source-guard-source-kind-summary-refresh")
+    assert source_kind_summary_backlog["classification"] == "closed"
+    assert source_kind_summary_backlog["reasonCode"] == "backlog-closed-source-assignment"
+    assert source_kind_summary_backlog["reason"] == "closed assignment evidence exists for dispatcher-closed-source-guard-source-kind-summary-refresh"
+    assert source_kind_summary_backlog["nextSafeAction"] == "Use closed source completion evidence only; choose the next ready safe backlog lane"
+    assert source_kind_summary_backlog["sourceCompletionEvidence"] == {
         "evidenceKind": "assignment",
-        "recordId": "dispatcher-closed-source-guard-rollup-filter-refresh",
-        "sourceBacklogItemId": "dispatcher-closed-source-guard-rollup-filter-refresh",
-        "branch": "codex/dispatcher-closed-source-guard-rollup-filter-refresh",
-        "taskId": "20260623-dispatcher-closed-source-guard-rollup-filter-refresh",
+        "recordId": "dispatcher-closed-source-guard-source-kind-summary-refresh",
+        "sourceBacklogItemId": "dispatcher-closed-source-guard-source-kind-summary-refresh",
+        "branch": "codex/dispatcher-closed-source-guard-source-kind-summary-refresh",
+        "taskId": "20260623-dispatcher-closed-source-guard-source-kind-summary-refresh",
         "sourceAssignmentId": None,
-        "evidencePath": (assignments_dir / "dispatcher-closed-source-guard-rollup-filter-refresh.json").as_posix(),
-        "evidenceSummary": "Closed assignment record dispatcher-closed-source-guard-rollup-filter-refresh matches source backlog item dispatcher-closed-source-guard-rollup-filter-refresh.",
+        "evidencePath": (assignments_dir / "dispatcher-closed-source-guard-source-kind-summary-refresh.json").as_posix(),
+        "evidenceSummary": "Closed assignment record dispatcher-closed-source-guard-source-kind-summary-refresh matches source backlog item dispatcher-closed-source-guard-source-kind-summary-refresh.",
     }
     read_only_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "read-only-evidence-polish")
     assert read_only_backlog["classification"] == "closed"
