@@ -1138,6 +1138,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(handoffAuditTrail.getByLabel("Filtered audit export")).toContainText("retention: metadata-only");
     await expect(handoffAuditTrail.getByText(/filename: handoff-audit-.*-1-of-1\.txt/)).toBeVisible();
     await expect(handoffAuditTrail.getByText(/json filename: handoff-audit-.*-1-of-1\.json/)).toBeVisible();
+    await expect(handoffAuditTrail.getByText("JSON validation: schema v1 metadata-only; retained fields 21.")).toBeVisible();
     await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"schemaId": "kendall.runner-handoff-audit.filtered-export.v1"');
     await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"schemaVersion": 1');
     await expect(handoffAuditTrail.getByLabel("Filtered audit JSON export")).toContainText('"exportKind": "filtered-handoff-audit"');
@@ -1181,7 +1182,7 @@ test.describe("dashboard workflow coverage", () => {
       },
       schema: {
         metadataContract: "generated-worker-handoff-audit-metadata-only",
-        requiredTopLevelFields: ["schemaId", "schemaVersion", "exportKind", "retention", "entries", "filters", "auditTrail"],
+        requiredTopLevelFields: ["schemaId", "schemaVersion", "exportKind", "retention", "schema", "entries", "filters", "auditTrail"],
       },
       entries: {
         filtered: 1,
@@ -1198,6 +1199,32 @@ test.describe("dashboard workflow coverage", () => {
       payloadRetention: "not-retained",
       retentionPolicy: "metadata-only",
     });
+    expect(auditJsonDownloadPayload.schema.requiredTopLevelFields).toEqual(["schemaId", "schemaVersion", "exportKind", "retention", "schema", "entries", "filters", "auditTrail"]);
+    expect(auditJsonDownloadPayload.schema.retainedEntryFields).toEqual([
+      "sequence",
+      "lane",
+      "branch",
+      "taskId",
+      "workspaceAction",
+      "nextCommand",
+      "generatedAt",
+      "readinessStatus",
+      "readinessCommand",
+      "readinessSummary",
+      "queueCountsStatus",
+      "queueCounts",
+      "stopLines",
+      "lifecycleState",
+      "recoveryAction",
+      "recoverySummary",
+      "evidenceStatus",
+      "evidenceSummary",
+      "retentionPolicy",
+      "payloadRetention",
+      "retentionSummary",
+    ]);
+    expect(Object.keys(auditJsonDownloadPayload.auditTrail[0]).sort()).toEqual([...auditJsonDownloadPayload.schema.retainedEntryFields].sort());
+    expect(auditJsonDownloadPayload.entries.total).toBe(1);
     expect(auditJsonDownloadPayload.schema.retainedEntryFields).toContain("evidenceStatus");
     expect(auditJsonDownloadPayload.schema.retainedEntryFields).toContain("payloadRetention");
     await expect(handoffAuditTrail.getByText("JSON download prepared for 1 audit entry.")).toBeVisible();
