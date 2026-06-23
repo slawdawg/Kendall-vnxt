@@ -204,6 +204,16 @@ Routine mechanics, command selection, context reads, local planning, test
 selection, PR updates, and low-risk cleanup should continue without operator
 attention while leaving concise evidence.
 
+## Escalation Wording
+
+Managed worktrees, Git operations, and GitHub delivery often require sandbox
+escalation even when the lane authority is already settled. Under the
+`standard-delivery` profile, requests to run `finish-pr`, push the lane branch,
+or open/update the lane PR should cite the standing end-to-end lane authority
+and the verification evidence. Do not phrase these as a fresh operator approval
+for GitHub delivery unless the action exceeds the named lane, fails local
+verification, or touches a high-risk surface.
+
 ## Evidence Packet
 
 For each completed lane, preserve or report:
