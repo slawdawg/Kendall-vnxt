@@ -122,6 +122,9 @@ for (const itemId of [
   "verification-surface-hardening",
   "github-delivery-hygiene",
   "read-only-evidence-polish",
+  "worker-backlog-queue-refresh",
+  "lane-handoff-evidence-refresh",
+  "report-catalog-shortcut-refresh",
   "authority-blocked-work",
 ]) {
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Safe backlog service must include item ${itemId}`, failures);
@@ -245,10 +248,15 @@ for (const safetyText of [
   'lane_slug="verification-surface-hardening"',
   'lane_slug="github-delivery-hygiene"',
   'lane_slug="read-only-evidence-polish"',
+  'lane_slug="worker-backlog-queue-refresh"',
+  'lane_slug="lane-handoff-evidence-refresh"',
+  'lane_slug="report-catalog-shortcut-refresh"',
   "complete",
   "Use this completed item as evidence only; do not requeue it as a new lane.",
   "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
   "Do not start or modify another active lane while using this recommendation.",
+  "Current claim-next evidence can become starved when all ready lanes are active or assigned to other runners.",
+  "Generated backlog items should link to explicit dashboard report anchors rather than falling back to the report catalog.",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
@@ -289,6 +297,16 @@ for (const browserText of [
   "Verification surface hardening is read-only planning guidance, not execution-authority approval.",
   "GitHub delivery hygiene",
   "persistent plaintext gh token storage",
+  "Worker backlog queue refresh",
+  "branch: codex/worker-backlog-queue-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "worker backlog queue refresh"',
+  "claim-next evidence can become starved",
+  "Lane handoff evidence refresh",
+  "branch: codex/lane-handoff-evidence-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "lane handoff evidence refresh"',
+  "Report catalog shortcut refresh",
+  "branch: codex/report-catalog-shortcut-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"',
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
   "Do not start or modify another active lane while using this recommendation.",

@@ -955,6 +955,27 @@ test.describe("dashboard workflow coverage", () => {
     await expect(safeBacklogPanel.getByRole("link", { name: "/controls#github-workflow-policy-report" })).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "GitHub delivery hygiene" })).toBeVisible();
     await expect(safeBacklogPanel.getByText("persistent plaintext gh token storage")).toBeVisible();
+    await expect(safeBacklogPanel.getByRole("heading", { name: "Worker backlog queue refresh" })).toBeVisible();
+    const workerQueueCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Worker backlog queue refresh" }) });
+    await expect(workerQueueCard.getByText("branch: codex/worker-backlog-queue-refresh")).toBeVisible();
+    await expect(workerQueueCard.getByText('start: node ./scripts/codex-workspace.mjs start "worker backlog queue refresh"')).toBeVisible();
+    await expect(workerQueueCard.getByText("claim-next evidence can become starved")).toBeVisible();
+    await expect(workerQueueCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
+    await expect(workerQueueCard.getByRole("link", { name: "GET /supervisor/runner-assignment-status-report" })).toHaveAttribute(
+      "href",
+      "/controls#runner-assignment-status",
+    );
+    await expect(workerQueueCard.getByRole("link", { name: "/controls#runner-assignment-status" })).toBeVisible();
+    await expect(safeBacklogPanel.getByRole("heading", { name: "Lane handoff evidence refresh" })).toBeVisible();
+    const handoffCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Lane handoff evidence refresh" }) });
+    await expect(handoffCard.getByText("branch: codex/lane-handoff-evidence-refresh")).toBeVisible();
+    await expect(handoffCard.getByText('start: node ./scripts/codex-workspace.mjs start "lane handoff evidence refresh"')).toBeVisible();
+    await expect(handoffCard.getByText("pnpm run check:runbooks")).toBeVisible();
+    await expect(safeBacklogPanel.getByRole("heading", { name: "Report catalog shortcut refresh" })).toBeVisible();
+    const shortcutCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Report catalog shortcut refresh" }) });
+    await expect(shortcutCard.getByText("branch: codex/report-catalog-shortcut-refresh")).toBeVisible();
+    await expect(shortcutCard.getByText('start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"')).toBeVisible();
+    await expect(shortcutCard.getByText("pnpm run check:reports")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 

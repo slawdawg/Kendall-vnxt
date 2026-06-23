@@ -2234,6 +2234,9 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "verification-surface-hardening",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
+        "worker-backlog-queue-refresh",
+        "lane-handoff-evidence-refresh",
+        "report-catalog-shortcut-refresh",
         "authority-blocked-work",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
@@ -2299,6 +2302,28 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
+    worker_queue_item = next(item for item in report["items"] if item["itemId"] == "worker-backlog-queue-refresh")
+    assert worker_queue_item["priority"] == "P1"
+    assert worker_queue_item["recommendedSliceSize"] == "large"
+    assert worker_queue_item["nextLane"]["laneSlug"] == "worker-backlog-queue-refresh"
+    assert worker_queue_item["nextLane"]["branchName"] == "codex/worker-backlog-queue-refresh"
+    assert worker_queue_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "worker backlog queue refresh"'
+    assert "pnpm run test:codex-workspace" in worker_queue_item["nextLane"]["verificationCommands"]
+    assert "GET /supervisor/runner-assignment-status-report" in worker_queue_item["relatedReports"]
+    assert "/controls#runner-assignment-status" in worker_queue_item["dashboardAnchors"]
+    assert any("claim-next evidence can become starved" in evidence for evidence in worker_queue_item["evidence"])
+    handoff_item = next(item for item in report["items"] if item["itemId"] == "lane-handoff-evidence-refresh")
+    assert handoff_item["nextLane"]["branchName"] == "codex/lane-handoff-evidence-refresh"
+    assert handoff_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "lane handoff evidence refresh"'
+    assert "pnpm run check:runbooks" in handoff_item["nextLane"]["verificationCommands"]
+    assert "GET /supervisor/safe-development-backlog" in handoff_item["relatedReports"]
+    assert "/controls#safe-development-backlog" in handoff_item["dashboardAnchors"]
+    shortcut_item = next(item for item in report["items"] if item["itemId"] == "report-catalog-shortcut-refresh")
+    assert shortcut_item["nextLane"]["branchName"] == "codex/report-catalog-shortcut-refresh"
+    assert shortcut_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"'
+    assert "pnpm run check:reports" in shortcut_item["nextLane"]["verificationCommands"]
+    assert "GET /supervisor/report-catalog" in shortcut_item["relatedReports"]
+    assert "/controls#supervisor-report-catalog" in shortcut_item["dashboardAnchors"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
