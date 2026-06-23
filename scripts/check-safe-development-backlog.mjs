@@ -161,6 +161,7 @@ for (const itemId of [
   "dispatcher-cleanup-assignment-report-refresh",
   "dispatcher-assignment-panel-filter-refresh",
   "dispatcher-closed-lane-requeue-guard-refresh",
+  "dispatcher-closed-source-guard-report-refresh",
   "authority-blocked-work",
 ]) {
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Safe backlog service must include item ${itemId}`, failures);
@@ -323,6 +324,7 @@ for (const safetyText of [
   'lane_slug="dispatcher-cleanup-assignment-report-refresh"',
   'lane_slug="dispatcher-assignment-panel-filter-refresh"',
   'lane_slug="dispatcher-closed-lane-requeue-guard-refresh"',
+  'lane_slug="dispatcher-closed-source-guard-report-refresh"',
   "complete",
   "Use this completed item as evidence only; do not requeue it as a new lane.",
   "Use this completed queue refresh as evidence only; do not requeue worker-backlog-queue-refresh.",
@@ -354,7 +356,9 @@ for (const safetyText of [
   "Use this completed dispatcher cleanup assignment report evidence only; do not requeue dispatcher-cleanup-assignment-report-refresh.",
   "Delivered dashboard filtering for runner assignment rows",
   "Use this completed dispatcher assignment panel filter evidence only; do not requeue dispatcher-assignment-panel-filter-refresh.",
-  "Add explicit dispatcher proof that merged and cleaned backlog lanes are closed before generating the next end-to-end worker lane.",
+  "Delivered explicit dispatcher proof that closed source completion evidence prevents merged and cleaned backlog lanes from being selected again.",
+  "Use this completed dispatcher closed-lane requeue guard evidence only; do not requeue dispatcher-closed-lane-requeue-guard-refresh.",
+  "Surface closed source completion guard evidence in dispatcher reports",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
@@ -383,8 +387,8 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/dispatcher-closed-lane-requeue-guard-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed lane requeue guard refresh"',
+  "branch: codex/dispatcher-closed-source-guard-report-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard report refresh"',
   "pnpm run check:runner-assignment-status",
   "pnpm run check:safe-backlog",
   "Related report links",
@@ -445,8 +449,10 @@ for (const browserText of [
   "Dispatcher assignment panel filter refresh",
   "do not requeue dispatcher-assignment-panel-filter-refresh",
   "Dispatcher closed lane requeue guard refresh",
-  "branch: codex/dispatcher-closed-lane-requeue-guard-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed lane requeue guard refresh"',
+  "do not requeue dispatcher-closed-lane-requeue-guard-refresh",
+  "Dispatcher closed source guard report refresh",
+  "branch: codex/dispatcher-closed-source-guard-report-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard report refresh"',
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
   "Do not start or modify another active lane while using this recommendation.",
@@ -470,8 +476,8 @@ assertCondition(
     supervisorTests.includes('dispatcher_cleanup_assignment_report_item["nextLane"] is None') &&
     supervisorTests.includes('dispatcher_assignment_panel_filter_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_assignment_panel_filter_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-closed-lane-requeue-guard-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed lane requeue guard refresh"') &&
+    supervisorTests.includes('"codex/dispatcher-closed-source-guard-report-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed source guard report refresh"') &&
     supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
@@ -504,7 +510,8 @@ assertCondition(
     supervisorTests.includes('dispatcher_cleanup_assignment_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_cleanup_assignment_item["nextLane"] is None') &&
     supervisorTests.includes('dispatcher_assignment_panel_filter_item["status"] == "closed"') &&
-    supervisorTests.includes('dispatcher_closed_lane_requeue_guard_item["status"] == "ready"'),
+    supervisorTests.includes('dispatcher_closed_lane_requeue_guard_item["status"] == "closed"') &&
+    supervisorTests.includes('dispatcher_closed_source_guard_report_item["status"] == "ready"'),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );

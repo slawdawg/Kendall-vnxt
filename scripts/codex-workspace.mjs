@@ -361,7 +361,7 @@ function assignmentReport(argv) {
     console.log("- none found (safe backlog source unavailable or unparsable)");
   } else {
     for (const item of backlogItems) {
-      const classification = classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates);
+      const classification = classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates, manifests, assignments);
       console.log(
         [
           `- ${item.itemId}`,
@@ -2109,7 +2109,7 @@ function laneOwnerIsStale(manifest, context) {
   return context.generatedAt.getTime() - timestamp > context.staleAfterSeconds * 1000;
 }
 
-function classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates = new Map()) {
+function classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates = new Map(), manifests = [], assignments = []) {
   if (item.status === "closed" || item.recommendedSliceSize === "complete") {
     return {
       status: "closed",
@@ -2127,6 +2127,13 @@ function classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates 
     return {
       status: "ambiguous",
       reason: "ready item has no source-owned lane start command",
+    };
+  }
+  const closedCompletionEvidence = closedSourceCompletionEvidence(item, manifests, assignments);
+  if (closedCompletionEvidence) {
+    return {
+      status: "closed",
+      reason: closedCompletionEvidence,
     };
   }
   const branchNameError = item.branchName ? claimBranchNameBlocker(item.branchName) : "";
@@ -2270,6 +2277,16 @@ function evaluateClaimCandidate(item, manifests, assignments, context) {
     };
   }
 
+  const closedCompletionEvidence = closedSourceCompletionEvidence(item, manifests, assignments);
+  if (closedCompletionEvidence) {
+    return {
+      ...base,
+      status: "closed",
+      reason: closedCompletionEvidence,
+      nextAction: "choose the next ready safe backlog lane",
+    };
+  }
+
   const branchNameError = claimBranchNameBlocker(item.branchName);
   if (branchNameError) {
     return {
@@ -2374,6 +2391,41 @@ function evaluateClaimCandidate(item, manifests, assignments, context) {
 
 function activeAssignmentsForBranch(assignments, branchName) {
   return assignments.filter((assignment) => assignment.branch === branchName && assignment.status !== "closed");
+}
+
+function closedSourceCompletionEvidence(item, manifests, assignments) {
+  const itemId = String(item.itemId || "").trim();
+  if (!itemId) {
+    return "";
+  }
+  const branchName = String(item.branchName || "").trim();
+  const assignment = assignments.find((record) => {
+    if (record.status !== "closed") return false;
+    if (record.assignment_id === itemId || record.lane_slug === itemId || record.source_backlog_item?.item_id === itemId) {
+      return true;
+    }
+    return Boolean(branchName && record.branch === branchName && record.source_backlog_item?.item_id === itemId);
+  });
+  if (assignment) {
+    return `closed assignment evidence exists for ${itemId}`;
+  }
+
+  const manifest = manifests.find((record) => {
+    if (record.status !== "closed") return false;
+    if (record.source_assignment_id === itemId || record.source_backlog_item?.item_id === itemId) {
+      return true;
+    }
+    return Boolean(
+      branchName &&
+        record.branch === branchName &&
+        (record.source_assignment_id === itemId || record.source_backlog_item?.item_id === itemId),
+    );
+  });
+  if (manifest) {
+    return `closed workspace evidence exists for ${itemId}`;
+  }
+
+  return "";
 }
 
 function assignmentBranchStatesByBranch(assignments) {
