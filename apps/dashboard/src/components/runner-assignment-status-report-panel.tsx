@@ -8,6 +8,7 @@ type AuditPayloadFilter = "all" | RunnerHandoffAuditEntryView["payloadRetention"
 
 const AUDIT_JSON_SCHEMA_ID = "kendall.runner-handoff-audit.filtered-export.v1";
 const AUDIT_JSON_SCHEMA_VERSION = 1;
+const AUDIT_JSON_REQUIRED_TOP_LEVEL_FIELDS = ["schemaId", "schemaVersion", "exportKind", "retention", "schema", "entries", "filters", "auditTrail"] as const;
 const AUDIT_JSON_RETAINED_ENTRY_FIELDS = [
   "sequence",
   "lane",
@@ -31,6 +32,26 @@ const AUDIT_JSON_RETAINED_ENTRY_FIELDS = [
   "payloadRetention",
   "retentionSummary",
 ] as const;
+const AUDIT_EVIDENCE_FILTER_VALUES = ["all", "complete", "partial", "invalid"] as const;
+const AUDIT_PAYLOAD_FILTER_VALUES = ["all", "not-retained", "redacted", "omitted"] as const;
+const AUDIT_RETENTION_POLICY_VALUES = ["metadata-only", "capped-metadata-only"] as const;
+const AUDIT_PAYLOAD_RETENTION_VALUES = ["not-retained", "redacted", "omitted"] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function missingObjectFields(value: Record<string, unknown>, fields: readonly string[]): string[] {
+  return fields.filter((field) => !Object.hasOwn(value, field));
+}
+
+function unexpectedObjectFields(value: Record<string, unknown>, fields: readonly string[]): string[] {
+  return Object.keys(value).filter((field) => !fields.includes(field));
+}
+
+function exactStringArray(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value) && value.length === expected.length && expected.every((field, index) => value[index] === field);
+}
 
 function formatGenerated(value: string): string {
   return new Date(value).toLocaleString();
@@ -154,7 +175,7 @@ function auditExportJson(
       },
       schema: {
         retainedEntryFields: AUDIT_JSON_RETAINED_ENTRY_FIELDS,
-        requiredTopLevelFields: ["schemaId", "schemaVersion", "exportKind", "retention", "entries", "filters", "auditTrail"],
+        requiredTopLevelFields: AUDIT_JSON_REQUIRED_TOP_LEVEL_FIELDS,
         metadataContract: "generated-worker-handoff-audit-metadata-only",
       },
       entries: {
@@ -168,15 +189,15 @@ function auditExportJson(
       },
       auditTrail: entries.map((entry) => ({
         sequence: entry.sequence,
-        lane: entry.lane,
-        branch: entry.branch,
-        taskId: entry.taskId,
-        workspaceAction: entry.workspaceAction,
-        nextCommand: entry.nextCommand,
-        generatedAt: entry.generatedAt,
-        readinessStatus: entry.readinessStatus,
-        readinessCommand: entry.readinessCommand,
-        readinessSummary: entry.readinessSummary,
+        lane: entry.lane ?? null,
+        branch: entry.branch ?? null,
+        taskId: entry.taskId ?? null,
+        workspaceAction: entry.workspaceAction ?? null,
+        nextCommand: entry.nextCommand ?? null,
+        generatedAt: entry.generatedAt ?? null,
+        readinessStatus: entry.readinessStatus ?? null,
+        readinessCommand: entry.readinessCommand ?? null,
+        readinessSummary: entry.readinessSummary ?? null,
         queueCountsStatus: entry.queueCountsStatus,
         queueCounts: entry.queueCounts ?? {},
         stopLines: entry.stopLines ?? [],
@@ -193,6 +214,87 @@ function auditExportJson(
     null,
     2,
   );
+}
+
+function auditJsonValidationMessages(jsonText: string): string[] {
+  const failures: string[] = [];
+  let payload: unknown;
+  try {
+    payload = JSON.parse(jsonText);
+  } catch {
+    return ["invalid JSON"];
+  }
+
+  if (!isRecord(payload)) return ["JSON payload must be an object"];
+  const missingTopLevelFields = missingObjectFields(payload, AUDIT_JSON_REQUIRED_TOP_LEVEL_FIELDS);
+  if (missingTopLevelFields.length > 0) failures.push(`missing top-level fields: ${missingTopLevelFields.join(", ")}`);
+  const unexpectedTopLevelFields = unexpectedObjectFields(payload, AUDIT_JSON_REQUIRED_TOP_LEVEL_FIELDS);
+  if (unexpectedTopLevelFields.length > 0) failures.push(`unexpected top-level fields: ${unexpectedTopLevelFields.join(", ")}`);
+  if (payload.schemaId !== AUDIT_JSON_SCHEMA_ID) failures.push("schemaId mismatch");
+  if (payload.schemaVersion !== AUDIT_JSON_SCHEMA_VERSION) failures.push("schemaVersion mismatch");
+  if (payload.exportKind !== "filtered-handoff-audit") failures.push("exportKind mismatch");
+
+  const retention = payload.retention;
+  if (!isRecord(retention)) {
+    failures.push("retention must be an object");
+  } else {
+    if (retention.policy !== "metadata-only") failures.push("retention.policy must be metadata-only");
+    if (retention.payload !== "not-retained") failures.push("retention.payload must be not-retained");
+  }
+
+  const schema = payload.schema;
+  if (!isRecord(schema)) {
+    failures.push("schema must be an object");
+  } else {
+    if (schema.metadataContract !== "generated-worker-handoff-audit-metadata-only") failures.push("metadata contract mismatch");
+    if (!exactStringArray(schema.requiredTopLevelFields, AUDIT_JSON_REQUIRED_TOP_LEVEL_FIELDS)) failures.push("schema.requiredTopLevelFields must match exactly");
+    if (!exactStringArray(schema.retainedEntryFields, AUDIT_JSON_RETAINED_ENTRY_FIELDS)) failures.push("schema.retainedEntryFields must match exactly");
+  }
+
+  const auditTrail = payload.auditTrail;
+  if (!Array.isArray(auditTrail)) {
+    failures.push("auditTrail must be an array");
+  } else {
+    auditTrail.forEach((entry, index) => {
+      if (!isRecord(entry)) {
+        failures.push(`auditTrail[${index}] must be an object`);
+        return;
+      }
+      const missingEntryFields = missingObjectFields(entry, AUDIT_JSON_RETAINED_ENTRY_FIELDS);
+      if (missingEntryFields.length > 0) failures.push(`auditTrail[${index}] missing retained fields: ${missingEntryFields.join(", ")}`);
+      const unexpectedEntryFields = unexpectedObjectFields(entry, AUDIT_JSON_RETAINED_ENTRY_FIELDS);
+      if (unexpectedEntryFields.length > 0) failures.push(`auditTrail[${index}] has unexpected fields: ${unexpectedEntryFields.join(", ")}`);
+      if (typeof entry.sequence !== "number") failures.push(`auditTrail[${index}].sequence must be a number`);
+      if (!isRecord(entry.queueCounts)) failures.push(`auditTrail[${index}].queueCounts must be an object`);
+      if (!Array.isArray(entry.stopLines)) failures.push(`auditTrail[${index}].stopLines must be an array`);
+      if (!AUDIT_RETENTION_POLICY_VALUES.includes(entry.retentionPolicy as (typeof AUDIT_RETENTION_POLICY_VALUES)[number])) {
+        failures.push(`auditTrail[${index}].retentionPolicy is invalid`);
+      }
+      if (!AUDIT_PAYLOAD_RETENTION_VALUES.includes(entry.payloadRetention as (typeof AUDIT_PAYLOAD_RETENTION_VALUES)[number])) {
+        failures.push(`auditTrail[${index}].payloadRetention is invalid`);
+      }
+    });
+  }
+
+  const entries = payload.entries;
+  if (!isRecord(entries)) {
+    failures.push("entries must be an object");
+  } else {
+    if (Array.isArray(auditTrail) && entries.filtered !== auditTrail.length) failures.push("entries.filtered must match auditTrail length");
+    if (typeof entries.total !== "number") failures.push("entries.total must be a number");
+    if (typeof entries.filtered === "number" && typeof entries.total === "number" && entries.total < entries.filtered) failures.push("entries.total must be greater than or equal to entries.filtered");
+  }
+
+  const filters = payload.filters;
+  if (!isRecord(filters)) {
+    failures.push("filters must be an object");
+  } else {
+    if (filters.query !== null && typeof filters.query !== "string") failures.push("filters.query must be a string or null");
+    if (!AUDIT_EVIDENCE_FILTER_VALUES.includes(filters.evidence as (typeof AUDIT_EVIDENCE_FILTER_VALUES)[number])) failures.push("filters.evidence is invalid");
+    if (!AUDIT_PAYLOAD_FILTER_VALUES.includes(filters.payload as (typeof AUDIT_PAYLOAD_FILTER_VALUES)[number])) failures.push("filters.payload is invalid");
+  }
+
+  return failures;
 }
 
 function auditJsonFilename(row: RunnerAssignmentStatusRowView, entries: RunnerHandoffAuditEntryView[]): string {
@@ -241,6 +343,14 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
     () => auditJsonFilename(row, filteredAuditEntries),
     [filteredAuditEntries, row],
   );
+  const filteredAuditJsonValidationMessages = useMemo(
+    () => auditJsonValidationMessages(filteredAuditJsonExport),
+    [filteredAuditJsonExport],
+  );
+  const filteredAuditJsonValidationSummary =
+    filteredAuditJsonValidationMessages.length === 0
+      ? `JSON validation: schema v${AUDIT_JSON_SCHEMA_VERSION} metadata-only; retained fields ${AUDIT_JSON_RETAINED_ENTRY_FIELDS.length}.`
+      : `JSON validation failed: ${filteredAuditJsonValidationMessages.join("; ")}.`;
 
   async function copyAuditExportSummary() {
     setAuditExportStatus(`Copy prepared for ${filteredAuditEntries.length} audit ${filteredAuditEntries.length === 1 ? "entry" : "entries"}.`);
@@ -473,6 +583,7 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
             </div>
             <p className="mt-1 break-all font-mono text-[10px] text-[var(--muted)]">filename: {filteredAuditExportFilename}</p>
             <p className="mt-1 break-all font-mono text-[10px] text-[var(--muted)]">json filename: {filteredAuditJsonFilename}</p>
+            <p className="mt-1 break-all font-mono text-[10px] text-[var(--muted)]">{filteredAuditJsonValidationSummary}</p>
             <textarea
               className="mt-2 min-h-32 w-full resize-y rounded-[0.5rem] border bg-[var(--surface)] p-2 font-mono text-[11px] leading-5 text-[var(--foreground)]"
               aria-label="Filtered audit export"
