@@ -2958,6 +2958,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         preferred_successor_ids = (
+            "dispatcher-closed-source-guard-filter-reset-refresh",
             "dispatcher-closed-source-guard-source-kind-summary-refresh",
             "dispatcher-closed-source-guard-rollup-filter-refresh",
             "dispatcher-closed-source-guard-rollup-refresh",
@@ -3920,6 +3921,24 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_closed_source_guard_filter_reset_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-filter-reset-refresh",
+            lane_title="Dispatcher closed source guard filter reset refresh",
+            scope=[
+                "runner assignment filter reset controls that clear classification, source, and source-completion filters without changing source data",
+                "dashboard assertions that filtered source-kind summaries return to the default needs-attention view after reset",
+                "static drift coverage for successor queue advancement and metadata-only filter reset messaging",
+                "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3927,7 +3946,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-closed-source-guard-source-kind-summary-refresh"],
+                includedBacklogItems=["dispatcher-closed-source-guard-filter-reset-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3952,14 +3971,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-closed-source-guard-source-kind-summary-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the closed source guard source-kind summary item is the next safe backlog item for dispatcher queue integrity work.",
-                        evidence=["dispatcher-closed-source-guard-source-kind-summary-refresh"],
+                        status="ready" if "dispatcher-closed-source-guard-filter-reset-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the closed source guard filter reset item is the next safe backlog item for dispatcher queue integrity work.",
+                        evidence=["dispatcher-closed-source-guard-filter-reset-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the closed source guard source-kind summary item ready before changing dispatcher queue snapshot or assignment surfaces.",
+                        nextAction="Keep the closed source guard filter reset item ready before changing dispatcher queue snapshot or assignment surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3989,8 +4008,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_closed_source_guard_source_kind_summary_lane,
-                nextAction="Select this slice for dispatcher closed source guard source-kind summary work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_closed_source_guard_filter_reset_lane,
+                nextAction="Select this slice for dispatcher closed source guard filter reset work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4739,6 +4758,24 @@ class SupervisorService:
                 "dashboard assertions that source-completion filters and rollup counts remain aligned when generated lane workers inspect closed backlog evidence",
                 "static drift coverage for successor queue advancement and metadata-only source-kind summary messaging",
                 "metadata-only report evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_closed_source_guard_filter_reset_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-filter-reset-refresh",
+            lane_title="Dispatcher closed source guard filter reset refresh",
+            scope=[
+                "runner assignment filter reset controls that clear classification, source, and source-completion filters without changing source data",
+                "dashboard assertions that filtered source-kind summaries return to the default needs-attention view after reset",
+                "static drift coverage for successor queue advancement and metadata-only filter reset messaging",
+                "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
             ],
             verification_commands=[
                 "pnpm run check:runner-assignment-status",
@@ -5717,13 +5754,13 @@ class SupervisorService:
                 itemId="dispatcher-closed-source-guard-source-kind-summary-refresh",
                 label="Dispatcher closed source guard source kind summary refresh",
                 priority="P2",
-                status="ready",
-                summary="Add source-kind summaries that keep assignment-backed and workspace-backed source completion evidence easy to compare.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered filtered source-kind summaries that compare row sources and assignment-backed versus workspace-backed source completion evidence.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Source-completion filters now isolate assignment-backed and workspace-backed closed source evidence rows.",
-                    "The next lane should summarize filtered source kinds without retaining raw prompts, provider payloads, or unnecessary source copies.",
-                    "Keep the source-kind summary refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                    "Runner assignment filters now show a filtered source summary for workspace, lane assignment, and backlog rows.",
+                    "Filtered source summaries preserve assignment-backed, workspace-backed, and none source-completion counts after the source-completion filter changes.",
+                    "Dashboard assertions cover the active workspace view and closed backlog workspace-completion view without provider calls or generated workspace mutation.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -5740,8 +5777,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_closed_source_guard_source_kind_summary_lane,
-                nextAction="Refresh dispatcher closed source guard source-kind summary evidence so generated lane workers can compare source completion rows by evidence kind.",
+                nextAction="Use this completed dispatcher closed source guard source-kind summary evidence only; do not requeue dispatcher-closed-source-guard-source-kind-summary-refresh. Continue with dispatcher-closed-source-guard-filter-reset-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-closed-source-guard-filter-reset-refresh",
+                label="Dispatcher closed source guard filter reset refresh",
+                priority="P2",
+                status="ready",
+                summary="Add filter reset controls so generated lane workers can return runner assignment filters to the default needs-attention view.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Source-completion filters and filtered source summaries now make narrow row views easy to inspect.",
+                    "The next lane should add reset ergonomics without changing source-completion evidence semantics or generated workspace state.",
+                    "Keep the filter reset refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_closed_source_guard_filter_reset_lane,
+                nextAction="Refresh dispatcher closed source guard filter reset controls so filtered source summaries can return to the default needs-attention view.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
