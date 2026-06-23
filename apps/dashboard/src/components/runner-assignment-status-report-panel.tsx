@@ -18,6 +18,14 @@ type SourcedAssignmentRow = {
   row: RunnerAssignmentStatusRowView;
   source: Exclude<AssignmentSourceFilter, "all">;
 };
+type FilteredSourceKindSummary = {
+  workspace: number;
+  lane: number;
+  backlog: number;
+  sourceCompletionAssignment: number;
+  sourceCompletionWorkspace: number;
+  sourceCompletionNone: number;
+};
 
 function formatGenerated(value: string): string {
   return new Date(value).toLocaleString();
@@ -63,6 +71,27 @@ function sourceCompletionMatches(row: RunnerAssignmentStatusRowView, filter: Sou
   if (filter === "any") return Boolean(evidenceKind);
   if (filter === "none") return !evidenceKind;
   return evidenceKind === filter;
+}
+
+function filteredSourceKindSummary(rows: SourcedAssignmentRow[]): FilteredSourceKindSummary {
+  return rows.reduce<FilteredSourceKindSummary>(
+    (summary, { row, source }) => {
+      summary[source] += 1;
+      const evidenceKind = row.sourceCompletionEvidence?.evidenceKind;
+      if (evidenceKind === "assignment") summary.sourceCompletionAssignment += 1;
+      else if (evidenceKind === "workspace") summary.sourceCompletionWorkspace += 1;
+      else summary.sourceCompletionNone += 1;
+      return summary;
+    },
+    {
+      workspace: 0,
+      lane: 0,
+      backlog: 0,
+      sourceCompletionAssignment: 0,
+      sourceCompletionWorkspace: 0,
+      sourceCompletionNone: 0,
+    },
+  );
 }
 
 function orderedCountEntries(counts: Record<string, number>): [string, number][] {
@@ -528,6 +557,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
     if (!sourceCompletionMatches(row, sourceCompletionFilter)) return false;
     return classificationMatches(row, classificationFilter);
   });
+  const filteredSourceSummary = filteredSourceKindSummary(filteredRows);
   const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
   return (
     <section className="rounded-[1rem] border bg-[var(--surface)] p-4 shadow-sm">
@@ -671,6 +701,16 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
               </select>
             </label>
           </div>
+        </div>
+        <div data-testid="filtered-source-kind-summary" className="mt-3 grid gap-1 text-xs leading-5 text-[var(--muted)] sm:grid-cols-2">
+          <p className="font-semibold text-[var(--foreground)]">Filtered source summary</p>
+          <p>
+            Rows: workspace {filteredSourceSummary.workspace}, lane assignment {filteredSourceSummary.lane}, backlog {filteredSourceSummary.backlog}
+          </p>
+          <p>
+            Source completion: assignment {filteredSourceSummary.sourceCompletionAssignment}, workspace {filteredSourceSummary.sourceCompletionWorkspace}, none{" "}
+            {filteredSourceSummary.sourceCompletionNone}
+          </p>
         </div>
       </div>
 
