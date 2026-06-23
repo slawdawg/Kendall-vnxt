@@ -56,11 +56,14 @@ const runbookCheck = readWorkspaceFile("scripts/check-runbook-verification.mjs")
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
 const readme = readWorkspaceFile("README.md");
 const currentRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
-const runbookCheckUsesPackageInventory =
-  runbookCheck.includes("activeCheckCommands") &&
-  runbookCheck.includes('extractCheckCommands(packageJson.scripts?.["check:static"])') &&
-  runbookCheck.includes("extractCheckCommands(packageJson.scripts?.check)") &&
-  runbookCheck.includes("for (const command of activeCheckCommands)") &&
+const runbookCheckUsesPackageVerificationInventory =
+  runbookCheck.includes("activeVerificationCommands") &&
+  runbookCheck.includes('extractVerificationCommands(packageJson.scripts?.["check:static"])') &&
+  runbookCheck.includes("extractVerificationCommands(packageJson.scripts?.check)") &&
+  runbookCheck.includes("(?:check|test|build):") &&
+  runbookCheck.includes("extractorProbeCommands") &&
+  runbookCheck.includes("pnpm run build:dashboard") &&
+  runbookCheck.includes("for (const command of activeVerificationCommands)") &&
   runbookCheck.includes("mentionsCommand(content, command)");
 
 const failures = [];
@@ -174,8 +177,8 @@ for (const fileText of [
   assertCondition(fileText[0].includes(fileText[1]), `${fileText[2]} must include ${fileText[1]}`, failures);
 }
 assertCondition(
-  runbookCheckUsesPackageInventory,
-  "runbook drift check must derive active check commands from package.json aggregate scripts",
+  runbookCheckUsesPackageVerificationInventory,
+  "runbook drift check must derive active check/test/build commands from package.json aggregate scripts",
   failures,
 );
 

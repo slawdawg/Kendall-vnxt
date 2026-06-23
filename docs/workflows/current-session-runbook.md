@@ -52,5 +52,19 @@ verification, `pnpm run check:runtime-export`, `pnpm run check:runtime-review`,
 `pnpm run check:maintenance-readiness`, `pnpm run check:token-economy`,
 `pnpm run check:workspace-coordination`, `pnpm run check:mise-workflow`,
 `pnpm run check:linux-install-lane`, `pnpm run check:bmad-work-products`,
-`pnpm run check:clean-install-boundary`, dashboard build verification, and
-supervisor integration tests.
+`pnpm run test:clean-install-boundary`, `pnpm run check:clean-install-boundary`,
+`pnpm run test:codex-workspace`, `pnpm run test:codex-workspace-state`,
+`pnpm run test:workspace-command-resolution`,
+`pnpm run test:anti-churn-event-writer`,
+`pnpm run test:anti-churn-signature-classifier`,
+`pnpm run test:anti-churn-event-reader`,
+`pnpm run test:anti-churn-guidance-candidate-classifier`,
+`pnpm run test:anti-churn-guidance-dedupe`,
+`pnpm run test:anti-churn-guidance-output`,
+`pnpm run test:anti-churn-verification-routing`,
+`pnpm run test:anti-churn-apply-safe-gate`,
+`pnpm run test:anti-churn-hook-transaction-store`,
+`pnpm run test:anti-churn-source-apply`,
+`pnpm run test:anti-churn-verification-rollback`,
+`pnpm run test:dashboard-e2e-runner`, `pnpm run build:dashboard`, and
+`pnpm run test:supervisor`.

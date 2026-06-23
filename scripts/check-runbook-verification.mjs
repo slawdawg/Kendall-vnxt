@@ -22,9 +22,9 @@ function mentionsCommand(content, command) {
   return new RegExp(`${escapeRegExp(command)}(?![A-Za-z0-9:-])`).test(content);
 }
 
-function extractCheckCommands(script) {
+function extractVerificationCommands(script) {
   const commands = [];
-  const commandPattern = /\bpnpm\s+run\s+(check:[A-Za-z0-9:-]+)/g;
+  const commandPattern = /\bpnpm\s+run\s+((?:check|test|build):[A-Za-z0-9:-]+)/g;
   let match;
 
   while ((match = commandPattern.exec(script ?? "")) !== null) {
@@ -48,6 +48,14 @@ function uniqueInOrder(values) {
   return unique;
 }
 
+function assertExactList(actual, expected, label) {
+  assertCondition(
+    actual.length === expected.length && actual.every((value, index) => value === expected[index]),
+    `${label} must exactly match ${JSON.stringify(expected)} but found ${JSON.stringify(actual)}`,
+    failures,
+  );
+}
+
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const files = {
   "README.md": readWorkspaceFile("README.md"),
@@ -61,6 +69,15 @@ const files = {
 
 const failures = [];
 
+const extractorProbeCommands = extractVerificationCommands(
+  "pnpm run check:docs && pnpm run test:codex-workspace && pnpm run build:dashboard && pnpm run dev:dashboard",
+);
+assertExactList(
+  extractorProbeCommands,
+  ["pnpm run check:docs", "pnpm run test:codex-workspace", "pnpm run build:dashboard"],
+  "Verification command extractor probe",
+);
+
 assertCondition(
   packageJson.scripts?.["check:runbooks"] === "node ./scripts/check-runbook-verification.mjs",
   "package.json must define check:runbooks as node ./scripts/check-runbook-verification.mjs",
@@ -72,14 +89,14 @@ assertCondition(
   failures,
 );
 
-const activeCheckCommands = uniqueInOrder([
-  ...extractCheckCommands(packageJson.scripts?.["check:static"]),
-  ...extractCheckCommands(packageJson.scripts?.check),
+const activeVerificationCommands = uniqueInOrder([
+  ...extractVerificationCommands(packageJson.scripts?.["check:static"]),
+  ...extractVerificationCommands(packageJson.scripts?.check),
 ]);
 
 assertCondition(
-  activeCheckCommands.length > 0,
-  "package.json aggregate check scripts must include at least one pnpm run check:* command",
+  activeVerificationCommands.length > 0,
+  "package.json aggregate check scripts must include at least one pnpm run check:*, test:*, or build:* command",
   failures,
 );
 
@@ -91,7 +108,7 @@ const currentRunbooks = [
 for (const path of currentRunbooks) {
   const content = files[path];
   assertCondition(mentionsCommand(content, "pnpm run check"), `${path} must mention pnpm run check`, failures);
-  for (const command of activeCheckCommands) {
+  for (const command of activeVerificationCommands) {
     assertCondition(mentionsCommand(content, command), `${path} must mention ${command}`, failures);
   }
   assertCondition(

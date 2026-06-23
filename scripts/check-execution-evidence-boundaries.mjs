@@ -122,12 +122,15 @@ assertCondition(
   failures,
 );
 assertCondition(
-  runbookCheck.includes("activeCheckCommands") &&
-    runbookCheck.includes('extractCheckCommands(packageJson.scripts?.["check:static"])') &&
-    runbookCheck.includes("extractCheckCommands(packageJson.scripts?.check)") &&
-    runbookCheck.includes("for (const command of activeCheckCommands)") &&
+  runbookCheck.includes("activeVerificationCommands") &&
+    runbookCheck.includes('extractVerificationCommands(packageJson.scripts?.["check:static"])') &&
+    runbookCheck.includes("extractVerificationCommands(packageJson.scripts?.check)") &&
+    runbookCheck.includes("(?:check|test|build):") &&
+    runbookCheck.includes("extractorProbeCommands") &&
+    runbookCheck.includes("pnpm run build:dashboard") &&
+    runbookCheck.includes("for (const command of activeVerificationCommands)") &&
     runbookCheck.includes("mentionsCommand(content, command)"),
-  "Runbook drift check must derive active check commands from package.json aggregate scripts",
+  "Runbook drift check must derive active check/test/build commands from package.json aggregate scripts",
   failures,
 );
 assertCondition(
