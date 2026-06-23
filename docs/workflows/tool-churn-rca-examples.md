@@ -61,6 +61,45 @@ Tool Churn RCA Packet
 - Durable fix recommendation: Keep the command result in the lane evidence and add a wrapper/preflight only if the same EROFS signature recurs in ordinary non-sandbox runs.
 ```
 
+## Git Worktree Metadata EROFS
+
+```text
+Tool Churn RCA Packet
+- What failed: A Node workspace verification command failed while a test tried to create temporary Git worktree metadata.
+- Failure class: sandbox
+- Most likely cause: The sandbox can read the repository but cannot write required metadata under the primary checkout's `.git/worktrees` directory.
+- Evidence: Output includes `fatal: could not create directory of '<repo>/.git/worktrees/<temporary-worktree-name>': Read-only file system`.
+- Retry stop line: Do not retry the same workspace test inside the sandbox after this `.git/worktrees` EROFS signature appears.
+- One next safe action: Request approval to rerun the exact same read-only verification command outside the sandbox; do not skip the Git-worktree test or change the test scope just to avoid the boundary.
+- Durable fix recommendation: Keep this as an environment-boundary note in lane evidence unless the test can be refactored to use an isolated temporary repository without weakening cleanup or worktree coverage.
+```
+
+## Supervisor Uv Cache EROFS
+
+```text
+Tool Churn RCA Packet
+- What failed: A supervisor `uv run --directory services/supervisor ...` verification command failed before pytest or Python checks ran.
+- Failure class: sandbox
+- Most likely cause: `uv` needed to create or lock files under the user's cache directory, but the sandbox made that path read-only.
+- Evidence: Output includes `Could not acquire lock`, `Could not create temporary file`, or `Read-only file system` at a path under `$HOME/.cache/uv`.
+- Retry stop line: Do not switch between `uv`, `python`, and pnpm wrappers after this cache EROFS signature appears.
+- One next safe action: Request approval to rerun the exact same `uv run --directory services/supervisor ...` command outside the sandbox.
+- Durable fix recommendation: Preserve the outside-sandbox verification result as lane evidence; consider a future uv cache preflight only if the same signature recurs outside managed sandbox constraints.
+```
+
+## PR Review Threads After Green CI
+
+```text
+Tool Churn RCA Packet
+- What failed: A PR appeared merge-ready because CI checks passed, but GitHub still had unresolved or current review threads.
+- Failure class: review-state
+- Most likely cause: The runner treated check status or flat PR comments as complete review evidence instead of reading thread-aware review state.
+- Evidence: `gh pr checks` is green, but GraphQL `reviewThreads` includes unresolved current threads or `gh pr view` reports a blocked merge state.
+- Retry stop line: Do not retry merge commands or speculate about branch protection until thread-aware review state has been fetched from the PR branch context.
+- One next safe action: Use the GitHub PR comment workflow or GraphQL review-thread fetch, address actionable unresolved threads, rerun focused verification, push, then re-check review threads after the latest head.
+- Durable fix recommendation: Keep the end-to-end lane runner merge gate requiring post-push thread-aware review checks and resolve only threads addressed by code, docs, tests, or explicit operator decision.
+```
+
 ## Playwright Browser Cache Mismatch
 
 ```text

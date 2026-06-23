@@ -166,6 +166,9 @@ const exampleHeadings = [
   "Sandbox Runner Timeout",
   "Shell Quoting Or Parser Error",
   "Missing Supervisor Virtual Environment",
+  "Git Worktree Metadata EROFS",
+  "Supervisor Uv Cache EROFS",
+  "PR Review Threads After Green CI",
   "Git Safe-Directory Or Permission Denial",
 ];
 const packetFields = [
