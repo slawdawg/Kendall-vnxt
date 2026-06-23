@@ -535,7 +535,8 @@ try {
     assert(result.stdout.includes("- dispatcher-cleanup-assignment-closure-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-cleanup-assignment-report-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-assignment-panel-filter-refresh | closed"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- dispatcher-closed-lane-requeue-guard-refresh | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-closed-lane-requeue-guard-refresh | closed"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-closed-source-guard-report-refresh | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -571,7 +572,7 @@ try {
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
-  test("claim-next advances to closed lane requeue guard after completed assignment panel filter lane", () => {
+  test("claim-next advances to closed source guard report after completed requeue guard lane", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-generated-queue-"));
     try {
       const assignmentsDir = join(queueStateRoot, "assignments");
@@ -600,8 +601,8 @@ try {
       const after = taskSnapshot(assignmentsDir);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("claim candidate dispatcher-closed-lane-requeue-guard-refresh"), result.stdout || result.stderr);
-      assert(result.stdout.includes("branch codex/dispatcher-closed-lane-requeue-guard-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate dispatcher-closed-source-guard-report-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("branch codex/dispatcher-closed-source-guard-report-refresh"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
       assert(result.stdout.includes("- worker-backlog-queue-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- lane-handoff-evidence-refresh | closed"), result.stdout || result.stderr);
@@ -619,7 +620,40 @@ try {
       assert(result.stdout.includes("- dispatcher-queue-handoff-audit-export-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- dispatcher-queue-handoff-audit-download-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- dispatcher-assignment-panel-filter-refresh | closed"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- dispatcher-closed-lane-requeue-guard-refresh | closed"), result.stdout || result.stderr);
       assert(before === after, "generated queue dry-run mutated assignment metadata");
+    } finally {
+      rmSync(queueStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("closed source completion evidence prevents ready backlog requeue", () => {
+    const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-closed-source-requeue-guard-"));
+    try {
+      const expected = expectedClaimCandidate();
+      const tasksDir = join(queueStateRoot, "tasks");
+      const assignmentsDir = join(queueStateRoot, "assignments");
+      seedGeneratedSuccessorPrerequisites(queueStateRoot);
+      seedClosedSourceCompletion(queueStateRoot, expected);
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const report = run(["assignment-report", "--owner", "runner-a", "--state-root", queueStateRoot]);
+      const claim = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
+      const dispatch = run(["dispatch-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
+
+      assert(report.code === 0, report.stderr || report.stdout);
+      assert(report.stdout.includes(`- ${expected.slug} | closed`), report.stdout || report.stderr);
+      assert(report.stdout.includes(`reason=closed assignment evidence exists for ${expected.slug}`), report.stdout || report.stderr);
+      assert(claim.code === 0, claim.stderr || claim.stdout);
+      assert(claim.stdout.includes("no claimable safe backlog lane found"), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes(`- ${expected.slug} | closed`), claim.stdout || claim.stderr);
+      assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
+      assert(dispatch.stdout.includes("- selected lane none"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes("no dispatchable safe backlog lane found"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes(`- ${expected.slug} | closed`), dispatch.stdout || dispatch.stderr);
+      assert(beforeTasks === taskSnapshot(tasksDir), "closed source guard dry-runs mutated task manifests");
+      assert(beforeAssignments === taskSnapshot(assignmentsDir), "closed source guard dry-runs mutated assignments");
     } finally {
       rmSync(queueStateRoot, { recursive: true, force: true });
     }
@@ -1241,7 +1275,7 @@ try {
         "codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
         "codex/dispatcher-cleanup-assignment-closure-refresh",
         "codex/dispatcher-cleanup-assignment-report-refresh",
-        "codex/dispatcher-closed-lane-requeue-guard-refresh",
+        "codex/dispatcher-closed-source-guard-report-refresh",
       ];
       const manifestPaths = blockedBranches.map((branchName, index) => {
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
@@ -1318,7 +1352,7 @@ try {
         "dispatcher-queue-handoff-audit-json-validation-refresh",
         "dispatcher-cleanup-assignment-closure-refresh",
         "dispatcher-cleanup-assignment-report-refresh",
-        "dispatcher-closed-lane-requeue-guard-refresh",
+        "dispatcher-closed-source-guard-report-refresh",
       ]) {
         writeFileSync(
           join(assignmentsDir, `${laneSlug}.json`),
@@ -1356,7 +1390,7 @@ try {
         "dispatcher-queue-handoff-audit-json-validation-refresh",
         "dispatcher-cleanup-assignment-closure-refresh",
         "dispatcher-cleanup-assignment-report-refresh",
-        "dispatcher-closed-lane-requeue-guard-refresh",
+        "dispatcher-closed-source-guard-report-refresh",
       ].map((laneSlug) => join(assignmentsDir, `${laneSlug}.json`));
       const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
@@ -1704,7 +1738,7 @@ try {
         "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
         "dispatcher-cleanup-assignment-closure-refresh",
         "dispatcher-cleanup-assignment-report-refresh",
-        "dispatcher-closed-lane-requeue-guard-refresh",
+        "dispatcher-closed-source-guard-report-refresh",
       ].map((laneSlug) => {
         const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
         writeFileSync(
@@ -2238,9 +2272,9 @@ function remoteBranchExists(cwd, branch) {
 
 function expectedClaimCandidate() {
   return {
-    slug: "dispatcher-closed-lane-requeue-guard-refresh",
-    title: "dispatcher closed lane requeue guard refresh",
-    branch: "codex/dispatcher-closed-lane-requeue-guard-refresh",
+    slug: "dispatcher-closed-source-guard-report-refresh",
+    title: "dispatcher closed source guard report refresh",
+    branch: "codex/dispatcher-closed-source-guard-report-refresh",
   };
 }
 
@@ -2274,6 +2308,7 @@ function seedClosedSafeBacklogManifests(stateRootPath) {
     "dispatcher-cleanup-assignment-closure-refresh",
     "dispatcher-cleanup-assignment-report-refresh",
     "dispatcher-assignment-panel-filter-refresh",
+    "dispatcher-closed-lane-requeue-guard-refresh",
   ]) {
     const manifestPath = join(tasksDir, `closed-${laneSlug}.json`);
     if (existsSync(manifestPath)) {
@@ -2343,6 +2378,56 @@ function seedClaimedSafeBacklogAssignment(stateRootPath, laneSlug, owner) {
         created_at: now,
         updated_at: now,
         events: [],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+function seedClosedSourceCompletion(stateRootPath, candidate) {
+  const tasksDir = join(stateRootPath, "tasks");
+  const assignmentsDir = join(stateRootPath, "assignments");
+  mkdirSync(tasksDir, { recursive: true });
+  mkdirSync(assignmentsDir, { recursive: true });
+  const closedAt = "2026-06-23T12:57:05.000Z";
+  const sourceBacklogItem = {
+    item_id: candidate.slug,
+    status: "ready",
+    recommended_slice_size: "medium_to_large",
+    branch_name: candidate.branch,
+    start_command: `node ./scripts/codex-workspace.mjs start "${candidate.title}"`,
+  };
+  writeFileSync(
+    join(assignmentsDir, `${candidate.slug}.json`),
+    `${JSON.stringify(
+      {
+        assignment_id: candidate.slug,
+        task_id: `closed-${candidate.slug}`,
+        lane_slug: candidate.slug,
+        branch: candidate.branch,
+        status: "closed",
+        owner: "runner-a",
+        closed_at: closedAt,
+        source_backlog_item: sourceBacklogItem,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(
+    join(tasksDir, `closed-${candidate.slug}.json`),
+    `${JSON.stringify(
+      {
+        task_id: `closed-${candidate.slug}`,
+        branch: candidate.branch,
+        worktree_path: rootDir,
+        base_branch: "main",
+        status: "closed",
+        owner: "runner-a",
+        closed_at: closedAt,
+        source_assignment_id: candidate.slug,
+        source_backlog_item: sourceBacklogItem,
       },
       null,
       2,
