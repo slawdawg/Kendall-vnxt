@@ -1,0 +1,41 @@
+name: Kendall Obsidian Memory
+code: kom
+version: 0.1.0
+module_greeting: Kendall Obsidian Memory is configured for approved-folder vault access, review-gated proposals, and local write-back to the dashboard queue.
+variables:
+  - key: profile
+    default: obsidian-sync-headless
+    prompt: Which vault sync profile should this install use?
+  - key: vault_display_name
+    default: Kendall Memory
+    prompt: What should Kendall call this vault?
+  - key: vault_root
+    default: "{project-root}/.local/runtime/kom/vault"
+    prompt: What local Linux path contains the synced Obsidian vault mirror?
+    user_setting: true
+  - key: backup_root
+    default: "{project-root}/.local/runtime/kom/backups"
+    prompt: Where should local vault backups be written before approved write-back?
+    user_setting: true
+  - key: proposal_queue_folder
+    default: "01 Dashboard Queue"
+    prompt: Which vault folder should receive Kendall review queue artifacts?
+  - key: allowed_read_folders
+    default:
+      - "00 Inbox"
+      - "02 Customers"
+      - "03 Contacts"
+      - "04 Projects"
+      - "05 Decisions"
+      - "06 Research"
+      - "07 Operating Manual"
+      - "08 Lessons"
+    prompt: Which vault folders may Kendall scan?
+  - key: excluded_folders
+    default:
+      - "01 Dashboard Queue"
+      - "09 Archive"
+      - "Private"
+      - "Personal"
+      - "Journal"
+    prompt: Which vault folders must Kendall avoid?

@@ -1007,6 +1007,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-knx-obsidian-memory",
+                label="Kendall Obsidian memory synthetic check",
+                command="pnpm run check:knx-obsidian-memory",
+                status="required",
+                requiredFor=["Obsidian memory module changes", "vault boundary changes", "memory proposal runtime changes"],
+                evidence=[
+                    "Runs the synthetic vault validation loop for approved-folder reads, proposal creation, backup-before-write, and dashboard queue write-back.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-clean-install-boundary",
                 label="Clean install boundary drift",
                 command="pnpm run check:clean-install-boundary",
@@ -1025,6 +1036,17 @@ class SupervisorService:
                 requiredFor=["clean install boundary changes", "tracked artifact policy changes", "source-control hygiene changes"],
                 evidence=[
                     "Runs the clean-install boundary unit test suite that backs the tracked artifact policy.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-knx-obsidian-memory",
+                label="Kendall Obsidian memory tests",
+                command="pnpm run test:knx-obsidian-memory",
+                status="required",
+                requiredFor=["Obsidian memory module changes", "vault boundary changes", "memory proposal runtime changes"],
+                evidence=[
+                    "Runs unit tests for excluded folder handling, traversal rejection, proposal approval gating, and queue-only write-back.",
                     "Runs as part of the full local verification command.",
                 ],
             ),
@@ -1374,7 +1396,9 @@ class SupervisorService:
                     "check-mise-workflow",
                     "check-linux-install-lane",
                     "check-bmad-work-products",
+                    "check-knx-obsidian-memory",
                     "test-clean-install-boundary",
+                    "test-knx-obsidian-memory",
                     "check-clean-install-boundary",
                     "test-codex-workspace",
                     "test-codex-workspace-state",

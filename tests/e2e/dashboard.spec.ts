@@ -696,7 +696,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:mise-workflow", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:linux-install-lane", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:bmad-work-products", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:knx-obsidian-memory", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:clean-install-boundary", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:knx-obsidian-memory", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:clean-install-boundary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:codex-workspace", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:codex-workspace-state", { exact: true })).toBeVisible();

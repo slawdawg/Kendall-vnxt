@@ -1594,7 +1594,9 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-mise-workflow",
         "check-linux-install-lane",
         "check-bmad-work-products",
+        "check-knx-obsidian-memory",
         "test-clean-install-boundary",
+        "test-knx-obsidian-memory",
         "check-clean-install-boundary",
         "test-codex-workspace",
         "test-codex-workspace-state",
@@ -1639,7 +1641,9 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "check-development-runway" in static_group["commandIds"]
     assert "check-runner-assignment-status" in static_group["commandIds"]
     assert "check-token-economy" in static_group["commandIds"]
+    assert "check-knx-obsidian-memory" in static_group["commandIds"]
     assert "test-clean-install-boundary" in static_group["commandIds"]
+    assert "test-knx-obsidian-memory" in static_group["commandIds"]
     assert "check-clean-install-boundary" in static_group["commandIds"]
     assert "test-codex-workspace" in static_group["commandIds"]
     assert "test-codex-workspace-state" in static_group["commandIds"]

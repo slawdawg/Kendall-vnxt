@@ -1,0 +1,4 @@
+module_code,skill,summary
+kom,kom-setup,Configure local Obsidian vault access for Kendall memory
+kom,kom-validate,Validate vault boundaries and proposal write-back
+kom,kom-safety-review,Review Obsidian memory workflows against KNX safety boundaries

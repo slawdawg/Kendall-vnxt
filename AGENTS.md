@@ -143,6 +143,13 @@ durable, milestone-driven workflow rather than a single unbounded task.
   destructive history rewrites, secret access, provider calls, cleanup outside
   the managed workspace, or expanding delivery beyond the reviewed lane scope.
   Record each delivery action and its evidence as part of the goal.
+- When using the end-to-end lane runner under `standard-delivery`, do not
+  reframe `finish-pr`, PR creation/update, or routine PR push as a new
+  operator approval request after local verification. If sandbox escalation is
+  needed to run the command, state that the escalation is for filesystem,
+  process, or network access and cite the standing lane authority. Stop only if
+  the action exceeds the lane scope, touches a high-risk surface, or lacks the
+  required verification evidence.
 - Treat a PR merge under that standing approval as policy-approved low-risk
   delivery only when all of these are true: the PR belongs to the current lane,
   targets the expected base branch, is not a draft, is mergeable at the exact
