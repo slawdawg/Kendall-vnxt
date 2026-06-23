@@ -848,9 +848,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/report-catalog-shortcut-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"')).toBeVisible();
-    await expect(runwayPanel.getByText("pnpm run check:reports").first()).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-continuity-snapshot-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
     await expect(runwayPanel.getByText("Do not start or modify another active lane while using this recommendation.").first()).toBeVisible();
@@ -983,9 +983,19 @@ test.describe("dashboard workflow coverage", () => {
     );
     await expect(safeBacklogPanel.getByRole("heading", { name: "Report catalog shortcut refresh" })).toBeVisible();
     const shortcutCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Report catalog shortcut refresh" }) });
-    await expect(shortcutCard.getByText("branch: codex/report-catalog-shortcut-refresh")).toBeVisible();
-    await expect(shortcutCard.getByText('start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"')).toBeVisible();
-    await expect(shortcutCard.getByText("pnpm run check:reports")).toBeVisible();
+    await expect(shortcutCard.getByText("closed", { exact: true })).toBeVisible();
+    await expect(shortcutCard.getByText("slice: complete")).toBeVisible();
+    await expect(shortcutCard.getByText("explicit dashboard report anchors")).toBeVisible();
+    await expect(shortcutCard.getByText("do not requeue report-catalog-shortcut-refresh")).toBeVisible();
+    await expect(shortcutCard.getByRole("link", { name: "GET /supervisor/runner-assignment-status-report" })).toHaveAttribute(
+      "href",
+      "/controls#runner-assignment-status",
+    );
+    await expect(safeBacklogPanel.getByRole("heading", { name: "Dispatcher continuity snapshot refresh" })).toBeVisible();
+    const dispatcherCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Dispatcher continuity snapshot refresh" }) });
+    await expect(dispatcherCard.getByText("branch: codex/dispatcher-continuity-snapshot-refresh")).toBeVisible();
+    await expect(dispatcherCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"')).toBeVisible();
+    await expect(dispatcherCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 

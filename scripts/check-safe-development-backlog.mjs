@@ -141,6 +141,7 @@ for (const itemId of [
   "worker-backlog-queue-refresh",
   "lane-handoff-evidence-refresh",
   "report-catalog-shortcut-refresh",
+  "dispatcher-continuity-snapshot-refresh",
   "authority-blocked-work",
 ]) {
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Safe backlog service must include item ${itemId}`, failures);
@@ -286,6 +287,7 @@ for (const safetyText of [
   'lane_slug="read-only-evidence-polish"',
   'lane_slug="lane-handoff-evidence-refresh"',
   'lane_slug="report-catalog-shortcut-refresh"',
+  'lane_slug="dispatcher-continuity-snapshot-refresh"',
   "complete",
   "Use this completed item as evidence only; do not requeue it as a new lane.",
   "Use this completed queue refresh as evidence only; do not requeue worker-backlog-queue-refresh.",
@@ -295,7 +297,8 @@ for (const safetyText of [
   "After this completed item closes, claim-next should advance to report-catalog-shortcut-refresh once lane-handoff-evidence-refresh is closed.",
   "Use this completed handoff evidence only; do not requeue lane-handoff-evidence-refresh.",
   "The runner assignment status panel now groups owner, branch, worktree state, readiness, next command, and stop lines as a visible resume packet.",
-  "Generated backlog items should link to explicit dashboard report anchors rather than falling back to the report catalog.",
+  "Use this completed shortcut evidence only; do not requeue report-catalog-shortcut-refresh.",
+  "Refresh dispatcher continuity snapshots while keeping all evidence read-only and source-owned.",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
@@ -324,9 +327,9 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/report-catalog-shortcut-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"',
-  "pnpm run check:reports",
+  "branch: codex/dispatcher-continuity-snapshot-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"',
+  "pnpm run check:runner-assignment-status",
   "pnpm run check:safe-backlog",
   "Related report links",
   "Source evidence labels",
@@ -346,8 +349,10 @@ for (const browserText of [
   "visible resume packet",
   "do not requeue lane-handoff-evidence-refresh",
   "Report catalog shortcut refresh",
-  "branch: codex/report-catalog-shortcut-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"',
+  "do not requeue report-catalog-shortcut-refresh",
+  "Dispatcher continuity snapshot refresh",
+  "branch: codex/dispatcher-continuity-snapshot-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"',
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
   "Do not start or modify another active lane while using this recommendation.",
@@ -367,13 +372,16 @@ assertCondition(
     supervisorTests.includes('github_item["nextLane"] is None') &&
     supervisorTests.includes('worker_queue_item["status"] == "closed"') &&
     supervisorTests.includes('worker_queue_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/report-catalog-shortcut-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"') &&
-    supervisorTests.includes("pnpm run check:reports") &&
+    supervisorTests.includes('"codex/dispatcher-continuity-snapshot-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"') &&
+    supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
     supervisorTests.includes('handoff_item["nextLane"] is None') &&
-    supervisorTests.includes("do not requeue lane-handoff-evidence-refresh"),
+    supervisorTests.includes("do not requeue lane-handoff-evidence-refresh") &&
+    supervisorTests.includes('shortcut_item["status"] == "closed"') &&
+    supervisorTests.includes('shortcut_item["nextLane"] is None') &&
+    supervisorTests.includes('"codex/dispatcher-continuity-snapshot-refresh"'),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );
