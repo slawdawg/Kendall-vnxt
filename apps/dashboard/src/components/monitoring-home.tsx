@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { RunStatusView, WorkItemView } from "@kendall/contracts";
 
 import { AttentionBadge } from "./attention-badge";
+import { reportShortcutHref } from "../lib/report-shortcuts";
 import { formatLane, formatWorkflowState } from "../lib/workflow-display";
 
 const activeStates = new Set(["implementing", "validating", "reviewing", "awaiting_audit"]);
@@ -22,6 +23,7 @@ const authorityKeywords = [
   "blocked",
   "failed",
 ];
+const runtimeEvidenceReviewHref = reportShortcutHref("GET /supervisor/runtime-evidence-review-report");
 
 function sortByLatest(items: WorkItemView[]) {
   return [...items].sort((left, right) => {
@@ -283,23 +285,51 @@ export function MonitoringHome({ status, items }: { status: RunStatusView; items
             </Link>
           }
         >
-          <div className="space-y-3">
-            {recentItems.map((item) => (
-              <Link
-                key={item.id}
-                href={`/work-items/${item.id}`}
-                className="block rounded-[0.5rem] border bg-[var(--surface)] p-3 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
-              >
-                <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                  {formatWorkflowState(item.state)} / {formatLane(item.lane)}
-                </p>
-                <p className="mt-1 text-sm font-semibold">{item.title}</p>
-                <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-                  Inspect routing, attempt, history, and evidence details. No execution controls here.
-                </p>
-              </Link>
-            ))}
-          </div>
+          {recentItems.length === 0 ? (
+            <p className="text-sm text-[var(--muted)]">No recent evidence found.</p>
+          ) : (
+            <div className="space-y-3">
+              {recentItems.map((item) => {
+                const workItemHref = `/work-items/${encodeURIComponent(item.id)}`;
+                return (
+                  <article
+                    key={item.id}
+                    className="rounded-[0.5rem] border bg-[var(--surface)] p-3 transition hover:border-[var(--accent)]"
+                  >
+                    <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                      {formatWorkflowState(item.state)} / {formatLane(item.lane)}
+                    </p>
+                    <Link href={workItemHref} className="mt-1 block break-words text-sm font-semibold transition hover:text-[var(--accent)]">
+                      {item.title}
+                    </Link>
+                    <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+                      Inspect routing, attempt, history, and evidence details. No execution controls here.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Link
+                        href={workItemHref}
+                        className="rounded-[0.5rem] border bg-[var(--panel)] px-2.5 py-1.5 text-xs font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      >
+                        Detail
+                      </Link>
+                      <Link
+                        href={`${workItemHref}#runtime-evidence-export`}
+                        className="rounded-[0.5rem] border bg-[var(--panel)] px-2.5 py-1.5 text-xs font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      >
+                        Runtime export
+                      </Link>
+                      <Link
+                        href={runtimeEvidenceReviewHref}
+                        className="rounded-[0.5rem] border bg-[var(--panel)] px-2.5 py-1.5 text-xs font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      >
+                        Review index
+                      </Link>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
         </Panel>
       </section>
 

@@ -528,7 +528,28 @@ test.describe("dashboard workflow coverage", () => {
     await expect(attentionItem.getByRole("link", { name: /Open detail/ })).toBeVisible();
     await expect(attentionItem.getByRole("button")).toHaveCount(0);
 
-    const approvalItem = page.locator("article").filter({ hasText: "Monitoring home approval next step" }).first();
+    const recentEvidencePanel = page.getByText("Read-only evidence", { exact: true }).locator("xpath=ancestor::section[1]");
+    const recentEvidenceItem = recentEvidencePanel.locator("article").filter({ hasText: "Monitoring home approval next step" }).first();
+    await expect(recentEvidenceItem).toBeVisible();
+    await expect(recentEvidenceItem.getByRole("link", { name: "Detail" })).toHaveAttribute(
+      "href",
+      `/work-items/${approvalWorkItemId}`,
+    );
+    await expect(recentEvidenceItem.getByRole("link", { name: "Runtime export" })).toHaveAttribute(
+      "href",
+      `/work-items/${approvalWorkItemId}#runtime-evidence-export`,
+    );
+    await expect(recentEvidenceItem.getByRole("link", { name: "Review index" })).toHaveAttribute(
+      "href",
+      "/controls#runtime-evidence-review-report",
+    );
+    await expect(recentEvidenceItem.getByRole("button")).toHaveCount(0);
+
+    const approvalItem = page
+      .locator("article")
+      .filter({ hasText: "Monitoring home approval next step" })
+      .filter({ hasText: "Authority-gated: inspect before action" })
+      .first();
     await expect(approvalItem).toBeVisible();
     await expect(approvalItem.getByText("Next: Inspect evidence first")).toBeVisible();
     await expect(approvalItem.getByText("Authority-gated: inspect before action")).toBeVisible();
