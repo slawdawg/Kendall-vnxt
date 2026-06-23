@@ -1945,11 +1945,11 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
-    assert report_slice["includedBacklogItems"] == ["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"]
+    assert report_slice["includedBacklogItems"] == ["dispatcher-cleanup-assignment-report-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"
-    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"'
+    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-cleanup-assignment-report-refresh"
+    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-cleanup-assignment-report-refresh"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"'
     assert "pnpm run check:runner-assignment-status" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run test:codex-workspace" in report_slice["nextLane"]["verificationCommands"]
@@ -2268,6 +2268,8 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "dispatcher-queue-handoff-audit-json-schema-refresh",
         "dispatcher-queue-handoff-audit-json-validation-refresh",
         "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+        "dispatcher-cleanup-assignment-closure-refresh",
+        "dispatcher-cleanup-assignment-report-refresh",
         "authority-blocked-work",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
@@ -2472,10 +2474,20 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert handoff_json_validation_item["nextLane"] is None
     assert "do not requeue dispatcher-queue-handoff-audit-json-validation-refresh" in handoff_json_validation_item["nextAction"]
     handoff_json_validation_fixtures_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh")
-    assert handoff_json_validation_fixtures_item["status"] == "ready"
-    assert handoff_json_validation_fixtures_item["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"
-    assert handoff_json_validation_fixtures_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"'
-    assert "pnpm run test:codex-workspace" in handoff_json_validation_fixtures_item["nextLane"]["verificationCommands"]
+    assert handoff_json_validation_fixtures_item["status"] == "closed"
+    assert handoff_json_validation_fixtures_item["recommendedSliceSize"] == "complete"
+    assert handoff_json_validation_fixtures_item["nextLane"] is None
+    assert "do not requeue dispatcher-queue-handoff-audit-json-validation-fixtures-refresh" in handoff_json_validation_fixtures_item["nextAction"]
+    dispatcher_cleanup_assignment_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-cleanup-assignment-closure-refresh")
+    assert dispatcher_cleanup_assignment_item["status"] == "closed"
+    assert dispatcher_cleanup_assignment_item["recommendedSliceSize"] == "complete"
+    assert dispatcher_cleanup_assignment_item["nextLane"] is None
+    assert "do not requeue dispatcher-cleanup-assignment-closure-refresh" in dispatcher_cleanup_assignment_item["nextAction"]
+    dispatcher_cleanup_assignment_report_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-cleanup-assignment-report-refresh")
+    assert dispatcher_cleanup_assignment_report_item["status"] == "ready"
+    assert dispatcher_cleanup_assignment_report_item["nextLane"]["branchName"] == "codex/dispatcher-cleanup-assignment-report-refresh"
+    assert dispatcher_cleanup_assignment_report_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"'
+    assert "pnpm run test:codex-workspace" in dispatcher_cleanup_assignment_report_item["nextLane"]["verificationCommands"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
@@ -8343,10 +8355,12 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     handoff_json_schema_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-queue-handoff-audit-json-schema-refresh")
     handoff_json_validation_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-queue-handoff-audit-json-validation-refresh")
     handoff_json_validation_fixtures_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh")
+    dispatcher_cleanup_assignment_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-cleanup-assignment-closure-refresh")
+    dispatcher_cleanup_assignment_report_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-cleanup-assignment-report-refresh")
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"
-    assert continuity["selectedBranch"] == "codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"
+    assert continuity["selectedBacklogItemId"] == "dispatcher-cleanup-assignment-report-refresh"
+    assert continuity["selectedBranch"] == "codex/dispatcher-cleanup-assignment-report-refresh"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["assignableCount"] >= 1
     assert "blocked-authority" in continuity["blockerCodes"]
@@ -8369,8 +8383,12 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert handoff_json_schema_backlog["reasonCode"] == "backlog-closed"
     assert handoff_json_validation_backlog["classification"] == "closed"
     assert handoff_json_validation_backlog["reasonCode"] == "backlog-closed"
-    assert handoff_json_validation_fixtures_backlog["classification"] == "assignable"
-    assert handoff_json_validation_fixtures_backlog["reasonCode"] == "backlog-assignable"
+    assert handoff_json_validation_fixtures_backlog["classification"] == "closed"
+    assert handoff_json_validation_fixtures_backlog["reasonCode"] == "backlog-closed"
+    assert dispatcher_cleanup_assignment_backlog["classification"] == "closed"
+    assert dispatcher_cleanup_assignment_backlog["reasonCode"] == "backlog-closed"
+    assert dispatcher_cleanup_assignment_report_backlog["classification"] == "assignable"
+    assert dispatcher_cleanup_assignment_report_backlog["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-export-refresh"]["classification"] == "closed"
@@ -8383,8 +8401,12 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert queue_proof_rows["dispatcher-queue-handoff-audit-json-schema-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-json-validation-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-json-validation-refresh"]["reasonCode"] == "backlog-closed"
-    assert queue_proof_rows["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"]["classification"] == "assignable"
-    assert queue_proof_rows["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"]["reasonCode"] == "backlog-assignable"
+    assert queue_proof_rows["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"]["classification"] == "closed"
+    assert queue_proof_rows["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"]["reasonCode"] == "backlog-closed"
+    assert queue_proof_rows["dispatcher-cleanup-assignment-closure-refresh"]["classification"] == "closed"
+    assert queue_proof_rows["dispatcher-cleanup-assignment-closure-refresh"]["reasonCode"] == "backlog-closed"
+    assert queue_proof_rows["dispatcher-cleanup-assignment-report-refresh"]["classification"] == "assignable"
+    assert queue_proof_rows["dispatcher-cleanup-assignment-report-refresh"]["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-state-fixtures-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-continuity-snapshot-refresh"]["classification"] == "closed"
     assert queue_proof_rows["assignment-report-queue-proof-refresh"]["classification"] == "closed"

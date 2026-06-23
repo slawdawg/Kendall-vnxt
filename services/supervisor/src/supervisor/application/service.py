@@ -2858,6 +2858,8 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
+            "dispatcher-cleanup-assignment-report-refresh",
+            "dispatcher-cleanup-assignment-closure-refresh",
             "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
             "dispatcher-queue-handoff-audit-json-validation-refresh",
             "dispatcher-queue-handoff-audit-json-schema-refresh",
@@ -3650,6 +3652,41 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_cleanup_assignment_closure_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-cleanup-assignment-closure-refresh",
+            lane_title="Dispatcher cleanup assignment closure refresh",
+            scope=[
+                "source-owned dispatch proof that merged workspace cleanup closes matching lane assignments",
+                "assignment-report and dispatch-next regression coverage for cleaned lane assignment state",
+                "safe backlog successor evidence after JSON validation fixtures close",
+                "metadata-only cleanup evidence without provider calls, worker launches, or branch deletion outside the cleaned lane",
+            ],
+            verification_commands=[
+                "pnpm run test:codex-workspace",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:static",
+            ],
+        )
+        dispatcher_cleanup_assignment_report_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-cleanup-assignment-report-refresh",
+            lane_title="Dispatcher cleanup assignment report refresh",
+            scope=[
+                "runner assignment status evidence that closed cleanup assignments no longer appear as dispatchable work",
+                "dispatch-next queue proof coverage for closed assignment records after merged workspace cleanup",
+                "dashboard assertions that distinguish closed assignment evidence from the next ready lane",
+                "metadata-only report evidence without provider calls, worker launches, or branch deletion outside the cleaned lane",
+            ],
+            verification_commands=[
+                "pnpm run test:codex-workspace",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3657,7 +3694,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"],
+                includedBacklogItems=["dispatcher-cleanup-assignment-report-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3682,14 +3719,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher queue handoff audit JSON validation fixtures item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"],
+                        status="ready" if "dispatcher-cleanup-assignment-report-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the dispatcher cleanup assignment report item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["dispatcher-cleanup-assignment-report-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher queue handoff audit JSON validation fixtures item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the dispatcher cleanup assignment report item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3719,8 +3756,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_queue_handoff_audit_json_validation_fixtures_lane,
-                nextAction="Select this slice for dispatcher queue handoff audit JSON validation fixture work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_cleanup_assignment_report_lane,
+                nextAction="Select this slice for dispatcher cleanup assignment report work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4315,6 +4352,41 @@ class SupervisorService:
                 "pnpm run check:runner-assignment-status",
                 "pnpm run check:safe-backlog",
                 "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_cleanup_assignment_closure_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-cleanup-assignment-closure-refresh",
+            lane_title="Dispatcher cleanup assignment closure refresh",
+            scope=[
+                "source-owned dispatch proof that merged workspace cleanup closes matching lane assignments",
+                "assignment-report and dispatch-next regression coverage for cleaned lane assignment state",
+                "safe backlog successor evidence after JSON validation fixtures close",
+                "metadata-only cleanup evidence without provider calls, worker launches, or branch deletion outside the cleaned lane",
+            ],
+            verification_commands=[
+                "pnpm run test:codex-workspace",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:static",
+            ],
+        )
+        dispatcher_cleanup_assignment_report_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-cleanup-assignment-report-refresh",
+            lane_title="Dispatcher cleanup assignment report refresh",
+            scope=[
+                "runner assignment status evidence that closed cleanup assignments no longer appear as dispatchable work",
+                "dispatch-next queue proof coverage for closed assignment records after merged workspace cleanup",
+                "dashboard assertions that distinguish closed assignment evidence from the next ready lane",
+                "metadata-only report evidence without provider calls, worker launches, or branch deletion outside the cleaned lane",
+            ],
+            verification_commands=[
+                "pnpm run test:codex-workspace",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:runner-assignment-status",
                 "pnpm run check:static",
                 "pnpm run test:e2e:dashboard:controls",
             ],
@@ -5025,13 +5097,13 @@ class SupervisorService:
                 itemId="dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
                 label="Dispatcher queue handoff audit JSON validation fixtures refresh",
                 priority="P2",
-                status="ready",
-                summary="Add focused malformed JSON fixture coverage for filtered generated-worker handoff audit JSON validation while preserving metadata-only retention boundaries.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered focused malformed JSON fixture coverage for filtered generated-worker handoff audit JSON validation while preserving metadata-only retention boundaries.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Filtered handoff audit JSON exports now have local validation for schema, retained fields, entry counts, filters, and retention domains.",
-                    "The next lane should add direct negative-path fixtures for missing schema fields, unexpected audit entry fields, invalid retention domains, and malformed JSON without retaining raw provider payloads, prompts, completions, reasoning traces, secrets, or source copies.",
-                    "Generated lane continuity should advance after dispatcher-queue-handoff-audit-json-validation-refresh closes.",
+                    "Filtered handoff audit JSON exports now have direct negative-path fixtures for malformed JSON, missing schema fields, unexpected audit entry fields, invalid retention domains, invalid filters, and inconsistent entry counts.",
+                    "The JSON validation fixture tests preserve nullable retained metadata fields without retaining raw provider payloads, prompts, completions, reasoning traces, secrets, or source copies.",
+                    "Generated lane continuity now advances after dispatcher-queue-handoff-audit-json-validation-fixtures-refresh closes.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -5048,8 +5120,66 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_queue_handoff_audit_json_validation_fixtures_lane,
-                nextAction="Refresh dispatcher queue handoff audit JSON validation fixtures while keeping generated-worker evidence metadata-only and source-owned.",
+                nextAction="Use this completed dispatcher queue handoff audit JSON validation fixture evidence only; do not requeue dispatcher-queue-handoff-audit-json-validation-fixtures-refresh. Continue with dispatcher-cleanup-assignment-closure-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-cleanup-assignment-closure-refresh",
+                label="Dispatcher cleanup assignment closure refresh",
+                priority="P2",
+                status="closed",
+                summary="Delivered source-owned coverage and workspace cleanup behavior that closes matching lane assignments so dispatch-next cannot reselect cleaned lanes.",
+                recommendedSliceSize="complete",
+                evidence=[
+                    "Merged workspace cleanup now closes the matching assignment only when the assignment id, branch, and owner match the cleaned manifest.",
+                    "The codex-workspace cleanup tests assert the assignment status, phase, closed timestamp, and cleanup event after cleanup applies.",
+                    "Generated lane continuity now advances after dispatcher-cleanup-assignment-closure-refresh closes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextAction="Use this completed dispatcher cleanup assignment closure evidence only; do not requeue dispatcher-cleanup-assignment-closure-refresh. Continue with dispatcher-cleanup-assignment-report-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-cleanup-assignment-report-refresh",
+                label="Dispatcher cleanup assignment report refresh",
+                priority="P2",
+                status="ready",
+                summary="Add runner assignment status and dashboard evidence that closed cleanup assignments are classified as closed evidence while the next ready lane remains dispatchable.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Cleanup closure now prevents stale assignment records from reselecting cleaned lanes.",
+                    "The next lane should make the report and dashboard distinction explicit for closed assignment records and the selected successor lane.",
+                    "Keep the evidence metadata-only and source-owned without retaining raw prompts, completions, provider payloads, secrets, or source copies.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_cleanup_assignment_report_lane,
+                nextAction="Refresh dispatcher cleanup assignment report evidence so closed assignments stay visible as closed evidence and cannot mask the next ready lane.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",

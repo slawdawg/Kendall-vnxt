@@ -1260,6 +1260,11 @@ function cleanupMerged(argv, mode = {}) {
         manifest.closed_at = new Date().toISOString();
         manifest.updated_at = manifest.closed_at;
         manifest.cleanup_error = null;
+        const assignmentClosure = closeAssignmentForCleanedManifest(state, manifest);
+        if (assignmentClosure?.closed) {
+          manifest.source_assignment_closed_at = assignmentClosure.closedAt;
+          appendTaskEvent(manifest, "assignment_closed", assignmentClosure.assignmentId);
+        }
         appendTaskEvent(manifest, "closed", `cleaned merged PR ${manifest.pr_url || manifest.pr_number}`);
       } catch (error) {
         manifest.status = "cleanup_partial";
@@ -1273,6 +1278,47 @@ function cleanupMerged(argv, mode = {}) {
     });
     console.log(`Closed ${manifest.task_id}`);
   }
+}
+
+function closeAssignmentForCleanedManifest(state, manifest) {
+  const assignmentId = String(manifest.source_assignment_id || "").trim();
+  if (!assignmentId) {
+    return null;
+  }
+  assertSafeTaskId(assignmentId);
+  const path = assignmentPath(state, assignmentId);
+  if (!existsSync(path)) {
+    return null;
+  }
+
+  return withAssignmentLock(state, assignmentId, () => {
+    const assignment = readAssignment(path);
+    validateAssignment(assignment, path);
+    if (assignment.status === "closed") {
+      return { closed: false, assignmentId };
+    }
+    const assignmentBranch = assignment.branch || assignment.source_backlog_item?.branch_name || "";
+    if (assignmentBranch !== manifest.branch) {
+      throw new Error(`Assignment ${assignmentId} branch ${assignmentBranch || "missing"} does not match cleaned branch ${manifest.branch}.`);
+    }
+    if (assignment.owner && manifest.owner && assignment.owner !== manifest.owner) {
+      throw new Error(`Assignment ${assignmentId} is owned by ${assignment.owner}, expected ${manifest.owner}.`);
+    }
+
+    const closedAt = new Date().toISOString();
+    assignment.status = "closed";
+    assignment.phase = "closed";
+    assignment.updated_at = closedAt;
+    assignment.closed_at = closedAt;
+    assignment.current_command = null;
+    assignment.last_result = `closed after cleanup of ${manifest.task_id}`;
+    assignment.events = [
+      ...(Array.isArray(assignment.events) ? assignment.events : []),
+      taskEvent("closed", `cleaned merged workspace ${manifest.task_id}`),
+    ];
+    writeAssignment(path, assignment);
+    return { closed: true, assignmentId, closedAt };
+  });
 }
 
 function cleanupCurrent(argv) {
