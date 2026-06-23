@@ -929,8 +929,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/dispatcher-closed-source-guard-report-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard report refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-closed-source-guard-drilldown-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard drilldown refresh"')).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
@@ -1165,9 +1165,14 @@ test.describe("dashboard workflow coverage", () => {
     const closedSourceGuardReportCard = safeBacklogPanel
       .locator("article")
       .filter({ has: page.getByRole("heading", { name: "Dispatcher closed source guard report refresh", exact: true }) });
-    await expect(closedSourceGuardReportCard.getByText("branch: codex/dispatcher-closed-source-guard-report-refresh")).toBeVisible();
-    await expect(closedSourceGuardReportCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard report refresh"')).toBeVisible();
-    await expect(closedSourceGuardReportCard.getByText("pnpm run test:e2e:dashboard:controls")).toBeVisible();
+    await expect(closedSourceGuardReportCard.getByText("slice: complete")).toBeVisible();
+    await expect(closedSourceGuardReportCard.getByText("do not requeue dispatcher-closed-source-guard-report-refresh")).toBeVisible();
+    const closedSourceGuardDrilldownCard = safeBacklogPanel
+      .locator("article")
+      .filter({ has: page.getByRole("heading", { name: "Dispatcher closed source guard drilldown refresh", exact: true }) });
+    await expect(closedSourceGuardDrilldownCard.getByText("branch: codex/dispatcher-closed-source-guard-drilldown-refresh")).toBeVisible();
+    await expect(closedSourceGuardDrilldownCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard drilldown refresh"')).toBeVisible();
+    await expect(closedSourceGuardDrilldownCard.getByText("pnpm run test:e2e:dashboard:controls")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 
@@ -1176,20 +1181,20 @@ test.describe("dashboard workflow coverage", () => {
     const closedAssignmentEvidence = runnerAssignmentPanel.getByTestId("closed-assignment-evidence");
     await expect(closedAssignmentEvidence.getByText("Closed assignment evidence", { exact: true })).toBeVisible();
     await expect(closedAssignmentEvidence.getByText("dispatcher-cleanup-assignment-closure-refresh: lane-closed branch codex/dispatcher-cleanup-assignment-closure-refresh - No assignment action")).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("dispatcher-closed-source-guard-report-refresh: assignable (backlog-assignable) branch codex/dispatcher-closed-source-guard-report-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("dispatcher-closed-source-guard-drilldown-refresh: assignable (backlog-assignable) branch codex/dispatcher-closed-source-guard-drilldown-refresh")).toBeVisible();
     const assignmentRowFilters = runnerAssignmentPanel.getByTestId("assignment-row-filters");
     await expect(assignmentRowFilters.getByText("Assignment row filters", { exact: true })).toBeVisible();
     await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for Needs attention from All sources\./)).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-report-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-drilldown-refresh")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("active");
     await assignmentRowFilters.getByLabel("Source").selectOption("workspace");
     await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for active from Workspace\./)).toBeVisible();
     await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "e2e-dispatcher-queue-handoff-badges-refresh" }).getByText("source: Workspace")).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-report-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-drilldown-refresh")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("assignable");
     await assignmentRowFilters.getByLabel("Source").selectOption("backlog");
     await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for assignable from Backlog\./)).toBeVisible();
-    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Dispatcher closed source guard report refresh" }).getByText("source: Backlog")).toBeVisible();
+    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Dispatcher closed source guard drilldown refresh" }).getByText("source: Backlog")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("blocked");
     await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for blocked from Backlog\./)).toBeVisible();
     await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Execution-authority stories" }).getByText("source: Backlog")).toBeVisible();
@@ -1205,7 +1210,7 @@ test.describe("dashboard workflow coverage", () => {
     await assignmentRowFilters.getByLabel("Source").selectOption("lane");
     await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for closed from Lane assignment\./)).toBeVisible();
     await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "codex/dispatcher-cleanup-assignment-closure-refresh" }).getByText("source: Lane assignment")).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-report-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-drilldown-refresh")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("attention");
     await assignmentRowFilters.getByLabel("Source").selectOption("all");
     await expect(runnerAssignmentPanel.getByText("Resume packet")).toBeVisible();

@@ -162,6 +162,7 @@ for (const itemId of [
   "dispatcher-assignment-panel-filter-refresh",
   "dispatcher-closed-lane-requeue-guard-refresh",
   "dispatcher-closed-source-guard-report-refresh",
+  "dispatcher-closed-source-guard-drilldown-refresh",
   "authority-blocked-work",
 ]) {
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Safe backlog service must include item ${itemId}`, failures);
@@ -325,6 +326,7 @@ for (const safetyText of [
   'lane_slug="dispatcher-assignment-panel-filter-refresh"',
   'lane_slug="dispatcher-closed-lane-requeue-guard-refresh"',
   'lane_slug="dispatcher-closed-source-guard-report-refresh"',
+  'lane_slug="dispatcher-closed-source-guard-drilldown-refresh"',
   "complete",
   "Use this completed item as evidence only; do not requeue it as a new lane.",
   "Use this completed queue refresh as evidence only; do not requeue worker-backlog-queue-refresh.",
@@ -387,8 +389,8 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/dispatcher-closed-source-guard-report-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard report refresh"',
+  "branch: codex/dispatcher-closed-source-guard-drilldown-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard drilldown refresh"',
   "pnpm run check:runner-assignment-status",
   "pnpm run check:safe-backlog",
   "Related report links",
@@ -451,8 +453,10 @@ for (const browserText of [
   "Dispatcher closed lane requeue guard refresh",
   "do not requeue dispatcher-closed-lane-requeue-guard-refresh",
   "Dispatcher closed source guard report refresh",
-  "branch: codex/dispatcher-closed-source-guard-report-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard report refresh"',
+  "do not requeue dispatcher-closed-source-guard-report-refresh",
+  "Dispatcher closed source guard drilldown refresh",
+  "branch: codex/dispatcher-closed-source-guard-drilldown-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard drilldown refresh"',
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
   "Do not start or modify another active lane while using this recommendation.",
@@ -476,8 +480,10 @@ assertCondition(
     supervisorTests.includes('dispatcher_cleanup_assignment_report_item["nextLane"] is None') &&
     supervisorTests.includes('dispatcher_assignment_panel_filter_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_assignment_panel_filter_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-closed-source-guard-report-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed source guard report refresh"') &&
+    supervisorTests.includes('dispatcher_closed_source_guard_report_item["status"] == "closed"') &&
+    supervisorTests.includes('dispatcher_closed_source_guard_report_item["nextLane"] is None') &&
+    supervisorTests.includes('"codex/dispatcher-closed-source-guard-drilldown-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed source guard drilldown refresh"') &&
     supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
@@ -511,7 +517,7 @@ assertCondition(
     supervisorTests.includes('dispatcher_cleanup_assignment_item["nextLane"] is None') &&
     supervisorTests.includes('dispatcher_assignment_panel_filter_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_closed_lane_requeue_guard_item["status"] == "closed"') &&
-    supervisorTests.includes('dispatcher_closed_source_guard_report_item["status"] == "ready"'),
+    supervisorTests.includes('dispatcher_closed_source_guard_drilldown_item["status"] == "ready"'),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );
