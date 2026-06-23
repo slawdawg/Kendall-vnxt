@@ -2846,6 +2846,7 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
+            "dispatcher-queue-handoff-audit-export-refresh",
             "read-only-evidence-polish",
             "dispatcher-queue-handoff-audit-query-refresh",
             "dispatcher-queue-handoff-audit-retention-refresh",
@@ -3530,6 +3531,23 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_queue_handoff_audit_export_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-export-refresh",
+            lane_title="Dispatcher queue handoff audit export refresh",
+            scope=[
+                "operator-visible filtered handoff audit summary export affordances",
+                "metadata-only export assertions for generated-worker handoffs",
+                "workspace dispatcher evidence tests for exported audit summaries",
+                "dashboard assertions for filtered audit export and copy states",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3537,7 +3555,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-queue-handoff-audit-query-refresh"],
+                includedBacklogItems=["dispatcher-queue-handoff-audit-export-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3562,14 +3580,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-queue-handoff-audit-query-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher queue handoff audit query item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-queue-handoff-audit-query-refresh"],
+                        status="ready" if "dispatcher-queue-handoff-audit-export-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the dispatcher queue handoff audit export item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["dispatcher-queue-handoff-audit-export-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher queue handoff audit query item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the dispatcher queue handoff audit export item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3599,8 +3617,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_queue_handoff_audit_query_lane,
-                nextAction="Select this slice for dispatcher queue handoff audit query work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_queue_handoff_audit_export_lane,
+                nextAction="Select this slice for dispatcher queue handoff audit export work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4088,6 +4106,23 @@ class SupervisorService:
                 "metadata-only retention filter assertions for generated-worker handoffs",
                 "workspace dispatcher evidence tests for retained audit search summaries",
                 "dashboard assertions for evidence status and payload retention query states",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_queue_handoff_audit_export_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-export-refresh",
+            lane_title="Dispatcher queue handoff audit export refresh",
+            scope=[
+                "operator-visible filtered handoff audit summary export affordances",
+                "metadata-only export assertions for generated-worker handoffs",
+                "workspace dispatcher evidence tests for exported audit summaries",
+                "dashboard assertions for filtered audit export and copy states",
             ],
             verification_commands=[
                 "pnpm run check:runner-assignment-status",
@@ -4629,13 +4664,13 @@ class SupervisorService:
                 itemId="dispatcher-queue-handoff-audit-query-refresh",
                 label="Dispatcher queue handoff audit query refresh",
                 priority="P2",
-                status="ready",
-                summary="Add operator-facing query and filter affordances for generated worker handoff audit trails while preserving metadata-only retention boundaries.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered operator-facing query and filter affordances for generated worker handoff audit trails while preserving metadata-only retention boundaries.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Handoff audit entries now expose evidence status, retention policy, payload retention, queue counts, and stop lines that can drive focused dashboard filters.",
-                    "The next lane should stay source-owned and avoid provider calls, worker launches, raw payload retention, or lane takeovers.",
-                    "Generated lane continuity should advance after dispatcher-queue-handoff-audit-retention-refresh closes.",
+                    "The dashboard handoff audit trail now supports evidence status, payload retention, and text query filters.",
+                    "Filtered audit query states preserve metadata-only retention and avoid raw prompt, completion, provider payload, reasoning trace, secret, or source-copy retention.",
+                    "Generated lane continuity now advances after dispatcher-queue-handoff-audit-query-refresh closes.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -4652,8 +4687,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_queue_handoff_audit_query_lane,
-                nextAction="Refresh dispatcher queue handoff audit query controls while keeping generated-worker evidence metadata-only and source-owned.",
+                nextAction="Use this completed dispatcher queue handoff audit query evidence only; do not requeue dispatcher-queue-handoff-audit-query-refresh. Continue with dispatcher-queue-handoff-audit-export-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-queue-handoff-audit-export-refresh",
+                label="Dispatcher queue handoff audit export refresh",
+                priority="P2",
+                status="ready",
+                summary="Add operator-facing copy and export affordances for filtered generated worker handoff audit summaries while preserving metadata-only retention boundaries.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Filtered handoff audit trails can now be narrowed by query, evidence status, and payload retention.",
+                    "The next lane should expose copy/export summaries from filtered metadata only, never raw provider payloads, prompts, completions, reasoning traces, secrets, or source copies.",
+                    "Generated lane continuity should advance after dispatcher-queue-handoff-audit-query-refresh closes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_queue_handoff_audit_export_lane,
+                nextAction="Refresh dispatcher queue handoff audit export summaries while keeping generated-worker evidence metadata-only and source-owned.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
