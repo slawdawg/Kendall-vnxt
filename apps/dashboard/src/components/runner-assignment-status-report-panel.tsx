@@ -57,6 +57,34 @@ function sourceCompletionFilterLabel(filter: SourceCompletionFilter): string {
   return `${filter} source completion`;
 }
 
+function assignmentRowEmptyStateGuidance({
+  classificationFilter,
+  sourceFilter,
+  sourceCompletionFilter,
+  filtersAtDefault,
+}: {
+  classificationFilter: AssignmentClassificationFilter;
+  sourceFilter: AssignmentSourceFilter;
+  sourceCompletionFilter: SourceCompletionFilter;
+  filtersAtDefault: boolean;
+}): string {
+  if (sourceCompletionFilter === "assignment") {
+    return "This assignment-backed view has 0 rows. Switch to Workspace-backed or Uncompleted, or reset filters before deciding the queue is empty.";
+  }
+  if (sourceCompletionFilter === "workspace") {
+    return "This workspace-backed view has 0 rows. Switch to Assignment-backed or Uncompleted, or reset filters before deciding the queue is empty.";
+  }
+  if (sourceCompletionFilter === "none") {
+    return "This uncompleted view has 0 rows. Switch to Assignment-backed or Workspace-backed, or reset filters before deciding the queue is empty.";
+  }
+  if (filtersAtDefault) {
+    return "The default needs-attention view has 0 rows. Check the dispatcher continuity candidate before deciding the queue is empty.";
+  }
+  return `This filtered view has 0 rows for ${classificationFilterLabel(classificationFilter)} from ${sourceLabel(sourceFilter)} with ${sourceCompletionFilterLabel(
+    sourceCompletionFilter,
+  )}. Reset filters to return to the default needs-attention view before deciding the queue is empty.`;
+}
+
 function classificationMatches(row: RunnerAssignmentStatusRowView, filter: AssignmentClassificationFilter): boolean {
   if (filter === "all") return true;
   if (filter === "attention") return row.classification !== "closed";
@@ -564,6 +592,12 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
   };
   const filteredSourceSummary = filteredSourceKindSummary(filteredRows);
   const filtersAtDefault = classificationFilter === "attention" && sourceFilter === "all" && sourceCompletionFilter === "all";
+  const emptyStateGuidance = assignmentRowEmptyStateGuidance({
+    classificationFilter,
+    sourceFilter,
+    sourceCompletionFilter,
+    filtersAtDefault,
+  });
   const resetFilters = () => {
     setClassificationFilter("attention");
     setSourceFilter("all");
@@ -767,7 +801,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
 
       {filteredRows.length === 0 ? (
         <p className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)]">
-          No assignment rows match the current filters. Adjust classification or source before deciding the queue is empty.
+          No assignment rows match the current filters. {emptyStateGuidance}
         </p>
       ) : (
         <div className="mt-4 grid gap-3">
