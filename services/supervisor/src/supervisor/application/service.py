@@ -2166,6 +2166,60 @@ class SupervisorService:
             return "pr-open"
         return "no-pr"
 
+    def _runner_handoff_text(self, value: object) -> str | None:
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    def _runner_handoff_stop_lines(self, handoff: dict) -> list[str]:
+        raw_stop_lines = handoff.get("stop_lines") or handoff.get("stopLines")
+        if not isinstance(raw_stop_lines, list):
+            raw_stop_line = handoff.get("takeover_stop_line") or handoff.get("takeoverStopLine")
+            raw_stop_lines = [raw_stop_line] if raw_stop_line else []
+        return list(dict.fromkeys(item.strip() for item in raw_stop_lines if isinstance(item, str) and item.strip()))
+
+    def _runner_handoff_evidence(self, manifest: dict) -> dict[str, str | list[str] | None]:
+        handoffs = manifest.get("dispatch_handoffs")
+        if not isinstance(handoffs, list) or not handoffs:
+            return {
+                "handoffStatus": "missing" if manifest.get("worktree_path") else "not-applicable",
+                "handoffNextCommand": None,
+                "handoffReadinessStatus": None,
+                "handoffReadinessCommand": None,
+                "handoffGeneratedAt": None,
+                "handoffSummary": None,
+                "handoffTakeoverStopLines": [],
+            }
+        latest = next(
+            (
+                handoff
+                for handoff in reversed(handoffs)
+                if isinstance(handoff, dict)
+                and self._runner_handoff_text(handoff.get("next_command"))
+                and isinstance(handoff.get("readiness"), dict)
+                and self._runner_handoff_text(handoff["readiness"].get("status"))
+            ),
+            None,
+        )
+        if latest is None:
+            return {
+                "handoffStatus": "missing",
+                "handoffNextCommand": None,
+                "handoffReadinessStatus": None,
+                "handoffReadinessCommand": None,
+                "handoffGeneratedAt": None,
+                "handoffSummary": None,
+                "handoffTakeoverStopLines": [],
+            }
+        readiness = latest.get("readiness") if isinstance(latest.get("readiness"), dict) else {}
+        return {
+            "handoffStatus": "available",
+            "handoffNextCommand": self._runner_handoff_text(latest.get("next_command")),
+            "handoffReadinessStatus": self._runner_handoff_text(readiness.get("status")),
+            "handoffReadinessCommand": self._runner_handoff_text(readiness.get("command")),
+            "handoffGeneratedAt": self._runner_handoff_text(latest.get("generated_at")),
+            "handoffSummary": self._runner_handoff_text(readiness.get("summary")) or self._runner_handoff_text(latest.get("handoff")),
+            "handoffTakeoverStopLines": self._runner_handoff_stop_lines(latest),
+        }
+
     def _runner_worktree_state(self, worktree_path: str | None, state_root: Path, deadline: float) -> tuple[str, list[RunnerAssignmentWarningView]]:
         if not worktree_path:
             return "not-applicable", []
@@ -2269,6 +2323,7 @@ class SupervisorService:
 
         worktree_state, worktree_warnings = self._runner_worktree_state(record.get("worktree_path"), state_root, deadline)
         warnings.extend(worktree_warnings)
+        handoff_evidence = self._runner_handoff_evidence(record)
         if worktree_state == "missing" and classification != "closed":
             classification = "blocked_missing_worktree"
             reason_code = "missing-worktree"
@@ -2299,6 +2354,13 @@ class SupervisorService:
             lastResult=record.get("last_result"),
             worktreePath=record.get("worktree_path"),
             worktreeState=worktree_state,
+            handoffStatus=str(handoff_evidence["handoffStatus"]),
+            handoffNextCommand=handoff_evidence["handoffNextCommand"],
+            handoffReadinessStatus=handoff_evidence["handoffReadinessStatus"],
+            handoffReadinessCommand=handoff_evidence["handoffReadinessCommand"],
+            handoffGeneratedAt=handoff_evidence["handoffGeneratedAt"],
+            handoffSummary=handoff_evidence["handoffSummary"],
+            handoffTakeoverStopLines=handoff_evidence["handoffTakeoverStopLines"],
             deliveryState=self._runner_delivery_state(record),
             localEvidenceStatus="available",
             evidencePath=str(path),

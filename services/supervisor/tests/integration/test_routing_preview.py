@@ -8161,6 +8161,102 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert closed_backlog["branch"] is None
 
 
+def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_path, monkeypatch) -> None:
+    state_root = tmp_path / "codex-state"
+    tasks_dir = state_root / "tasks"
+    assignments_dir = state_root / "assignments"
+    tasks_dir.mkdir(parents=True)
+    assignments_dir.mkdir()
+    task_path = tasks_dir / "prepared-handoff.json"
+    task_path.write_text(
+        json.dumps(
+            {
+                "task_id": "prepared-handoff",
+                "title": "Prepared handoff",
+                "branch": "codex/prepared-handoff",
+                "status": "active",
+                "owner": "runner-a",
+                "owner_updated_at": datetime.now(timezone.utc).isoformat(),
+                "worktree_path": (state_root / "worktrees" / "prepared-handoff").as_posix(),
+                "dispatch_handoffs": [
+                    {
+                        "lane": "prepared-handoff",
+                        "workspace_action": "create_workspace",
+                        "next_command": "cd /tmp/prepared-handoff",
+                        "handoff": "resume this prepared worktree; no worker or provider process launched",
+                        "generated_at": "2026-06-23T01:00:00Z",
+                        "stop_lines": [
+                            "no automatic takeover without evidence and approval",
+                            "no authority-blocked work mutation",
+                        ],
+                        "readiness": {
+                            "profile": "doctor",
+                            "status": "passed",
+                            "command": "node ./scripts/codex-workspace.mjs doctor",
+                            "summary": "OK: git | OK: node",
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("CODEX_WORKSPACE_STATE_ROOT", state_root.as_posix())
+    client = _client(tmp_path, monkeypatch, "runner-assignment-status-handoff.db")
+
+    response = client.get("/supervisor/runner-assignment-status-report")
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    row = next(item for item in report["workspaceAssignments"] if item["taskId"] == "prepared-handoff")
+    assert row["handoffStatus"] == "available"
+    assert row["handoffNextCommand"] == "cd /tmp/prepared-handoff"
+    assert row["handoffReadinessStatus"] == "passed"
+    assert row["handoffReadinessCommand"] == "node ./scripts/codex-workspace.mjs doctor"
+    assert row["handoffGeneratedAt"] == "2026-06-23T01:00:00Z"
+    assert row["handoffSummary"] == "OK: git | OK: node"
+    assert row["handoffTakeoverStopLines"] == [
+        "no automatic takeover without evidence and approval",
+        "no authority-blocked work mutation",
+    ]
+    assert row["worktreeState"] == "missing"
+
+    incomplete_path = tasks_dir / "incomplete-handoff.json"
+    incomplete_path.write_text(
+        json.dumps(
+            {
+                "task_id": "incomplete-handoff",
+                "title": "Incomplete handoff",
+                "branch": "codex/incomplete-handoff",
+                "status": "active",
+                "owner": "runner-a",
+                "owner_updated_at": datetime.now(timezone.utc).isoformat(),
+                "worktree_path": (state_root / "worktrees" / "incomplete-handoff").as_posix(),
+                "dispatch_handoffs": [
+                    {
+                        "lane": "incomplete-handoff",
+                        "next_command": 42,
+                        "generated_at": "2026-06-23T01:05:00Z",
+                        "readiness": {"command": 123},
+                        "stop_lines": ["no automatic takeover without evidence and approval"],
+                    }
+                ],
+            }
+        )
+    )
+
+    incomplete_response = client.get("/supervisor/runner-assignment-status-report")
+
+    assert incomplete_response.status_code == 200
+    incomplete_report = incomplete_response.json()["data"]
+    incomplete_row = next(item for item in incomplete_report["workspaceAssignments"] if item["taskId"] == "incomplete-handoff")
+    assert incomplete_row["handoffStatus"] == "missing"
+    assert incomplete_row["handoffNextCommand"] is None
+    assert incomplete_row["handoffReadinessStatus"] is None
+    assert incomplete_row["handoffReadinessCommand"] is None
+    assert incomplete_row["handoffGeneratedAt"] is None
+    assert incomplete_row["handoffTakeoverStopLines"] == []
+
+
 def test_runner_assignment_status_report_treats_unowned_active_workspace_as_assignable(tmp_path, monkeypatch) -> None:
     state_root = tmp_path / "codex-state"
     tasks_dir = state_root / "tasks"

@@ -33,6 +33,9 @@ ignored local workspace path. If their decisions need to survive in Git, rewrite
 the decision as source-owned docs, scripts, tests, or policy.
 
 This runbook also anchors runbook verification for the active check chain.
+Prepared lane handoffs must surface owner, branch, worktree/dirty state,
+readiness status, next command, and takeover stop lines through the runner
+assignment status report before another runner continues or asks for takeover.
 
 `pnpm run check` includes `pnpm run check:docs`,
 `pnpm run check:documentation-authority`,
