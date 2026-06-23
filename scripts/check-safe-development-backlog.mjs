@@ -156,6 +156,7 @@ for (const itemId of [
   "dispatcher-queue-handoff-audit-json-refresh",
   "dispatcher-queue-handoff-audit-json-schema-refresh",
   "dispatcher-queue-handoff-audit-json-validation-refresh",
+  "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
   "authority-blocked-work",
 ]) {
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Safe backlog service must include item ${itemId}`, failures);
@@ -313,6 +314,7 @@ for (const safetyText of [
   'lane_slug="dispatcher-queue-handoff-audit-json-refresh"',
   'lane_slug="dispatcher-queue-handoff-audit-json-schema-refresh"',
   'lane_slug="dispatcher-queue-handoff-audit-json-validation-refresh"',
+  'lane_slug="dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"',
   "complete",
   "Use this completed item as evidence only; do not requeue it as a new lane.",
   "Use this completed queue refresh as evidence only; do not requeue worker-backlog-queue-refresh.",
@@ -337,7 +339,8 @@ for (const safetyText of [
   "Use this completed dispatcher queue handoff audit download evidence only; do not requeue dispatcher-queue-handoff-audit-download-refresh.",
   "Use this completed dispatcher queue handoff audit JSON evidence only; do not requeue dispatcher-queue-handoff-audit-json-refresh.",
   "Use this completed dispatcher queue handoff audit JSON schema evidence only; do not requeue dispatcher-queue-handoff-audit-json-schema-refresh.",
-  "Refresh dispatcher queue handoff audit JSON validation evidence while keeping generated-worker evidence metadata-only and source-owned.",
+  "Use this completed dispatcher queue handoff audit JSON validation evidence only; do not requeue dispatcher-queue-handoff-audit-json-validation-refresh.",
+  "Refresh dispatcher queue handoff audit JSON validation fixtures while keeping generated-worker evidence metadata-only and source-owned.",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
@@ -366,8 +369,8 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/dispatcher-queue-handoff-audit-json-validation-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation refresh"',
+  "branch: codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"',
   "pnpm run check:runner-assignment-status",
   "pnpm run check:safe-backlog",
   "Related report links",
@@ -418,8 +421,10 @@ for (const browserText of [
   "Dispatcher queue handoff audit JSON schema refresh",
   "do not requeue dispatcher-queue-handoff-audit-json-schema-refresh",
   "Dispatcher queue handoff audit JSON validation refresh",
-  "branch: codex/dispatcher-queue-handoff-audit-json-validation-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation refresh"',
+  "do not requeue dispatcher-queue-handoff-audit-json-validation-refresh",
+  "Dispatcher queue handoff audit JSON validation fixtures refresh",
+  "branch: codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"',
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
   "Do not start or modify another active lane while using this recommendation.",
@@ -439,8 +444,8 @@ assertCondition(
     supervisorTests.includes('github_item["nextLane"] is None') &&
     supervisorTests.includes('worker_queue_item["status"] == "closed"') &&
     supervisorTests.includes('worker_queue_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-queue-handoff-audit-json-validation-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation refresh"') &&
+    supervisorTests.includes('"codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"') &&
     supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
@@ -466,7 +471,9 @@ assertCondition(
     supervisorTests.includes('handoff_json_item["nextLane"] is None') &&
     supervisorTests.includes('handoff_json_schema_item["status"] == "closed"') &&
     supervisorTests.includes('handoff_json_schema_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-queue-handoff-audit-json-validation-refresh"'),
+    supervisorTests.includes('handoff_json_validation_item["status"] == "closed"') &&
+    supervisorTests.includes('handoff_json_validation_item["nextLane"] is None') &&
+    supervisorTests.includes('"codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"'),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );

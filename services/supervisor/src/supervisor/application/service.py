@@ -3620,6 +3620,23 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_queue_handoff_audit_json_validation_fixtures_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+            lane_title="Dispatcher queue handoff audit JSON validation fixtures refresh",
+            scope=[
+                "focused malformed JSON validation fixtures for filtered handoff audit exports",
+                "negative-path assertions for missing, extra, and invalid metadata-only fields",
+                "source-owned regression coverage for generated-worker audit JSON validation",
+                "dashboard or script assertions that preserve metadata-only retention boundaries",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3627,7 +3644,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-queue-handoff-audit-json-validation-refresh"],
+                includedBacklogItems=["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3652,14 +3669,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-queue-handoff-audit-json-validation-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher queue handoff audit JSON validation item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-queue-handoff-audit-json-validation-refresh"],
+                        status="ready" if "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the dispatcher queue handoff audit JSON validation fixtures item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher queue handoff audit JSON validation item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the dispatcher queue handoff audit JSON validation fixtures item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3689,8 +3706,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_queue_handoff_audit_json_validation_lane,
-                nextAction="Select this slice for dispatcher queue handoff audit JSON validation work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_queue_handoff_audit_json_validation_fixtures_lane,
+                nextAction="Select this slice for dispatcher queue handoff audit JSON validation fixture work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4263,6 +4280,23 @@ class SupervisorService:
                 "metadata-only JSON contract validation assertions for generated-worker handoffs",
                 "workspace dispatcher evidence tests for validation-backed audit summaries",
                 "dashboard assertions for invalid or missing retained JSON fields",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_queue_handoff_audit_json_validation_fixtures_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+            lane_title="Dispatcher queue handoff audit JSON validation fixtures refresh",
+            scope=[
+                "focused malformed JSON validation fixtures for filtered handoff audit exports",
+                "negative-path assertions for missing, extra, and invalid metadata-only fields",
+                "source-owned regression coverage for generated-worker audit JSON validation",
+                "dashboard or script assertions that preserve metadata-only retention boundaries",
             ],
             verification_commands=[
                 "pnpm run check:runner-assignment-status",
@@ -4949,13 +4983,13 @@ class SupervisorService:
                 itemId="dispatcher-queue-handoff-audit-json-validation-refresh",
                 label="Dispatcher queue handoff audit JSON validation refresh",
                 priority="P2",
-                status="ready",
-                summary="Add local validation evidence for filtered generated-worker handoff audit JSON exports while preserving metadata-only retention boundaries.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered local validation evidence for filtered generated-worker handoff audit JSON exports while preserving metadata-only retention boundaries.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Filtered handoff audit JSON exports now include a versioned metadata-only schema contract.",
-                    "The next lane should validate required top-level fields and retained audit entry fields without retaining raw provider payloads, prompts, completions, reasoning traces, secrets, or source copies.",
-                    "Generated lane continuity should advance after dispatcher-queue-handoff-audit-json-schema-refresh closes.",
+                    "The dashboard now validates required top-level fields, exact retained audit entry fields, entry counts, filters, and metadata-only retention domains before showing JSON validation success.",
+                    "The filtered audit JSON export preserves retained nullable metadata fields without retaining raw provider payloads, prompts, completions, reasoning traces, secrets, or source copies.",
+                    "Generated lane continuity now advances after dispatcher-queue-handoff-audit-json-validation-refresh closes.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -4972,8 +5006,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_queue_handoff_audit_json_validation_lane,
-                nextAction="Refresh dispatcher queue handoff audit JSON validation evidence while keeping generated-worker evidence metadata-only and source-owned.",
+                nextAction="Use this completed dispatcher queue handoff audit JSON validation evidence only; do not requeue dispatcher-queue-handoff-audit-json-validation-refresh. Continue with dispatcher-queue-handoff-audit-json-validation-fixtures-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+                label="Dispatcher queue handoff audit JSON validation fixtures refresh",
+                priority="P2",
+                status="ready",
+                summary="Add focused malformed JSON fixture coverage for filtered generated-worker handoff audit JSON validation while preserving metadata-only retention boundaries.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Filtered handoff audit JSON exports now have local validation for schema, retained fields, entry counts, filters, and retention domains.",
+                    "The next lane should add direct negative-path fixtures for missing schema fields, unexpected audit entry fields, invalid retention domains, and malformed JSON without retaining raw provider payloads, prompts, completions, reasoning traces, secrets, or source copies.",
+                    "Generated lane continuity should advance after dispatcher-queue-handoff-audit-json-validation-refresh closes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_queue_handoff_audit_json_validation_fixtures_lane,
+                nextAction="Refresh dispatcher queue handoff audit JSON validation fixtures while keeping generated-worker evidence metadata-only and source-owned.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
