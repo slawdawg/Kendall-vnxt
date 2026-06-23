@@ -66,6 +66,10 @@ Under `standard-delivery`, BMAD party mode and spawned BMAD subagents may run
 automatically when they materially improve discovery, planning, review, or
 verification for the named lane.
 
+The operator has granted standing approval for this bounded automatic use. Do
+not ask for additional operator approval merely because party mode or BMAD
+subagents will run within the allowance below.
+
 The default allowance is:
 
 - Use the repository's configured provider and model defaults. If the party-mode
