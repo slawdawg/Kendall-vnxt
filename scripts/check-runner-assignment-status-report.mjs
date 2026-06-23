@@ -61,6 +61,7 @@ for (const serviceText of [
   "dispatch-next --dry-run --owner <owner>",
   "queueProofRows",
   "dispatcher-queue-state-fixtures-refresh",
+  "dispatcher-queue-handoff-badges-refresh",
   "stop_lines",
   "worktree-outside-managed-root",
   "runner-assignment-status-report-v1",

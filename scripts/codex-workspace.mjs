@@ -2360,16 +2360,7 @@ function applyClaimNext(selected, context) {
 }
 
 function dispatchPlan(context) {
-  const manifests = readManifests(context.state).map(({ manifest }) => manifest);
-  const assignments = readAssignments(context.state).map(({ assignment }) => assignment);
-  const backlogItems = readSafeBacklogItems();
-  const evaluations = backlogItems.map((item) =>
-    evaluateClaimCandidate(item, manifests, assignments, {
-      currentOwner: context.currentOwner,
-      generatedAt: context.generatedAt,
-      staleAfterSeconds: context.staleAfterSeconds,
-    }),
-  );
+  const evaluations = dispatchCandidateEvaluations(context);
   const selected = evaluations.find((evaluation) => evaluation.claimable) || null;
   const packet = dispatchPacket(selected, evaluations, context);
   return {
@@ -2379,11 +2370,29 @@ function dispatchPlan(context) {
   };
 }
 
+function dispatchCandidateEvaluations(context) {
+  const manifests = readManifests(context.state).map(({ manifest }) => manifest);
+  const assignments = readAssignments(context.state).map(({ assignment }) => assignment);
+  const backlogItems = readSafeBacklogItems();
+  return backlogItems.map((item) =>
+    evaluateClaimCandidate(item, manifests, assignments, {
+      currentOwner: context.currentOwner,
+      generatedAt: context.generatedAt,
+      staleAfterSeconds: context.staleAfterSeconds,
+    }),
+  );
+}
+
+function dispatchCandidateStateCounts(context) {
+  return queueCandidateStateCounts(dispatchCandidateEvaluations(context));
+}
+
 function dispatchPacket(selected, evaluations, context) {
   const blockers = [];
   if (!selected) {
     blockers.push("no dispatchable safe backlog lane found");
   }
+  const candidateStateCounts = queueCandidateStateCounts(evaluations);
 
   return {
     schema_version: 1,
@@ -2400,6 +2409,7 @@ function dispatchPacket(selected, evaluations, context) {
     allowed: blockers.length === 0,
     blockers,
     generated_at: context.generatedAt.toISOString(),
+    candidate_state_counts: candidateStateCounts,
     blocked_candidates: evaluations
       .filter((evaluation) => !evaluation.claimable)
       .map((evaluation) => ({
@@ -2409,6 +2419,39 @@ function dispatchPacket(selected, evaluations, context) {
         next_action: evaluation.nextAction,
       })),
   };
+}
+
+function queueCandidateStateCounts(evaluations) {
+  const counts = {};
+  for (const evaluation of evaluations) {
+    if (typeof evaluation.status !== "string" || !evaluation.status.trim()) {
+      const itemId = evaluation.item?.itemId || "unknown";
+      throw new Error(`Dispatch candidate ${itemId} is missing a status.`);
+    }
+    const status = evaluation.status;
+    counts[status] = (counts[status] || 0) + 1;
+  }
+  return counts;
+}
+
+function formatQueueCandidateStateCounts(counts = {}) {
+  const preferredOrder = [
+    "assignable",
+    "active",
+    "claimed",
+    "ambiguous",
+    "blocked_authority",
+    "blocked_owned_active",
+    "blocked_stale_owner_needs_takeover",
+    "closed",
+  ];
+  const keys = [
+    ...preferredOrder.filter((key) => Object.hasOwn(counts, key)),
+    ...Object.keys(counts)
+      .filter((key) => !preferredOrder.includes(key))
+      .sort(),
+  ];
+  return keys.map((key) => `${key}=${counts[key]}`).join(" ");
 }
 
 function applyDispatchNext(plan, context) {
@@ -2439,7 +2482,15 @@ function applyDispatchNext(plan, context) {
     : createDispatchWorkspace(plan.selected.item, assignment, context);
 
   const readiness = runDispatchReadiness(manifestResult.manifest.worktree_path, context);
-  const packet = dispatchHandoffPacket(plan.selected, context, manifestResult.manifest, readiness, manifestResult.workspaceAction);
+  const candidateStateCounts = dispatchCandidateStateCounts(context);
+  const packet = dispatchHandoffPacket(
+    plan.selected,
+    context,
+    manifestResult.manifest,
+    readiness,
+    manifestResult.workspaceAction,
+    candidateStateCounts,
+  );
 
   withManifestLock(context.state, manifestResult.manifest.task_id, () => {
     const manifest = readManifest(manifestResult.path);
@@ -2471,7 +2522,14 @@ function applyManifestDispatch(selected, manifestPath, context, { assignmentPath
   const manifest = readManifest(manifestPath);
   validateManifest(manifest, manifestPath);
   const readiness = runDispatchReadiness(manifest.worktree_path, context);
-  const packet = dispatchHandoffPacket(selected, context, manifest, readiness, workspaceAction);
+  const packet = dispatchHandoffPacket(
+    selected,
+    context,
+    manifest,
+    readiness,
+    workspaceAction,
+    dispatchCandidateStateCounts(context),
+  );
 
   withManifestLock(context.state, manifest.task_id, () => {
     const freshManifest = readManifest(manifestPath);
@@ -2672,7 +2730,7 @@ function summarizeCommandOutput(output) {
   return lines.slice(0, 12).join(" | ") || "no output";
 }
 
-function dispatchHandoffPacket(selected, context, manifest, readiness, workspaceAction) {
+function dispatchHandoffPacket(selected, context, manifest, readiness, workspaceAction, candidateStateCounts = {}) {
   return {
     schema_version: 1,
     lane: selected.item.itemId,
@@ -2685,6 +2743,7 @@ function dispatchHandoffPacket(selected, context, manifest, readiness, workspace
     next_command: `cd ${manifest.worktree_path}`,
     handoff: "resume this prepared worktree; no worker or provider process launched",
     stop_lines: defaultDispatchStopLines(),
+    candidate_state_counts: candidateStateCounts,
     generated_at: new Date().toISOString(),
   };
 }
@@ -2746,6 +2805,7 @@ function printDispatchPacket(label, packet) {
   console.log(`- readiness ${packet.readiness_profile || packet.readiness?.profile || "none"}`);
   console.log(`- next ${packet.next_command || "none"}`);
   console.log(`- allowed ${packet.allowed !== false}`);
+  console.log(`- queue states ${formatQueueCandidateStateCounts(packet.candidate_state_counts) || "none"}`);
   if (packet.blockers?.length) {
     for (const blocker of packet.blockers) {
       console.log(`- blocker ${blocker}`);
