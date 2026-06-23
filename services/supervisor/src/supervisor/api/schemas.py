@@ -1138,6 +1138,9 @@ class RunnerHandoffAuditEntryView(BaseModel):
         "no-action",
     ] = "no-action"
     recoverySummary: str = "No handoff recovery action required."
+    retentionPolicy: Literal["metadata-only", "capped-metadata-only"] = "metadata-only"
+    payloadRetention: Literal["not-retained", "redacted", "omitted"] = "not-retained"
+    retentionSummary: str = "metadata-only audit entry; raw payloads not retained."
     evidenceStatus: Literal["complete", "partial", "invalid"] = "partial"
     evidenceSummary: str
 

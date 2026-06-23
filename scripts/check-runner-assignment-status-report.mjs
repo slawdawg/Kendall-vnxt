@@ -68,6 +68,11 @@ for (const serviceText of [
   "_runner_handoff_audit_trail",
   "evidenceStatus",
   "queueCountsStatus",
+  "retentionPolicy",
+  "payloadRetention",
+  "retentionSummary",
+  "_runner_handoff_retention_summary",
+  "_runner_handoff_audit_retained_text",
   "_runner_handoff_candidate_state_counts",
   "_runner_handoff_candidate_state_counts_status",
   "_runner_handoff_lifecycle_state",
@@ -137,6 +142,8 @@ for (const panelText of [
   "Recovery action:",
   "Recovery:",
   "Queue counts:",
+  "Retention:",
+  "Retention summary:",
   "Stop:",
   "report.summary",
   "row.reasonCode",
@@ -187,6 +194,9 @@ for (const contractText of [
   "recoverySummary",
   "evidenceStatus",
   "evidenceSummary",
+  "retentionPolicy",
+  "payloadRetention",
+  "retentionSummary",
 ]) {
   assertCondition(contractSource.includes(contractText), `Shared contracts must include ${contractText}`, failures);
   assertCondition(schemaSource.includes(contractText), `Supervisor schemas must include ${contractText}`, failures);
@@ -205,6 +215,9 @@ for (const browserText of [
   "Audit #1: complete",
   "Readiness evidence: passed",
   "Queue evidence: available",
+  "Retention: metadata-only",
+  "payload not-retained",
+  "Retention summary:",
   "Audit stop: no automatic takeover",
   "complete handoff packet; readiness passed; queue counts available",
 ]) {

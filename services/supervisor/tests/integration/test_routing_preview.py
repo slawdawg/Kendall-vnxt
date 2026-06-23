@@ -8428,6 +8428,9 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
             "lifecycleState": "not-applicable",
             "recoveryAction": "no-action",
             "recoverySummary": "No handoff recovery action required.",
+            "retentionPolicy": "metadata-only",
+            "payloadRetention": "not-retained",
+            "retentionSummary": "metadata-only audit entry; raw prompts, completions, provider payloads, reasoning traces, secrets, and source copies are not retained.",
             "evidenceStatus": "complete",
             "evidenceSummary": "complete handoff packet; readiness passed; queue counts available; stop lines 2.",
         }
@@ -8683,6 +8686,36 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
             }
         )
     )
+    redacted_payload_path = tasks_dir / "redacted-payload-handoff.json"
+    redacted_payload_path.write_text(
+        json.dumps(
+            {
+                "task_id": "redacted-payload-handoff",
+                "title": "Redacted payload handoff",
+                "branch": "codex/redacted-payload-handoff",
+                "status": "active",
+                "owner": "runner-a",
+                "owner_updated_at": datetime.now(timezone.utc).isoformat(),
+                "worktree_path": (state_root / "worktrees" / "redacted-payload-handoff").as_posix(),
+                "dispatch_handoffs": [
+                    {
+                        "lane": "redacted-payload-handoff",
+                        "branch": "codex/redacted-payload-handoff",
+                        "task_id": "redacted-payload-handoff",
+                        "workspace_action": "create_workspace",
+                        "next_command": "cd /tmp/redacted-payload-handoff",
+                        "generated_at": "2026-06-23T01:24:00Z",
+                        "candidate_state_counts": {"active": 1},
+                        "readiness": {
+                            "status": "passed",
+                            "command": "node ./scripts/codex-workspace.mjs doctor",
+                            "summary": "provider_payload={raw_prompt: hello, token=example-token-value}",
+                        },
+                    }
+                ],
+            }
+        )
+    )
     delivered_path = tasks_dir / "delivered-handoff.json"
     delivered_path.write_text(
         json.dumps(
@@ -8778,6 +8811,15 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     assert failed_row["handoffReadinessStatus"] == "failed"
     assert failed_row["handoffRecoveryAction"] == "inspect-handoff-evidence"
     assert failed_row["handoffAuditTrail"][0]["evidenceStatus"] == "invalid"
+    redacted_payload_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "redacted-payload-handoff")
+    assert redacted_payload_row["handoffSummary"] == "[redacted: metadata-only retention boundary]"
+    assert redacted_payload_row["handoffAuditTrail"][0]["readinessSummary"] == "[redacted: metadata-only retention boundary]"
+    assert redacted_payload_row["handoffAuditTrail"][0]["payloadRetention"] == "redacted"
+    assert redacted_payload_row["handoffAuditTrail"][0]["retentionPolicy"] == "metadata-only"
+    assert (
+        redacted_payload_row["handoffAuditTrail"][0]["retentionSummary"]
+        == "metadata-only audit entry; sensitive-looking payload text redacted before report projection."
+    )
     delivered_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "delivered-handoff")
     assert delivered_row["handoffLifecycleState"] == "delivered"
     assert delivered_row["deliveryState"] == "pr-open"
@@ -8825,9 +8867,12 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     capped_row = next(item for item in capped_report["workspaceAssignments"] if item["taskId"] == "capped-handoff")
     assert capped_row["handoffAuditTrail"][0]["sequence"] == 3
     assert capped_row["handoffAuditTrail"][0]["evidenceSummary"] == "retention capped; 3 older handoff packet(s) omitted."
+    assert capped_row["handoffAuditTrail"][0]["retentionPolicy"] == "capped-metadata-only"
+    assert capped_row["handoffAuditTrail"][0]["payloadRetention"] == "omitted"
     assert capped_row["handoffAuditTrail"][-1]["sequence"] == 23
     assert capped_row["handoffAuditTrail"][-1]["evidenceStatus"] == "invalid"
     assert capped_row["handoffAuditTrail"][-1]["evidenceSummary"] == "invalid handoff packet; entry is not an object."
+    assert capped_row["handoffAuditTrail"][-1]["payloadRetention"] == "omitted"
 
 
 def test_runner_assignment_status_report_treats_unowned_active_workspace_as_assignable(tmp_path, monkeypatch) -> None:

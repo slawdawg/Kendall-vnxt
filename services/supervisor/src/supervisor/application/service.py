@@ -2202,6 +2202,49 @@ class SupervisorService:
             return None
         return text if len(text) <= max_length else f"{text[: max_length - 3]}..."
 
+    def _runner_handoff_payload_redaction_required(self, text: str) -> bool:
+        return bool(
+            re.search(
+                r"(?i)(sk-[a-z0-9_-]{8,}|api[_ -]?key\s*[:=]|authorization\s*:|bearer\s+[a-z0-9._-]{8,}|"
+                r"provider[_ -]?payload|raw[_ -]?prompt|raw[_ -]?completion|reasoning[_ -]?trace|"
+                r"password\s*[:=]|token\s*[:=])",
+                text,
+            )
+        )
+
+    def _runner_handoff_audit_retained_text(self, value: object, max_length: int = 240) -> tuple[str | None, bool]:
+        text = self._runner_handoff_text(value)
+        if not text:
+            return (None, False)
+        if self._runner_handoff_payload_redaction_required(text):
+            return ("[redacted: metadata-only retention boundary]", True)
+        return (text if len(text) <= max_length else f"{text[: max_length - 3]}...", False)
+
+    def _runner_handoff_retention_summary(self, *, capped: bool = False, redacted: bool = False, omitted: bool = False) -> tuple[str, str, str]:
+        if capped:
+            return (
+                "capped-metadata-only",
+                "omitted",
+                "metadata-only retention cap; older handoff packets omitted without raw prompts, completions, provider payloads, reasoning traces, secrets, or source copies.",
+            )
+        if omitted:
+            return (
+                "metadata-only",
+                "omitted",
+                "metadata-only audit entry; malformed handoff payload omitted without retaining raw source copies.",
+            )
+        if redacted:
+            return (
+                "metadata-only",
+                "redacted",
+                "metadata-only audit entry; sensitive-looking payload text redacted before report projection.",
+            )
+        return (
+            "metadata-only",
+            "not-retained",
+            "metadata-only audit entry; raw prompts, completions, provider payloads, reasoning traces, secrets, and source copies are not retained.",
+        )
+
     def _runner_handoff_audit_lifecycle_state(self, value: object) -> str:
         state = str(value or "").strip()
         return state if state in {"prepared", "claimed", "delivered", "cleaned", "missing", "not-applicable"} else "not-applicable"
@@ -2219,11 +2262,21 @@ class SupervisorService:
         } else "no-action"
 
     def _runner_handoff_stop_lines(self, handoff: dict) -> list[str]:
+        return self._runner_handoff_stop_lines_retained(handoff)[0]
+
+    def _runner_handoff_stop_lines_retained(self, handoff: dict) -> tuple[list[str], bool]:
         raw_stop_lines = handoff.get("stop_lines") or handoff.get("stopLines")
         if not isinstance(raw_stop_lines, list):
             raw_stop_line = handoff.get("takeover_stop_line") or handoff.get("takeoverStopLine")
             raw_stop_lines = [raw_stop_line] if raw_stop_line else []
-        return list(dict.fromkeys(self._runner_handoff_audit_text(item, 180) for item in raw_stop_lines if self._runner_handoff_audit_text(item, 180)))
+        redacted = False
+        retained_stop_lines = []
+        for item in raw_stop_lines:
+            stop_line, field_redacted = self._runner_handoff_audit_retained_text(item, 180)
+            redacted = redacted or field_redacted
+            if stop_line:
+                retained_stop_lines.append(stop_line)
+        return (list(dict.fromkeys(retained_stop_lines)), redacted)
 
     def _runner_handoff_candidate_state_counts(self, handoff: dict) -> dict[str, int]:
         raw_counts = handoff["candidate_state_counts"] if "candidate_state_counts" in handoff else handoff.get("candidateStateCounts")
@@ -2352,13 +2405,16 @@ class SupervisorService:
                 "handoffCandidateStateCountsStatus": "missing",
             }
         readiness = latest.get("readiness") if isinstance(latest.get("readiness"), dict) else {}
+        handoff_summary = self._runner_handoff_audit_retained_text(readiness.get("summary"))[0]
+        if not handoff_summary:
+            handoff_summary = self._runner_handoff_audit_retained_text(latest.get("handoff"))[0]
         return {
             "handoffStatus": "available",
-            "handoffNextCommand": self._runner_handoff_text(latest.get("next_command")),
-            "handoffReadinessStatus": self._runner_handoff_text(readiness.get("status")),
-            "handoffReadinessCommand": self._runner_handoff_text(readiness.get("command")),
-            "handoffGeneratedAt": self._runner_handoff_text(latest.get("generated_at")),
-            "handoffSummary": self._runner_handoff_text(readiness.get("summary")) or self._runner_handoff_text(latest.get("handoff")),
+            "handoffNextCommand": self._runner_handoff_audit_retained_text(latest.get("next_command"))[0],
+            "handoffReadinessStatus": self._runner_handoff_audit_retained_text(readiness.get("status"))[0],
+            "handoffReadinessCommand": self._runner_handoff_audit_retained_text(readiness.get("command"))[0],
+            "handoffGeneratedAt": self._runner_handoff_audit_retained_text(latest.get("generated_at"))[0],
+            "handoffSummary": handoff_summary,
             "handoffTakeoverStopLines": self._runner_handoff_stop_lines(latest),
             "handoffCandidateStateCounts": self._runner_handoff_candidate_state_counts(latest),
             "handoffCandidateStateCountsStatus": self._runner_handoff_candidate_state_counts_status(latest),
@@ -2375,6 +2431,7 @@ class SupervisorService:
         entries: list[RunnerHandoffAuditEntryView] = []
         omitted_count = max(0, len(handoffs) - 20)
         if omitted_count:
+            retention_policy, payload_retention, retention_summary = self._runner_handoff_retention_summary(capped=True)
             entries.append(
                 RunnerHandoffAuditEntryView(
                     sequence=omitted_count,
@@ -2384,6 +2441,9 @@ class SupervisorService:
                     lifecycleState="not-applicable",
                     recoveryAction="no-action",
                     recoverySummary="No handoff recovery action required.",
+                    retentionPolicy=retention_policy,
+                    payloadRetention=payload_retention,
+                    retentionSummary=retention_summary,
                     evidenceStatus="partial",
                     evidenceSummary=f"retention capped; {omitted_count} older handoff packet(s) omitted.",
                 )
@@ -2392,6 +2452,7 @@ class SupervisorService:
         sequence_offset = len(handoffs) - len(visible_handoffs)
         for index, handoff in enumerate(visible_handoffs, start=sequence_offset + 1):
             if not isinstance(handoff, dict):
+                retention_policy, payload_retention, retention_summary = self._runner_handoff_retention_summary(omitted=True)
                 entries.append(
                     RunnerHandoffAuditEntryView(
                         sequence=index,
@@ -2401,31 +2462,53 @@ class SupervisorService:
                         lifecycleState="not-applicable",
                         recoveryAction="no-action",
                         recoverySummary="No handoff recovery action required.",
+                        retentionPolicy=retention_policy,
+                        payloadRetention=payload_retention,
+                        retentionSummary=retention_summary,
                         evidenceStatus="invalid",
                         evidenceSummary="invalid handoff packet; entry is not an object.",
                     )
                 )
                 continue
             readiness = handoff.get("readiness") if isinstance(handoff.get("readiness"), dict) else {}
-            readiness_status = self._runner_handoff_audit_text(readiness.get("status"), 80)
-            readiness_command = self._runner_handoff_audit_text(readiness.get("command"))
-            readiness_summary = self._runner_handoff_audit_text(readiness.get("summary"))
-            next_command = self._runner_handoff_audit_text(handoff.get("next_command"))
-            generated_at = self._runner_handoff_audit_text(handoff.get("generated_at"), 80)
-            lane = self._runner_handoff_audit_text(handoff.get("lane"))
-            branch = self._runner_handoff_audit_text(handoff.get("branch")) or self._runner_handoff_audit_text(manifest.get("branch"))
-            task_id = self._runner_handoff_audit_text(handoff.get("task_id")) or self._runner_handoff_audit_text(manifest.get("task_id"))
-            workspace_action = self._runner_handoff_audit_text(handoff.get("workspace_action"), 80)
+            redacted = False
+            readiness_status, field_redacted = self._runner_handoff_audit_retained_text(readiness.get("status"), 80)
+            redacted = redacted or field_redacted
+            readiness_command, field_redacted = self._runner_handoff_audit_retained_text(readiness.get("command"))
+            redacted = redacted or field_redacted
+            readiness_summary, field_redacted = self._runner_handoff_audit_retained_text(readiness.get("summary"))
+            redacted = redacted or field_redacted
+            next_command, field_redacted = self._runner_handoff_audit_retained_text(handoff.get("next_command"))
+            redacted = redacted or field_redacted
+            generated_at, field_redacted = self._runner_handoff_audit_retained_text(handoff.get("generated_at"), 80)
+            redacted = redacted or field_redacted
+            lane, field_redacted = self._runner_handoff_audit_retained_text(handoff.get("lane"))
+            redacted = redacted or field_redacted
+            branch, field_redacted = self._runner_handoff_audit_retained_text(handoff.get("branch"))
+            redacted = redacted or field_redacted
+            if not branch:
+                branch, field_redacted = self._runner_handoff_audit_retained_text(manifest.get("branch"))
+                redacted = redacted or field_redacted
+            task_id, field_redacted = self._runner_handoff_audit_retained_text(handoff.get("task_id"))
+            redacted = redacted or field_redacted
+            if not task_id:
+                task_id, field_redacted = self._runner_handoff_audit_retained_text(manifest.get("task_id"))
+                redacted = redacted or field_redacted
+            workspace_action, field_redacted = self._runner_handoff_audit_retained_text(handoff.get("workspace_action"), 80)
+            redacted = redacted or field_redacted
             queue_counts = self._runner_handoff_candidate_state_counts(handoff)
             queue_counts_status = self._runner_handoff_candidate_state_counts_status(handoff)
-            stop_lines = self._runner_handoff_stop_lines(handoff)
+            stop_lines, field_redacted = self._runner_handoff_stop_lines_retained(handoff)
+            redacted = redacted or field_redacted
 
             lifecycle_snapshot = self._runner_handoff_audit_lifecycle_state(handoff.get("lifecycle_state") or handoff.get("lifecycleState"))
             recovery_snapshot = self._runner_handoff_audit_recovery_action(handoff.get("recovery_action") or handoff.get("recoveryAction"))
-            recovery_snapshot_summary = (
-                self._runner_handoff_audit_text(handoff.get("recovery_summary") or handoff.get("recoverySummary"))
-                or "No handoff recovery action required."
+            recovery_snapshot_summary, field_redacted = self._runner_handoff_audit_retained_text(
+                handoff.get("recovery_summary") or handoff.get("recoverySummary")
             )
+            redacted = redacted or field_redacted
+            recovery_snapshot_summary = recovery_snapshot_summary or "No handoff recovery action required."
+            retention_policy, payload_retention, retention_summary = self._runner_handoff_retention_summary(redacted=redacted)
             readiness_normalized = str(readiness_status or "").lower()
             missing_core = not all([lane, branch, task_id, workspace_action, next_command, generated_at])
             readiness_complete = readiness_normalized in {"passed", "skipped"}
@@ -2459,6 +2542,9 @@ class SupervisorService:
                     lifecycleState=lifecycle_snapshot,
                     recoveryAction=recovery_snapshot,
                     recoverySummary=recovery_snapshot_summary,
+                    retentionPolicy=retention_policy,
+                    payloadRetention=payload_retention,
+                    retentionSummary=retention_summary,
                     evidenceStatus=evidence_status,
                     evidenceSummary=evidence_summary,
                 )

@@ -1098,6 +1098,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(handoffAuditTrail.getByText("Audit #1: complete; lifecycle not-applicable; recovery no-action")).toBeVisible();
     await expect(handoffAuditTrail.getByText("Readiness evidence: passed via node ./scripts/codex-workspace.mjs doctor")).toBeVisible();
     await expect(handoffAuditTrail.getByText("Queue evidence: available", { exact: true })).toBeVisible();
+    await expect(handoffAuditTrail.getByText("Retention: metadata-only; payload not-retained", { exact: true })).toBeVisible();
+    await expect(handoffAuditTrail.getByText("Retention summary: metadata-only audit entry; raw prompts, completions, provider payloads, reasoning traces, secrets, and source copies are not retained.")).toBeVisible();
     await expect(handoffAuditTrail.getByText("Audit stop: no automatic takeover without evidence and approval")).toBeVisible();
     await expect(handoffAuditTrail.getByText("complete handoff packet; readiness passed; queue counts available; stop lines 2.")).toBeVisible();
     await expect(handoffAuditTrail.getByText("active: 1", { exact: true })).toBeVisible();
