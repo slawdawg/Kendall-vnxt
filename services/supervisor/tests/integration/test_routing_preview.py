@@ -8343,8 +8343,8 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     handoff_json_validation_fixtures_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh")
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "read-only-evidence-polish"
-    assert continuity["selectedBranch"] == "codex/read-only-evidence-polish"
+    assert continuity["selectedBacklogItemId"] == "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"
+    assert continuity["selectedBranch"] == "codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["assignableCount"] >= 1
     assert "blocked-authority" in continuity["blockerCodes"]

@@ -2846,6 +2846,7 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
+            "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
             "dispatcher-queue-handoff-audit-json-validation-refresh",
             "dispatcher-queue-handoff-audit-json-schema-refresh",
             "dispatcher-queue-handoff-audit-json-refresh",
