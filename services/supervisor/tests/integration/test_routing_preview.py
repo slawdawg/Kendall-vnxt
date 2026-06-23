@@ -1569,6 +1569,8 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-verification-readiness",
         "check-authority-readiness",
         "check-adaptive-scoring",
+        "check-premium-execution",
+        "check-worker-launch",
         "check-e2e-report",
         "check-reports",
         "check-execution-boundary",
@@ -1582,8 +1584,17 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-managed-recipes",
         "check-maintenance-action-plan",
         "check-development-runway",
+        "check-runner-assignment-status",
         "check-delivery-readiness",
+        "check-github-workflow-policy",
+        "check-cleanup-automation",
         "check-maintenance-readiness",
+        "check-token-economy",
+        "check-workspace-coordination",
+        "check-mise-workflow",
+        "check-linux-install-lane",
+        "check-bmad-work-products",
+        "check-clean-install-boundary",
         "dashboard-build",
         "supervisor-tests",
         "full-check",
@@ -1610,6 +1621,9 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     static_group = next(group for group in report["commandGroups"] if group["groupId"] == "static-drift-chain")
     assert "check-runtime-review" in static_group["commandIds"]
     assert "check-development-runway" in static_group["commandIds"]
+    assert "check-runner-assignment-status" in static_group["commandIds"]
+    assert "check-token-economy" in static_group["commandIds"]
+    assert "check-clean-install-boundary" in static_group["commandIds"]
     assert "check-adaptive-scoring" in static_group["commandIds"]
     adaptive_scoring_command = next(
         command for command in report["requiredCommands"] if command["commandId"] == "check-adaptive-scoring"

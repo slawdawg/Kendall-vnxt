@@ -14,6 +14,43 @@ function assertCondition(condition, message, failures) {
   }
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractAggregateCheckCommands(script) {
+  const commands = [];
+  const commandPattern = /\bpnpm\s+run\s+(check:[A-Za-z0-9:-]+)/g;
+  let match;
+
+  while ((match = commandPattern.exec(script ?? "")) !== null) {
+    commands.push({
+      command: `pnpm run ${match[1]}`,
+      commandId: match[1].replace("check:", "check-").replaceAll(":", "-"),
+    });
+  }
+
+  return commands;
+}
+
+function uniqueCommands(commands) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const command of commands) {
+    if (!seen.has(command.command)) {
+      seen.add(command.command);
+      unique.push(command);
+    }
+  }
+
+  return unique;
+}
+
+function mentionsCommand(content, command) {
+  return new RegExp(`${escapeRegExp(command)}(?![A-Za-z0-9:-])`).test(content);
+}
+
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const contractSource = readWorkspaceFile("packages/contracts/src/api.ts");
 const schemaSource = readWorkspaceFile("services/supervisor/src/supervisor/api/schemas.py");
@@ -40,6 +77,17 @@ assertCondition(
   failures,
 );
 
+const aggregateCheckCommands = uniqueCommands([
+  ...extractAggregateCheckCommands(packageJson.scripts?.["check:static"]),
+  ...extractAggregateCheckCommands(packageJson.scripts?.check),
+]);
+
+assertCondition(
+  aggregateCheckCommands.length > 0,
+  "package.json aggregate check scripts must include at least one pnpm run check:* command",
+  failures,
+);
+
 for (const typeName of [
   "VerificationCommandView",
   "VerificationCommandGroupView",
@@ -56,28 +104,14 @@ assertCondition(
   failures,
 );
 
-for (const commandText of [
-  "check-documentation-authority",
-  "check-verification-readiness",
-  "check-authority-readiness",
-  "check-adaptive-scoring",
-  "check-e2e-report",
-  "check-reports",
-  "check-execution-boundary",
-  "check-execution-evidence",
-  "check-provider-fixtures",
-  "check-process-lifecycle",
-  "check-runbooks",
-  "check-runtime-export",
-  "check-runtime-review",
-  "check-safe-backlog",
-  "check-managed-recipes",
-  "check-maintenance-action-plan",
-  "check-development-runway",
-  "check-delivery-readiness",
-  "check-maintenance-readiness",
-  "full-check",
-]) {
+for (const { command, commandId } of aggregateCheckCommands) {
+  assertCondition(serviceSource.includes(commandId), `Verification readiness service must include ${commandId}`, failures);
+  assertCondition(mentionsCommand(serviceSource, command), `Verification readiness service must surface ${command}`, failures);
+  assertCondition(supervisorTests.includes(`"${commandId}"`), `Supervisor tests must assert ${commandId}`, failures);
+  assertCondition(controlsSpec.includes(command), `Controls e2e must assert ${command}`, failures);
+}
+
+for (const commandText of ["full-check"]) {
   assertCondition(serviceSource.includes(commandText), `Verification readiness service must include ${commandText}`, failures);
   assertCondition(supervisorTests.includes(`"${commandText}"`), `Supervisor tests must assert ${commandText}`, failures);
 }
@@ -138,17 +172,6 @@ for (const browserText of [
   "dashboard-change-handoff",
   "setup-handoff",
   "authority-boundary-handoff",
-  "pnpm run check:documentation-authority",
-  "pnpm run check:verification-readiness",
-  "pnpm run check:authority-readiness",
-  "pnpm run check:adaptive-scoring",
-  "pnpm run check:execution-boundary",
-  "pnpm run check:execution-evidence",
-  "pnpm run check:provider-fixtures",
-  "pnpm run check:process-lifecycle",
-  "pnpm run check:maintenance-action-plan",
-  "pnpm run check:runtime-review",
-  "pnpm run check:development-runway",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert ${browserText}`, failures);
 }
