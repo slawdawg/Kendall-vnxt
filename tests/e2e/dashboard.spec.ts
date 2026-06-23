@@ -1111,7 +1111,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(handoffAuditTrail.getByText("Retention: metadata-only; payload not-retained", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("Retention summary: metadata-only audit entry; raw prompts, completions, provider payloads, reasoning traces, secrets, and source copies are not retained.")).toBeVisible();
     await expect(handoffAuditTrail.getByText("Audit stop: no automatic takeover without evidence and approval")).toBeVisible();
-    await expect(handoffAuditTrail.getByText("complete handoff packet; readiness passed; queue counts available; stop lines 2.")).toBeVisible();
+    await expect(handoffAuditTrail.locator("p").getByText("complete handoff packet; readiness passed; queue counts available; stop lines 2.", { exact: true })).toBeVisible();
+    await expect(handoffAuditTrail.getByText("Filtered audit export", { exact: true })).toBeVisible();
+    await expect(handoffAuditTrail.getByLabel("Filtered audit export")).toContainText("entries: 1/1");
+    await expect(handoffAuditTrail.getByLabel("Filtered audit export")).toContainText("payload=not-retained");
+    await expect(handoffAuditTrail.getByLabel("Filtered audit export")).toContainText("retention: metadata-only");
     await expect(handoffAuditTrail.getByText("active: 1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("blocked authority: 1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("blocked owned active: 1", { exact: true })).toBeVisible();
@@ -1120,9 +1124,12 @@ test.describe("dashboard workflow coverage", () => {
     await handoffAuditTrail.getByLabel("Payload").selectOption("not-retained");
     await handoffAuditTrail.getByLabel("Query").fill("doctor");
     await expect(handoffAuditTrail.getByText("Audit query: 1/1", { exact: true })).toBeVisible();
+    await handoffAuditTrail.getByRole("button", { name: "Copy summary" }).click();
+    await expect(handoffAuditTrail.getByText(/Copy prepared for 1 audit entry\.|Copied 1 audit entry\.|Copy unavailable; select summary text\./)).toBeVisible();
     await handoffAuditTrail.getByLabel("Query").fill("not-present-in-audit");
     await expect(handoffAuditTrail.getByText("Audit query: 0/1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("No audit entries match the current query.")).toBeVisible();
+    await expect(handoffAuditTrail.getByLabel("Filtered audit export")).toContainText("No filtered audit entries to export.");
 
     const managedRecipePolicyPanel = page
       .locator("section")

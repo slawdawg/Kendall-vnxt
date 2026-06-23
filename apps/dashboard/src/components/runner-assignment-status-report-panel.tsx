@@ -68,6 +68,38 @@ function auditEntrySearchText(entry: RunnerHandoffAuditEntryView): string {
     .toLowerCase();
 }
 
+function auditEntryExportText(entry: RunnerHandoffAuditEntryView): string {
+  const queueCounts = orderedCountEntries(entry.queueCounts ?? {})
+    .map(([state, count]) => `${state.replaceAll("_", " ")}=${count}`)
+    .join(", ");
+  const stopLines = (entry.stopLines ?? []).join(" | ");
+  return [
+    `#${entry.sequence} lane=${entry.lane ?? "unknown"} task=${entry.taskId ?? "unknown"} branch=${entry.branch ?? "unknown"}`,
+    `evidence=${entry.evidenceStatus}; lifecycle=${entry.lifecycleState}; recovery=${entry.recoveryAction}`,
+    `readiness=${entry.readinessStatus ?? "missing"}${entry.readinessCommand ? ` via ${entry.readinessCommand}` : ""}`,
+    `queue=${entry.queueCountsStatus}${queueCounts ? `; counts ${queueCounts}` : ""}`,
+    `retention=${entry.retentionPolicy}; payload=${entry.payloadRetention}`,
+    `retention-summary=${entry.retentionSummary}`,
+    stopLines ? `stop-lines=${stopLines}` : "stop-lines=none",
+    `summary=${entry.evidenceSummary}`,
+  ].join("\n");
+}
+
+function auditExportText(
+  entries: RunnerHandoffAuditEntryView[],
+  totalEntries: number,
+  filters: { query: string; evidence: AuditEvidenceFilter; payload: AuditPayloadFilter },
+): string {
+  const query = filters.query.trim();
+  return [
+    "Filtered handoff audit export",
+    `entries: ${entries.length}/${totalEntries}`,
+    `filters: query=${query ? `"${query}"` : "all"}; evidence=${filters.evidence}; payload=${filters.payload}`,
+    "retention: metadata-only; raw prompts, completions, provider payloads, reasoning traces, secrets, and source copies are not retained.",
+    entries.length > 0 ? entries.map(auditEntryExportText).join("\n\n") : "No filtered audit entries to export.",
+  ].join("\n");
+}
+
 function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
   const hasAvailableHandoff = row.handoffStatus === "available";
   const countEntries = handoffCountEntries(row);
@@ -75,6 +107,7 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
   const [auditQuery, setAuditQuery] = useState("");
   const [auditEvidenceFilter, setAuditEvidenceFilter] = useState<AuditEvidenceFilter>("all");
   const [auditPayloadFilter, setAuditPayloadFilter] = useState<AuditPayloadFilter>("all");
+  const [auditExportStatus, setAuditExportStatus] = useState("Copy summary");
   const filteredAuditEntries = useMemo(() => {
     const query = auditQuery.trim().toLowerCase();
     return auditEntries.filter((entry) => {
@@ -83,6 +116,26 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
       return query ? auditEntrySearchText(entry).includes(query) : true;
     });
   }, [auditEntries, auditEvidenceFilter, auditPayloadFilter, auditQuery]);
+  const filteredAuditExportText = useMemo(
+    () =>
+      auditExportText(filteredAuditEntries, auditEntries.length, {
+        query: auditQuery,
+        evidence: auditEvidenceFilter,
+        payload: auditPayloadFilter,
+      }),
+    [auditEntries.length, auditEvidenceFilter, auditPayloadFilter, auditQuery, filteredAuditEntries],
+  );
+
+  async function copyAuditExportSummary() {
+    setAuditExportStatus(`Copy prepared for ${filteredAuditEntries.length} audit ${filteredAuditEntries.length === 1 ? "entry" : "entries"}.`);
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(filteredAuditExportText);
+      setAuditExportStatus(`Copied ${filteredAuditEntries.length} audit ${filteredAuditEntries.length === 1 ? "entry" : "entries"}.`);
+    } catch {
+      setAuditExportStatus("Copy unavailable; select summary text.");
+    }
+  }
 
   return (
     <article className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
@@ -250,6 +303,25 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
             {filteredAuditEntries.length === 0 ? (
               <p className="rounded-[0.5rem] border bg-[var(--panel)] px-2 py-1 text-[var(--muted)]">No audit entries match the current query.</p>
             ) : null}
+          </div>
+          <div className="mt-3 rounded-[0.5rem] border bg-[var(--panel)] p-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="font-semibold text-[var(--foreground)]">Filtered audit export</p>
+              <button
+                type="button"
+                className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-2 font-mono text-[11px] text-[var(--foreground)]"
+                onClick={copyAuditExportSummary}
+              >
+                Copy summary
+              </button>
+            </div>
+            <textarea
+              className="mt-2 min-h-32 w-full resize-y rounded-[0.5rem] border bg-[var(--surface)] p-2 font-mono text-[11px] leading-5 text-[var(--foreground)]"
+              aria-label="Filtered audit export"
+              readOnly
+              value={filteredAuditExportText}
+            />
+            <p className="mt-1 text-[11px] text-[var(--muted)]">{auditExportStatus}</p>
           </div>
         </div>
       ) : null}
