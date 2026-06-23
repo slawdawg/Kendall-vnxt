@@ -2131,6 +2131,13 @@ export interface RunnerAssignmentStatusSummaryView {
   missing: number;
 }
 
+export interface RunnerSourceCompletionRollupView {
+  total: number;
+  assignment: number;
+  workspace: number;
+  sourceBacklogItemIds: string[];
+}
+
 export interface RunnerDispatcherQueueProofRowView {
   backlogItemId: string;
   classification: RunnerAssignmentClassification;
@@ -2261,6 +2268,7 @@ export interface RunnerAssignmentStatusReportView {
   currentOwner?: string | null;
   staleAfterSeconds: number;
   summary: RunnerAssignmentStatusSummaryView;
+  sourceCompletionRollup: RunnerSourceCompletionRollupView;
   dispatcherContinuity: RunnerDispatcherContinuitySnapshotView;
   workspaceAssignments: RunnerWorkspaceAssignmentView[];
   laneAssignments: RunnerLaneAssignmentView[];
