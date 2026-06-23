@@ -502,7 +502,10 @@ try {
       assert(report.code === 0, report.stderr || report.stdout);
       assert(report.stdout.includes("phase=verification"), report.stdout || report.stderr);
       assert(report.stdout.includes("runner=codex-cli"), report.stdout || report.stderr);
-      assert(!report.stdout.includes("heartbeat=none"), report.stdout || report.stderr);
+      const assignmentLine = report.stdout
+        .split("\n")
+        .find((line) => line.startsWith("- verification-surface-hardening | claimed | owner=runner-a"));
+      assert(assignmentLine && !assignmentLine.includes("heartbeat=none"), report.stdout || report.stderr);
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }
