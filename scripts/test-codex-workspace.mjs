@@ -1204,7 +1204,6 @@ try {
         );
       }
       const assignmentFiles = [
-        "verification-surface-hardening",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
         "worker-backlog-queue-refresh",
