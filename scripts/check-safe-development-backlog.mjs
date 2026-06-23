@@ -322,11 +322,10 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/github-delivery-hygiene",
-  'start: node ./scripts/codex-workspace.mjs start "github delivery hygiene"',
-  "pnpm run check:github-workflow-policy",
-  "pnpm run check:delivery-readiness",
-  "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+  "branch: codex/report-catalog-shortcut-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"',
+  "pnpm run check:reports",
+  "pnpm run check:safe-backlog",
   "Related report links",
   "Source evidence labels",
   "Related docs",
@@ -362,12 +361,13 @@ assertCondition(
 assertCondition(
   supervisorTests.includes('report_alignment_item["status"] == "closed"') &&
     supervisorTests.includes('report_alignment_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/github-delivery-hygiene"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "github delivery hygiene"') &&
-    supervisorTests.includes("pnpm run check:github-workflow-policy") &&
+    supervisorTests.includes('github_item["status"] == "closed"') &&
+    supervisorTests.includes('github_item["nextLane"] is None') &&
     supervisorTests.includes('worker_queue_item["status"] == "closed"') &&
     supervisorTests.includes('worker_queue_item["nextLane"] is None') &&
-    supervisorTests.includes("claim-next should advance to lane-handoff-evidence-refresh"),
+    supervisorTests.includes('"codex/report-catalog-shortcut-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"') &&
+    supervisorTests.includes("pnpm run check:reports"),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );

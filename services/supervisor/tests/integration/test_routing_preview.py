@@ -1937,37 +1937,34 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
         for check in slice_item["readinessChecks"]:
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
-    assert report_slice["status"] == "closed"
-    assert "verification-surface-hardening" in report_slice["includedBacklogItems"]
+    assert report_slice["status"] == "ready"
+    assert report_slice["includedBacklogItems"] == ["report-catalog-shortcut-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"] is None
+    assert report_slice["nextLane"]["laneSlug"] == "report-catalog-shortcut-refresh"
+    assert report_slice["nextLane"]["branchName"] == "codex/report-catalog-shortcut-refresh"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"'
+    assert "pnpm run check:reports" in report_slice["nextLane"]["verificationCommands"]
+    assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
+    assert "pnpm run test:dashboard-e2e-runner" in report_slice["nextLane"]["verificationCommands"]
+    assert any("merge, cleanup, issue-sync" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
+    assert any("another active lane" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
     assert "docs/workflows/implementation-evidence-boundary.md" in report_slice["relatedDocs"]
     assert report_slice["relatedDocs"].count("docs/workflows/implementation-evidence-boundary.md") == 1
     assert "/controls#supervisor-report-catalog" in report_slice["dashboardAnchors"]
     assert {check["checkId"] for check in report_slice["readinessChecks"]} == {
-        "completed-backlog-item",
+        "ready-backlog-item",
         "action-plan-coverage",
         "focused-verification",
     }
-    completed_check = next(check for check in report_slice["readinessChecks"] if check["checkId"] == "completed-backlog-item")
-    assert completed_check["status"] == "closed"
-    ready_checks = [check for check in report_slice["readinessChecks"] if check["checkId"] != "completed-backlog-item"]
-    assert all(check["status"] == "ready" for check in ready_checks)
-    ready_check = completed_check
+    assert all(check["status"] == "ready" for check in report_slice["readinessChecks"])
+    ready_check = next(check for check in report_slice["readinessChecks"] if check["checkId"] == "ready-backlog-item")
     assert "docs/workflows/implementation-evidence-boundary.md" in ready_check["relatedDocs"]
     assert "/controls#safe-development-backlog" in ready_check["dashboardAnchors"]
     verification_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "verification-runbook-hardening-slice")
-    assert verification_slice["status"] == "ready"
+    assert verification_slice["status"] == "closed"
     assert verification_slice["includedBacklogItems"] == ["github-delivery-hygiene"]
-    assert verification_slice["nextLane"]["laneSlug"] == "github-delivery-hygiene"
-    assert verification_slice["nextLane"]["branchName"] == "codex/github-delivery-hygiene"
-    assert verification_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "github delivery hygiene"'
-    assert "pnpm run check:github-workflow-policy" in verification_slice["nextLane"]["verificationCommands"]
-    assert "pnpm run check:delivery-readiness" in verification_slice["nextLane"]["verificationCommands"]
-    assert "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py" in verification_slice["nextLane"]["verificationCommands"]
-    assert any("merge, cleanup, issue-sync" in stop_line for stop_line in verification_slice["nextLane"]["stopLines"])
-    assert any("another active lane" in stop_line for stop_line in verification_slice["nextLane"]["stopLines"])
+    assert verification_slice["nextLane"] is None
     assert "pnpm run check:runbooks" in verification_slice["requiredVerification"]
     assert "pnpm run check:github-workflow-policy" in verification_slice["requiredVerification"]
     assert "pnpm run check:delivery-readiness" in verification_slice["requiredVerification"]
@@ -1980,6 +1977,8 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
         "handoff-checkpoint-coverage",
         "full-gate-available",
     }
+    completed_delivery_check = next(check for check in verification_slice["readinessChecks"] if check["checkId"] == "ready-backlog-items")
+    assert completed_delivery_check["status"] == "closed"
     handoff_coverage = next(check for check in verification_slice["readinessChecks"] if check["checkId"] == "handoff-checkpoint-coverage")
     assert handoff_coverage["relatedDocs"] == [
         "docs/workflows/implementation-evidence-boundary.md",
@@ -2290,10 +2289,10 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "/controls#development-runway-report",
     ]
     github_item = next(item for item in report["items"] if item["itemId"] == "github-delivery-hygiene")
-    assert github_item["recommendedSliceSize"] == "large"
-    assert github_item["nextLane"]["branchName"] == "codex/github-delivery-hygiene"
-    assert github_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "github delivery hygiene"'
-    assert "pnpm run check:github-workflow-policy" in github_item["nextLane"]["verificationCommands"]
+    assert github_item["status"] == "closed"
+    assert github_item["recommendedSliceSize"] == "complete"
+    assert github_item["nextLane"] is None
+    assert "do not requeue codex/github-delivery-hygiene" in github_item["nextAction"]
     assert "GET /supervisor/github-workflow-policy-report" in github_item["relatedReports"]
     assert "GET /supervisor/delivery-readiness-policy-report" in github_item["relatedReports"]
     assert "/controls#github-workflow-policy-report" in github_item["dashboardAnchors"]
@@ -8152,14 +8151,14 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     tasks_dir = state_root / "tasks"
     assignments_dir.mkdir(parents=True)
     tasks_dir.mkdir()
-    assignment_path = assignments_dir / "github-delivery-hygiene.json"
+    assignment_path = assignments_dir / "report-catalog-shortcut-refresh.json"
     assignment_path.write_text(
         json.dumps(
             {
-                "assignment_id": "github-delivery-hygiene",
-                "task_id": "github-delivery-hygiene",
-                "lane_slug": "github-delivery-hygiene",
-                "branch": "codex/github-delivery-hygiene",
+                "assignment_id": "report-catalog-shortcut-refresh",
+                "task_id": "report-catalog-shortcut-refresh",
+                "lane_slug": "report-catalog-shortcut-refresh",
+                "branch": "codex/report-catalog-shortcut-refresh",
                 "status": "claimed",
                 "owner": "runner-a",
                 "phase": "claimed",
@@ -8174,12 +8173,15 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
 
     assert response.status_code == 200
     report = response.json()["data"]
-    lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "github-delivery-hygiene")
+    lane = next(row for row in report["laneAssignments"] if row["assignmentId"] == "report-catalog-shortcut-refresh")
     assert lane["classification"] == "claimed"
-    assert lane["branch"] == "codex/github-delivery-hygiene"
-    backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "github-delivery-hygiene")
+    assert lane["branch"] == "codex/report-catalog-shortcut-refresh"
+    backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "report-catalog-shortcut-refresh")
     assert backlog["classification"] == "claimed"
     assert backlog["reasonCode"] == "backlog-lane-claimed"
+    github_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "github-delivery-hygiene")
+    assert github_backlog["classification"] == "closed"
+    assert github_backlog["reasonCode"] == "backlog-closed"
     verification_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "verification-surface-hardening")
     assert verification_backlog["classification"] == "closed"
     assert verification_backlog["reasonCode"] == "backlog-closed"
