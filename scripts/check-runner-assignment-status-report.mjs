@@ -58,7 +58,9 @@ for (const serviceText of [
   "handoffReadinessStatus",
   "handoffTakeoverStopLines",
   "handoffCandidateStateCounts",
+  "handoffCandidateStateCountsStatus",
   "_runner_handoff_candidate_state_counts",
+  "_runner_handoff_candidate_state_counts_status",
   "candidate_state_counts",
   "dispatcherContinuity",
   "dispatcher-continuity-snapshot-v1",
@@ -99,6 +101,7 @@ for (const panelText of [
   "Resume packet",
   "handoffCountEntries",
   "handoffCandidateStateCounts",
+  "handoffCandidateStateCountsStatus",
   "Owner:",
   "Branch:",
   "Worktree state:",
@@ -106,6 +109,7 @@ for (const panelText of [
   "Generated:",
   "Readiness:",
   "Summary:",
+  "Queue counts:",
   "Stop:",
   "report.summary",
   "row.reasonCode",
@@ -139,6 +143,7 @@ for (const contractText of [
   "handoffSummary",
   "handoffTakeoverStopLines",
   "handoffCandidateStateCounts",
+  "handoffCandidateStateCountsStatus",
 ]) {
   assertCondition(contractSource.includes(contractText), `Shared contracts must include ${contractText}`, failures);
   assertCondition(schemaSource.includes(contractText), `Supervisor schemas must include ${contractText}`, failures);
@@ -150,6 +155,7 @@ for (const browserText of [
   "blocked authority: 1",
   "blocked owned active: 1",
   "closed: 9",
+  "Queue counts: available",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert runner assignment handoff badge text: ${browserText}`, failures);
 }

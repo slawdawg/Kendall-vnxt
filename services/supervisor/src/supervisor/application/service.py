@@ -2217,6 +2217,27 @@ class SupervisorService:
             counts[raw_key.strip()] = raw_value
         return counts
 
+    def _runner_handoff_candidate_state_counts_status(self, handoff: dict) -> str:
+        if "candidate_state_counts" in handoff:
+            raw_counts = handoff["candidate_state_counts"]
+        elif "candidateStateCounts" in handoff:
+            raw_counts = handoff.get("candidateStateCounts")
+        else:
+            return "missing"
+        if not isinstance(raw_counts, dict):
+            return "invalid"
+        if not raw_counts:
+            return "empty"
+        sanitized_counts = self._runner_handoff_candidate_state_counts(handoff)
+        return "available" if len(sanitized_counts) == len(raw_counts) else "invalid"
+
+    def _runner_handoff_has_readiness_status(self, handoff: dict) -> bool:
+        readiness = handoff.get("readiness") if isinstance(handoff.get("readiness"), dict) else {}
+        return bool(self._runner_handoff_text(readiness.get("status")))
+
+    def _runner_handoff_has_count_evidence(self, handoff: dict) -> bool:
+        return "candidate_state_counts" in handoff or "candidateStateCounts" in handoff
+
     def _runner_handoff_evidence(self, manifest: dict) -> dict[str, str | list[str] | dict[str, int] | None]:
         handoffs = manifest.get("dispatch_handoffs")
         if not isinstance(handoffs, list) or not handoffs:
@@ -2229,6 +2250,7 @@ class SupervisorService:
                 "handoffSummary": None,
                 "handoffTakeoverStopLines": [],
                 "handoffCandidateStateCounts": {},
+                "handoffCandidateStateCountsStatus": "missing" if manifest.get("worktree_path") else "not-applicable",
             }
         latest = next(
             (
@@ -2236,8 +2258,7 @@ class SupervisorService:
                 for handoff in reversed(handoffs)
                 if isinstance(handoff, dict)
                 and self._runner_handoff_text(handoff.get("next_command"))
-                and isinstance(handoff.get("readiness"), dict)
-                and self._runner_handoff_text(handoff["readiness"].get("status"))
+                and (self._runner_handoff_has_readiness_status(handoff) or self._runner_handoff_has_count_evidence(handoff))
             ),
             None,
         )
@@ -2251,6 +2272,7 @@ class SupervisorService:
                 "handoffSummary": None,
                 "handoffTakeoverStopLines": [],
                 "handoffCandidateStateCounts": {},
+                "handoffCandidateStateCountsStatus": "missing",
             }
         readiness = latest.get("readiness") if isinstance(latest.get("readiness"), dict) else {}
         return {
@@ -2262,6 +2284,7 @@ class SupervisorService:
             "handoffSummary": self._runner_handoff_text(readiness.get("summary")) or self._runner_handoff_text(latest.get("handoff")),
             "handoffTakeoverStopLines": self._runner_handoff_stop_lines(latest),
             "handoffCandidateStateCounts": self._runner_handoff_candidate_state_counts(latest),
+            "handoffCandidateStateCountsStatus": self._runner_handoff_candidate_state_counts_status(latest),
         }
 
     def _runner_worktree_state(self, worktree_path: str | None, state_root: Path, deadline: float) -> tuple[str, list[RunnerAssignmentWarningView]]:
@@ -2406,6 +2429,7 @@ class SupervisorService:
             handoffSummary=handoff_evidence["handoffSummary"],
             handoffTakeoverStopLines=handoff_evidence["handoffTakeoverStopLines"],
             handoffCandidateStateCounts=handoff_evidence["handoffCandidateStateCounts"],
+            handoffCandidateStateCountsStatus=str(handoff_evidence["handoffCandidateStateCountsStatus"]),
             deliveryState=self._runner_delivery_state(record),
             localEvidenceStatus="available",
             evidencePath=str(path),
@@ -2534,6 +2558,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
             "read-only-evidence-polish",
+            "dispatcher-queue-handoff-lifecycle-refresh",
             "dispatcher-queue-handoff-status-refresh",
             "dispatcher-queue-handoff-badges-refresh",
             "dispatcher-queue-state-fixtures-refresh",
@@ -3163,14 +3188,14 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
-        dispatcher_queue_handoff_status_lane = self._safe_backlog_next_lane(
-            lane_slug="dispatcher-queue-handoff-status-refresh",
-            lane_title="Dispatcher queue handoff status refresh",
+        dispatcher_queue_handoff_lifecycle_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-lifecycle-refresh",
+            lane_title="Dispatcher queue handoff lifecycle refresh",
             scope=[
-                "dispatch handoff status and empty-count visibility",
-                "runner assignment continuity status alignment",
-                "workspace dispatcher evidence tests for missing count packets",
-                "dashboard assertions for handoff count empty states",
+                "dispatch handoff lifecycle transition visibility",
+                "runner assignment continuity lifecycle alignment",
+                "workspace dispatcher evidence tests for claimed and cleaned lanes",
+                "dashboard assertions for handoff lifecycle summaries",
             ],
             verification_commands=[
                 "pnpm run check:runner-assignment-status",
@@ -3186,7 +3211,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-queue-handoff-status-refresh"],
+                includedBacklogItems=["dispatcher-queue-handoff-lifecycle-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3211,14 +3236,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-queue-handoff-status-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher queue handoff status item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-queue-handoff-status-refresh"],
+                        status="ready" if "dispatcher-queue-handoff-lifecycle-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the dispatcher queue handoff lifecycle item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["dispatcher-queue-handoff-lifecycle-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher queue handoff status item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the dispatcher queue handoff lifecycle item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3248,8 +3273,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_queue_handoff_status_lane,
-                nextAction="Select this slice for dispatcher queue handoff status work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_queue_handoff_lifecycle_lane,
+                nextAction="Select this slice for dispatcher queue handoff lifecycle work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -3697,14 +3722,14 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
-        dispatcher_queue_handoff_status_lane = self._safe_backlog_next_lane(
-            lane_slug="dispatcher-queue-handoff-status-refresh",
-            lane_title="Dispatcher queue handoff status refresh",
+        dispatcher_queue_handoff_lifecycle_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-lifecycle-refresh",
+            lane_title="Dispatcher queue handoff lifecycle refresh",
             scope=[
-                "dispatch handoff status and empty-count visibility",
-                "runner assignment continuity status alignment",
-                "workspace dispatcher evidence tests for missing count packets",
-                "dashboard assertions for handoff count empty states",
+                "dispatch handoff lifecycle transition visibility",
+                "runner assignment continuity lifecycle alignment",
+                "workspace dispatcher evidence tests for claimed and cleaned lanes",
+                "dashboard assertions for handoff lifecycle summaries",
             ],
             verification_commands=[
                 "pnpm run check:runner-assignment-status",
@@ -4065,7 +4090,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher queue fixture evidence only; do not requeue dispatcher-queue-state-fixtures-refresh. Continue with dispatcher-queue-handoff-status-refresh.",
+                nextAction="Use this completed dispatcher queue fixture evidence only; do not requeue dispatcher-queue-state-fixtures-refresh. Continue with dispatcher-queue-handoff-lifecycle-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-queue-handoff-badges-refresh",
@@ -4094,19 +4119,19 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher queue handoff badge evidence only; do not requeue dispatcher-queue-handoff-badges-refresh. Continue with dispatcher-queue-handoff-status-refresh.",
+                nextAction="Use this completed dispatcher queue handoff badge evidence only; do not requeue dispatcher-queue-handoff-badges-refresh. Continue with dispatcher-queue-handoff-lifecycle-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-queue-handoff-status-refresh",
                 label="Dispatcher queue handoff status refresh",
                 priority="P2",
-                status="ready",
-                summary="Clarify runner assignment handoff status and empty-count states so generated lane workers can tell missing queue evidence from a clean zero-count packet.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered explicit runner assignment handoff count status so generated lane workers can tell missing, invalid, empty, and available queue evidence apart.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Dispatch handoff badges now expose candidate state counts, but missing or empty count packets need clearer status treatment in reports and dashboard copy.",
-                    "The next lane must stay read-only/source-owned and avoid provider calls, worker launches, or lane takeovers.",
-                    "Generated lane continuity should remain explicit after dispatcher-queue-handoff-badges-refresh closes.",
+                    "Runner assignment status rows now expose handoffCandidateStateCountsStatus through the API schema, shared dashboard contract, and dashboard resume packet.",
+                    "The status distinguishes missing, invalid, empty, and available count packets without provider calls, worker launches, or lane takeovers.",
+                    "Generated lane continuity remains explicit after dispatcher-queue-handoff-badges-refresh closes.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -4123,8 +4148,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_queue_handoff_status_lane,
-                nextAction="Refresh dispatcher queue handoff status and empty-count evidence while keeping generated-worker evidence read-only and source-owned.",
+                nextAction="Use this completed dispatcher queue handoff status evidence only; do not requeue dispatcher-queue-handoff-status-refresh. Continue with dispatcher-queue-handoff-lifecycle-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-queue-handoff-lifecycle-refresh",
+                label="Dispatcher queue handoff lifecycle refresh",
+                priority="P2",
+                status="ready",
+                summary="Show handoff lifecycle transitions across prepared, claimed, delivered, and cleaned lanes so generated lane workers can distinguish next action from historical evidence.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Dispatch handoff packets now expose count availability, but lifecycle state needs clearer source-owned status treatment across reports and dashboard copy.",
+                    "The next lane must stay read-only/source-owned and avoid provider calls, worker launches, or lane takeovers.",
+                    "Generated lane continuity should remain explicit after dispatcher-queue-handoff-status-refresh closes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_queue_handoff_lifecycle_lane,
+                nextAction="Refresh dispatcher queue handoff lifecycle evidence while keeping generated-worker evidence read-only and source-owned.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",

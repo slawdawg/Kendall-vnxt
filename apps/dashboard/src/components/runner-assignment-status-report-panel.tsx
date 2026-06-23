@@ -73,6 +73,7 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
             </p>
           ) : null}
           {row.handoffSummary ? <p className="break-all">Summary: {row.handoffSummary}</p> : null}
+          <p>Queue counts: {row.handoffCandidateStateCountsStatus}</p>
           {countEntries.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-2">
               {countEntries.map(([state, count]) => (
