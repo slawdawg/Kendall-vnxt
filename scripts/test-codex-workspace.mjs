@@ -550,6 +550,46 @@ try {
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
+  test("claim-next advances to generated handoff lane after completed worker queue refresh", () => {
+    const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-generated-queue-"));
+    try {
+      const assignmentsDir = join(queueStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      for (const laneSlug of [
+        "verification-surface-hardening",
+        "github-delivery-hygiene",
+        "read-only-evidence-polish",
+      ]) {
+        writeFileSync(
+          join(assignmentsDir, `${laneSlug}.json`),
+          `${JSON.stringify({
+            assignment_id: laneSlug,
+            task_id: laneSlug,
+            lane_slug: laneSlug,
+            branch: `codex/${laneSlug}`,
+            status: "claimed",
+            owner: "runner-b",
+            last_heartbeat_at: new Date().toISOString(),
+          })}\n`,
+        );
+      }
+      const before = taskSnapshot(assignmentsDir);
+
+      const result = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
+      const after = taskSnapshot(assignmentsDir);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("claim candidate lane-handoff-evidence-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("branch codex/lane-handoff-evidence-refresh"), result.stdout || result.stderr);
+      assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- worker-backlog-queue-refresh | closed"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- report-catalog-shortcut-refresh | assignable"), result.stdout || result.stderr);
+      assert(before === after, "generated queue dry-run mutated assignment metadata");
+    } finally {
+      rmSync(queueStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next apply claims the next lane without creating a branch or worktree", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-apply-"));
     try {

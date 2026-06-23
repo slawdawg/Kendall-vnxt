@@ -59,6 +59,10 @@ const githubDeliveryItemMatch = serviceSource.match(
   /SafeDevelopmentBacklogItemView\(\s*itemId="github-delivery-hygiene"[\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/,
 );
 const githubDeliveryItemSource = githubDeliveryItemMatch?.[0] ?? "";
+const workerQueueItemMatch = serviceSource.match(
+  /SafeDevelopmentBacklogItemView\(\s*itemId="worker-backlog-queue-refresh"[\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/,
+);
+const workerQueueItemSource = workerQueueItemMatch?.[0] ?? "";
 
 function countOccurrences(source, text) {
   return source.split(text).length - 1;
@@ -146,6 +150,11 @@ for (const itemId of [
 assertCondition(
   verificationItemSource.includes('itemId="verification-surface-hardening"'),
   "Safe backlog service must expose the verification-surface-hardening item block",
+  failures,
+);
+assertCondition(
+  workerQueueItemSource.includes('itemId="worker-backlog-queue-refresh"'),
+  "Safe backlog service must expose the worker-backlog-queue-refresh item block",
   failures,
 );
 assertCondition(
@@ -249,6 +258,15 @@ assertCondition(
   "Verification source evidence labels must be unique in the service item",
   failures,
 );
+assertCondition(
+  workerQueueItemSource.includes('status="closed"') &&
+    workerQueueItemSource.includes('recommendedSliceSize="complete"') &&
+    !workerQueueItemSource.includes("nextLane=") &&
+    workerQueueItemSource.includes("do not requeue worker-backlog-queue-refresh") &&
+    workerQueueItemSource.includes("claim-next should advance to lane-handoff-evidence-refresh"),
+  "Worker backlog queue refresh must be closed completion evidence and must not expose a dispatchable next lane",
+  failures,
+);
 
 for (const safetyText of [
   "blocked_pending_explicit_approval",
@@ -266,14 +284,15 @@ for (const safetyText of [
   'lane_slug="verification-surface-hardening"',
   'lane_slug="github-delivery-hygiene"',
   'lane_slug="read-only-evidence-polish"',
-  'lane_slug="worker-backlog-queue-refresh"',
   'lane_slug="lane-handoff-evidence-refresh"',
   'lane_slug="report-catalog-shortcut-refresh"',
   "complete",
   "Use this completed item as evidence only; do not requeue it as a new lane.",
+  "Use this completed queue refresh as evidence only; do not requeue worker-backlog-queue-refresh.",
   "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
   "Do not start or modify another active lane while using this recommendation.",
   "Current claim-next evidence can become starved when all ready lanes are active or assigned to other runners.",
+  "After this completed item closes, claim-next should advance to lane-handoff-evidence-refresh instead of requeueing worker-backlog-queue-refresh.",
   "Generated backlog items should link to explicit dashboard report anchors rather than falling back to the report catalog.",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
@@ -318,8 +337,9 @@ for (const browserText of [
   "GitHub delivery hygiene",
   "persistent plaintext gh token storage",
   "Worker backlog queue refresh",
-  "branch: codex/worker-backlog-queue-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "worker backlog queue refresh"',
+  "slice: complete",
+  "do not requeue worker-backlog-queue-refresh",
+  "claim-next should advance to lane-handoff-evidence-refresh",
   "claim-next evidence can become starved",
   "Lane handoff evidence refresh",
   "branch: codex/lane-handoff-evidence-refresh",
@@ -340,11 +360,14 @@ assertCondition(
   failures,
 );
 assertCondition(
-    supervisorTests.includes('report_alignment_item["status"] == "closed"') &&
+  supervisorTests.includes('report_alignment_item["status"] == "closed"') &&
     supervisorTests.includes('report_alignment_item["nextLane"] is None') &&
     supervisorTests.includes('"codex/github-delivery-hygiene"') &&
     supervisorTests.includes('node ./scripts/codex-workspace.mjs start "github delivery hygiene"') &&
-    supervisorTests.includes("pnpm run check:github-workflow-policy"),
+    supervisorTests.includes("pnpm run check:github-workflow-policy") &&
+    supervisorTests.includes('worker_queue_item["status"] == "closed"') &&
+    supervisorTests.includes('worker_queue_item["nextLane"] is None') &&
+    supervisorTests.includes("claim-next should advance to lane-handoff-evidence-refresh"),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );

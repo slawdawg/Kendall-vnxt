@@ -3363,22 +3363,6 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
-        worker_backlog_queue_lane = self._safe_backlog_next_lane(
-            lane_slug="worker-backlog-queue-refresh",
-            lane_title="Worker backlog queue refresh",
-            scope=[
-                "safe backlog queue capacity for end-to-end lane workers",
-                "claim-next and assignment-report evidence for newly generated work",
-                "dashboard safe backlog handoff text for generated worker lanes",
-                "static drift checks that prevent stale ready-lane starvation",
-            ],
-            verification_commands=[
-                "pnpm run check:safe-backlog",
-                "pnpm run test:codex-workspace",
-                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
-                "pnpm run check:static",
-            ],
-        )
         lane_handoff_evidence_lane = self._safe_backlog_next_lane(
             lane_slug="lane-handoff-evidence-refresh",
             lane_title="Lane handoff evidence refresh",
@@ -3553,13 +3537,19 @@ class SupervisorService:
                 itemId="worker-backlog-queue-refresh",
                 label="Worker backlog queue refresh",
                 priority="P1",
-                status="ready",
-                summary="Generate fresh, source-owned safe backlog capacity so end-to-end lane workers can claim work without taking over active lanes.",
-                recommendedSliceSize="large",
+                status="closed",
+                summary="Delivered fresh, source-owned safe backlog capacity so end-to-end lane workers can claim generated work without taking over active lanes.",
+                recommendedSliceSize="complete",
                 evidence=[
                     "Current claim-next evidence can become starved when all ready lanes are active or assigned to other runners.",
                     "New generated worker lanes must remain source-owned, branch-scoped, and claimable through codex-workspace rather than ad hoc chat state.",
-                    "The assignment report and safe backlog drift check should prove generated work stays dispatchable without touching owned lanes.",
+                    "The assignment report and safe backlog drift check prove generated work stays dispatchable without touching owned lanes.",
+                    "After this completed item closes, claim-next should advance to lane-handoff-evidence-refresh instead of requeueing worker-backlog-queue-refresh.",
+                ],
+                sourceEvidenceLabels=[
+                    "3-27-safe-development-backlog-report.md",
+                    "3-32-safe-development-backlog-drift-check.md",
+                    "3-60-safe-backlog-report-anchors.md",
                 ],
                 relatedReports=[
                     "GET /supervisor/safe-development-backlog",
@@ -3578,8 +3568,7 @@ class SupervisorService:
                     "/controls#development-runway-report",
                     "/controls#verification-readiness-report",
                 ],
-                nextLane=worker_backlog_queue_lane,
-                nextAction="Refresh source-owned backlog queue evidence so the next worker can claim a new lane instead of taking over active work.",
+                nextAction="Use this completed queue refresh as evidence only; do not requeue worker-backlog-queue-refresh. Continue with lane-handoff-evidence-refresh for the next generated worker lane.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="lane-handoff-evidence-refresh",
