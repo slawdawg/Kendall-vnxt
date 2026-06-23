@@ -558,6 +558,12 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
     return classificationMatches(row, classificationFilter);
   });
   const filteredSourceSummary = filteredSourceKindSummary(filteredRows);
+  const filtersAtDefault = classificationFilter === "attention" && sourceFilter === "all" && sourceCompletionFilter === "all";
+  const resetFilters = () => {
+    setClassificationFilter("attention");
+    setSourceFilter("all");
+    setSourceCompletionFilter("all");
+  };
   const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
   return (
     <section className="rounded-[1rem] border bg-[var(--surface)] p-4 shadow-sm">
@@ -654,7 +660,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
               {sourceCompletionFilterLabel(sourceCompletionFilter)}.
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Classification</span>
               <select
@@ -700,6 +706,15 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
                 <option value="none">none</option>
               </select>
             </label>
+            <button
+              type="button"
+              aria-label="Reset assignment row filters"
+              className="h-8 self-end rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={filtersAtDefault}
+              onClick={resetFilters}
+            >
+              Reset
+            </button>
           </div>
         </div>
         <div data-testid="filtered-source-kind-summary" className="mt-3 grid gap-1 text-xs leading-5 text-[var(--muted)] sm:grid-cols-2">
