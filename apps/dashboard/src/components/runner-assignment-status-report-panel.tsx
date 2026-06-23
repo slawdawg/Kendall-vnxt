@@ -592,6 +592,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
   };
   const filteredSourceSummary = filteredSourceKindSummary(filteredRows);
   const filtersAtDefault = classificationFilter === "attention" && sourceFilter === "all" && sourceCompletionFilter === "all";
+  const filtersAtSourceCompletionPresetScope = classificationFilter === "all" && sourceFilter === "all";
   const emptyStateGuidance = assignmentRowEmptyStateGuidance({
     classificationFilter,
     sourceFilter,
@@ -608,6 +609,8 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
     setSourceFilter("all");
     setSourceCompletionFilter(filter);
   };
+  const sourceCompletionShortcutDisabled = (filter: Extract<SourceCompletionFilter, "assignment" | "workspace" | "none">, count: number) =>
+    count === 0 || (sourceCompletionFilter === filter && filtersAtSourceCompletionPresetScope);
   const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
   return (
     <section className="rounded-[1rem] border bg-[var(--surface)] p-4 shadow-sm">
@@ -802,15 +805,44 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
       {filteredRows.length === 0 ? (
         <div className="mt-4 flex flex-col gap-3 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between">
           <p>No assignment rows match the current filters. {emptyStateGuidance}</p>
-          <button
-            type="button"
-            aria-label="Reset assignment row filters from empty state"
-            className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={filtersAtDefault}
-            onClick={resetFilters}
-          >
-            Reset filters
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              aria-label={`Show assignment-backed rows from empty state (${sourceCompletionPresetCounts.assignment})`}
+              className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={sourceCompletionShortcutDisabled("assignment", sourceCompletionPresetCounts.assignment)}
+              onClick={() => applySourceCompletionPreset("assignment")}
+            >
+              Assignment-backed
+            </button>
+            <button
+              type="button"
+              aria-label={`Show workspace-backed rows from empty state (${sourceCompletionPresetCounts.workspace})`}
+              className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={sourceCompletionShortcutDisabled("workspace", sourceCompletionPresetCounts.workspace)}
+              onClick={() => applySourceCompletionPreset("workspace")}
+            >
+              Workspace-backed
+            </button>
+            <button
+              type="button"
+              aria-label={`Show uncompleted rows from empty state (${sourceCompletionPresetCounts.none})`}
+              className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={sourceCompletionShortcutDisabled("none", sourceCompletionPresetCounts.none)}
+              onClick={() => applySourceCompletionPreset("none")}
+            >
+              Uncompleted
+            </button>
+            <button
+              type="button"
+              aria-label="Reset assignment row filters from empty state"
+              className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={filtersAtDefault}
+              onClick={resetFilters}
+            >
+              Reset filters
+            </button>
+          </div>
         </div>
       ) : (
         <div className="mt-4 grid gap-3">

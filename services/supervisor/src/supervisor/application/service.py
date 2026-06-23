@@ -2958,6 +2958,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         preferred_successor_ids = (
+            "dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
             "dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh",
             "dispatcher-closed-source-guard-filter-empty-state-reset-refresh",
             "dispatcher-closed-source-guard-filter-empty-state-refresh",
@@ -4034,6 +4035,24 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_closed_source_guard_filter_empty_state_shortcut_counts_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
+            lane_title="Dispatcher closed source guard filter empty state shortcut counts refresh",
+            scope=[
+                "visible count badges for inline zero-row recovery shortcuts without changing source data",
+                "dashboard assertions that empty-state shortcut counts match assignment-backed, workspace-backed, and uncompleted row totals predictably",
+                "static drift coverage for successor queue advancement and metadata-only empty-state shortcut count messaging",
+                "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -4041,7 +4060,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh"],
+                includedBacklogItems=["dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -4066,14 +4085,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the closed source guard filter empty-state shortcuts item is the next safe backlog item for dispatcher queue integrity work.",
-                        evidence=["dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh"],
+                        status="ready" if "dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the closed source guard filter empty-state shortcut counts item is the next safe backlog item for dispatcher queue integrity work.",
+                        evidence=["dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the closed source guard filter empty-state shortcuts item ready before changing dispatcher queue snapshot or assignment surfaces.",
+                        nextAction="Keep the closed source guard filter empty-state shortcut counts item ready before changing dispatcher queue snapshot or assignment surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -4103,8 +4122,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_closed_source_guard_filter_empty_state_shortcuts_lane,
-                nextAction="Select this slice for dispatcher closed source guard filter empty-state shortcuts work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_closed_source_guard_filter_empty_state_shortcut_counts_lane,
+                nextAction="Select this slice for dispatcher closed source guard filter empty-state shortcut count work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4960,6 +4979,24 @@ class SupervisorService:
                 "inline alternate-view shortcuts for zero-row runner assignment filter views without changing source data",
                 "dashboard assertions that zero-row recovery shortcuts switch to assignment-backed, workspace-backed, or uncompleted views predictably",
                 "static drift coverage for successor queue advancement and metadata-only empty-state shortcut messaging",
+                "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_closed_source_guard_filter_empty_state_shortcut_counts_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
+            lane_title="Dispatcher closed source guard filter empty state shortcut counts refresh",
+            scope=[
+                "visible count badges for inline zero-row recovery shortcuts without changing source data",
+                "dashboard assertions that empty-state shortcut counts match assignment-backed, workspace-backed, and uncompleted row totals predictably",
+                "static drift coverage for successor queue advancement and metadata-only empty-state shortcut count messaging",
                 "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
             ],
             verification_commands=[
@@ -6020,7 +6057,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter presets evidence only; do not requeue dispatcher-closed-source-guard-filter-presets-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter presets evidence only; do not requeue dispatcher-closed-source-guard-filter-presets-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-counts-refresh",
@@ -6049,7 +6086,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter counts evidence only; do not requeue dispatcher-closed-source-guard-filter-counts-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter counts evidence only; do not requeue dispatcher-closed-source-guard-filter-counts-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-empty-state-refresh",
@@ -6078,7 +6115,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter empty-state evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter empty-state evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-empty-state-reset-refresh",
@@ -6107,19 +6144,19 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter empty-state reset evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-reset-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter empty-state reset evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-reset-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh",
                 label="Dispatcher closed source guard filter empty state shortcuts refresh",
                 priority="P2",
-                status="ready",
-                summary="Add inline alternate-view shortcuts to zero-row runner assignment filter views so generated lane workers can switch to a broader source-completion view without changing source data.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered inline alternate-view shortcuts for zero-row runner assignment filter views so generated lane workers can switch to a broader source-completion view without changing source data.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Zero-row views now explain the active filter scope and provide an inline reset action.",
-                    "The next lane should add inline shortcuts for assignment-backed, workspace-backed, and uncompleted source-completion recovery paths.",
-                    "Keep the empty-state shortcuts refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                    "Zero-row runner assignment views now include inline shortcuts for assignment-backed, workspace-backed, and uncompleted source-completion views.",
+                    "Dashboard assertions cover empty-state shortcuts switching to broader source-completion views in one command.",
+                    "The empty-state shortcuts are metadata-only and do not mutate source-completion evidence, generated workspace manifests, workers, providers, or lane ownership.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -6136,8 +6173,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_closed_source_guard_filter_empty_state_shortcuts_lane,
-                nextAction="Refresh dispatcher closed source guard filter empty-state shortcut handling so zero-row filtered views can switch to broader source-completion views in one command.",
+                nextAction="Use this completed dispatcher closed source guard filter empty-state shortcut evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
+                label="Dispatcher closed source guard filter empty state shortcut counts refresh",
+                priority="P2",
+                status="ready",
+                summary="Add visible count badges to inline zero-row recovery shortcuts so generated lane workers can see assignment-backed, workspace-backed, and uncompleted row totals before switching views.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Zero-row views now include inline recovery shortcuts for assignment-backed, workspace-backed, and uncompleted source-completion views.",
+                    "The next lane should make shortcut counts visible in the empty state, matching the toolbar preset totals.",
+                    "Keep the empty-state shortcut counts refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_closed_source_guard_filter_empty_state_shortcut_counts_lane,
+                nextAction="Refresh dispatcher closed source guard filter empty-state shortcut count handling so zero-row recovery shortcuts show source-completion row totals.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
