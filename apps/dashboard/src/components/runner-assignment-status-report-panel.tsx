@@ -110,6 +110,62 @@ function auditExportFilename(row: RunnerAssignmentStatusRowView, entries: Runner
   return `handoff-audit-${safeSource || "filtered"}-${entries.length}-of-${row.handoffAuditTrail?.length ?? 0}.txt`;
 }
 
+function auditExportJson(
+  entries: RunnerHandoffAuditEntryView[],
+  totalEntries: number,
+  filters: { query: string; evidence: AuditEvidenceFilter; payload: AuditPayloadFilter },
+): string {
+  const query = filters.query.trim();
+  return JSON.stringify(
+    {
+      exportKind: "filtered-handoff-audit",
+      retention: {
+        policy: "metadata-only",
+        payload: "not-retained",
+        excluded: ["raw prompts", "completions", "provider payloads", "reasoning traces", "secrets", "source copies"],
+      },
+      entries: {
+        filtered: entries.length,
+        total: totalEntries,
+      },
+      filters: {
+        query: query || null,
+        evidence: filters.evidence,
+        payload: filters.payload,
+      },
+      auditTrail: entries.map((entry) => ({
+        sequence: entry.sequence,
+        lane: entry.lane,
+        branch: entry.branch,
+        taskId: entry.taskId,
+        workspaceAction: entry.workspaceAction,
+        nextCommand: entry.nextCommand,
+        generatedAt: entry.generatedAt,
+        readinessStatus: entry.readinessStatus,
+        readinessCommand: entry.readinessCommand,
+        readinessSummary: entry.readinessSummary,
+        queueCountsStatus: entry.queueCountsStatus,
+        queueCounts: entry.queueCounts ?? {},
+        stopLines: entry.stopLines ?? [],
+        lifecycleState: entry.lifecycleState,
+        recoveryAction: entry.recoveryAction,
+        recoverySummary: entry.recoverySummary,
+        evidenceStatus: entry.evidenceStatus,
+        evidenceSummary: entry.evidenceSummary,
+        retentionPolicy: entry.retentionPolicy,
+        payloadRetention: entry.payloadRetention,
+        retentionSummary: entry.retentionSummary,
+      })),
+    },
+    null,
+    2,
+  );
+}
+
+function auditJsonFilename(row: RunnerAssignmentStatusRowView, entries: RunnerHandoffAuditEntryView[]): string {
+  return auditExportFilename(row, entries).replace(/\.txt$/, ".json");
+}
+
 function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
   const hasAvailableHandoff = row.handoffStatus === "available";
   const countEntries = handoffCountEntries(row);
@@ -139,6 +195,19 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
     () => auditExportFilename(row, filteredAuditEntries),
     [filteredAuditEntries, row],
   );
+  const filteredAuditJsonExport = useMemo(
+    () =>
+      auditExportJson(filteredAuditEntries, auditEntries.length, {
+        query: auditQuery,
+        evidence: auditEvidenceFilter,
+        payload: auditPayloadFilter,
+      }),
+    [auditEntries.length, auditEvidenceFilter, auditPayloadFilter, auditQuery, filteredAuditEntries],
+  );
+  const filteredAuditJsonFilename = useMemo(
+    () => auditJsonFilename(row, filteredAuditEntries),
+    [filteredAuditEntries, row],
+  );
 
   async function copyAuditExportSummary() {
     setAuditExportStatus(`Copy prepared for ${filteredAuditEntries.length} audit ${filteredAuditEntries.length === 1 ? "entry" : "entries"}.`);
@@ -158,6 +227,19 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
     const link = document.createElement("a");
     link.href = url;
     link.download = filteredAuditExportFilename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  function downloadAuditJsonExport() {
+    setAuditExportStatus(`JSON download prepared for ${filteredAuditEntries.length} audit ${filteredAuditEntries.length === 1 ? "entry" : "entries"}.`);
+    if (typeof window === "undefined" || typeof document === "undefined" || typeof Blob === "undefined") return;
+    const url = window.URL.createObjectURL(new Blob([filteredAuditJsonExport], { type: "application/json;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filteredAuditJsonFilename;
     document.body.append(link);
     link.click();
     link.remove();
@@ -348,13 +430,27 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
               >
                 Download .txt
               </button>
+              <button
+                type="button"
+                className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-2 font-mono text-[11px] text-[var(--foreground)]"
+                onClick={downloadAuditJsonExport}
+              >
+                Download .json
+              </button>
             </div>
             <p className="mt-1 break-all font-mono text-[10px] text-[var(--muted)]">filename: {filteredAuditExportFilename}</p>
+            <p className="mt-1 break-all font-mono text-[10px] text-[var(--muted)]">json filename: {filteredAuditJsonFilename}</p>
             <textarea
               className="mt-2 min-h-32 w-full resize-y rounded-[0.5rem] border bg-[var(--surface)] p-2 font-mono text-[11px] leading-5 text-[var(--foreground)]"
               aria-label="Filtered audit export"
               readOnly
               value={filteredAuditExportText}
+            />
+            <textarea
+              className="mt-2 min-h-32 w-full resize-y rounded-[0.5rem] border bg-[var(--surface)] p-2 font-mono text-[11px] leading-5 text-[var(--foreground)]"
+              aria-label="Filtered audit JSON export"
+              readOnly
+              value={filteredAuditJsonExport}
             />
             <p className="mt-1 text-[11px] text-[var(--muted)]">{auditExportStatus}</p>
           </div>
