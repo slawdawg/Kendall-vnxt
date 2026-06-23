@@ -564,6 +564,11 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
     setSourceFilter("all");
     setSourceCompletionFilter("all");
   };
+  const applySourceCompletionPreset = (filter: Extract<SourceCompletionFilter, "assignment" | "workspace" | "none">) => {
+    setClassificationFilter("all");
+    setSourceFilter("all");
+    setSourceCompletionFilter(filter);
+  };
   const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
   return (
     <section className="rounded-[1rem] border bg-[var(--surface)] p-4 shadow-sm">
@@ -714,6 +719,32 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
               onClick={resetFilters}
             >
               Reset
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2" aria-label="Assignment row filter presets">
+            <button
+              type="button"
+              aria-label="Show assignment-backed rows"
+              className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)]"
+              onClick={() => applySourceCompletionPreset("assignment")}
+            >
+              Assignment-backed
+            </button>
+            <button
+              type="button"
+              aria-label="Show workspace-backed rows"
+              className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)]"
+              onClick={() => applySourceCompletionPreset("workspace")}
+            >
+              Workspace-backed
+            </button>
+            <button
+              type="button"
+              aria-label="Show uncompleted rows"
+              className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)]"
+              onClick={() => applySourceCompletionPreset("none")}
+            >
+              Uncompleted
             </button>
           </div>
         </div>

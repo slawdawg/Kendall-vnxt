@@ -2958,6 +2958,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         preferred_successor_ids = (
+            "dispatcher-closed-source-guard-filter-counts-refresh",
             "dispatcher-closed-source-guard-filter-presets-refresh",
             "dispatcher-closed-source-guard-filter-reset-refresh",
             "dispatcher-closed-source-guard-source-kind-summary-refresh",
@@ -3958,6 +3959,24 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_closed_source_guard_filter_counts_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-filter-counts-refresh",
+            lane_title="Dispatcher closed source guard filter counts refresh",
+            scope=[
+                "runner assignment filter count badges for preset source-completion views without changing source data",
+                "dashboard assertions that count badges match assignment-backed, workspace-backed, and uncompleted row totals predictably",
+                "static drift coverage for successor queue advancement and metadata-only filter count messaging",
+                "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3965,7 +3984,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-closed-source-guard-filter-presets-refresh"],
+                includedBacklogItems=["dispatcher-closed-source-guard-filter-counts-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3990,14 +4009,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-closed-source-guard-filter-presets-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the closed source guard filter presets item is the next safe backlog item for dispatcher queue integrity work.",
-                        evidence=["dispatcher-closed-source-guard-filter-presets-refresh"],
+                        status="ready" if "dispatcher-closed-source-guard-filter-counts-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the closed source guard filter counts item is the next safe backlog item for dispatcher queue integrity work.",
+                        evidence=["dispatcher-closed-source-guard-filter-counts-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the closed source guard filter presets item ready before changing dispatcher queue snapshot or assignment surfaces.",
+                        nextAction="Keep the closed source guard filter counts item ready before changing dispatcher queue snapshot or assignment surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -4027,8 +4046,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_closed_source_guard_filter_presets_lane,
-                nextAction="Select this slice for dispatcher closed source guard filter presets work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_closed_source_guard_filter_counts_lane,
+                nextAction="Select this slice for dispatcher closed source guard filter counts work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4812,6 +4831,24 @@ class SupervisorService:
                 "runner assignment filter presets for common source-completion views without changing source data",
                 "dashboard assertions that preset controls select assignment-backed, workspace-backed, or uncompleted rows predictably",
                 "static drift coverage for successor queue advancement and metadata-only filter preset messaging",
+                "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_closed_source_guard_filter_counts_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-filter-counts-refresh",
+            lane_title="Dispatcher closed source guard filter counts refresh",
+            scope=[
+                "runner assignment filter count badges for preset source-completion views without changing source data",
+                "dashboard assertions that count badges match assignment-backed, workspace-backed, and uncompleted row totals predictably",
+                "static drift coverage for successor queue advancement and metadata-only filter count messaging",
                 "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
             ],
             verification_commands=[
@@ -5849,13 +5886,13 @@ class SupervisorService:
                 itemId="dispatcher-closed-source-guard-filter-presets-refresh",
                 label="Dispatcher closed source guard filter presets refresh",
                 priority="P2",
-                status="ready",
-                summary="Add filter presets for common source-completion views so generated lane workers can switch among assignment-backed, workspace-backed, and uncompleted rows quickly.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered filter presets for common source-completion views so generated lane workers can switch among assignment-backed, workspace-backed, and uncompleted rows quickly.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Filter reset controls now return the runner assignment panel to the default needs-attention view.",
-                    "The next lane should add preset controls without changing source-completion evidence semantics or generated workspace state.",
-                    "Keep the filter presets refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                    "Runner assignment filters now include one-command presets for assignment-backed, workspace-backed, and uncompleted source-completion views.",
+                    "Dashboard assertions cover each preset selecting all classifications, all sources, and the expected source-completion state.",
+                    "The preset controls are metadata-only and do not mutate source-completion evidence, generated workspace manifests, workers, providers, or lane ownership.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -5872,8 +5909,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_closed_source_guard_filter_presets_lane,
-                nextAction="Refresh dispatcher closed source guard filter presets so common source-completion row views are one command away.",
+                nextAction="Use this completed dispatcher closed source guard filter presets evidence only; do not requeue dispatcher-closed-source-guard-filter-presets-refresh. Continue with dispatcher-closed-source-guard-filter-counts-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-closed-source-guard-filter-counts-refresh",
+                label="Dispatcher closed source guard filter counts refresh",
+                priority="P2",
+                status="ready",
+                summary="Add filter count badges for preset source-completion views so generated lane workers can see assignment-backed, workspace-backed, and uncompleted row totals before switching views.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Filter presets now switch the runner assignment panel to common source-completion views in one command.",
+                    "The next lane should add count badges without changing source-completion evidence semantics or generated workspace state.",
+                    "Keep the filter counts refresh metadata-only; do not mutate generated workspace manifests, launch workers, call providers, or take over unrelated active lanes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_closed_source_guard_filter_counts_lane,
+                nextAction="Refresh dispatcher closed source guard filter count badges so preset row totals are visible before switching views.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
