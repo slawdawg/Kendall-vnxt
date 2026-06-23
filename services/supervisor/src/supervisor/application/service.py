@@ -911,6 +911,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-runner-handoff-audit-json-validation",
+                label="Runner handoff audit JSON validation fixtures",
+                command="pnpm run test:runner-handoff-audit-json-validation",
+                status="required",
+                requiredFor=["runner assignment report changes", "handoff audit JSON export changes", "metadata-only retention validation changes"],
+                evidence=[
+                    "Validates malformed and drifted filtered handoff audit JSON exports are rejected without retaining raw prompts, completions, reasoning traces, provider payloads, secrets, or source copies.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-delivery-readiness",
                 label="Delivery readiness policy drift",
                 command="pnpm run check:delivery-readiness",
@@ -1390,6 +1401,7 @@ class SupervisorService:
                     "check-maintenance-action-plan",
                     "check-development-runway",
                     "check-runner-assignment-status",
+                    "test-runner-handoff-audit-json-validation",
                     "check-delivery-readiness",
                     "check-github-workflow-policy",
                     "check-cleanup-automation",
