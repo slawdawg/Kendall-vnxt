@@ -546,7 +546,8 @@ try {
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-counts-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-reset-refresh | closed"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh | closed"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -582,7 +583,7 @@ try {
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
-  test("claim-next advances to closed source guard filter empty state shortcuts after completed empty state reset lane", () => {
+  test("claim-next advances to closed source guard filter empty state shortcut counts after completed shortcuts lane", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-generated-queue-"));
     try {
       const assignmentsDir = join(queueStateRoot, "assignments");
@@ -611,8 +612,8 @@ try {
       const after = taskSnapshot(assignmentsDir);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("claim candidate dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh"), result.stdout || result.stderr);
-      assert(result.stdout.includes("branch codex/dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("branch codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
       assert(result.stdout.includes("- worker-backlog-queue-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- lane-handoff-evidence-refresh | closed"), result.stdout || result.stderr);
@@ -1296,6 +1297,7 @@ try {
         "codex/dispatcher-closed-source-guard-filter-empty-state-refresh",
         "codex/dispatcher-closed-source-guard-filter-empty-state-reset-refresh",
         "codex/dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh",
+        "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
       ];
       const manifestPaths = blockedBranches.map((branchName, index) => {
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
@@ -1383,6 +1385,7 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-reset-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh",
+        "dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
       ]) {
         writeFileSync(
           join(assignmentsDir, `${laneSlug}.json`),
@@ -1431,6 +1434,7 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-reset-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh",
+        "dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
       ].map((laneSlug) => join(assignmentsDir, `${laneSlug}.json`));
       const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
@@ -1789,6 +1793,7 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-reset-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh",
+        "dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
       ].map((laneSlug) => {
         const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
         writeFileSync(
@@ -2322,9 +2327,9 @@ function remoteBranchExists(cwd, branch) {
 
 function expectedClaimCandidate() {
   return {
-    slug: "dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh",
-    title: "dispatcher closed source guard filter empty state shortcuts refresh",
-    branch: "codex/dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh",
+    slug: "dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
+    title: "dispatcher closed source guard filter empty state shortcut counts refresh",
+    branch: "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
   };
 }
 
