@@ -2846,6 +2846,7 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
+            "dispatcher-queue-handoff-audit-json-refresh",
             "dispatcher-queue-handoff-audit-download-refresh",
             "dispatcher-queue-handoff-audit-export-refresh",
             "read-only-evidence-polish",
@@ -3566,6 +3567,23 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_queue_handoff_audit_json_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-json-refresh",
+            lane_title="Dispatcher queue handoff audit JSON refresh",
+            scope=[
+                "operator-visible structured JSON export affordances for filtered handoff audits",
+                "metadata-only JSON assertions for generated-worker handoffs",
+                "workspace dispatcher evidence tests for structured audit summaries",
+                "dashboard assertions for filtered audit JSON filenames and content",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3573,7 +3591,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-queue-handoff-audit-download-refresh"],
+                includedBacklogItems=["dispatcher-queue-handoff-audit-json-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3598,14 +3616,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-queue-handoff-audit-download-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher queue handoff audit download item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-queue-handoff-audit-download-refresh"],
+                        status="ready" if "dispatcher-queue-handoff-audit-json-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the dispatcher queue handoff audit JSON item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["dispatcher-queue-handoff-audit-json-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher queue handoff audit download item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the dispatcher queue handoff audit JSON item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3635,8 +3653,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_queue_handoff_audit_download_lane,
-                nextAction="Select this slice for dispatcher queue handoff audit download work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_queue_handoff_audit_json_lane,
+                nextAction="Select this slice for dispatcher queue handoff audit JSON work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -4158,6 +4176,23 @@ class SupervisorService:
                 "metadata-only downloaded summary assertions for generated-worker handoffs",
                 "workspace dispatcher evidence tests for downloaded audit summaries",
                 "dashboard assertions for filtered audit download filenames and content",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_queue_handoff_audit_json_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-json-refresh",
+            lane_title="Dispatcher queue handoff audit JSON refresh",
+            scope=[
+                "operator-visible structured JSON export affordances for filtered handoff audits",
+                "metadata-only JSON assertions for generated-worker handoffs",
+                "workspace dispatcher evidence tests for structured audit summaries",
+                "dashboard assertions for filtered audit JSON filenames and content",
             ],
             verification_commands=[
                 "pnpm run check:runner-assignment-status",
@@ -4757,13 +4792,13 @@ class SupervisorService:
                 itemId="dispatcher-queue-handoff-audit-download-refresh",
                 label="Dispatcher queue handoff audit download refresh",
                 priority="P2",
-                status="ready",
-                summary="Add operator-facing file download affordances for filtered generated worker handoff audit summaries while preserving metadata-only retention boundaries.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered operator-facing file download affordances for filtered generated worker handoff audit summaries while preserving metadata-only retention boundaries.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Filtered handoff audit export text can now be copied from the dashboard without retaining raw payload material.",
-                    "The next lane should expose a download affordance and filename/content assertions from filtered metadata only.",
-                    "Generated lane continuity should advance after dispatcher-queue-handoff-audit-export-refresh closes.",
+                    "The dashboard handoff audit trail now downloads the filtered metadata-only export text as a safe `.txt` file.",
+                    "Download filenames and content are derived from generated-worker handoff metadata only and exclude raw provider payloads, prompts, completions, reasoning traces, secrets, and source copies.",
+                    "Generated lane continuity now advances after dispatcher-queue-handoff-audit-download-refresh closes.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -4780,8 +4815,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_queue_handoff_audit_download_lane,
-                nextAction="Refresh dispatcher queue handoff audit download summaries while keeping generated-worker evidence metadata-only and source-owned.",
+                nextAction="Use this completed dispatcher queue handoff audit download evidence only; do not requeue dispatcher-queue-handoff-audit-download-refresh. Continue with dispatcher-queue-handoff-audit-json-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-queue-handoff-audit-json-refresh",
+                label="Dispatcher queue handoff audit JSON refresh",
+                priority="P2",
+                status="ready",
+                summary="Add operator-facing structured JSON export affordances for filtered generated worker handoff audit summaries while preserving metadata-only retention boundaries.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Filtered handoff audit summaries can now be copied and downloaded as metadata-only text.",
+                    "The next lane should expose a structured JSON export from filtered metadata only, never raw provider payloads, prompts, completions, reasoning traces, secrets, or source copies.",
+                    "Generated lane continuity should advance after dispatcher-queue-handoff-audit-download-refresh closes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_queue_handoff_audit_json_lane,
+                nextAction="Refresh dispatcher queue handoff audit JSON summaries while keeping generated-worker evidence metadata-only and source-owned.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
