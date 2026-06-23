@@ -14,6 +14,7 @@ type AuditPayloadFilter = "all" | RunnerHandoffAuditEntryView["payloadRetention"
 type AssignmentClassificationFilter = "attention" | "active" | "blocked" | "assignable" | "closed" | "all";
 type AssignmentSourceFilter = "all" | "workspace" | "lane" | "backlog";
 type SourceCompletionFilter = "all" | "any" | "assignment" | "workspace" | "none";
+type SourceCompletionPresetFilter = Extract<SourceCompletionFilter, "assignment" | "workspace" | "none">;
 type SourcedAssignmentRow = {
   row: RunnerAssignmentStatusRowView;
   source: Exclude<AssignmentSourceFilter, "all">;
@@ -55,6 +56,33 @@ function sourceCompletionFilterLabel(filter: SourceCompletionFilter): string {
   if (filter === "any") return "any source completion";
   if (filter === "none") return "no source completion";
   return `${filter} source completion`;
+}
+
+function sourceCompletionPresetLabel(filter: SourceCompletionPresetFilter): string {
+  if (filter === "assignment") return "Assignment-backed";
+  if (filter === "workspace") return "Workspace-backed";
+  return "Uncompleted";
+}
+
+function sourceCompletionShortcutDisabledReason({
+  filter,
+  count,
+  sourceCompletionFilter,
+  filtersAtSourceCompletionPresetScope,
+}: {
+  filter: SourceCompletionPresetFilter;
+  count: number;
+  sourceCompletionFilter: SourceCompletionFilter;
+  filtersAtSourceCompletionPresetScope: boolean;
+}): string | null {
+  const selectedAtPresetScope = sourceCompletionFilter === filter && filtersAtSourceCompletionPresetScope;
+  const label = sourceCompletionPresetLabel(filter);
+  const countReason = count === 0 ? `0 ${label.toLowerCase()} rows are available` : null;
+  const selectedReason = selectedAtPresetScope ? "the empty-state shortcut already matches the current full-source filter" : null;
+  if (countReason && selectedReason) return `${label} disabled: ${selectedReason}, and ${countReason}.`;
+  if (countReason) return `${label} unavailable: ${countReason}.`;
+  if (selectedReason) return `${label} disabled: ${selectedReason}.`;
+  return null;
 }
 
 function assignmentRowEmptyStateGuidance({
@@ -604,13 +632,35 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
     setSourceFilter("all");
     setSourceCompletionFilter("all");
   };
-  const applySourceCompletionPreset = (filter: Extract<SourceCompletionFilter, "assignment" | "workspace" | "none">) => {
+  const applySourceCompletionPreset = (filter: SourceCompletionPresetFilter) => {
     setClassificationFilter("all");
     setSourceFilter("all");
     setSourceCompletionFilter(filter);
   };
-  const sourceCompletionShortcutDisabled = (filter: Extract<SourceCompletionFilter, "assignment" | "workspace" | "none">, count: number) =>
-    count === 0 || (sourceCompletionFilter === filter && filtersAtSourceCompletionPresetScope);
+  const sourceCompletionShortcutDisabledReasons = {
+    assignment: sourceCompletionShortcutDisabledReason({
+      filter: "assignment",
+      count: sourceCompletionPresetCounts.assignment,
+      sourceCompletionFilter,
+      filtersAtSourceCompletionPresetScope,
+    }),
+    workspace: sourceCompletionShortcutDisabledReason({
+      filter: "workspace",
+      count: sourceCompletionPresetCounts.workspace,
+      sourceCompletionFilter,
+      filtersAtSourceCompletionPresetScope,
+    }),
+    none: sourceCompletionShortcutDisabledReason({
+      filter: "none",
+      count: sourceCompletionPresetCounts.none,
+      sourceCompletionFilter,
+      filtersAtSourceCompletionPresetScope,
+    }),
+  };
+  const sourceCompletionShortcutDisabled = (filter: SourceCompletionPresetFilter) => sourceCompletionShortcutDisabledReasons[filter] !== null;
+  const emptyStateShortcutDisabledReasonRows = Object.entries(sourceCompletionShortcutDisabledReasons).filter(
+    (entry): entry is [SourceCompletionPresetFilter, string] => entry[1] !== null,
+  );
   const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
   return (
     <section className="rounded-[1rem] border bg-[var(--surface)] p-4 shadow-sm">
@@ -805,43 +855,57 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
       {filteredRows.length === 0 ? (
         <div className="mt-4 flex flex-col gap-3 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between">
           <p>No assignment rows match the current filters. {emptyStateGuidance}</p>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              aria-label={`Show assignment-backed rows from empty state (${sourceCompletionPresetCounts.assignment})`}
-              className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={sourceCompletionShortcutDisabled("assignment", sourceCompletionPresetCounts.assignment)}
-              onClick={() => applySourceCompletionPreset("assignment")}
-            >
-              Assignment-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.assignment}</span>
-            </button>
-            <button
-              type="button"
-              aria-label={`Show workspace-backed rows from empty state (${sourceCompletionPresetCounts.workspace})`}
-              className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={sourceCompletionShortcutDisabled("workspace", sourceCompletionPresetCounts.workspace)}
-              onClick={() => applySourceCompletionPreset("workspace")}
-            >
-              Workspace-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.workspace}</span>
-            </button>
-            <button
-              type="button"
-              aria-label={`Show uncompleted rows from empty state (${sourceCompletionPresetCounts.none})`}
-              className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={sourceCompletionShortcutDisabled("none", sourceCompletionPresetCounts.none)}
-              onClick={() => applySourceCompletionPreset("none")}
-            >
-              Uncompleted <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.none}</span>
-            </button>
-            <button
-              type="button"
-              aria-label="Reset assignment row filters from empty state"
-              className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={filtersAtDefault}
-              onClick={resetFilters}
-            >
-              Reset filters
-            </button>
+          <div className="grid gap-2">
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                aria-label={`Show assignment-backed rows from empty state (${sourceCompletionPresetCounts.assignment})`}
+                aria-describedby={sourceCompletionShortcutDisabledReasons.assignment ? "empty-state-assignment-shortcut-disabled-reason" : undefined}
+                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={sourceCompletionShortcutDisabled("assignment")}
+                onClick={() => applySourceCompletionPreset("assignment")}
+              >
+                Assignment-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.assignment}</span>
+              </button>
+              <button
+                type="button"
+                aria-label={`Show workspace-backed rows from empty state (${sourceCompletionPresetCounts.workspace})`}
+                aria-describedby={sourceCompletionShortcutDisabledReasons.workspace ? "empty-state-workspace-shortcut-disabled-reason" : undefined}
+                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={sourceCompletionShortcutDisabled("workspace")}
+                onClick={() => applySourceCompletionPreset("workspace")}
+              >
+                Workspace-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.workspace}</span>
+              </button>
+              <button
+                type="button"
+                aria-label={`Show uncompleted rows from empty state (${sourceCompletionPresetCounts.none})`}
+                aria-describedby={sourceCompletionShortcutDisabledReasons.none ? "empty-state-none-shortcut-disabled-reason" : undefined}
+                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={sourceCompletionShortcutDisabled("none")}
+                onClick={() => applySourceCompletionPreset("none")}
+              >
+                Uncompleted <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.none}</span>
+              </button>
+              <button
+                type="button"
+                aria-label="Reset assignment row filters from empty state"
+                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={filtersAtDefault}
+                onClick={resetFilters}
+              >
+                Reset filters
+              </button>
+            </div>
+            {emptyStateShortcutDisabledReasonRows.length > 0 ? (
+              <div data-testid="empty-state-shortcut-disabled-reasons" className="grid gap-1 text-xs leading-5 text-[var(--muted)]">
+                {emptyStateShortcutDisabledReasonRows.map(([filter, reason]) => (
+                  <p key={filter} id={`empty-state-${filter}-shortcut-disabled-reason`}>
+                    {reason}
+                  </p>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : (
