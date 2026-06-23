@@ -1115,6 +1115,13 @@ class RunnerAssignmentStatusRowView(BaseModel):
     lastResult: str | None = None
     worktreePath: str | None = None
     worktreeState: str = "not-applicable"
+    handoffStatus: str = "not-applicable"
+    handoffNextCommand: str | None = None
+    handoffReadinessStatus: str | None = None
+    handoffReadinessCommand: str | None = None
+    handoffGeneratedAt: str | None = None
+    handoffSummary: str | None = None
+    handoffTakeoverStopLines: list[str] = Field(default_factory=list)
     deliveryState: str = "unknown"
     localEvidenceStatus: str = "available"
     evidencePath: str | None = None

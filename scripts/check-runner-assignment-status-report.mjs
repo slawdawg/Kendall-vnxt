@@ -19,6 +19,7 @@ const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts"
 const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
 const panelSource = readWorkspaceFile("apps/dashboard/src/components/runner-assignment-status-report-panel.tsx");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
+const currentRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
 
 const failures = [];
 
@@ -44,6 +45,11 @@ for (const serviceText of [
   "CODEX_WORKSPACE_ROOT",
   "get_safe_development_backlog_report",
   "GIT_OPTIONAL_LOCKS",
+  "dispatch_handoffs",
+  "handoffNextCommand",
+  "handoffReadinessStatus",
+  "handoffTakeoverStopLines",
+  "stop_lines",
   "worktree-outside-managed-root",
   "runner-assignment-status-report-v1",
   "No assignment action",
@@ -54,6 +60,12 @@ for (const serviceText of [
 assertCondition(dashboardClient.includes("getRunnerAssignmentStatusReport"), "Dashboard client must fetch runner assignment status", failures);
 assertCondition(controlsPage.includes("<RunnerAssignmentStatusReportPanel report={runnerAssignmentStatusReport} />"), "Controls page must render RunnerAssignmentStatusReportPanel", failures);
 assertCondition(reportShortcuts.includes('"GET /supervisor/runner-assignment-status-report": "#runner-assignment-status"'), "Report shortcuts must map runner assignment endpoint", failures);
+assertCondition(
+  currentRunbook.includes("Prepared lane handoffs must surface owner, branch, worktree/dirty state") &&
+    currentRunbook.includes("readiness status, next command, and takeover stop lines"),
+  "Current session runbook must describe prepared lane handoff evidence",
+  failures,
+);
 
 for (const panelText of [
   "Runner Assignment Status",
@@ -61,11 +73,29 @@ for (const panelText of [
   "No active runner assignments.",
   "Degraded evidence",
   "No assignment action",
+  "handoff: {row.handoffStatus}",
+  "Handoff next:",
+  "Handoff generated:",
+  "Handoff readiness:",
+  "Handoff stop:",
   "report.summary",
   "row.reasonCode",
   "row.warnings",
 ]) {
   assertCondition(panelSource.includes(panelText), `Runner assignment panel must render ${panelText}`, failures);
+}
+
+for (const contractText of [
+  "handoffStatus",
+  "handoffNextCommand",
+  "handoffReadinessStatus",
+  "handoffReadinessCommand",
+  "handoffGeneratedAt",
+  "handoffSummary",
+  "handoffTakeoverStopLines",
+]) {
+  assertCondition(contractSource.includes(contractText), `Shared contracts must include ${contractText}`, failures);
+  assertCondition(schemaSource.includes(contractText), `Supervisor schemas must include ${contractText}`, failures);
 }
 
 if (failures.length > 0) {

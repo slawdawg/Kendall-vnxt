@@ -2156,6 +2156,13 @@ export interface RunnerAssignmentStatusRowView {
   lastResult?: string | null;
   worktreePath?: string | null;
   worktreeState: "clean" | "dirty" | "missing" | "unreadable" | "not-applicable";
+  handoffStatus: "available" | "missing" | "not-applicable";
+  handoffNextCommand?: string | null;
+  handoffReadinessStatus?: string | null;
+  handoffReadinessCommand?: string | null;
+  handoffGeneratedAt?: string | null;
+  handoffSummary?: string | null;
+  handoffTakeoverStopLines: string[];
   deliveryState: "no-pr" | "draft-pr" | "pr-open" | "pr-closed-unmerged" | "merged" | "cleanup-ready" | "cleanup-partial" | "closed" | "unknown-pr-state" | "unknown";
   localEvidenceStatus: "available" | "missing" | "unreadable" | "malformed" | "skipped";
   evidencePath?: string | null;
@@ -2180,4 +2187,3 @@ export interface RunnerAssignmentStatusReportView {
   backlogCandidates: RunnerBacklogCandidateView[];
   degradedInputs: RunnerAssignmentDegradedInputView[];
 }
-
