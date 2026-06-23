@@ -2335,13 +2335,23 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "GET /supervisor/runner-assignment-status-report" in worker_queue_item["relatedReports"]
     assert "/controls#runner-assignment-status" in worker_queue_item["dashboardAnchors"]
     assert any("claim-next evidence can become starved" in evidence for evidence in worker_queue_item["evidence"])
-    assert any("claim-next should advance to lane-handoff-evidence-refresh" in evidence for evidence in worker_queue_item["evidence"])
+    assert any("claim-next should advance to report-catalog-shortcut-refresh" in evidence for evidence in worker_queue_item["evidence"])
     handoff_item = next(item for item in report["items"] if item["itemId"] == "lane-handoff-evidence-refresh")
-    assert handoff_item["nextLane"]["branchName"] == "codex/lane-handoff-evidence-refresh"
-    assert handoff_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "lane handoff evidence refresh"'
-    assert "pnpm run check:runbooks" in handoff_item["nextLane"]["verificationCommands"]
+    assert handoff_item["status"] == "closed"
+    assert handoff_item["recommendedSliceSize"] == "complete"
+    assert handoff_item["nextLane"] is None
+    assert "do not requeue lane-handoff-evidence-refresh" in handoff_item["nextAction"]
+    assert handoff_item["sourceEvidenceLabels"] == [
+        "3-27-safe-development-backlog-report.md",
+        "3-32-safe-development-backlog-drift-check.md",
+        "3-58-verification-handoff-checkpoints.md",
+        "3-60-safe-backlog-report-anchors.md",
+    ]
+    assert any("resume packet" in evidence for evidence in handoff_item["evidence"])
     assert "GET /supervisor/safe-development-backlog" in handoff_item["relatedReports"]
+    assert "GET /supervisor/runner-assignment-status-report" in handoff_item["relatedReports"]
     assert "/controls#safe-development-backlog" in handoff_item["dashboardAnchors"]
+    assert "/controls#runner-assignment-status" in handoff_item["dashboardAnchors"]
     shortcut_item = next(item for item in report["items"] if item["itemId"] == "report-catalog-shortcut-refresh")
     assert shortcut_item["nextLane"]["branchName"] == "codex/report-catalog-shortcut-refresh"
     assert shortcut_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"'

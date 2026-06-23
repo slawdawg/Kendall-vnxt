@@ -263,7 +263,7 @@ assertCondition(
     workerQueueItemSource.includes('recommendedSliceSize="complete"') &&
     !workerQueueItemSource.includes("nextLane=") &&
     workerQueueItemSource.includes("do not requeue worker-backlog-queue-refresh") &&
-    workerQueueItemSource.includes("claim-next should advance to lane-handoff-evidence-refresh"),
+    workerQueueItemSource.includes("claim-next should advance to report-catalog-shortcut-refresh"),
   "Worker backlog queue refresh must be closed completion evidence and must not expose a dispatchable next lane",
   failures,
 );
@@ -292,7 +292,9 @@ for (const safetyText of [
   "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
   "Do not start or modify another active lane while using this recommendation.",
   "Current claim-next evidence can become starved when all ready lanes are active or assigned to other runners.",
-  "After this completed item closes, claim-next should advance to lane-handoff-evidence-refresh instead of requeueing worker-backlog-queue-refresh.",
+  "After this completed item closes, claim-next should advance to report-catalog-shortcut-refresh once lane-handoff-evidence-refresh is closed.",
+  "Use this completed handoff evidence only; do not requeue lane-handoff-evidence-refresh.",
+  "The runner assignment status panel now groups owner, branch, worktree state, readiness, next command, and stop lines as a visible resume packet.",
   "Generated backlog items should link to explicit dashboard report anchors rather than falling back to the report catalog.",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
@@ -338,11 +340,11 @@ for (const browserText of [
   "Worker backlog queue refresh",
   "slice: complete",
   "do not requeue worker-backlog-queue-refresh",
-  "claim-next should advance to lane-handoff-evidence-refresh",
+  "claim-next should advance to report-catalog-shortcut-refresh",
   "claim-next evidence can become starved",
   "Lane handoff evidence refresh",
-  "branch: codex/lane-handoff-evidence-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "lane handoff evidence refresh"',
+  "visible resume packet",
+  "do not requeue lane-handoff-evidence-refresh",
   "Report catalog shortcut refresh",
   "branch: codex/report-catalog-shortcut-refresh",
   'start: node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"',
@@ -367,7 +369,11 @@ assertCondition(
     supervisorTests.includes('worker_queue_item["nextLane"] is None') &&
     supervisorTests.includes('"codex/report-catalog-shortcut-refresh"') &&
     supervisorTests.includes('node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"') &&
-    supervisorTests.includes("pnpm run check:reports"),
+    supervisorTests.includes("pnpm run check:reports") &&
+    supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
+    supervisorTests.includes('handoff_item["status"] == "closed"') &&
+    supervisorTests.includes('handoff_item["nextLane"] is None') &&
+    supervisorTests.includes("do not requeue lane-handoff-evidence-refresh"),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );

@@ -964,7 +964,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(workerQueueCard.getByText("slice: complete")).toBeVisible();
     await expect(workerQueueCard.getByText("claim-next evidence can become starved")).toBeVisible();
     await expect(workerQueueCard.getByText("do not requeue worker-backlog-queue-refresh")).toBeVisible();
-    await expect(workerQueueCard.getByText("claim-next should advance to lane-handoff-evidence-refresh")).toBeVisible();
+    await expect(workerQueueCard.getByText("claim-next should advance to report-catalog-shortcut-refresh")).toBeVisible();
     await expect(workerQueueCard.getByText("3-32-safe-development-backlog-drift-check.md")).toBeVisible();
     await expect(workerQueueCard.getByRole("link", { name: "GET /supervisor/runner-assignment-status-report" })).toHaveAttribute(
       "href",
@@ -973,9 +973,14 @@ test.describe("dashboard workflow coverage", () => {
     await expect(workerQueueCard.getByRole("link", { name: "/controls#runner-assignment-status" })).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "Lane handoff evidence refresh" })).toBeVisible();
     const handoffCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Lane handoff evidence refresh" }) });
-    await expect(handoffCard.getByText("branch: codex/lane-handoff-evidence-refresh")).toBeVisible();
-    await expect(handoffCard.getByText('start: node ./scripts/codex-workspace.mjs start "lane handoff evidence refresh"')).toBeVisible();
-    await expect(handoffCard.getByText("pnpm run check:runbooks")).toBeVisible();
+    await expect(handoffCard.getByText("closed", { exact: true })).toBeVisible();
+    await expect(handoffCard.getByText("slice: complete")).toBeVisible();
+    await expect(handoffCard.getByText("visible resume packet")).toBeVisible();
+    await expect(handoffCard.getByText("do not requeue lane-handoff-evidence-refresh")).toBeVisible();
+    await expect(handoffCard.getByRole("link", { name: "GET /supervisor/runner-assignment-status-report" })).toHaveAttribute(
+      "href",
+      "/controls#runner-assignment-status",
+    );
     await expect(safeBacklogPanel.getByRole("heading", { name: "Report catalog shortcut refresh" })).toBeVisible();
     const shortcutCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Report catalog shortcut refresh" }) });
     await expect(shortcutCard.getByText("branch: codex/report-catalog-shortcut-refresh")).toBeVisible();

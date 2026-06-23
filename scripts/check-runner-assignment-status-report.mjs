@@ -61,7 +61,7 @@ assertCondition(dashboardClient.includes("getRunnerAssignmentStatusReport"), "Da
 assertCondition(controlsPage.includes("<RunnerAssignmentStatusReportPanel report={runnerAssignmentStatusReport} />"), "Controls page must render RunnerAssignmentStatusReportPanel", failures);
 assertCondition(reportShortcuts.includes('"GET /supervisor/runner-assignment-status-report": "#runner-assignment-status"'), "Report shortcuts must map runner assignment endpoint", failures);
 assertCondition(
-  currentRunbook.includes("Prepared lane handoffs must surface owner, branch, worktree/dirty state") &&
+  currentRunbook.includes("Prepared lane handoffs must surface a resume packet with owner, branch") &&
     currentRunbook.includes("readiness status, next command, and takeover stop lines"),
   "Current session runbook must describe prepared lane handoff evidence",
   failures,
@@ -78,6 +78,15 @@ for (const panelText of [
   "Handoff generated:",
   "Handoff readiness:",
   "Handoff stop:",
+  "Resume packet",
+  "Owner:",
+  "Branch:",
+  "Worktree state:",
+  "Next command:",
+  "Generated:",
+  "Readiness:",
+  "Summary:",
+  "Stop:",
   "report.summary",
   "row.reasonCode",
   "row.warnings",
