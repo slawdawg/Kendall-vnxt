@@ -18,15 +18,25 @@ const apiSource = readWorkspaceFile("services/supervisor/src/supervisor/api/main
 const dashboardClient = readWorkspaceFile("apps/dashboard/src/lib/supervisor.ts");
 const controlsPage = readWorkspaceFile("apps/dashboard/src/app/controls/page.tsx");
 const panelSource = readWorkspaceFile("apps/dashboard/src/components/runner-assignment-status-report-panel.tsx");
+const auditJsonModule = readWorkspaceFile("apps/dashboard/src/lib/runner-handoff-audit-json.mjs");
+const auditJsonDeclaration = readWorkspaceFile("apps/dashboard/src/lib/runner-handoff-audit-json.d.mts");
 const reportShortcuts = readWorkspaceFile("apps/dashboard/src/lib/report-shortcuts.ts");
 const currentRunbook = readWorkspaceFile("docs/workflows/current-session-runbook.md");
 const controlsSpec = readWorkspaceFile("tests/e2e/dashboard.spec.ts");
+const auditJsonValidationSpec = readWorkspaceFile("tests/runner-handoff-audit-json-validation.test.mjs");
 
 const failures = [];
 
 assertCondition(packageJson.scripts?.["check:runner-assignment-status"] === "node ./scripts/check-runner-assignment-status-report.mjs", "package.json must define check:runner-assignment-status", failures);
+assertCondition(
+  packageJson.scripts?.["test:runner-handoff-audit-json-validation"] === "node --test tests/runner-handoff-audit-json-validation.test.mjs",
+  "package.json must define test:runner-handoff-audit-json-validation",
+  failures,
+);
 assertCondition(packageJson.scripts?.["check:static"]?.includes("pnpm run check:runner-assignment-status"), "check:static must include check:runner-assignment-status", failures);
+assertCondition(packageJson.scripts?.["check:static"]?.includes("pnpm run test:runner-handoff-audit-json-validation"), "check:static must include test:runner-handoff-audit-json-validation", failures);
 assertCondition(packageJson.scripts?.check?.includes("pnpm run check:runner-assignment-status"), "check must include check:runner-assignment-status", failures);
+assertCondition(packageJson.scripts?.check?.includes("pnpm run test:runner-handoff-audit-json-validation"), "check must include test:runner-handoff-audit-json-validation", failures);
 
 for (const typeName of [
   "RunnerAssignmentStatusReportView",
@@ -129,12 +139,9 @@ for (const panelText of [
   "auditQuery",
   "auditEvidenceFilter",
   "auditPayloadFilter",
-  "AUDIT_JSON_SCHEMA_ID",
   "AUDIT_JSON_SCHEMA_VERSION",
-  "AUDIT_JSON_REQUIRED_TOP_LEVEL_FIELDS",
   "AUDIT_JSON_RETAINED_ENTRY_FIELDS",
-  "isRecord",
-  "missingObjectFields",
+  "../lib/runner-handoff-audit-json.mjs",
   "auditExportText",
   "auditExportFilename",
   "auditExportJson",
@@ -160,22 +167,8 @@ for (const panelText of [
   "filename:",
   "json filename:",
   "Filtered audit JSON export",
-  "kendall.runner-handoff-audit.filtered-export.v1",
-  "generated-worker-handoff-audit-metadata-only",
-  "requiredTopLevelFields",
-  "retainedEntryFields",
   "JSON validation:",
   "JSON validation failed:",
-  "missing top-level fields:",
-  "unexpected top-level fields:",
-  "has unexpected fields:",
-  "schema.requiredTopLevelFields must match exactly",
-  "schema.retainedEntryFields must match exactly",
-  "entries.total must be a number",
-  "filters.evidence is invalid",
-  "retentionPolicy is invalid",
-  "payloadRetention is invalid",
-  "auditTrail[",
   "No filtered audit entries to export.",
   "No audit entries match the current query.",
   "Readiness evidence:",
@@ -209,6 +202,84 @@ for (const panelText of [
   "report.dispatcherContinuity.queueProofRows.map",
 ]) {
   assertCondition(panelSource.includes(panelText), `Runner assignment panel must render ${panelText}`, failures);
+}
+
+for (const moduleText of [
+  "AUDIT_JSON_SCHEMA_ID",
+  "AUDIT_JSON_SCHEMA_VERSION",
+  "AUDIT_JSON_REQUIRED_TOP_LEVEL_FIELDS",
+  "AUDIT_JSON_RETAINED_ENTRY_FIELDS",
+  "kendall.runner-handoff-audit.filtered-export.v1",
+  "generated-worker-handoff-audit-metadata-only",
+  "requiredTopLevelFields",
+  "retainedEntryFields",
+  "isRecord",
+  "missingObjectFields",
+  "unexpectedObjectFields",
+  "auditExportJson",
+  "auditJsonValidationMessages",
+  "invalid JSON",
+  "missing top-level fields:",
+  "unexpected top-level fields:",
+  "has unexpected fields:",
+  "schema.requiredTopLevelFields must match exactly",
+  "schema.retainedEntryFields must match exactly",
+  "entries.total must be a number",
+  "entries.total must be greater than or equal to entries.filtered",
+  "filters.evidence is invalid",
+  "filters.payload is invalid",
+  "retention.policy must be metadata-only",
+  "retention.payload must be not-retained",
+  "retentionPolicy is invalid",
+  "payloadRetention is invalid",
+  "auditTrail[",
+  "raw prompts",
+  "completions",
+  "provider payloads",
+  "reasoning traces",
+  "secrets",
+  "source copies",
+]) {
+  assertCondition(auditJsonModule.includes(moduleText), `Runner handoff audit JSON module must include ${moduleText}`, failures);
+}
+
+for (const declarationText of [
+  "RunnerHandoffAuditEntryView",
+  "AUDIT_JSON_SCHEMA_ID",
+  "AUDIT_JSON_REQUIRED_TOP_LEVEL_FIELDS",
+  "AUDIT_JSON_RETAINED_ENTRY_FIELDS",
+  "auditExportJson",
+  "auditJsonValidationMessages",
+]) {
+  assertCondition(auditJsonDeclaration.includes(declarationText), `Runner handoff audit JSON declaration must include ${declarationText}`, failures);
+}
+
+for (const fixtureText of [
+  "validAuditEntry",
+  "validExportPayload",
+  "malformed JSON",
+  "{not json",
+  "missing schema fields",
+  "missing schema metadata fields",
+  "unexpected top-level fields",
+  "unexpected audit entry fields",
+  "missing retained audit entry fields",
+  "schema retained field drift",
+  "invalid retention domains",
+  "invalid payload retention domains",
+  "invalid filters",
+  "inconsistent entry totals",
+  "AUDIT_JSON_REQUIRED_TOP_LEVEL_FIELDS",
+  "AUDIT_JSON_RETAINED_ENTRY_FIELDS",
+  "Object.keys(payload.auditTrail[0])",
+  "Object.hasOwn(payload.auditTrail[0], \"providerPayload\")",
+  "Object.hasOwn(payload.auditTrail[0], \"rawPrompt\")",
+  "retention.policy must be metadata-only",
+  "auditTrail[0].retentionPolicy is invalid",
+  "filters.evidence is invalid",
+  "entries.filtered must match auditTrail length",
+]) {
+  assertCondition(auditJsonValidationSpec.includes(fixtureText), `Runner handoff audit JSON fixture test must include ${fixtureText}`, failures);
 }
 
 for (const contractText of [
