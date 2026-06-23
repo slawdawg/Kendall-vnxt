@@ -813,7 +813,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
               disabled={sourceCompletionShortcutDisabled("assignment", sourceCompletionPresetCounts.assignment)}
               onClick={() => applySourceCompletionPreset("assignment")}
             >
-              Assignment-backed
+              Assignment-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.assignment}</span>
             </button>
             <button
               type="button"
@@ -822,7 +822,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
               disabled={sourceCompletionShortcutDisabled("workspace", sourceCompletionPresetCounts.workspace)}
               onClick={() => applySourceCompletionPreset("workspace")}
             >
-              Workspace-backed
+              Workspace-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.workspace}</span>
             </button>
             <button
               type="button"
@@ -831,7 +831,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
               disabled={sourceCompletionShortcutDisabled("none", sourceCompletionPresetCounts.none)}
               onClick={() => applySourceCompletionPreset("none")}
             >
-              Uncompleted
+              Uncompleted <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.none}</span>
             </button>
             <button
               type="button"
