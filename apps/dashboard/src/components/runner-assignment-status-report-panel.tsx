@@ -260,6 +260,19 @@ function Row({ row, source }: { row: RunnerAssignmentStatusRowView; source: Excl
         <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">recovery: {row.handoffRecoveryAction}</span>
       </div>
       <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--accent)]">{row.nextSafeAction}</p>
+      {row.sourceCompletionEvidence ? (
+        <div data-testid="source-completion-evidence" className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+          <p className="font-semibold text-[var(--foreground)]">Source completion evidence</p>
+          <p>Kind: {row.sourceCompletionEvidence.evidenceKind}</p>
+          <p className="break-all">Record: {row.sourceCompletionEvidence.recordId}</p>
+          <p className="break-all">Source backlog item: {row.sourceCompletionEvidence.sourceBacklogItemId}</p>
+          {row.sourceCompletionEvidence.branch ? <p className="break-all">Branch: {row.sourceCompletionEvidence.branch}</p> : null}
+          {row.sourceCompletionEvidence.taskId ? <p className="break-all">Task: {row.sourceCompletionEvidence.taskId}</p> : null}
+          {row.sourceCompletionEvidence.sourceAssignmentId ? <p className="break-all">Source assignment: {row.sourceCompletionEvidence.sourceAssignmentId}</p> : null}
+          {row.sourceCompletionEvidence.evidencePath ? <p className="break-all">Evidence path: {row.sourceCompletionEvidence.evidencePath}</p> : null}
+          <p className="break-all">Summary: {row.sourceCompletionEvidence.evidenceSummary}</p>
+        </div>
+      ) : null}
       {row.handoffRecoveryAction !== "no-action" ? (
         <p className="mt-2 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
           Recovery: {row.handoffRecoverySummary}

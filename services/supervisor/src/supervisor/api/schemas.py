@@ -1145,6 +1145,17 @@ class RunnerHandoffAuditEntryView(BaseModel):
     evidenceSummary: str
 
 
+class RunnerSourceCompletionEvidenceView(BaseModel):
+    evidenceKind: Literal["assignment", "workspace"]
+    recordId: str
+    sourceBacklogItemId: str
+    branch: str | None = None
+    taskId: str | None = None
+    sourceAssignmentId: str | None = None
+    evidencePath: str | None = None
+    evidenceSummary: str
+
+
 class RunnerAssignmentStatusRowView(BaseModel):
     id: str
     title: str
@@ -1194,6 +1205,7 @@ class RunnerAssignmentStatusRowView(BaseModel):
     deliveryState: str = "unknown"
     localEvidenceStatus: str = "available"
     evidencePath: str | None = None
+    sourceCompletionEvidence: RunnerSourceCompletionEvidenceView | None = None
 
 
 RunnerWorkspaceAssignmentView = RunnerAssignmentStatusRowView

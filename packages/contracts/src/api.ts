@@ -2185,6 +2185,17 @@ export interface RunnerHandoffAuditEntryView {
   evidenceSummary: string;
 }
 
+export interface RunnerSourceCompletionEvidenceView {
+  evidenceKind: "assignment" | "workspace";
+  recordId: string;
+  sourceBacklogItemId: string;
+  branch?: string | null;
+  taskId?: string | null;
+  sourceAssignmentId?: string | null;
+  evidencePath?: string | null;
+  evidenceSummary: string;
+}
+
 export interface RunnerAssignmentStatusRowView {
   id: string;
   title: string;
@@ -2233,6 +2244,7 @@ export interface RunnerAssignmentStatusRowView {
   deliveryState: "no-pr" | "draft-pr" | "pr-open" | "pr-closed-unmerged" | "merged" | "cleanup-ready" | "cleanup-partial" | "closed" | "unknown-pr-state" | "unknown";
   localEvidenceStatus: "available" | "missing" | "unreadable" | "malformed" | "skipped";
   evidencePath?: string | null;
+  sourceCompletionEvidence?: RunnerSourceCompletionEvidenceView | null;
 }
 
 export type RunnerWorkspaceAssignmentView = RunnerAssignmentStatusRowView;
