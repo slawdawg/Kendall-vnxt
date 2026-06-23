@@ -147,6 +147,7 @@ for (const itemId of [
   "dispatcher-queue-handoff-badges-refresh",
   "dispatcher-queue-handoff-status-refresh",
   "dispatcher-queue-handoff-lifecycle-refresh",
+  "dispatcher-queue-handoff-recovery-refresh",
   "authority-blocked-work",
 ]) {
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Safe backlog service must include item ${itemId}`, failures);
@@ -296,7 +297,7 @@ for (const safetyText of [
   'lane_slug="assignment-report-queue-proof-refresh"',
   'lane_slug="dispatcher-queue-state-fixtures-refresh"',
   'lane_slug="dispatcher-queue-handoff-badges-refresh"',
-  'lane_slug="dispatcher-queue-handoff-lifecycle-refresh"',
+  'lane_slug="dispatcher-queue-handoff-recovery-refresh"',
   "complete",
   "Use this completed item as evidence only; do not requeue it as a new lane.",
   "Use this completed queue refresh as evidence only; do not requeue worker-backlog-queue-refresh.",
@@ -312,7 +313,8 @@ for (const safetyText of [
   "Use this completed dispatcher queue fixture evidence only; do not requeue dispatcher-queue-state-fixtures-refresh.",
   "Use this completed dispatcher queue handoff badge evidence only; do not requeue dispatcher-queue-handoff-badges-refresh.",
   "Use this completed dispatcher queue handoff status evidence only; do not requeue dispatcher-queue-handoff-status-refresh.",
-  "Refresh dispatcher queue handoff lifecycle evidence while keeping generated-worker evidence read-only and source-owned.",
+  "Use this completed dispatcher queue handoff lifecycle evidence only; do not requeue dispatcher-queue-handoff-lifecycle-refresh.",
+  "Refresh dispatcher queue handoff recovery evidence while keeping generated-worker evidence read-only and source-owned.",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
@@ -341,8 +343,8 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/dispatcher-queue-handoff-lifecycle-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff lifecycle refresh"',
+  "branch: codex/dispatcher-queue-handoff-recovery-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff recovery refresh"',
   "pnpm run check:runner-assignment-status",
   "pnpm run check:safe-backlog",
   "Related report links",
@@ -375,8 +377,10 @@ for (const browserText of [
   "Dispatcher queue handoff status refresh",
   "do not requeue dispatcher-queue-handoff-status-refresh",
   "Dispatcher queue handoff lifecycle refresh",
-  "branch: codex/dispatcher-queue-handoff-lifecycle-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff lifecycle refresh"',
+  "do not requeue dispatcher-queue-handoff-lifecycle-refresh",
+  "Dispatcher queue handoff recovery refresh",
+  "branch: codex/dispatcher-queue-handoff-recovery-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff recovery refresh"',
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
   "Do not start or modify another active lane while using this recommendation.",
@@ -396,8 +400,8 @@ assertCondition(
     supervisorTests.includes('github_item["nextLane"] is None') &&
     supervisorTests.includes('worker_queue_item["status"] == "closed"') &&
     supervisorTests.includes('worker_queue_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-queue-handoff-lifecycle-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher queue handoff lifecycle refresh"') &&
+    supervisorTests.includes('"codex/dispatcher-queue-handoff-recovery-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher queue handoff recovery refresh"') &&
     supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
@@ -415,7 +419,9 @@ assertCondition(
     supervisorTests.includes('handoff_badges_item["nextLane"] is None') &&
     supervisorTests.includes('handoff_status_item["status"] == "closed"') &&
     supervisorTests.includes('handoff_status_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-queue-handoff-lifecycle-refresh"'),
+    supervisorTests.includes('handoff_lifecycle_item["status"] == "closed"') &&
+    supervisorTests.includes('handoff_lifecycle_item["nextLane"] is None') &&
+    supervisorTests.includes('"codex/dispatcher-queue-handoff-recovery-refresh"'),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );
