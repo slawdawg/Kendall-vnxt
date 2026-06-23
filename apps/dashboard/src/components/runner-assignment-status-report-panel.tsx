@@ -100,6 +100,16 @@ function auditExportText(
   ].join("\n");
 }
 
+function auditExportFilename(row: RunnerAssignmentStatusRowView, entries: RunnerHandoffAuditEntryView[]): string {
+  const source = entries[0]?.lane ?? row.backlogItemId ?? row.id;
+  const safeSource = source
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `handoff-audit-${safeSource || "filtered"}-${entries.length}-of-${row.handoffAuditTrail?.length ?? 0}.txt`;
+}
+
 function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
   const hasAvailableHandoff = row.handoffStatus === "available";
   const countEntries = handoffCountEntries(row);
@@ -125,6 +135,10 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
       }),
     [auditEntries.length, auditEvidenceFilter, auditPayloadFilter, auditQuery, filteredAuditEntries],
   );
+  const filteredAuditExportFilename = useMemo(
+    () => auditExportFilename(row, filteredAuditEntries),
+    [filteredAuditEntries, row],
+  );
 
   async function copyAuditExportSummary() {
     setAuditExportStatus(`Copy prepared for ${filteredAuditEntries.length} audit ${filteredAuditEntries.length === 1 ? "entry" : "entries"}.`);
@@ -135,6 +149,19 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
     } catch {
       setAuditExportStatus("Copy unavailable; select summary text.");
     }
+  }
+
+  function downloadAuditExportSummary() {
+    setAuditExportStatus(`Download prepared for ${filteredAuditEntries.length} audit ${filteredAuditEntries.length === 1 ? "entry" : "entries"}.`);
+    if (typeof window === "undefined" || typeof document === "undefined" || typeof Blob === "undefined") return;
+    const url = window.URL.createObjectURL(new Blob([filteredAuditExportText], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filteredAuditExportFilename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
   }
 
   return (
@@ -314,7 +341,15 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
               >
                 Copy summary
               </button>
+              <button
+                type="button"
+                className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-2 font-mono text-[11px] text-[var(--foreground)]"
+                onClick={downloadAuditExportSummary}
+              >
+                Download .txt
+              </button>
             </div>
+            <p className="mt-1 break-all font-mono text-[10px] text-[var(--muted)]">filename: {filteredAuditExportFilename}</p>
             <textarea
               className="mt-2 min-h-32 w-full resize-y rounded-[0.5rem] border bg-[var(--surface)] p-2 font-mono text-[11px] leading-5 text-[var(--foreground)]"
               aria-label="Filtered audit export"
