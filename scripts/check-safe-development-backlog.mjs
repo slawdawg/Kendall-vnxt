@@ -157,6 +157,8 @@ for (const itemId of [
   "dispatcher-queue-handoff-audit-json-schema-refresh",
   "dispatcher-queue-handoff-audit-json-validation-refresh",
   "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+  "dispatcher-cleanup-assignment-closure-refresh",
+  "dispatcher-cleanup-assignment-report-refresh",
   "authority-blocked-work",
 ]) {
   assertCondition(serviceSource.includes(`itemId="${itemId}"`), `Safe backlog service must include item ${itemId}`, failures);
@@ -315,6 +317,8 @@ for (const safetyText of [
   'lane_slug="dispatcher-queue-handoff-audit-json-schema-refresh"',
   'lane_slug="dispatcher-queue-handoff-audit-json-validation-refresh"',
   'lane_slug="dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"',
+  'lane_slug="dispatcher-cleanup-assignment-closure-refresh"',
+  'lane_slug="dispatcher-cleanup-assignment-report-refresh"',
   "complete",
   "Use this completed item as evidence only; do not requeue it as a new lane.",
   "Use this completed queue refresh as evidence only; do not requeue worker-backlog-queue-refresh.",
@@ -340,7 +344,9 @@ for (const safetyText of [
   "Use this completed dispatcher queue handoff audit JSON evidence only; do not requeue dispatcher-queue-handoff-audit-json-refresh.",
   "Use this completed dispatcher queue handoff audit JSON schema evidence only; do not requeue dispatcher-queue-handoff-audit-json-schema-refresh.",
   "Use this completed dispatcher queue handoff audit JSON validation evidence only; do not requeue dispatcher-queue-handoff-audit-json-validation-refresh.",
-  "Refresh dispatcher queue handoff audit JSON validation fixtures while keeping generated-worker evidence metadata-only and source-owned.",
+  "Use this completed dispatcher queue handoff audit JSON validation fixture evidence only; do not requeue dispatcher-queue-handoff-audit-json-validation-fixtures-refresh.",
+  "Use this completed dispatcher cleanup assignment closure evidence only; do not requeue dispatcher-cleanup-assignment-closure-refresh.",
+  "Refresh dispatcher cleanup assignment report evidence so closed assignments stay visible as closed evidence and cannot mask the next ready lane.",
 ]) {
   assertCondition(serviceSource.includes(safetyText), `Safe backlog service must retain safety text: ${safetyText}`, failures);
 }
@@ -369,8 +375,8 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"',
+  "branch: codex/dispatcher-cleanup-assignment-report-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"',
   "pnpm run check:runner-assignment-status",
   "pnpm run check:safe-backlog",
   "Related report links",
@@ -423,8 +429,12 @@ for (const browserText of [
   "Dispatcher queue handoff audit JSON validation refresh",
   "do not requeue dispatcher-queue-handoff-audit-json-validation-refresh",
   "Dispatcher queue handoff audit JSON validation fixtures refresh",
-  "branch: codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"',
+  "do not requeue dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+  "Dispatcher cleanup assignment closure refresh",
+  "do not requeue dispatcher-cleanup-assignment-closure-refresh",
+  "Dispatcher cleanup assignment report refresh",
+  "branch: codex/dispatcher-cleanup-assignment-report-refresh",
+  'start: node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"',
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
   "Do not start or modify another active lane while using this recommendation.",
@@ -444,8 +454,8 @@ assertCondition(
     supervisorTests.includes('github_item["nextLane"] is None') &&
     supervisorTests.includes('worker_queue_item["status"] == "closed"') &&
     supervisorTests.includes('worker_queue_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"') &&
+    supervisorTests.includes('"codex/dispatcher-cleanup-assignment-report-refresh"') &&
+    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"') &&
     supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     supervisorTests.includes("claim-next should advance to report-catalog-shortcut-refresh") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
@@ -473,7 +483,11 @@ assertCondition(
     supervisorTests.includes('handoff_json_schema_item["nextLane"] is None') &&
     supervisorTests.includes('handoff_json_validation_item["status"] == "closed"') &&
     supervisorTests.includes('handoff_json_validation_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"'),
+    supervisorTests.includes('handoff_json_validation_fixtures_item["status"] == "closed"') &&
+    supervisorTests.includes('handoff_json_validation_fixtures_item["nextLane"] is None') &&
+    supervisorTests.includes('dispatcher_cleanup_assignment_item["status"] == "closed"') &&
+    supervisorTests.includes('dispatcher_cleanup_assignment_item["nextLane"] is None') &&
+    supervisorTests.includes('"codex/dispatcher-cleanup-assignment-report-refresh"'),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );

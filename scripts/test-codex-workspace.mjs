@@ -531,7 +531,9 @@ try {
     assert(result.stdout.includes("- dispatcher-queue-handoff-audit-json-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-queue-handoff-audit-json-schema-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-queue-handoff-audit-json-validation-refresh | closed"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- dispatcher-queue-handoff-audit-json-validation-fixtures-refresh | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-queue-handoff-audit-json-validation-fixtures-refresh | closed"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-cleanup-assignment-closure-refresh | closed"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-cleanup-assignment-report-refresh | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -545,7 +547,7 @@ try {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
     const expected = expectedClaimCandidate();
-    seedClosedSafeBacklogManifests(stateRoot);
+    seedGeneratedSuccessorPrerequisites(stateRoot);
     if (branchExists(rootDir, expected.branch)) {
       seedUnownedSafeBacklogWorkspace(stateRoot, expected.slug);
     }
@@ -567,7 +569,7 @@ try {
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
-  test("claim-next advances to dispatcher queue handoff audit JSON validation fixtures lane after completed validation refresh", () => {
+  test("claim-next advances to dispatcher cleanup assignment report lane after completed cleanup closure", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-generated-queue-"));
     try {
       const assignmentsDir = join(queueStateRoot, "assignments");
@@ -596,8 +598,8 @@ try {
       const after = taskSnapshot(assignmentsDir);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("claim candidate dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"), result.stdout || result.stderr);
-      assert(result.stdout.includes("branch codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate dispatcher-cleanup-assignment-report-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("branch codex/dispatcher-cleanup-assignment-report-refresh"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
       assert(result.stdout.includes("- worker-backlog-queue-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- lane-handoff-evidence-refresh | closed"), result.stdout || result.stderr);
@@ -630,7 +632,7 @@ try {
       if (branchBefore) {
         seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug);
       } else {
-        seedClosedSafeBacklogManifests(claimStateRoot);
+        seedGeneratedSuccessorPrerequisites(claimStateRoot);
       }
       const beforeTasks = taskSnapshot(tasksDir);
 
@@ -675,7 +677,7 @@ try {
       if (branchExists(rootDir, expected.branch)) {
         seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
       } else {
-        seedClosedSafeBacklogManifests(claimStateRoot);
+        seedGeneratedSuccessorPrerequisites(claimStateRoot);
       }
       const first = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       assert(first.code === 0, first.stderr || first.stdout);
@@ -685,7 +687,7 @@ try {
 
       const assignmentsDir = join(claimStateRoot, "assignments");
       const assignmentFiles = readdirSync(assignmentsDir).filter((name) => name.endsWith(".json"));
-      assert(assignmentFiles.length === 1, `expected one assignment file, saw ${assignmentFiles.join(", ")}`);
+      assert(assignmentFiles.includes(`${expected.slug}.json`), `expected assignment file for ${expected.slug}, saw ${assignmentFiles.join(", ")}`);
       const assignment = JSON.parse(
         readFileSync(join(assignmentsDir, `${expected.slug}.json`), "utf8"),
       );
@@ -706,7 +708,7 @@ try {
       if (branchExists(rootDir, expected.branch)) {
         seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
       } else {
-        seedClosedSafeBacklogManifests(claimStateRoot);
+        seedGeneratedSuccessorPrerequisites(claimStateRoot);
         const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
         assert(claim.code === 0, claim.stderr || claim.stdout);
       }
@@ -734,7 +736,7 @@ try {
       if (branchExists(rootDir, expected.branch)) {
         seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
       } else {
-        seedClosedSafeBacklogManifests(claimStateRoot);
+        seedGeneratedSuccessorPrerequisites(claimStateRoot);
         const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
         assert(claim.code === 0, claim.stderr || claim.stdout);
       }
@@ -818,7 +820,7 @@ try {
       if (branchExists(rootDir, expected.branch)) {
         seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-b");
       } else {
-        seedClosedSafeBacklogManifests(claimStateRoot);
+        seedGeneratedSuccessorPrerequisites(claimStateRoot, "runner-a");
         const claim = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
         assert(claim.code === 0, claim.stderr || claim.stdout);
       }
@@ -1094,10 +1096,12 @@ try {
       if (branchExists(rootDir, expected.branch)) {
         seedUnownedSafeBacklogWorkspace(dispatchStateRoot, expected.slug);
       } else {
-        seedClosedSafeBacklogManifests(dispatchStateRoot);
+        seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
       }
       const tasksDir = join(dispatchStateRoot, "tasks");
+      const assignmentsDir = join(dispatchStateRoot, "assignments");
       const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
       const result = run([
         "dispatch-next",
         "--dry-run",
@@ -1119,7 +1123,7 @@ try {
       assert(result.stdout.includes("- queue states "), result.stdout || result.stderr);
       assert(result.stdout.includes("blocked_authority=1"), result.stdout || result.stderr);
       assert(result.stdout.includes("closed="), result.stdout || result.stderr);
-      assert(!existsSync(join(dispatchStateRoot, "assignments")), "dispatch dry-run created assignments");
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch dry-run mutated assignments");
       assert(taskSnapshot(tasksDir) === beforeTasks, "dispatch dry-run mutated manifests");
     } finally {
       rmSync(dispatchStateRoot, { recursive: true, force: true });
@@ -1141,6 +1145,7 @@ try {
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "dispatch-workspace.json");
       const expected = expectedClaimCandidate();
+      seedClaimedSafeBacklogAssignment(dispatchStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
@@ -1185,7 +1190,7 @@ try {
       assert(latestHandoff.candidate_state_counts.blocked_authority >= 1, "dispatch handoff blocked count missing");
       assert(latestHandoff.candidate_state_counts.closed >= 1, "dispatch handoff closed count missing");
       assert(manifest.events.some((event) => event.type === "dispatch_handoff"), "dispatch event missing");
-      assert(!existsSync(join(dispatchStateRoot, "assignments")), "workspace dispatch created assignment metadata");
+      assert(!existsSync(join(dispatchStateRoot, "assignments", `${expected.slug}.json`)), "workspace dispatch created assignment metadata");
     } finally {
       rmSync(dispatchStateRoot, { recursive: true, force: true });
       rmSync(worktreePath, { recursive: true, force: true });
@@ -1228,6 +1233,8 @@ try {
         "codex/dispatcher-queue-handoff-audit-json-schema-refresh",
         "codex/dispatcher-queue-handoff-audit-json-validation-refresh",
         "codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+        "codex/dispatcher-cleanup-assignment-closure-refresh",
+        "codex/dispatcher-cleanup-assignment-report-refresh",
       ];
       const manifestPaths = blockedBranches.map((branchName, index) => {
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
@@ -1276,7 +1283,7 @@ try {
       if (branchExists(rootDir, expected.branch)) {
         seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-b");
       } else {
-        seedClosedSafeBacklogManifests(claimStateRoot);
+        seedGeneratedSuccessorPrerequisites(claimStateRoot, "runner-a");
         const first = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
         assert(first.code === 0, first.stderr || first.stdout);
       }
@@ -1302,7 +1309,8 @@ try {
         "dispatcher-queue-handoff-audit-json-refresh",
         "dispatcher-queue-handoff-audit-json-schema-refresh",
         "dispatcher-queue-handoff-audit-json-validation-refresh",
-        "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+        "dispatcher-cleanup-assignment-closure-refresh",
+        "dispatcher-cleanup-assignment-report-refresh",
       ]) {
         writeFileSync(
           join(assignmentsDir, `${laneSlug}.json`),
@@ -1338,7 +1346,8 @@ try {
         "dispatcher-queue-handoff-audit-json-refresh",
         "dispatcher-queue-handoff-audit-json-schema-refresh",
         "dispatcher-queue-handoff-audit-json-validation-refresh",
-        "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+        "dispatcher-cleanup-assignment-closure-refresh",
+        "dispatcher-cleanup-assignment-report-refresh",
       ].map((laneSlug) => join(assignmentsDir, `${laneSlug}.json`));
       const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
@@ -1361,6 +1370,7 @@ try {
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
       const expected = expectedClaimCandidate();
+      seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
@@ -1396,6 +1406,7 @@ try {
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
       const expected = expectedClaimCandidate();
+      seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
@@ -1415,7 +1426,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("claimed existing unowned workspace unowned-safe-backlog"), result.stdout || result.stderr);
-      assert(!existsSync(join(claimStateRoot, "assignments")), "manifest claim should not create assignment metadata");
+      assert(!existsSync(join(claimStateRoot, "assignments", `${expected.slug}.json`)), "manifest claim should not create assignment metadata");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       assert(manifest.owner === "runner-a", "claim-next --apply did not claim the unowned manifest");
       assert(Object.hasOwn(manifest, "owner_thread_id"), "owner thread id evidence missing");
@@ -1682,6 +1693,8 @@ try {
         "dispatcher-queue-handoff-audit-json-schema-refresh",
         "dispatcher-queue-handoff-audit-json-validation-refresh",
         "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+        "dispatcher-cleanup-assignment-closure-refresh",
+        "dispatcher-cleanup-assignment-report-refresh",
       ].map((laneSlug) => {
         const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
         writeFileSync(
@@ -1818,6 +1831,12 @@ try {
       assert(manifest.worktree_removed_at, "manifest missing worktree removal timestamp");
       assert(manifest.local_branch_deleted_at, "manifest missing local branch deletion timestamp");
       assert(manifest.remote_branch_deleted_at, "manifest missing remote branch deletion timestamp");
+      assert(manifest.source_assignment_closed_at, "manifest missing source assignment closure timestamp");
+      const assignment = readJson(join(fixture.stateRoot, "assignments", "cleanup-assignment.json"));
+      assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
+      assert(assignment.phase === "closed", `assignment phase is ${assignment.phase}`);
+      assert(assignment.closed_at, "assignment missing closed_at");
+      assert(assignment.last_result === "closed after cleanup of cleanup-task", `assignment last_result is ${assignment.last_result}`);
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }
@@ -2027,8 +2046,30 @@ function createMergedCleanupFixture() {
       pr_url: "https://example.test/pull/123",
       pr_number: 123,
       pr_delivery_head_sha: branchHead,
+      source_assignment_id: "cleanup-assignment",
       owner: "runner-a",
       events: [],
+    }, null, 2)}\n`,
+  );
+  mkdirSync(join(stateRootFixture, "assignments"), { recursive: true });
+  writeFileSync(
+    join(stateRootFixture, "assignments", "cleanup-assignment.json"),
+    `${JSON.stringify({
+      schema_version: 1,
+      assignment_id: "cleanup-assignment",
+      task_id: "cleanup-task",
+      lane_slug: "cleanup-task",
+      branch,
+      worktree_path: worktree,
+      status: "claimed",
+      owner: "runner-a",
+      phase: "handoff",
+      runner_kind: "codex-cli",
+      events: [],
+      source_backlog_item: {
+        item_id: "cleanup-task",
+        branch_name: branch,
+      },
     }, null, 2)}\n`,
   );
 
@@ -2187,9 +2228,9 @@ function remoteBranchExists(cwd, branch) {
 
 function expectedClaimCandidate() {
   return {
-    slug: "read-only-evidence-polish",
-    title: "read only evidence polish",
-    branch: "codex/read-only-evidence-polish",
+    slug: "dispatcher-cleanup-assignment-report-refresh",
+    title: "dispatcher cleanup assignment report refresh",
+    branch: "codex/dispatcher-cleanup-assignment-report-refresh",
   };
 }
 
@@ -2205,6 +2246,22 @@ function seedClosedSafeBacklogManifests(stateRootPath) {
     "lane-handoff-evidence-refresh",
     "report-catalog-shortcut-refresh",
     "dispatcher-continuity-snapshot-refresh",
+    "assignment-report-queue-proof-refresh",
+    "dispatcher-queue-state-fixtures-refresh",
+    "dispatcher-queue-handoff-badges-refresh",
+    "dispatcher-queue-handoff-status-refresh",
+    "dispatcher-queue-handoff-lifecycle-refresh",
+    "dispatcher-queue-handoff-recovery-refresh",
+    "dispatcher-queue-handoff-audit-refresh",
+    "dispatcher-queue-handoff-audit-retention-refresh",
+    "dispatcher-queue-handoff-audit-query-refresh",
+    "dispatcher-queue-handoff-audit-export-refresh",
+    "dispatcher-queue-handoff-audit-download-refresh",
+    "dispatcher-queue-handoff-audit-json-refresh",
+    "dispatcher-queue-handoff-audit-json-schema-refresh",
+    "dispatcher-queue-handoff-audit-json-validation-refresh",
+    "dispatcher-queue-handoff-audit-json-validation-fixtures-refresh",
+    "dispatcher-cleanup-assignment-closure-refresh",
   ]) {
     const manifestPath = join(tasksDir, `closed-${laneSlug}.json`);
     if (existsSync(manifestPath)) {
@@ -2279,6 +2336,11 @@ function seedClaimedSafeBacklogAssignment(stateRootPath, laneSlug, owner) {
       2,
     )}\n`,
   );
+}
+
+function seedGeneratedSuccessorPrerequisites(stateRootPath, blockerOwner = "runner-b") {
+  seedClosedSafeBacklogManifests(stateRootPath);
+  seedClaimedSafeBacklogAssignment(stateRootPath, "read-only-evidence-polish", blockerOwner);
 }
 
 function seedClaimedVerificationAssignment(stateRootPath, owner) {

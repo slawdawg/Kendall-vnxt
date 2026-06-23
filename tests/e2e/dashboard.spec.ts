@@ -905,8 +905,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-cleanup-assignment-report-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"')).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
@@ -1116,9 +1116,19 @@ test.describe("dashboard workflow coverage", () => {
     const handoffJsonValidationFixturesCard = safeBacklogPanel
       .locator("article")
       .filter({ has: page.getByRole("heading", { name: "Dispatcher queue handoff audit JSON validation fixtures refresh", exact: true }) });
-    await expect(handoffJsonValidationFixturesCard.getByText("branch: codex/dispatcher-queue-handoff-audit-json-validation-fixtures-refresh")).toBeVisible();
-    await expect(handoffJsonValidationFixturesCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit json validation fixtures refresh"')).toBeVisible();
-    await expect(handoffJsonValidationFixturesCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
+    await expect(handoffJsonValidationFixturesCard.getByText("slice: complete")).toBeVisible();
+    await expect(handoffJsonValidationFixturesCard.getByText("do not requeue dispatcher-queue-handoff-audit-json-validation-fixtures-refresh")).toBeVisible();
+    const cleanupAssignmentClosureCard = safeBacklogPanel
+      .locator("article")
+      .filter({ has: page.getByRole("heading", { name: "Dispatcher cleanup assignment closure refresh", exact: true }) });
+    await expect(cleanupAssignmentClosureCard.getByText("slice: complete")).toBeVisible();
+    await expect(cleanupAssignmentClosureCard.getByText("do not requeue dispatcher-cleanup-assignment-closure-refresh")).toBeVisible();
+    const cleanupAssignmentReportCard = safeBacklogPanel
+      .locator("article")
+      .filter({ has: page.getByRole("heading", { name: "Dispatcher cleanup assignment report refresh", exact: true }) });
+    await expect(cleanupAssignmentReportCard.getByText("branch: codex/dispatcher-cleanup-assignment-report-refresh")).toBeVisible();
+    await expect(cleanupAssignmentReportCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher cleanup assignment report refresh"')).toBeVisible();
+    await expect(cleanupAssignmentReportCard.getByText("pnpm run test:codex-workspace")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 
