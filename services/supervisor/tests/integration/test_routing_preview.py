@@ -2245,6 +2245,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "worker-backlog-queue-refresh",
         "lane-handoff-evidence-refresh",
         "report-catalog-shortcut-refresh",
+        "dispatcher-continuity-snapshot-refresh",
         "authority-blocked-work",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
@@ -2353,11 +2354,21 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "/controls#safe-development-backlog" in handoff_item["dashboardAnchors"]
     assert "/controls#runner-assignment-status" in handoff_item["dashboardAnchors"]
     shortcut_item = next(item for item in report["items"] if item["itemId"] == "report-catalog-shortcut-refresh")
-    assert shortcut_item["nextLane"]["branchName"] == "codex/report-catalog-shortcut-refresh"
-    assert shortcut_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "report catalog shortcut refresh"'
-    assert "pnpm run check:reports" in shortcut_item["nextLane"]["verificationCommands"]
+    assert shortcut_item["status"] == "closed"
+    assert shortcut_item["recommendedSliceSize"] == "complete"
+    assert shortcut_item["nextLane"] is None
+    assert "do not requeue report-catalog-shortcut-refresh" in shortcut_item["nextAction"]
+    assert any("explicit dashboard report anchors" in evidence for evidence in shortcut_item["evidence"])
     assert "GET /supervisor/report-catalog" in shortcut_item["relatedReports"]
+    assert "GET /supervisor/runner-assignment-status-report" in shortcut_item["relatedReports"]
     assert "/controls#supervisor-report-catalog" in shortcut_item["dashboardAnchors"]
+    assert "/controls#runner-assignment-status" in shortcut_item["dashboardAnchors"]
+    dispatcher_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-continuity-snapshot-refresh")
+    assert dispatcher_item["nextLane"]["branchName"] == "codex/dispatcher-continuity-snapshot-refresh"
+    assert dispatcher_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher continuity snapshot refresh"'
+    assert "pnpm run test:codex-workspace" in dispatcher_item["nextLane"]["verificationCommands"]
+    assert "GET /supervisor/runner-assignment-status-report" in dispatcher_item["relatedReports"]
+    assert "/controls#runner-assignment-status" in dispatcher_item["dashboardAnchors"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])

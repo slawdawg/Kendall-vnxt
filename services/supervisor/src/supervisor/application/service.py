@@ -3002,6 +3002,22 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
+        dispatcher_continuity_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-continuity-snapshot-refresh",
+            lane_title="Dispatcher continuity snapshot refresh",
+            scope=[
+                "safe backlog next-lane queue snapshots",
+                "runner assignment status report continuity links",
+                "operator-visible dispatcher dry-run evidence",
+                "static drift checks for generated lane starvation prevention",
+            ],
+            verification_commands=[
+                "pnpm run check:safe-backlog",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+        )
 
         slices = [
             DevelopmentRunwaySliceView(
@@ -3457,6 +3473,22 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
+        dispatcher_continuity_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-continuity-snapshot-refresh",
+            lane_title="Dispatcher continuity snapshot refresh",
+            scope=[
+                "safe backlog next-lane queue snapshots",
+                "runner assignment status report continuity links",
+                "operator-visible dispatcher dry-run evidence",
+                "static drift checks for generated lane starvation prevention",
+            ],
+            verification_commands=[
+                "pnpm run check:safe-backlog",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+        )
 
         items = [
             SafeDevelopmentBacklogItemView(
@@ -3672,19 +3704,25 @@ class SupervisorService:
                 itemId="report-catalog-shortcut-refresh",
                 label="Report catalog shortcut refresh",
                 priority="P2",
-                status="ready",
-                summary="Keep report shortcuts for generated worker lanes precise so operators can inspect existing read-only evidence quickly.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered precise report shortcuts for generated worker lanes so operators can inspect existing read-only evidence quickly.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Generated backlog items should link to explicit dashboard report anchors rather than falling back to the report catalog.",
-                    "Controls-page assertions should cover new worker-lane report links and dashboard anchors.",
-                    "Shortcut refresh work must preserve read-only evidence boundaries and avoid provider, worker launch, or credential changes.",
+                    "Generated backlog items link to explicit dashboard report anchors rather than falling back to the report catalog.",
+                    "Controls-page assertions cover generated worker-lane report links and dashboard anchors.",
+                    "This completed shortcut refresh preserves read-only evidence boundaries and avoids provider, worker launch, or credential changes.",
+                ],
+                sourceEvidenceLabels=[
+                    "3-27-safe-development-backlog-report.md",
+                    "3-32-safe-development-backlog-drift-check.md",
+                    "3-60-safe-backlog-report-anchors.md",
                 ],
                 relatedReports=[
                     "GET /supervisor/report-catalog",
                     "GET /supervisor/safe-development-backlog",
                     "GET /supervisor/github-workflow-policy-report",
                     "GET /supervisor/delivery-readiness-policy-report",
+                    "GET /supervisor/runner-assignment-status-report",
                 ],
                 relatedDocs=[
                     "docs/workflows/end-to-end-lane-runner.md",
@@ -3695,9 +3733,41 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#github-workflow-policy-report",
                     "/controls#delivery-readiness-policy-report",
+                    "/controls#runner-assignment-status",
                 ],
-                nextLane=report_catalog_shortcut_lane,
-                nextAction="Refresh report shortcut evidence for generated lanes while keeping all links read-only and dashboard-local.",
+                nextAction="Use this completed shortcut evidence only; do not requeue report-catalog-shortcut-refresh. Continue with dispatcher-continuity-snapshot-refresh for the next generated worker lane.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-continuity-snapshot-refresh",
+                label="Dispatcher continuity snapshot refresh",
+                priority="P2",
+                status="ready",
+                summary="Keep dispatcher queue snapshots explicit so end-to-end lane runners can continue from source-owned safe work without hidden chat state.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Continuous lane work should expose the next claimable safe backlog item after completed generated lanes close.",
+                    "Runner assignment status and safe backlog reports provide read-only evidence for active owners, blockers, and next safe dispatcher action.",
+                    "This lane must preserve dispatch dry-run evidence only; it must not launch workers, call providers, or take over owned lanes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/report-catalog",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#safe-development-backlog",
+                    "/controls#runner-assignment-status",
+                    "/controls#development-runway-report",
+                    "/controls#supervisor-report-catalog",
+                ],
+                nextLane=dispatcher_continuity_lane,
+                nextAction="Refresh dispatcher continuity snapshots while keeping all evidence read-only and source-owned.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
