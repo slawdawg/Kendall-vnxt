@@ -800,9 +800,18 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
       </div>
 
       {filteredRows.length === 0 ? (
-        <p className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)]">
-          No assignment rows match the current filters. {emptyStateGuidance}
-        </p>
+        <div className="mt-4 flex flex-col gap-3 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between">
+          <p>No assignment rows match the current filters. {emptyStateGuidance}</p>
+          <button
+            type="button"
+            aria-label="Reset assignment row filters from empty state"
+            className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={filtersAtDefault}
+            onClick={resetFilters}
+          >
+            Reset filters
+          </button>
+        </div>
       ) : (
         <div className="mt-4 grid gap-3">
           {filteredRows.map(({ row, source }) => (
