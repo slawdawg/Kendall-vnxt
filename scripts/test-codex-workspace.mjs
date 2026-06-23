@@ -528,9 +528,10 @@ try {
   test("claim-next dry-run previews the next safe backlog lane without mutation", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
+    const expected = expectedClaimCandidate();
     seedClosedSafeBacklogManifests(stateRoot);
-    if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
-      seedUnownedSafeBacklogWorkspace(stateRoot, "github-delivery-hygiene");
+    if (branchExists(rootDir, expected.branch)) {
+      seedUnownedSafeBacklogWorkspace(stateRoot, expected.slug);
     }
     const before = taskSnapshot(tasksDir);
 
@@ -539,7 +540,6 @@ try {
 
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("DRY RUN: claim-next"), result.stdout || result.stderr);
-    const expected = expectedClaimCandidate();
     assert(result.stdout.includes(`claim candidate ${expected.slug}`), result.stdout || result.stderr);
     assert(result.stdout.includes(`branch ${expected.branch}`), result.stdout || result.stderr);
     assert(
@@ -701,8 +701,9 @@ try {
   test("heartbeat updates current-owner assignment lease evidence", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-assignment-"));
     try {
-      if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
-        seedClaimedSafeBacklogAssignment(claimStateRoot, "github-delivery-hygiene", "runner-a");
+      const expected = expectedClaimCandidate();
+      if (branchExists(rootDir, expected.branch)) {
+        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
         const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
@@ -713,7 +714,7 @@ try {
 
       const result = run([
         "heartbeat",
-        "github-delivery-hygiene",
+        expected.slug,
         "--owner",
         "runner-a",
         "--phase",
@@ -730,7 +731,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("APPLY: heartbeat"), result.stdout || result.stderr);
-      assert(result.stdout.includes("target assignment github-delivery-hygiene"), result.stdout || result.stderr);
+      assert(result.stdout.includes(`target assignment ${expected.slug}`), result.stdout || result.stderr);
       assert(
         result.stdout.includes("heartbeat metadata only; no branch, PR, cleanup, or ownership mutation"),
         result.stdout || result.stderr,
@@ -738,7 +739,7 @@ try {
       assert(taskSnapshot(tasksDir) === beforeTasks, "assignment heartbeat mutated workspace manifests");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "assignment heartbeat created worktrees");
 
-      const assignmentPath = join(claimStateRoot, "assignments", "github-delivery-hygiene.json");
+      const assignmentPath = join(claimStateRoot, "assignments", `${expected.slug}.json`);
       const assignment = JSON.parse(readFileSync(assignmentPath, "utf8"));
       assert(assignment.status === "claimed", "heartbeat should not change assignment status");
       assert(assignment.owner === "runner-a", "heartbeat changed assignment owner");
@@ -753,7 +754,7 @@ try {
 
       const second = run([
         "heartbeat",
-        "github-delivery-hygiene",
+        expected.slug,
         "--owner",
         "runner-a",
         "--phase",
@@ -774,7 +775,7 @@ try {
       assert(report.stdout.includes("runner=codex-cli"), report.stdout || report.stderr);
       const assignmentLine = report.stdout
         .split("\n")
-        .find((line) => line.startsWith("- github-delivery-hygiene | claimed | owner=runner-a"));
+        .find((line) => line.startsWith(`- ${expected.slug} | claimed | owner=runner-a`));
       assert(assignmentLine && !assignmentLine.includes("heartbeat=none"), report.stdout || report.stderr);
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
@@ -784,19 +785,20 @@ try {
   test("heartbeat refuses assignment owned by another runner without mutation", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-owned-assignment-"));
     try {
-      if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
-        seedClaimedSafeBacklogAssignment(claimStateRoot, "github-delivery-hygiene", "runner-b");
+      const expected = expectedClaimCandidate();
+      if (branchExists(rootDir, expected.branch)) {
+        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-b");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
         const claim = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
         assert(claim.code === 0, claim.stderr || claim.stdout);
       }
-      const assignmentPath = join(claimStateRoot, "assignments", "github-delivery-hygiene.json");
+      const assignmentPath = join(claimStateRoot, "assignments", `${expected.slug}.json`);
       const before = readFileSync(assignmentPath, "utf8");
 
       const result = run([
         "heartbeat",
-        "github-delivery-hygiene",
+        expected.slug,
         "--owner",
         "runner-a",
         "--phase",
@@ -1059,8 +1061,9 @@ try {
   test("dispatch-next dry-run previews handoff without mutation", () => {
     const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-dry-run-"));
     try {
-      if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
-        seedUnownedSafeBacklogWorkspace(dispatchStateRoot, "github-delivery-hygiene");
+      const expected = expectedClaimCandidate();
+      if (branchExists(rootDir, expected.branch)) {
+        seedUnownedSafeBacklogWorkspace(dispatchStateRoot, expected.slug);
       } else {
         seedClosedSafeBacklogManifests(dispatchStateRoot);
       }
@@ -1077,7 +1080,6 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
-      const expected = expectedClaimCandidate();
       assert(result.stdout.includes(`- selected lane ${expected.slug}`), result.stdout || result.stderr);
       assert(
         result.stdout.includes("- workspace action claim_and_create_workspace") ||
@@ -1218,8 +1220,9 @@ try {
   test("claim-next apply blocks a lane assigned to another owner", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-owned-assignment-"));
     try {
-      if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
-        seedClaimedSafeBacklogAssignment(claimStateRoot, "github-delivery-hygiene", "runner-b");
+      const expected = expectedClaimCandidate();
+      if (branchExists(rootDir, expected.branch)) {
+        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-b");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
         const first = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
