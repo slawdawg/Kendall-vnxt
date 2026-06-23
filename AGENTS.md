@@ -232,11 +232,13 @@ through merge and cleanup", or "see this lane through end to end".
   useful, implement, verify, review, commit, push, open or update the PR, merge
   low-risk PRs, and clean up the merged local worktree, local branch, and remote
   lane branch when the evidence gates pass. BMAD party mode or spawned BMAD
-  subagents may run automatically when useful, using configured provider/model
-  defaults and the bounded party-mode allowance without lane-specific provider,
-  model-selection, or spending approval. This is standing operator approval for
-  bounded automatic party-mode use; do not ask for additional operator approval
-  merely because party mode or BMAD subagents will run within the allowance.
+  subagents are pre-approved to run automatically when they materially improve
+  discovery, planning, review, or verification for the named lane, using
+  configured provider/model defaults and the automatic party-mode allowance
+  without lane-specific provider, model-selection, spending, or extra operator
+  approval. Record the party-mode run purpose, agents used, allowance basis,
+  retained evidence, and result in the lane evidence packet instead of
+  interrupting for approval.
   The default allowance is one party-mode or subagent round per lane phase,
   normally two to four BMAD agents per round, with local artifact retention
   limited to summaries, paths, findings, and verification evidence rather than

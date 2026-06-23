@@ -1,6 +1,6 @@
 # End-to-End Lane Runner
 
-Date: 2026-06-21
+Date: 2026-06-23
 Status: active guidance
 
 ## Purpose
@@ -39,9 +39,10 @@ It authorizes, for the named lane only:
   architecture, QA, or multi-perspective review.
 - Use BMAD party mode or spawned BMAD subagents automatically when the lane
   benefits from multi-agent analysis, using the repository's configured
-  provider/model defaults. The end-to-end lane request is standing approval for
-  that bounded party-mode use; do not ask for separate lane-specific provider,
-  model-selection, or spending approval while the run stays inside the
+  provider/model defaults. The end-to-end lane request is standing approval to
+  start bounded party-mode or subagent analysis without a separate operator
+  approval prompt. Do not ask for lane-specific provider, model-selection,
+  spending, or extra operator approval while the run stays inside the automatic
   allowance below.
 - Create local BMAD planning artifacts under ignored local output folders.
 - Rewrite durable decisions from local planning into source-owned docs, tests,
@@ -60,15 +61,16 @@ party-mode allowance, production deploys, database or schema migration
 execution, cleanup outside the managed lane, or remote branch deletion outside
 the merged managed lane.
 
-## Bounded Party-Mode Allowance
+## Automatic Bounded Party-Mode Allowance
 
-Under `standard-delivery`, BMAD party mode and spawned BMAD subagents may run
-automatically when they materially improve discovery, planning, review, or
-verification for the named lane.
+Under `standard-delivery`, BMAD party mode and spawned BMAD subagents are
+pre-approved for automatic launch when they materially improve discovery,
+planning, review, or verification for the named lane.
 
 The operator has granted standing approval for this bounded automatic use. Do
 not ask for additional operator approval merely because party mode or BMAD
-subagents will run within the allowance below.
+subagents will run within the allowance below. Record the run in the lane
+evidence packet instead of interrupting for approval.
 
 The default allowance is:
 
@@ -84,9 +86,10 @@ The default allowance is:
   lists, and verification evidence rather than raw prompts, reasoning traces,
   completions, or provider payloads.
 
-Do not interrupt the operator just because a possible party-mode run would
-fall outside the allowance. If party mode would override the configured
-provider/model defaults, exceed the allowance above, require missing
+Do not interrupt the operator merely because a party-mode run materially
+improves discovery, planning, review, or verification and falls inside the
+automatic allowance. If party mode would override the configured provider/model
+defaults, exceed the allowance above, require missing
 credentials, retain raw provider payloads, or combine with another high-risk
 surface, skip party mode and continue with the normal single-agent lane flow
 when that still satisfies the objective. Stop only when the lane objective
@@ -278,6 +281,8 @@ End-to-End Lane Evidence
 - Cleanup result:
 - Lane owner:
 - Ownership takeover, if any:
+- Automatic party-mode use, if any:
+- Party-mode allowance basis and retained evidence:
 - Residual risks or follow-ups:
 ```
 
