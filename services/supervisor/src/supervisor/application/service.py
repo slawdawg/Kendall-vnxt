@@ -2180,7 +2180,7 @@ class SupervisorService:
             return "closed"
         if status == "merged":
             return "merged"
-        if manifest.get("cleanup_partial"):
+        if status in {"cleanup_partial", "cleanup-partial"} or manifest.get("cleanup_partial"):
             return "cleanup-partial"
         if status == "cleanup-ready":
             return "cleanup-ready"
@@ -2255,6 +2255,42 @@ class SupervisorService:
         if handoff_status == "missing":
             return "missing"
         return "not-applicable"
+
+    def _runner_handoff_recovery(
+        self,
+        record: dict,
+        handoff_evidence: dict,
+        delivery_state: str,
+        classification: str,
+        worktree_state: str,
+        lifecycle_state: str,
+    ) -> tuple[str, str]:
+        owner = record.get("owner") or record.get("owner_thread_id")
+        handoff_status = str(handoff_evidence["handoffStatus"])
+        readiness_status = str(handoff_evidence["handoffReadinessStatus"] or "").lower()
+        counts_status = str(handoff_evidence["handoffCandidateStateCountsStatus"] or "").lower()
+
+        if classification == "closed" or delivery_state == "closed":
+            return ("no-action", "No handoff recovery action required for closed lane evidence.")
+        if delivery_state == "cleanup-partial":
+            return ("resume-cleanup", "Resume cleanup from a stable worktree after verifying the recorded PR head and branch cleanup evidence.")
+        if classification == "blocked_stale_owner_needs_takeover":
+            return ("request-takeover-approval", "Review stale owner evidence and request explicit takeover approval before mutating this lane.")
+        if classification == "blocked_authority":
+            return ("request-explicit-approval", "Wait for explicit authority approval before dispatching or mutating this blocked backlog item.")
+        if readiness_status in {"failed", "failure", "error", "timeout", "timed-out"} or counts_status == "invalid":
+            return ("inspect-handoff-evidence", "Inspect the failed or invalid handoff evidence before retrying, resuming, or taking over this lane.")
+        if handoff_status == "available" and lifecycle_state == "prepared" and worktree_state == "clean":
+            return ("resume-prepared-handoff", "Resume the prepared worktree with the recorded next command and preserve the stop lines.")
+        if owner and worktree_state == "clean":
+            return ("wait-for-owner", "Wait for the current owner heartbeat or request takeover only with explicit stale-owner evidence.")
+        if handoff_status == "available":
+            return ("inspect-handoff-evidence", "Inspect the handoff packet and worktree state before resuming this lane.")
+        if classification.startswith("blocked_"):
+            return ("inspect-handoff-evidence", "Inspect blocked lane evidence before retrying, resuming, or taking over this lane.")
+        if owner:
+            return ("wait-for-owner", "Wait for the current owner heartbeat or request takeover only with explicit stale-owner evidence.")
+        return ("no-action", "No handoff recovery action required.")
 
     def _runner_handoff_evidence(self, manifest: dict) -> dict[str, str | list[str] | dict[str, int] | None]:
         handoffs = manifest.get("dispatch_handoffs")
@@ -2417,6 +2453,14 @@ class SupervisorService:
             reason_code = "missing-worktree"
             reason = "worktree path is missing"
             next_safe_action = "Inspect worktree before takeover or cleanup"
+        recovery_action, recovery_summary = self._runner_handoff_recovery(
+            record,
+            handoff_evidence,
+            delivery_state,
+            classification,
+            worktree_state,
+            handoff_lifecycle_state,
+        )
 
         return RunnerAssignmentStatusRowView(
             id=record_id,
@@ -2452,6 +2496,8 @@ class SupervisorService:
             handoffCandidateStateCounts=handoff_evidence["handoffCandidateStateCounts"],
             handoffCandidateStateCountsStatus=str(handoff_evidence["handoffCandidateStateCountsStatus"]),
             handoffLifecycleState=handoff_lifecycle_state,
+            handoffRecoveryAction=recovery_action,
+            handoffRecoverySummary=recovery_summary,
             deliveryState=delivery_state,
             localEvidenceStatus="available",
             evidencePath=str(path),
@@ -2552,6 +2598,11 @@ class SupervisorService:
                     reason_code = "backlog-lane-claimed"
                     reason = "safe backlog item already has local workspace or lane assignment evidence"
                     next_action = "Review the existing assignment before dispatch"
+                backlog_recovery_action = "no-action"
+                backlog_recovery_summary = "No handoff recovery action required."
+                if classification == "blocked_authority":
+                    backlog_recovery_action = "request-explicit-approval"
+                    backlog_recovery_summary = "Wait for explicit authority approval before dispatching or mutating this blocked backlog item."
                 backlog_rows.append(
                     RunnerAssignmentStatusRowView(
                         id=item.itemId,
@@ -2569,6 +2620,8 @@ class SupervisorService:
                         heartbeatMissing=True,
                         staleAfterSeconds=stale_after_seconds,
                         worktreeState="not-applicable",
+                        handoffRecoveryAction=backlog_recovery_action,
+                        handoffRecoverySummary=backlog_recovery_summary,
                         deliveryState="unknown",
                         localEvidenceStatus="available",
                     )
@@ -2580,6 +2633,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
             "read-only-evidence-polish",
+            "dispatcher-queue-handoff-audit-refresh",
             "dispatcher-queue-handoff-recovery-refresh",
             "dispatcher-queue-handoff-lifecycle-refresh",
             "dispatcher-queue-handoff-status-refresh",
@@ -3227,6 +3281,22 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
+        dispatcher_queue_handoff_audit_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-refresh",
+            lane_title="Dispatcher queue handoff audit refresh",
+            scope=[
+                "dispatch handoff audit visibility",
+                "runner assignment lifecycle and recovery audit alignment",
+                "workspace dispatcher evidence tests for generated lane handoff packets",
+                "dashboard assertions for handoff audit facts",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3234,7 +3304,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-queue-handoff-recovery-refresh"],
+                includedBacklogItems=["dispatcher-queue-handoff-audit-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3259,14 +3329,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-queue-handoff-recovery-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher queue handoff recovery item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-queue-handoff-recovery-refresh"],
+                        status="ready" if "dispatcher-queue-handoff-audit-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the dispatcher queue handoff audit item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["dispatcher-queue-handoff-audit-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher queue handoff recovery item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the dispatcher queue handoff audit item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3296,8 +3366,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_queue_handoff_recovery_lane,
-                nextAction="Select this slice for dispatcher queue handoff recovery work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_queue_handoff_audit_lane,
+                nextAction="Select this slice for dispatcher queue handoff audit work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -3761,6 +3831,22 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
+        dispatcher_queue_handoff_audit_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-audit-refresh",
+            lane_title="Dispatcher queue handoff audit refresh",
+            scope=[
+                "dispatch handoff audit visibility",
+                "runner assignment lifecycle and recovery audit alignment",
+                "workspace dispatcher evidence tests for generated lane handoff packets",
+                "dashboard assertions for handoff audit facts",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+        )
 
         items = [
             SafeDevelopmentBacklogItemView(
@@ -4206,13 +4292,13 @@ class SupervisorService:
                 itemId="dispatcher-queue-handoff-recovery-refresh",
                 label="Dispatcher queue handoff recovery refresh",
                 priority="P2",
-                status="ready",
-                summary="Show recovery paths for blocked, stale, cleanup-partial, and failed handoff states so generated lane workers know whether to resume, wait, or request approval.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered explicit handoff recovery actions so generated lane workers can distinguish resume, wait, takeover-approval, cleanup-resume, and inspect states.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Dispatch handoff lifecycle state now distinguishes prepared, claimed, delivered, and cleaned records, but blocked recovery actions need clearer source-owned status treatment.",
-                    "The next lane must stay read-only/source-owned and avoid provider calls, worker launches, or lane takeovers.",
-                    "Generated lane continuity should remain explicit after dispatcher-queue-handoff-lifecycle-refresh closes.",
+                    "Runner assignment status rows now expose handoffRecoveryAction and handoffRecoverySummary through the API schema, shared dashboard contract, and dashboard resume packet.",
+                    "Recovery actions cover prepared resume, owner wait, stale-owner approval, authority approval, cleanup-partial resume, and failed/invalid handoff inspection without launching workers or taking over lanes.",
+                    "Generated lane continuity remains explicit after dispatcher-queue-handoff-lifecycle-refresh closes.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -4229,8 +4315,37 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_queue_handoff_recovery_lane,
-                nextAction="Refresh dispatcher queue handoff recovery evidence while keeping generated-worker evidence read-only and source-owned.",
+                nextAction="Use this completed dispatcher queue handoff recovery evidence only; do not requeue dispatcher-queue-handoff-recovery-refresh. Continue with dispatcher-queue-handoff-audit-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-queue-handoff-audit-refresh",
+                label="Dispatcher queue handoff audit refresh",
+                priority="P2",
+                status="ready",
+                summary="Add an operator-visible audit trail for generated worker handoffs across lifecycle, recovery action, queue counts, stop lines, and readiness evidence.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Handoff lifecycle and recovery fields now exist, but generated-worker review still needs a compact audit view over the complete handoff packet.",
+                    "The next lane must stay read-only/source-owned and avoid provider calls, worker launches, or lane takeovers.",
+                    "Generated lane continuity should remain explicit after dispatcher-queue-handoff-recovery-refresh closes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=dispatcher_queue_handoff_audit_lane,
+                nextAction="Refresh dispatcher queue handoff audit evidence while keeping generated-worker evidence read-only and source-owned.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",

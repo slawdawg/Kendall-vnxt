@@ -2189,6 +2189,15 @@ export interface RunnerAssignmentStatusRowView {
   handoffCandidateStateCounts: Record<string, number>;
   handoffCandidateStateCountsStatus: "available" | "empty" | "invalid" | "missing" | "not-applicable";
   handoffLifecycleState: "prepared" | "claimed" | "delivered" | "cleaned" | "missing" | "not-applicable";
+  handoffRecoveryAction:
+    | "resume-prepared-handoff"
+    | "wait-for-owner"
+    | "request-takeover-approval"
+    | "request-explicit-approval"
+    | "inspect-handoff-evidence"
+    | "resume-cleanup"
+    | "no-action";
+  handoffRecoverySummary: string;
   deliveryState: "no-pr" | "draft-pr" | "pr-open" | "pr-closed-unmerged" | "merged" | "cleanup-ready" | "cleanup-partial" | "closed" | "unknown-pr-state" | "unknown";
   localEvidenceStatus: "available" | "missing" | "unreadable" | "malformed" | "skipped";
   evidencePath?: string | null;

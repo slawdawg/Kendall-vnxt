@@ -1148,6 +1148,16 @@ class RunnerAssignmentStatusRowView(BaseModel):
     handoffCandidateStateCounts: dict[str, int] = Field(default_factory=dict)
     handoffCandidateStateCountsStatus: str = "not-applicable"
     handoffLifecycleState: Literal["prepared", "claimed", "delivered", "cleaned", "missing", "not-applicable"] = "not-applicable"
+    handoffRecoveryAction: Literal[
+        "resume-prepared-handoff",
+        "wait-for-owner",
+        "request-takeover-approval",
+        "request-explicit-approval",
+        "inspect-handoff-evidence",
+        "resume-cleanup",
+        "no-action",
+    ] = "no-action"
+    handoffRecoverySummary: str = "No handoff recovery action required."
     deliveryState: str = "unknown"
     localEvidenceStatus: str = "available"
     evidencePath: str | None = None

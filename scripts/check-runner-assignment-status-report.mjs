@@ -60,9 +60,15 @@ for (const serviceText of [
   "handoffCandidateStateCounts",
   "handoffCandidateStateCountsStatus",
   "handoffLifecycleState",
+  "handoffRecoveryAction",
+  "handoffRecoverySummary",
   "_runner_handoff_candidate_state_counts",
   "_runner_handoff_candidate_state_counts_status",
   "_runner_handoff_lifecycle_state",
+  "_runner_handoff_recovery",
+  "request-takeover-approval",
+  "resume-cleanup",
+  "inspect-handoff-evidence",
   "candidate_state_counts",
   "dispatcherContinuity",
   "dispatcher-continuity-snapshot-v1",
@@ -105,6 +111,8 @@ for (const panelText of [
   "handoffCandidateStateCounts",
   "handoffCandidateStateCountsStatus",
   "handoffLifecycleState",
+  "handoffRecoveryAction",
+  "handoffRecoverySummary",
   "Owner:",
   "Branch:",
   "Worktree state:",
@@ -113,6 +121,8 @@ for (const panelText of [
   "Readiness:",
   "Summary:",
   "Lifecycle:",
+  "Recovery action:",
+  "Recovery:",
   "Queue counts:",
   "Stop:",
   "report.summary",
@@ -149,6 +159,8 @@ for (const contractText of [
   "handoffCandidateStateCounts",
   "handoffCandidateStateCountsStatus",
   "handoffLifecycleState",
+  "handoffRecoveryAction",
+  "handoffRecoverySummary",
 ]) {
   assertCondition(contractSource.includes(contractText), `Shared contracts must include ${contractText}`, failures);
   assertCondition(schemaSource.includes(contractText), `Supervisor schemas must include ${contractText}`, failures);
@@ -161,6 +173,7 @@ for (const browserText of [
   "blocked owned active: 1",
   "closed: 9",
   "Lifecycle: prepared",
+  "Recovery action: inspect-handoff-evidence",
   "Queue counts: available",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert runner assignment handoff badge text: ${browserText}`, failures);

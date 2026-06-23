@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import socket
+import subprocess
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1942,11 +1943,11 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
-    assert report_slice["includedBacklogItems"] == ["dispatcher-queue-handoff-recovery-refresh"]
+    assert report_slice["includedBacklogItems"] == ["dispatcher-queue-handoff-audit-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-queue-handoff-recovery-refresh"
-    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-recovery-refresh"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff recovery refresh"'
+    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-queue-handoff-audit-refresh"
+    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-audit-refresh"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit refresh"'
     assert "pnpm run check:runner-assignment-status" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run test:codex-workspace" in report_slice["nextLane"]["verificationCommands"]
@@ -2256,6 +2257,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "dispatcher-queue-handoff-status-refresh",
         "dispatcher-queue-handoff-lifecycle-refresh",
         "dispatcher-queue-handoff-recovery-refresh",
+        "dispatcher-queue-handoff-audit-refresh",
         "authority-blocked-work",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
@@ -2412,11 +2414,17 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "do not requeue dispatcher-queue-handoff-lifecycle-refresh" in handoff_lifecycle_item["nextAction"]
     assert "GET /supervisor/runner-assignment-status-report" in handoff_lifecycle_item["relatedReports"]
     handoff_recovery_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-queue-handoff-recovery-refresh")
-    assert handoff_recovery_item["status"] == "ready"
-    assert handoff_recovery_item["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-recovery-refresh"
-    assert handoff_recovery_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff recovery refresh"'
-    assert "pnpm run test:codex-workspace" in handoff_recovery_item["nextLane"]["verificationCommands"]
+    assert handoff_recovery_item["status"] == "closed"
+    assert handoff_recovery_item["recommendedSliceSize"] == "complete"
+    assert handoff_recovery_item["nextLane"] is None
+    assert "do not requeue dispatcher-queue-handoff-recovery-refresh" in handoff_recovery_item["nextAction"]
     assert "GET /supervisor/runner-assignment-status-report" in handoff_recovery_item["relatedReports"]
+    handoff_audit_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-queue-handoff-audit-refresh")
+    assert handoff_audit_item["status"] == "ready"
+    assert handoff_audit_item["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-audit-refresh"
+    assert handoff_audit_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit refresh"'
+    assert "pnpm run test:codex-workspace" in handoff_audit_item["nextLane"]["verificationCommands"]
+    assert "GET /supervisor/runner-assignment-status-report" in handoff_audit_item["relatedReports"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
@@ -8246,6 +8254,7 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert lane["classification"] == "claimed"
     assert lane["branch"] == "codex/dispatcher-continuity-snapshot-refresh"
     assert lane["handoffLifecycleState"] == "claimed"
+    assert lane["handoffRecoveryAction"] == "wait-for-owner"
     backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "report-catalog-shortcut-refresh")
     assert backlog["classification"] == "closed"
     assert backlog["reasonCode"] == "backlog-closed"
@@ -8268,8 +8277,11 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert handoff_lifecycle_backlog["classification"] == "closed"
     assert handoff_lifecycle_backlog["reasonCode"] == "backlog-closed"
     handoff_recovery_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-queue-handoff-recovery-refresh")
-    assert handoff_recovery_backlog["classification"] == "assignable"
-    assert handoff_recovery_backlog["reasonCode"] == "backlog-assignable"
+    assert handoff_recovery_backlog["classification"] == "closed"
+    assert handoff_recovery_backlog["reasonCode"] == "backlog-closed"
+    handoff_audit_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-queue-handoff-audit-refresh")
+    assert handoff_audit_backlog["classification"] == "assignable"
+    assert handoff_audit_backlog["reasonCode"] == "backlog-assignable"
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
     assert continuity["selectedBacklogItemId"] == "read-only-evidence-polish"
@@ -8281,13 +8293,16 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert queue_proof_rows["dispatcher-queue-handoff-badges-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-status-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-lifecycle-refresh"]["classification"] == "closed"
-    assert queue_proof_rows["dispatcher-queue-handoff-recovery-refresh"]["classification"] == "assignable"
-    assert queue_proof_rows["dispatcher-queue-handoff-recovery-refresh"]["reasonCode"] == "backlog-assignable"
+    assert queue_proof_rows["dispatcher-queue-handoff-recovery-refresh"]["classification"] == "closed"
+    assert queue_proof_rows["dispatcher-queue-handoff-audit-refresh"]["classification"] == "assignable"
+    assert queue_proof_rows["dispatcher-queue-handoff-audit-refresh"]["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-state-fixtures-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-continuity-snapshot-refresh"]["classification"] == "closed"
     assert queue_proof_rows["assignment-report-queue-proof-refresh"]["classification"] == "closed"
     assert queue_proof_rows["authority-blocked-work"]["classification"] == "blocked_authority"
     assert queue_proof_rows["authority-blocked-work"]["reasonCode"] == "blocked-authority"
+    authority_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "authority-blocked-work")
+    assert authority_backlog["handoffRecoveryAction"] == "request-explicit-approval"
     assert any(row["classification"] == "claimed" for row in report["laneAssignments"])
     github_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "github-delivery-hygiene")
     assert github_backlog["classification"] == "closed"
@@ -8373,6 +8388,8 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     }
     assert row["handoffCandidateStateCountsStatus"] == "available"
     assert row["handoffLifecycleState"] == "prepared"
+    assert row["handoffRecoveryAction"] == "inspect-handoff-evidence"
+    assert row["handoffRecoverySummary"] == "Inspect the handoff packet and worktree state before resuming this lane."
     assert row["worktreeState"] == "missing"
 
     incomplete_path = tasks_dir / "incomplete-handoff.json"
@@ -8419,6 +8436,58 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
             }
         )
     )
+    clean_prepared_worktree = state_root / "worktrees" / "clean-prepared-handoff"
+    clean_prepared_worktree.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=clean_prepared_worktree, check=True)
+    clean_prepared_path = tasks_dir / "clean-prepared-handoff.json"
+    clean_prepared_path.write_text(
+        json.dumps(
+            {
+                "task_id": "clean-prepared-handoff",
+                "title": "Clean prepared handoff",
+                "branch": "codex/clean-prepared-handoff",
+                "status": "active",
+                "owner": "runner-a",
+                "phase": "handoff",
+                "owner_updated_at": datetime.now(timezone.utc).isoformat(),
+                "worktree_path": clean_prepared_worktree.as_posix(),
+                "dispatch_handoffs": [
+                    {
+                        "lane": "clean-prepared-handoff",
+                        "next_command": "cd /tmp/clean-prepared-handoff",
+                        "generated_at": "2026-06-23T01:08:00Z",
+                        "candidate_state_counts": {"assignable": 1},
+                    }
+                ],
+            }
+        )
+    )
+    clean_active_worktree = state_root / "worktrees" / "clean-active-handoff"
+    clean_active_worktree.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=clean_active_worktree, check=True)
+    clean_active_path = tasks_dir / "clean-active-handoff.json"
+    clean_active_path.write_text(
+        json.dumps(
+            {
+                "task_id": "clean-active-handoff",
+                "title": "Clean active handoff",
+                "branch": "codex/clean-active-handoff",
+                "status": "active",
+                "owner": "runner-a",
+                "phase": "active",
+                "owner_updated_at": datetime.now(timezone.utc).isoformat(),
+                "worktree_path": clean_active_worktree.as_posix(),
+                "dispatch_handoffs": [
+                    {
+                        "lane": "clean-active-handoff",
+                        "next_command": "cd /tmp/clean-active-handoff",
+                        "generated_at": "2026-06-23T01:09:00Z",
+                        "candidate_state_counts": {"active": 1},
+                    }
+                ],
+            }
+        )
+    )
 
     incomplete_response = client.get("/supervisor/runner-assignment-status-report")
 
@@ -8438,6 +8507,14 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     assert unowned_prepared_row["classification"] == "blocked_missing_worktree"
     assert unowned_prepared_row["handoffCandidateStateCounts"] == {"assignable": 1}
     assert unowned_prepared_row["handoffLifecycleState"] == "prepared"
+    clean_prepared_row = next(item for item in incomplete_report["workspaceAssignments"] if item["taskId"] == "clean-prepared-handoff")
+    assert clean_prepared_row["worktreeState"] == "clean"
+    assert clean_prepared_row["handoffLifecycleState"] == "prepared"
+    assert clean_prepared_row["handoffRecoveryAction"] == "resume-prepared-handoff"
+    clean_active_row = next(item for item in incomplete_report["workspaceAssignments"] if item["taskId"] == "clean-active-handoff")
+    assert clean_active_row["worktreeState"] == "clean"
+    assert clean_active_row["handoffLifecycleState"] == "claimed"
+    assert clean_active_row["handoffRecoveryAction"] == "wait-for-owner"
 
     empty_counts_path = tasks_dir / "empty-count-handoff.json"
     empty_counts_path.write_text(
@@ -8517,6 +8594,52 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
             }
         )
     )
+    stale_path = tasks_dir / "stale-handoff.json"
+    stale_path.write_text(
+        json.dumps(
+            {
+                "task_id": "stale-handoff",
+                "title": "Stale handoff",
+                "branch": "codex/stale-handoff",
+                "status": "active",
+                "owner": "runner-a",
+                "phase": "active",
+                "owner_updated_at": "2000-01-01T00:00:00+00:00",
+                "stale_after_seconds": 1,
+                "dispatch_handoffs": [
+                    {
+                        "lane": "stale-handoff",
+                        "next_command": "cd /tmp/stale-handoff",
+                        "generated_at": "2026-06-23T01:22:00Z",
+                        "candidate_state_counts": {"blocked_stale_owner_needs_takeover": 1},
+                    }
+                ],
+            }
+        )
+    )
+    failed_path = tasks_dir / "failed-handoff.json"
+    failed_path.write_text(
+        json.dumps(
+            {
+                "task_id": "failed-handoff",
+                "title": "Failed handoff",
+                "branch": "codex/failed-handoff",
+                "status": "active",
+                "owner": "runner-a",
+                "phase": "handoff",
+                "owner_updated_at": datetime.now(timezone.utc).isoformat(),
+                "worktree_path": (state_root / "worktrees" / "failed-handoff").as_posix(),
+                "dispatch_handoffs": [
+                    {
+                        "lane": "failed-handoff",
+                        "next_command": "cd /tmp/failed-handoff",
+                        "generated_at": "2026-06-23T01:23:00Z",
+                        "readiness": {"status": "failed", "command": "node ./scripts/codex-workspace.mjs doctor"},
+                    }
+                ],
+            }
+        )
+    )
     delivered_path = tasks_dir / "delivered-handoff.json"
     delivered_path.write_text(
         json.dumps(
@@ -8534,6 +8657,27 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
                         "lane": "delivered-handoff",
                         "next_command": "cd /tmp/delivered-handoff",
                         "generated_at": "2026-06-23T01:25:00Z",
+                        "candidate_state_counts": {"active": 1},
+                    }
+                ],
+            }
+        )
+    )
+    cleanup_partial_path = tasks_dir / "cleanup-partial-handoff.json"
+    cleanup_partial_path.write_text(
+        json.dumps(
+            {
+                "task_id": "cleanup-partial-handoff",
+                "title": "Cleanup partial handoff",
+                "branch": "codex/cleanup-partial-handoff",
+                "status": "cleanup_partial",
+                "owner": "runner-a",
+                "owner_updated_at": datetime.now(timezone.utc).isoformat(),
+                "dispatch_handoffs": [
+                    {
+                        "lane": "cleanup-partial-handoff",
+                        "next_command": "cd /tmp/cleanup-partial-handoff",
+                        "generated_at": "2026-06-23T01:28:00Z",
                         "candidate_state_counts": {"active": 1},
                     }
                 ],
@@ -8580,11 +8724,22 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     assert fallback_row["handoffCandidateStateCounts"] == {"active": 1}
     assert fallback_row["handoffCandidateStateCountsStatus"] == "available"
     assert fallback_row["handoffLifecycleState"] == "claimed"
+    assert fallback_row["handoffRecoveryAction"] == "inspect-handoff-evidence"
+    stale_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "stale-handoff")
+    assert stale_row["classification"] == "blocked_stale_owner_needs_takeover"
+    assert stale_row["handoffRecoveryAction"] == "request-takeover-approval"
+    failed_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "failed-handoff")
+    assert failed_row["handoffReadinessStatus"] == "failed"
+    assert failed_row["handoffRecoveryAction"] == "inspect-handoff-evidence"
     delivered_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "delivered-handoff")
     assert delivered_row["handoffLifecycleState"] == "delivered"
     assert delivered_row["deliveryState"] == "pr-open"
+    cleanup_partial_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "cleanup-partial-handoff")
+    assert cleanup_partial_row["deliveryState"] == "cleanup-partial"
+    assert cleanup_partial_row["handoffRecoveryAction"] == "resume-cleanup"
     cleaned_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "cleaned-handoff")
     assert cleaned_row["handoffLifecycleState"] == "cleaned"
+    assert cleaned_row["handoffRecoveryAction"] == "no-action"
     assert cleaned_row["classification"] == "closed"
 
 
