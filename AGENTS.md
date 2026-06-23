@@ -140,9 +140,10 @@ durable, milestone-driven workflow rather than a single unbounded task.
   operator's standing approval for those named GitHub delivery operations within
   the current lane. This standing approval does not authorize unrelated
   repositories, unrelated branches, bypassing failed checks, force-push,
-  destructive history rewrites, secret access, provider calls, cleanup outside
-  the managed workspace, or expanding delivery beyond the reviewed lane scope.
-  Record each delivery action and its evidence as part of the goal.
+  destructive history rewrites, secret access, provider calls outside the
+  bounded end-to-end party-mode allowance, cleanup outside the managed
+  workspace, or expanding delivery beyond the reviewed lane scope. Record each
+  delivery action and its evidence as part of the goal.
 - When using the end-to-end lane runner under `standard-delivery`, do not
   reframe `finish-pr`, PR creation/update, or routine PR push as a new
   operator approval request after local verification. If sandbox escalation is
@@ -231,8 +232,9 @@ through merge and cleanup", or "see this lane through end to end".
   useful, implement, verify, review, commit, push, open or update the PR, merge
   low-risk PRs, and clean up the merged local worktree, local branch, and remote
   lane branch when the evidence gates pass. BMAD party mode or spawned BMAD
-  subagents require explicit provider, model-selection, and spending approval
-  for the lane.
+  subagents may run automatically when useful, using configured provider/model
+  defaults and the bounded party-mode budget without lane-specific operator
+  approval.
 - Keep generated BMAD artifacts local. Rewrite durable decisions into
   source-owned docs, tests, scripts, or policy before delivery.
 - Do not interrupt for routine mechanics. Interrupt only for product steering,
