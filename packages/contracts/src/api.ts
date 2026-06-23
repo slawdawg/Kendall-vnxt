@@ -2131,6 +2131,14 @@ export interface RunnerAssignmentStatusSummaryView {
   missing: number;
 }
 
+export interface RunnerDispatcherQueueProofRowView {
+  backlogItemId: string;
+  classification: RunnerAssignmentClassification;
+  reasonCode: string;
+  branch?: string | null;
+  nextSafeAction: string;
+}
+
 export interface RunnerDispatcherContinuitySnapshotView {
   snapshotId: string;
   selectedBacklogItemId?: string | null;
@@ -2142,6 +2150,7 @@ export interface RunnerDispatcherContinuitySnapshotView {
   ambiguousCount: number;
   closedCount: number;
   blockerCodes: string[];
+  queueProofRows: RunnerDispatcherQueueProofRowView[];
   nextAction: string;
 }
 

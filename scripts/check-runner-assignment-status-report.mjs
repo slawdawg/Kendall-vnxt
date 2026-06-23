@@ -32,6 +32,7 @@ for (const typeName of [
   "RunnerAssignmentStatusRowView",
   "RunnerAssignmentStatusSummaryView",
   "RunnerDispatcherContinuitySnapshotView",
+  "RunnerDispatcherQueueProofRowView",
   "RunnerAssignmentWarningView",
 ]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
@@ -58,6 +59,8 @@ for (const serviceText of [
   "dispatcherContinuity",
   "dispatcher-continuity-snapshot-v1",
   "dispatch-next --dry-run --owner <owner>",
+  "queueProofRows",
+  "dispatcher-queue-state-fixtures-refresh",
   "stop_lines",
   "worktree-outside-managed-root",
   "runner-assignment-status-report-v1",
@@ -104,17 +107,22 @@ for (const panelText of [
   "Candidate:",
   "Dry run:",
   "Blockers:",
+  "Queue proof",
+  "report.dispatcherContinuity.queueProofRows.map",
 ]) {
   assertCondition(panelSource.includes(panelText), `Runner assignment panel must render ${panelText}`, failures);
 }
 
 for (const contractText of [
   "RunnerDispatcherContinuitySnapshotView",
+  "RunnerDispatcherQueueProofRowView",
   "dispatcherContinuity",
   "selectedBacklogItemId",
   "selectedBranch",
   "dryRunCommand",
   "blockerCodes",
+  "queueProofRows",
+  "backlogItemId",
   "handoffStatus",
   "handoffNextCommand",
   "handoffReadinessStatus",

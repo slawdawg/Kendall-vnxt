@@ -151,6 +151,16 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
         {report.dispatcherContinuity.blockerCodes.length > 0 ? (
           <p className="mt-2 break-all text-xs leading-5 text-[var(--muted)]">Blockers: {report.dispatcherContinuity.blockerCodes.join(", ")}</p>
         ) : null}
+        <div className="mt-3">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Queue proof</p>
+          <div className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
+            {report.dispatcherContinuity.queueProofRows.map((row) => (
+              <p key={`${row.backlogItemId}:${row.classification}:${row.reasonCode}`} className="break-all">
+                {row.backlogItemId}: {row.classification} ({row.reasonCode}) {row.branch ? `branch ${row.branch}` : "no branch"}
+              </p>
+            ))}
+          </div>
+        </div>
         <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{report.dispatcherContinuity.nextAction}</p>
       </div>
 
