@@ -131,6 +131,10 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
                   ) : null}
                   {entry.readinessSummary ? <p className="break-all">Readiness summary: {entry.readinessSummary}</p> : null}
                   <p>Queue evidence: {entry.queueCountsStatus}</p>
+                  <p>
+                    Retention: {entry.retentionPolicy}; payload {entry.payloadRetention}
+                  </p>
+                  <p className="break-all">Retention summary: {entry.retentionSummary}</p>
                   {auditCounts.length > 0 ? (
                     <div className="mt-1 flex flex-wrap gap-2">
                       {auditCounts.map(([state, count]) => (

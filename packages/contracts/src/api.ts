@@ -2178,6 +2178,9 @@ export interface RunnerHandoffAuditEntryView {
     | "resume-cleanup"
     | "no-action";
   recoverySummary: string;
+  retentionPolicy: "metadata-only" | "capped-metadata-only";
+  payloadRetention: "not-retained" | "redacted" | "omitted";
+  retentionSummary: string;
   evidenceStatus: "complete" | "partial" | "invalid";
   evidenceSummary: string;
 }
