@@ -557,6 +557,11 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
     if (!sourceCompletionMatches(row, sourceCompletionFilter)) return false;
     return classificationMatches(row, classificationFilter);
   });
+  const sourceCompletionPresetCounts = {
+    assignment: rows.filter(({ row }) => sourceCompletionMatches(row, "assignment")).length,
+    workspace: rows.filter(({ row }) => sourceCompletionMatches(row, "workspace")).length,
+    none: rows.filter(({ row }) => sourceCompletionMatches(row, "none")).length,
+  };
   const filteredSourceSummary = filteredSourceKindSummary(filteredRows);
   const filtersAtDefault = classificationFilter === "attention" && sourceFilter === "all" && sourceCompletionFilter === "all";
   const resetFilters = () => {
@@ -724,27 +729,27 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
           <div className="mt-2 flex flex-wrap gap-2" aria-label="Assignment row filter presets">
             <button
               type="button"
-              aria-label="Show assignment-backed rows"
+              aria-label={`Show assignment-backed rows (${sourceCompletionPresetCounts.assignment})`}
               className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)]"
               onClick={() => applySourceCompletionPreset("assignment")}
             >
-              Assignment-backed
+              Assignment-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.assignment}</span>
             </button>
             <button
               type="button"
-              aria-label="Show workspace-backed rows"
+              aria-label={`Show workspace-backed rows (${sourceCompletionPresetCounts.workspace})`}
               className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)]"
               onClick={() => applySourceCompletionPreset("workspace")}
             >
-              Workspace-backed
+              Workspace-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.workspace}</span>
             </button>
             <button
               type="button"
-              aria-label="Show uncompleted rows"
+              aria-label={`Show uncompleted rows (${sourceCompletionPresetCounts.none})`}
               className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)]"
               onClick={() => applySourceCompletionPreset("none")}
             >
-              Uncompleted
+              Uncompleted <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.none}</span>
             </button>
           </div>
         </div>
