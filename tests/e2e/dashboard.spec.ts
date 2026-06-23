@@ -907,12 +907,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportAlignmentCard.getByText("Use this completed item as evidence only; do not requeue it as a new lane.")).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "Verification surface hardening" })).toBeVisible();
     const verificationBacklogCards = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Verification surface hardening" }) });
-    await expect(verificationBacklogCards.getByText("Next lane handoff")).toBeVisible();
-    await expect(verificationBacklogCards.getByText("branch: codex/verification-surface-hardening")).toBeVisible();
-    await expect(verificationBacklogCards.getByText('start: node ./scripts/codex-workspace.mjs start "verification surface hardening"')).toBeVisible();
-    await expect(verificationBacklogCards.getByText("pnpm run check:verification-readiness")).toBeVisible();
-    await expect(verificationBacklogCards.getByText("uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py")).toBeVisible();
-    await expect(verificationBacklogCards.getByText("Do not start or modify another active lane while using this recommendation.")).toBeVisible();
+    await expect(
+      verificationBacklogCards.getByText("Use this completed verification lane as evidence only; do not requeue codex/verification-surface-hardening as a new lane."),
+    ).toBeVisible();
     await expect(safeBacklogPanel.getByText("Related report links").first()).toBeVisible();
     await expect(safeBacklogPanel.getByRole("link", { name: "GET /supervisor/maintenance-readiness-report" }).first()).toHaveAttribute(
       "href",
@@ -920,8 +917,8 @@ test.describe("dashboard workflow coverage", () => {
     );
     await expect(verificationBacklogCards).toHaveCount(1);
     const verificationBacklogCard = verificationBacklogCards.first();
-    await expect(verificationBacklogCard.getByText("ready", { exact: true })).toBeVisible();
-    await expect(verificationBacklogCard.getByText("slice: large", { exact: true })).toBeVisible();
+    await expect(verificationBacklogCard.getByText("closed", { exact: true })).toBeVisible();
+    await expect(verificationBacklogCard.getByText("slice: complete", { exact: true })).toBeVisible();
     await expect(verificationBacklogCard.getByText("Source evidence labels", { exact: true })).toBeVisible();
     await expect(verificationBacklogCard.getByText("3-27-safe-development-backlog-report.md")).toBeVisible();
     await expect(verificationBacklogCard.getByText("3-32-safe-development-backlog-drift-check.md")).toBeVisible();
@@ -945,15 +942,21 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationBacklogCard.getByRole("link", { name: "/controls#supervisor-report-catalog" })).toBeVisible();
     await expect(verificationBacklogCard.getByRole("link", { name: "/controls#development-runway-report" })).toBeVisible();
     await expect(
-      verificationBacklogCard.getByText(
-        "Add or extend static drift checks in larger coherent PR slices whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
-      ),
+      verificationBacklogCard.getByText("Use this completed verification lane as evidence only; do not requeue codex/verification-surface-hardening as a new lane."),
     ).toBeVisible();
     await expect(
       verificationBacklogCard.getByText("Verification surface hardening is read-only planning guidance, not execution-authority approval."),
     ).toBeVisible();
     await expect(safeBacklogPanel.getByRole("link", { name: "/controls#github-workflow-policy-report" })).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "GitHub delivery hygiene" })).toBeVisible();
+    const githubDeliveryBacklogCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "GitHub delivery hygiene" }) });
+    await expect(githubDeliveryBacklogCard.getByText("Next lane handoff")).toBeVisible();
+    await expect(githubDeliveryBacklogCard.getByText("branch: codex/github-delivery-hygiene")).toBeVisible();
+    await expect(githubDeliveryBacklogCard.getByText('start: node ./scripts/codex-workspace.mjs start "github delivery hygiene"')).toBeVisible();
+    await expect(githubDeliveryBacklogCard.getByText("pnpm run check:github-workflow-policy")).toBeVisible();
+    await expect(githubDeliveryBacklogCard.getByText("uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py")).toBeVisible();
+    await expect(githubDeliveryBacklogCard.getByText("docs/github-connector-workflow.md", { exact: true })).toHaveCount(1);
+    await expect(githubDeliveryBacklogCard.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true })).toHaveCount(1);
     await expect(safeBacklogPanel.getByText("persistent plaintext gh token storage")).toBeVisible();
     await expect(safeBacklogPanel.getByRole("heading", { name: "Worker backlog queue refresh" })).toBeVisible();
     const workerQueueCard = safeBacklogPanel.locator("article").filter({ has: page.getByRole("heading", { name: "Worker backlog queue refresh" }) });

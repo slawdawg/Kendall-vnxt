@@ -2252,11 +2252,10 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "explicit operator approval naming authority and scope" in blocked_item["blockedBy"]
     assert blocked_item["nextLane"] is None
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
-    assert verification_item["nextLane"]["laneSlug"] == "verification-surface-hardening"
-    assert verification_item["nextLane"]["branchName"] == "codex/verification-surface-hardening"
-    assert verification_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "verification surface hardening"'
-    assert "pnpm run check:verification-readiness" in verification_item["nextLane"]["verificationCommands"]
-    assert any("another active lane" in stop_line for stop_line in verification_item["nextLane"]["stopLines"])
+    assert verification_item["status"] == "closed"
+    assert verification_item["recommendedSliceSize"] == "complete"
+    assert verification_item["nextLane"] is None
+    assert "do not requeue codex/verification-surface-hardening" in verification_item["nextAction"]
     assert "/controls#verification-readiness-report" in verification_item["dashboardAnchors"]
     assert "/controls#development-runway-report" in verification_item["dashboardAnchors"]
     assert "docs/workflows/implementation-evidence-boundary.md" in verification_item["relatedDocs"]
@@ -2290,8 +2289,20 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "GET /supervisor/delivery-readiness-policy-report" in github_item["relatedReports"]
     assert "/controls#github-workflow-policy-report" in github_item["dashboardAnchors"]
     assert "/controls#delivery-readiness-policy-report" in github_item["dashboardAnchors"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in github_item["relatedDocs"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in github_item["relatedDocs"]
+    assert github_item["relatedReports"] == [
+        "GET /supervisor/github-workflow-policy-report",
+        "GET /supervisor/delivery-readiness-policy-report",
+        "GET /supervisor/report-catalog",
+        "GET /supervisor/verification-readiness-report",
+        "GET /supervisor/managed-recipe-policy-report",
+    ]
+    assert len(github_item["relatedReports"]) == len(set(github_item["relatedReports"]))
+    assert github_item["relatedDocs"] == [
+        "docs/github-connector-workflow.md",
+        "docs/workflows/implementation-evidence-boundary.md",
+    ]
+    assert len(github_item["relatedDocs"]) == len(set(github_item["relatedDocs"]))
+    assert len(github_item["dashboardAnchors"]) == len(set(github_item["dashboardAnchors"]))
     assert "docs/workflows/implementation-evidence-boundary.md" in github_item["relatedDocs"]
     assert any("plaintext gh token" in evidence for evidence in github_item["evidence"])
     evidence_item = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish")

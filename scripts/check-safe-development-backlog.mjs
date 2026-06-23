@@ -55,6 +55,10 @@ const verificationItemMatch = serviceSource.match(
   /SafeDevelopmentBacklogItemView\(\s*itemId="verification-surface-hardening"[\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/,
 );
 const verificationItemSource = verificationItemMatch?.[0] ?? "";
+const githubDeliveryItemMatch = serviceSource.match(
+  /SafeDevelopmentBacklogItemView\(\s*itemId="github-delivery-hygiene"[\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/,
+);
+const githubDeliveryItemSource = githubDeliveryItemMatch?.[0] ?? "";
 
 function countOccurrences(source, text) {
   return source.split(text).length - 1;
@@ -81,6 +85,14 @@ function assertExactList(actual, expected, label) {
   assertCondition(
     actual.length === expected.length && actual.every((value, index) => value === expected[index]),
     `${label} must exactly match ${JSON.stringify(expected)} but found ${JSON.stringify(actual)}`,
+    failures,
+  );
+}
+
+function assertUniqueList(values, label) {
+  assertCondition(
+    new Set(values).size === values.length,
+    `${label} must not contain duplicate entries: ${JSON.stringify(values)}`,
     failures,
   );
 }
@@ -168,16 +180,22 @@ assertExactList(parsedVerificationLabels, verificationEvidenceLabels, "Verificat
 assertExactList(parsedVerificationReports, verificationRelatedReports, "Verification related reports");
 assertExactList(parsedVerificationDocs, verificationRelatedDocs, "Verification related docs");
 assertExactList(parsedVerificationAnchors, verificationDashboardAnchors, "Verification dashboard anchors");
+assertUniqueList(parsedVerificationLabels, "Verification source evidence labels");
+assertUniqueList(parsedVerificationReports, "Verification related reports");
+assertUniqueList(parsedVerificationDocs, "Verification related docs");
+assertUniqueList(parsedVerificationAnchors, "Verification dashboard anchors");
 assertCondition(
-  new Set(parsedVerificationLabels).size === parsedVerificationLabels.length,
-  "Verification source evidence labels must not contain duplicates",
+  githubDeliveryItemSource.includes('itemId="github-delivery-hygiene"'),
+  "Safe backlog service must expose the github-delivery-hygiene item block",
   failures,
 );
-assertCondition(
-  new Set(parsedVerificationDocs).size === parsedVerificationDocs.length,
-  "Verification related docs must not contain duplicates",
-  failures,
-);
+for (const [fieldName, label] of [
+  ["relatedReports", "GitHub delivery related reports"],
+  ["relatedDocs", "GitHub delivery related docs"],
+  ["dashboardAnchors", "GitHub delivery dashboard anchors"],
+]) {
+  assertUniqueList(extractPythonStringList(githubDeliveryItemSource, fieldName), label);
+}
 assertCondition(
   parsedVerificationLabels.every((label) => storyIndex.includes(label)),
   "Verification source evidence labels must all exist in implementation-evidence-boundary.md",

@@ -513,10 +513,8 @@ try {
     assert(result.stdout.includes("Assignment Report"), result.stdout || result.stderr);
     assert(result.stdout.includes("Safe backlog candidates:"), result.stdout || result.stderr);
     assert(result.stdout.includes("- safe-backlog-report-alignment | closed"), result.stdout || result.stderr);
-    assertIncludesAny(result.stdout, [
-      "- verification-surface-hardening | assignable",
-      "- verification-surface-hardening | ambiguous",
-    ]);
+    assert(result.stdout.includes("- verification-surface-hardening | closed"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- github-delivery-hygiene | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -530,8 +528,8 @@ try {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
     seedClosedSafeBacklogManifests(stateRoot);
-    if (branchExists(rootDir, "codex/verification-surface-hardening")) {
-      seedUnownedVerificationWorkspace(stateRoot);
+    if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
+      seedUnownedSafeBacklogWorkspace(stateRoot, "github-delivery-hygiene");
     }
     const before = taskSnapshot(tasksDir);
 
@@ -560,7 +558,7 @@ try {
       const branch = expected.branch;
       const branchBefore = branchExists(rootDir, branch);
       if (branchBefore) {
-        seedUnownedVerificationWorkspace(claimStateRoot);
+        seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug);
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
       }
@@ -605,7 +603,7 @@ try {
     try {
       const expected = expectedClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
-        seedClaimedVerificationAssignment(claimStateRoot, "runner-a");
+        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
       }
@@ -636,7 +634,7 @@ try {
     try {
       const expected = expectedClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
-        seedClaimedVerificationAssignment(claimStateRoot, "runner-a");
+        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
         const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
@@ -662,8 +660,8 @@ try {
   test("heartbeat updates current-owner assignment lease evidence", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-assignment-"));
     try {
-      if (branchExists(rootDir, "codex/verification-surface-hardening")) {
-        seedClaimedVerificationAssignment(claimStateRoot, "runner-a");
+      if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
+        seedClaimedSafeBacklogAssignment(claimStateRoot, "github-delivery-hygiene", "runner-a");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
         const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
@@ -674,7 +672,7 @@ try {
 
       const result = run([
         "heartbeat",
-        "verification-surface-hardening",
+        "github-delivery-hygiene",
         "--owner",
         "runner-a",
         "--phase",
@@ -691,7 +689,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("APPLY: heartbeat"), result.stdout || result.stderr);
-      assert(result.stdout.includes("target assignment verification-surface-hardening"), result.stdout || result.stderr);
+      assert(result.stdout.includes("target assignment github-delivery-hygiene"), result.stdout || result.stderr);
       assert(
         result.stdout.includes("heartbeat metadata only; no branch, PR, cleanup, or ownership mutation"),
         result.stdout || result.stderr,
@@ -699,7 +697,7 @@ try {
       assert(taskSnapshot(tasksDir) === beforeTasks, "assignment heartbeat mutated workspace manifests");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "assignment heartbeat created worktrees");
 
-      const assignmentPath = join(claimStateRoot, "assignments", "verification-surface-hardening.json");
+      const assignmentPath = join(claimStateRoot, "assignments", "github-delivery-hygiene.json");
       const assignment = JSON.parse(readFileSync(assignmentPath, "utf8"));
       assert(assignment.status === "claimed", "heartbeat should not change assignment status");
       assert(assignment.owner === "runner-a", "heartbeat changed assignment owner");
@@ -714,7 +712,7 @@ try {
 
       const second = run([
         "heartbeat",
-        "verification-surface-hardening",
+        "github-delivery-hygiene",
         "--owner",
         "runner-a",
         "--phase",
@@ -735,7 +733,7 @@ try {
       assert(report.stdout.includes("runner=codex-cli"), report.stdout || report.stderr);
       const assignmentLine = report.stdout
         .split("\n")
-        .find((line) => line.startsWith("- verification-surface-hardening | claimed | owner=runner-a"));
+        .find((line) => line.startsWith("- github-delivery-hygiene | claimed | owner=runner-a"));
       assert(assignmentLine && !assignmentLine.includes("heartbeat=none"), report.stdout || report.stderr);
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
@@ -745,19 +743,19 @@ try {
   test("heartbeat refuses assignment owned by another runner without mutation", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-owned-assignment-"));
     try {
-      if (branchExists(rootDir, "codex/verification-surface-hardening")) {
-        seedClaimedVerificationAssignment(claimStateRoot, "runner-b");
+      if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
+        seedClaimedSafeBacklogAssignment(claimStateRoot, "github-delivery-hygiene", "runner-b");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
         const claim = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
         assert(claim.code === 0, claim.stderr || claim.stdout);
       }
-      const assignmentPath = join(claimStateRoot, "assignments", "verification-surface-hardening.json");
+      const assignmentPath = join(claimStateRoot, "assignments", "github-delivery-hygiene.json");
       const before = readFileSync(assignmentPath, "utf8");
 
       const result = run([
         "heartbeat",
-        "verification-surface-hardening",
+        "github-delivery-hygiene",
         "--owner",
         "runner-a",
         "--phase",
@@ -1020,8 +1018,8 @@ try {
   test("dispatch-next dry-run previews handoff without mutation", () => {
     const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-dry-run-"));
     try {
-      if (branchExists(rootDir, "codex/verification-surface-hardening")) {
-        seedUnownedVerificationWorkspace(dispatchStateRoot);
+      if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
+        seedUnownedSafeBacklogWorkspace(dispatchStateRoot, "github-delivery-hygiene");
       } else {
         seedClosedSafeBacklogManifests(dispatchStateRoot);
       }
@@ -1038,7 +1036,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
-      assert(result.stdout.includes("- selected lane verification-surface-hardening"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- selected lane github-delivery-hygiene"), result.stdout || result.stderr);
       assert(
         result.stdout.includes("- workspace action claim_and_create_workspace") ||
           result.stdout.includes("- workspace action claim_existing_workspace"),
@@ -1071,7 +1069,7 @@ try {
         `${JSON.stringify(
           {
             task_id: "dispatch-workspace",
-            branch: "codex/verification-surface-hardening",
+            branch: "codex/github-delivery-hygiene",
             worktree_path: worktreePath,
             base_branch: "main",
             status: "active",
@@ -1177,8 +1175,8 @@ try {
   test("claim-next apply blocks a lane assigned to another owner", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-owned-assignment-"));
     try {
-      if (branchExists(rootDir, "codex/verification-surface-hardening")) {
-        seedClaimedVerificationAssignment(claimStateRoot, "runner-b");
+      if (branchExists(rootDir, "codex/github-delivery-hygiene")) {
+        seedClaimedSafeBacklogAssignment(claimStateRoot, "github-delivery-hygiene", "runner-b");
       } else {
         seedClosedSafeBacklogManifests(claimStateRoot);
         const first = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
@@ -1219,7 +1217,7 @@ try {
       const after = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
       assert(second.code !== 0, "claim-next --apply unexpectedly claimed another owner's assignment");
-      assert(second.stdout.includes("- verification-surface-hardening | blocked_owned_active"), second.stdout || second.stderr);
+      assert(second.stdout.includes("- github-delivery-hygiene | blocked_owned_active"), second.stdout || second.stderr);
       assert(second.stderr.includes("No claimable safe backlog lane found"), second.stderr || second.stdout);
       assert(before === after, "blocked claim-next --apply mutated another owner's assignment");
     } finally {
@@ -1238,7 +1236,7 @@ try {
         `${JSON.stringify(
           {
             task_id: "unowned-safe-backlog",
-            branch: "codex/verification-surface-hardening",
+            branch: "codex/github-delivery-hygiene",
             worktree_path: rootDir,
             base_branch: "main",
             status: "active",
@@ -1272,7 +1270,7 @@ try {
         `${JSON.stringify(
           {
             task_id: "unowned-safe-backlog",
-            branch: "codex/verification-surface-hardening",
+            branch: "codex/github-delivery-hygiene",
             worktree_path: rootDir,
             base_branch: "main",
             status: "active",
@@ -1564,7 +1562,8 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("no claimable safe backlog lane found"), result.stdout || result.stderr);
-      assert(result.stdout.includes("- verification-surface-hardening | blocked_owned_active"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- verification-surface-hardening | closed"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- github-delivery-hygiene | blocked_owned_active"), result.stdout || result.stderr);
       assert(result.stdout.includes("do not mutate without explicit takeover approval"), result.stdout || result.stderr);
       assert(before === after, "claim-next --dry-run mutated the owned lane manifest");
     } finally {
@@ -2041,9 +2040,9 @@ function remoteBranchExists(cwd, branch) {
 
 function expectedClaimCandidate() {
   return {
-    slug: "verification-surface-hardening",
-    title: "verification surface hardening",
-    branch: "codex/verification-surface-hardening",
+    slug: "github-delivery-hygiene",
+    title: "github delivery hygiene",
+    branch: "codex/github-delivery-hygiene",
   };
 }
 
@@ -2082,15 +2081,15 @@ function seedClosedSafeBacklogManifests(stateRootPath) {
   }
 }
 
-function seedUnownedVerificationWorkspace(stateRootPath) {
+function seedUnownedSafeBacklogWorkspace(stateRootPath, laneSlug) {
   const tasksDir = join(stateRootPath, "tasks");
   mkdirSync(tasksDir, { recursive: true });
   writeFileSync(
-    join(tasksDir, "verification-surface-hardening-workspace.json"),
+    join(tasksDir, `${laneSlug}-workspace.json`),
     `${JSON.stringify(
       {
-        task_id: "verification-surface-hardening-workspace",
-        branch: "codex/verification-surface-hardening",
+        task_id: `${laneSlug}-workspace`,
+        branch: `codex/${laneSlug}`,
         worktree_path: rootDir,
         base_branch: "main",
         status: "active",
@@ -2105,18 +2104,22 @@ function seedUnownedVerificationWorkspace(stateRootPath) {
   );
 }
 
-function seedClaimedVerificationAssignment(stateRootPath, owner) {
+function seedUnownedVerificationWorkspace(stateRootPath) {
+  seedUnownedSafeBacklogWorkspace(stateRootPath, "verification-surface-hardening");
+}
+
+function seedClaimedSafeBacklogAssignment(stateRootPath, laneSlug, owner) {
   const assignmentsDir = join(stateRootPath, "assignments");
   mkdirSync(assignmentsDir, { recursive: true });
   const now = new Date().toISOString();
   writeFileSync(
-    join(assignmentsDir, "verification-surface-hardening.json"),
+    join(assignmentsDir, `${laneSlug}.json`),
     `${JSON.stringify(
       {
-        assignment_id: "verification-surface-hardening",
-        task_id: "verification-surface-hardening",
-        lane_slug: "verification-surface-hardening",
-        branch: "codex/verification-surface-hardening",
+        assignment_id: laneSlug,
+        task_id: laneSlug,
+        lane_slug: laneSlug,
+        branch: `codex/${laneSlug}`,
         status: "claimed",
         owner,
         owner_updated_at: now,
@@ -2128,6 +2131,10 @@ function seedClaimedVerificationAssignment(stateRootPath, owner) {
       2,
     )}\n`,
   );
+}
+
+function seedClaimedVerificationAssignment(stateRootPath, owner) {
+  seedClaimedSafeBacklogAssignment(stateRootPath, "verification-surface-hardening", owner);
 }
 
 function readJson(path) {

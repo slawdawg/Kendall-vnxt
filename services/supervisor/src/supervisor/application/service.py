@@ -3445,9 +3445,9 @@ class SupervisorService:
                 itemId="verification-surface-hardening",
                 label="Verification surface hardening",
                 priority="P1",
-                status="ready",
-                summary="Expand drift checks and focused verification when report or browser surfaces grow.",
-                recommendedSliceSize="large",
+                status="closed",
+                summary="Delivered verification readiness surface hardening; keep the completed lane as evidence and create a new lane before future expansion.",
+                recommendedSliceSize="complete",
                 evidence=[
                     f"{len(required_verification)} required verification commands are surfaced.",
                     "Dashboard e2e, supervisor report catalog, runtime evidence export, safe backlog, managed recipe policy, and delivery readiness policy drift checks now run inside the full local check.",
@@ -3476,8 +3476,7 @@ class SupervisorService:
                     "/controls#supervisor-report-catalog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=verification_surface_lane,
-                nextAction="Add or extend static drift checks in larger coherent PR slices whenever commands, reports, runtime export contracts, safe backlog items, or dashboard assertions gain new surfaces.",
+                nextAction="Use this completed verification lane as evidence only; do not requeue codex/verification-surface-hardening as a new lane.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="github-delivery-hygiene",
@@ -3500,8 +3499,6 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/github-connector-workflow.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
                     "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
