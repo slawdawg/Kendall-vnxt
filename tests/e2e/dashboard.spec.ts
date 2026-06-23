@@ -1097,9 +1097,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runnerAssignmentPanel.getByText("Lifecycle: prepared", { exact: true })).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Recovery action: inspect-handoff-evidence", { exact: true })).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Queue counts: available", { exact: true })).toBeVisible();
-    const handoffAuditTrailHeading = runnerAssignmentPanel.getByText("Handoff audit trail", { exact: true }).first();
-    await expect(handoffAuditTrailHeading).toBeVisible();
-    const handoffAuditTrail = handoffAuditTrailHeading.locator("..");
+    const handoffAuditTrail = runnerAssignmentPanel.getByTestId("handoff-audit-trail").first();
+    await expect(handoffAuditTrail.getByText("Handoff audit trail", { exact: true })).toBeVisible();
+    await expect(handoffAuditTrail.getByText("Audit query: 1/1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("Audit #1: complete; lifecycle not-applicable; recovery no-action")).toBeVisible();
     await expect(handoffAuditTrail.getByText("Readiness evidence: passed via node ./scripts/codex-workspace.mjs doctor")).toBeVisible();
     await expect(handoffAuditTrail.getByText("Queue evidence: available", { exact: true })).toBeVisible();
@@ -1111,6 +1111,13 @@ test.describe("dashboard workflow coverage", () => {
     await expect(handoffAuditTrail.getByText("blocked authority: 1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("blocked owned active: 1", { exact: true })).toBeVisible();
     await expect(handoffAuditTrail.getByText("closed: 9", { exact: true })).toBeVisible();
+    await handoffAuditTrail.getByLabel("Evidence").selectOption("complete");
+    await handoffAuditTrail.getByLabel("Payload").selectOption("not-retained");
+    await handoffAuditTrail.getByLabel("Query").fill("doctor");
+    await expect(handoffAuditTrail.getByText("Audit query: 1/1", { exact: true })).toBeVisible();
+    await handoffAuditTrail.getByLabel("Query").fill("not-present-in-audit");
+    await expect(handoffAuditTrail.getByText("Audit query: 0/1", { exact: true })).toBeVisible();
+    await expect(handoffAuditTrail.getByText("No audit entries match the current query.")).toBeVisible();
 
     const managedRecipePolicyPanel = page
       .locator("section")
