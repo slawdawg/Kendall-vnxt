@@ -658,6 +658,10 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
     }),
   };
   const sourceCompletionShortcutDisabled = (filter: SourceCompletionPresetFilter) => sourceCompletionShortcutDisabledReasons[filter] !== null;
+  const applyEmptyStateSourceCompletionPreset = (filter: SourceCompletionPresetFilter) => {
+    if (sourceCompletionShortcutDisabled(filter)) return;
+    applySourceCompletionPreset(filter);
+  };
   const emptyStateShortcutDisabledReasonRows = Object.entries(sourceCompletionShortcutDisabledReasons).filter(
     (entry): entry is [SourceCompletionPresetFilter, string] => entry[1] !== null,
   );
@@ -861,9 +865,9 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
                 type="button"
                 aria-label={`Show assignment-backed rows from empty state (${sourceCompletionPresetCounts.assignment})`}
                 aria-describedby={sourceCompletionShortcutDisabledReasons.assignment ? "empty-state-assignment-shortcut-disabled-reason" : undefined}
-                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={sourceCompletionShortcutDisabled("assignment")}
-                onClick={() => applySourceCompletionPreset("assignment")}
+                aria-disabled={sourceCompletionShortcutDisabled("assignment")}
+                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+                onClick={() => applyEmptyStateSourceCompletionPreset("assignment")}
               >
                 Assignment-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.assignment}</span>
               </button>
@@ -871,9 +875,9 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
                 type="button"
                 aria-label={`Show workspace-backed rows from empty state (${sourceCompletionPresetCounts.workspace})`}
                 aria-describedby={sourceCompletionShortcutDisabledReasons.workspace ? "empty-state-workspace-shortcut-disabled-reason" : undefined}
-                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={sourceCompletionShortcutDisabled("workspace")}
-                onClick={() => applySourceCompletionPreset("workspace")}
+                aria-disabled={sourceCompletionShortcutDisabled("workspace")}
+                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+                onClick={() => applyEmptyStateSourceCompletionPreset("workspace")}
               >
                 Workspace-backed <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.workspace}</span>
               </button>
@@ -881,9 +885,9 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
                 type="button"
                 aria-label={`Show uncompleted rows from empty state (${sourceCompletionPresetCounts.none})`}
                 aria-describedby={sourceCompletionShortcutDisabledReasons.none ? "empty-state-none-shortcut-disabled-reason" : undefined}
-                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={sourceCompletionShortcutDisabled("none")}
-                onClick={() => applySourceCompletionPreset("none")}
+                aria-disabled={sourceCompletionShortcutDisabled("none")}
+                className="h-8 w-fit shrink-0 rounded-[0.5rem] border bg-[var(--surface)] px-3 text-xs font-semibold text-[var(--foreground)] aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+                onClick={() => applyEmptyStateSourceCompletionPreset("none")}
               >
                 Uncompleted <span className="ml-2 font-mono text-[11px] text-[var(--muted)]">{sourceCompletionPresetCounts.none}</span>
               </button>

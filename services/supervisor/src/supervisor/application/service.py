@@ -2958,6 +2958,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         preferred_successor_ids = (
+            "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
             "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
             "dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh",
             "dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
@@ -4091,6 +4092,24 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
+            lane_title="Dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh",
+            scope=[
+                "keyboard traversal evidence for focusable empty-state recovery shortcuts with visible disabled reasons",
+                "dashboard assertions that aria-disabled shortcut activation remains a no-op while enabled shortcuts still recover to broader views",
+                "static drift coverage for successor queue advancement and metadata-only keyboard loop messaging",
+                "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -4098,7 +4117,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh"],
+                includedBacklogItems=["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -4123,14 +4142,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the closed source guard filter empty-state shortcut reason focus item is the next safe backlog item for dispatcher queue integrity work.",
-                        evidence=["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh"],
+                        status="ready" if "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the closed source guard filter empty-state shortcut reason keyboard loop item is the next safe backlog item for dispatcher queue integrity work.",
+                        evidence=["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the closed source guard filter empty-state shortcut reason focus item ready before changing dispatcher queue snapshot or assignment surfaces.",
+                        nextAction="Keep the closed source guard filter empty-state shortcut reason keyboard loop item ready before changing dispatcher queue snapshot or assignment surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -4160,8 +4179,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_focus_lane,
-                nextAction="Select this slice for dispatcher closed source guard filter empty-state shortcut reason focus work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_lane,
+                nextAction="Select this slice for dispatcher closed source guard filter empty-state shortcut reason keyboard loop work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -5071,6 +5090,24 @@ class SupervisorService:
                 "keyboard and focus-state evidence for empty-state recovery shortcut reason hints without changing source data",
                 "dashboard assertions that visible disabled reasons stay adjacent to shortcut controls after filter transitions",
                 "static drift coverage for successor queue advancement and metadata-only focus/reason messaging",
+                "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+                "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
+            lane_title="Dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh",
+            scope=[
+                "keyboard traversal evidence for focusable empty-state recovery shortcuts with visible disabled reasons",
+                "dashboard assertions that aria-disabled shortcut activation remains a no-op while enabled shortcuts still recover to broader views",
+                "static drift coverage for successor queue advancement and metadata-only keyboard loop messaging",
                 "metadata-only UI evidence without provider calls, worker launches, lane takeovers, or branch deletion outside the current lane",
             ],
             verification_commands=[
@@ -6131,7 +6168,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter presets evidence only; do not requeue dispatcher-closed-source-guard-filter-presets-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter presets evidence only; do not requeue dispatcher-closed-source-guard-filter-presets-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-counts-refresh",
@@ -6160,7 +6197,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter counts evidence only; do not requeue dispatcher-closed-source-guard-filter-counts-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter counts evidence only; do not requeue dispatcher-closed-source-guard-filter-counts-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-empty-state-refresh",
@@ -6189,7 +6226,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter empty-state evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter empty-state evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-empty-state-reset-refresh",
@@ -6218,7 +6255,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter empty-state reset evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-reset-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter empty-state reset evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-reset-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh",
@@ -6247,7 +6284,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter empty-state shortcut evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter empty-state shortcut evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcuts-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
@@ -6276,7 +6313,7 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter empty-state shortcut count evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter empty-state shortcut count evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh",
@@ -6305,18 +6342,47 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextAction="Use this completed dispatcher closed source guard filter empty-state shortcut disabled reason evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh.",
+                nextAction="Use this completed dispatcher closed source guard filter empty-state shortcut disabled reason evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
                 label="Dispatcher closed source guard filter empty state shortcut reason focus refresh",
                 priority="P2",
+                status="closed",
+                summary="Delivered keyboard and focus-state evidence around empty-state shortcut reason hints so generated lane workers can verify explanations remain adjacent after filter transitions.",
+                recommendedSliceSize="complete",
+                evidence=[
+                    "Empty-state recovery shortcuts with disabled reasons remain focusable with aria-disabled instead of native disabled controls.",
+                    "Dashboard assertions cover focus landing on the explained shortcut, no-op Enter activation for aria-disabled shortcuts, and adjacent visible reason text after filter transitions.",
+                    "The reason focus refresh is metadata-only and does not mutate source-completion evidence, generated workspace manifests, workers, providers, or lane ownership.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextAction="Use this completed dispatcher closed source guard filter empty-state shortcut reason focus evidence only; do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh. Continue with dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
+                label="Dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh",
+                priority="P2",
                 status="ready",
-                summary="Add keyboard and focus-state evidence around empty-state shortcut reason hints so generated lane workers can verify the explanation remains adjacent after filter transitions.",
+                summary="Add keyboard traversal evidence around the focusable empty-state shortcut reason loop so generated lane workers can verify aria-disabled no-op states and enabled recovery states in sequence.",
                 recommendedSliceSize="medium_to_large",
                 evidence=[
-                    "Disabled shortcut reasons are now visible and linked to disabled controls, but focus-state continuity after shortcut transitions is not explicitly covered.",
-                    "The next lane should keep reason/focus evidence metadata-only and avoid changing source data or dispatcher ownership.",
+                    "Reason-linked shortcuts are focusable and guarded with aria-disabled, but full keyboard traversal through the empty-state shortcut loop is not explicitly covered.",
+                    "The next lane should keep reason keyboard-loop evidence metadata-only and avoid changing source data or dispatcher ownership.",
                     "Do not launch workers, call providers, mutate generated workspace manifests, or take over unrelated active lanes.",
                 ],
                 relatedReports=[
@@ -6334,8 +6400,8 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_focus_lane,
-                nextAction="Refresh dispatcher closed source guard filter empty-state shortcut reason focus evidence so keyboard and filter transitions keep disabled explanations inspectable.",
+                nextLane=dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_lane,
+                nextAction="Refresh dispatcher closed source guard filter empty-state shortcut reason keyboard-loop evidence so keyboard traversal proves aria-disabled no-op controls and enabled recovery shortcuts remain inspectable.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
