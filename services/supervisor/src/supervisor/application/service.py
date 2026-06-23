@@ -2514,6 +2514,7 @@ class SupervisorService:
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
         preferred_successor_ids = (
+            "dispatcher-queue-handoff-badges-refresh",
             "dispatcher-queue-state-fixtures-refresh",
             "assignment-report-queue-proof-refresh",
         )
@@ -3125,7 +3126,22 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
-
+        dispatcher_queue_handoff_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-badges-refresh",
+            lane_title="Dispatcher queue handoff badges refresh",
+            scope=[
+                "dispatch handoff queue state count badges",
+                "runner assignment continuity count alignment",
+                "workspace dispatcher evidence tests for generated lane workers",
+                "dashboard assertions for selected queue state summaries",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+        )
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -3133,7 +3149,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-queue-state-fixtures-refresh"],
+                includedBacklogItems=["dispatcher-queue-handoff-badges-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3158,14 +3174,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-queue-state-fixtures-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher queue state fixtures item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-queue-state-fixtures-refresh"],
+                        status="ready" if "dispatcher-queue-handoff-badges-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the dispatcher queue handoff badges item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["dispatcher-queue-handoff-badges-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher queue state fixtures item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the dispatcher queue handoff badges item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3195,8 +3211,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_queue_fixture_lane,
-                nextAction="Select this slice for dispatcher queue state fixture work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=dispatcher_queue_handoff_lane,
+                nextAction="Select this slice for dispatcher queue handoff badge work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -3628,6 +3644,22 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
+        dispatcher_queue_handoff_lane = self._safe_backlog_next_lane(
+            lane_slug="dispatcher-queue-handoff-badges-refresh",
+            lane_title="Dispatcher queue handoff badges refresh",
+            scope=[
+                "dispatch handoff queue state count badges",
+                "runner assignment continuity count alignment",
+                "workspace dispatcher evidence tests for generated lane workers",
+                "dashboard assertions for selected queue state summaries",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+        )
 
         items = [
             SafeDevelopmentBacklogItemView(
@@ -3951,13 +3983,48 @@ class SupervisorService:
                 itemId="dispatcher-queue-state-fixtures-refresh",
                 label="Dispatcher queue state fixtures refresh",
                 priority="P2",
+                status="closed",
+                summary="Delivered source-owned dispatcher queue fixtures so generated lane workers keep explicit evidence for assignable, active, blocked, and closed candidates.",
+                recommendedSliceSize="complete",
+                evidence=[
+                    "Dispatch handoff packets now record queue candidate state counts alongside selected lane, owner, branch, blockers, and next command.",
+                    "Workspace dispatcher tests assert visible dry-run counts and persisted handoff count evidence without provider calls, worker launches, or lane takeovers.",
+                    "Generated lane continuity remains source-owned after assignment-report-queue-proof-refresh closes.",
+                ],
+                sourceEvidenceLabels=[
+                    "3-27-safe-development-backlog-report.md",
+                    "3-32-safe-development-backlog-drift-check.md",
+                    "3-60-safe-backlog-report-anchors.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/report-catalog",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextAction="Use this completed dispatcher queue fixture evidence only; do not requeue dispatcher-queue-state-fixtures-refresh. Continue with dispatcher-queue-handoff-badges-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="dispatcher-queue-handoff-badges-refresh",
+                label="Dispatcher queue handoff badges refresh",
+                priority="P2",
                 status="ready",
-                summary="Expand source-owned dispatcher queue fixtures so generated lane workers keep explicit evidence for assignable, active, ambiguous, blocked, and closed candidates.",
+                summary="Surface dispatcher queue state count evidence as compact handoff badges so generated lane workers can scan why a lane was selected.",
                 recommendedSliceSize="medium_to_large",
                 evidence=[
-                    "Queue proof rows are now available in the runner assignment status report and should be expanded with fixture-backed ordering checks.",
-                    "The next fixture lane must keep dispatcher evidence read-only and avoid provider calls, worker launches, or lane takeovers.",
-                    "Generated lane continuity should remain source-owned after assignment-report-queue-proof-refresh closes.",
+                    "Dispatch handoff packets now include candidate state counts but the dashboard and report panels should make those counts easier to scan.",
+                    "The next lane must stay read-only/source-owned and avoid provider calls, worker launches, or lane takeovers.",
+                    "Generated lane continuity should remain explicit after dispatcher-queue-state-fixtures-refresh closes.",
                 ],
                 relatedReports=[
                     "GET /supervisor/runner-assignment-status-report",
@@ -3974,8 +4041,8 @@ class SupervisorService:
                     "/controls#safe-development-backlog",
                     "/controls#development-runway-report",
                 ],
-                nextLane=dispatcher_queue_fixture_lane,
-                nextAction="Refresh dispatcher queue state fixtures while keeping generated-worker evidence read-only and source-owned.",
+                nextLane=dispatcher_queue_handoff_lane,
+                nextAction="Refresh dispatcher queue handoff badges while keeping generated-worker evidence read-only and source-owned.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
