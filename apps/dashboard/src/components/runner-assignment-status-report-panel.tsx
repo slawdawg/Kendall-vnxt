@@ -1,4 +1,10 @@
-import type { RunnerAssignmentStatusReportView, RunnerAssignmentStatusRowView } from "@kendall/contracts";
+"use client";
+
+import { useMemo, useState } from "react";
+import type { RunnerAssignmentStatusReportView, RunnerAssignmentStatusRowView, RunnerHandoffAuditEntryView } from "@kendall/contracts";
+
+type AuditEvidenceFilter = "all" | RunnerHandoffAuditEntryView["evidenceStatus"];
+type AuditPayloadFilter = "all" | RunnerHandoffAuditEntryView["payloadRetention"];
 
 function formatGenerated(value: string): string {
   return new Date(value).toLocaleString();
@@ -33,10 +39,50 @@ function handoffCountEntries(row: RunnerAssignmentStatusRowView): [string, numbe
   return orderedCountEntries(row.handoffCandidateStateCounts ?? {});
 }
 
+function auditEntrySearchText(entry: RunnerHandoffAuditEntryView): string {
+  return [
+    entry.sequence,
+    entry.lane,
+    entry.branch,
+    entry.taskId,
+    entry.workspaceAction,
+    entry.nextCommand,
+    entry.generatedAt,
+    entry.readinessStatus,
+    entry.readinessCommand,
+    entry.readinessSummary,
+    entry.queueCountsStatus,
+    entry.lifecycleState,
+    entry.recoveryAction,
+    entry.recoverySummary,
+    entry.retentionPolicy,
+    entry.payloadRetention,
+    entry.retentionSummary,
+    entry.evidenceStatus,
+    entry.evidenceSummary,
+    ...Object.keys(entry.queueCounts ?? {}),
+    ...(entry.stopLines ?? []),
+  ]
+    .filter((value) => value !== null && value !== undefined)
+    .join(" ")
+    .toLowerCase();
+}
+
 function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
   const hasAvailableHandoff = row.handoffStatus === "available";
   const countEntries = handoffCountEntries(row);
   const auditEntries = row.handoffAuditTrail ?? [];
+  const [auditQuery, setAuditQuery] = useState("");
+  const [auditEvidenceFilter, setAuditEvidenceFilter] = useState<AuditEvidenceFilter>("all");
+  const [auditPayloadFilter, setAuditPayloadFilter] = useState<AuditPayloadFilter>("all");
+  const filteredAuditEntries = useMemo(() => {
+    const query = auditQuery.trim().toLowerCase();
+    return auditEntries.filter((entry) => {
+      if (auditEvidenceFilter !== "all" && entry.evidenceStatus !== auditEvidenceFilter) return false;
+      if (auditPayloadFilter !== "all" && entry.payloadRetention !== auditPayloadFilter) return false;
+      return query ? auditEntrySearchText(entry).includes(query) : true;
+    });
+  }, [auditEntries, auditEvidenceFilter, auditPayloadFilter, auditQuery]);
 
   return (
     <article className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
@@ -70,7 +116,7 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
       {row.currentCommand ? <p className="mt-2 text-xs leading-5 text-[var(--muted)]">Current command: {row.currentCommand}</p> : null}
       {row.lastResult ? <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Last result: {row.lastResult}</p> : null}
       {hasAvailableHandoff ? (
-        <div data-testid="handoff-audit-trail" className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        <div data-testid="resume-packet" className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
           <p className="font-semibold text-[var(--foreground)]">Resume packet</p>
           <p className="break-all">Owner: {row.owner ?? "none"}</p>
           <p className="break-all">Branch: {row.branch ?? "none"}</p>
@@ -109,10 +155,54 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
         </div>
       ) : null}
       {auditEntries.length > 0 ? (
-        <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
-          <p className="font-semibold text-[var(--foreground)]">Handoff audit trail</p>
+        <div data-testid="handoff-audit-trail" className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="font-semibold text-[var(--foreground)]">Handoff audit trail</p>
+              <p className="font-mono text-[11px] text-[var(--muted)]">
+                Audit query: {filteredAuditEntries.length}/{auditEntries.length}
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[minmax(10rem,1fr)_auto_auto]">
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Query</span>
+                <input
+                  className="h-8 rounded-[0.5rem] border bg-[var(--panel)] px-2 text-xs text-[var(--foreground)]"
+                  value={auditQuery}
+                  onChange={(event) => setAuditQuery(event.target.value)}
+                  placeholder="audit text"
+                />
+              </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Evidence</span>
+                <select
+                  className="h-8 rounded-[0.5rem] border bg-[var(--panel)] px-2 text-xs text-[var(--foreground)]"
+                  value={auditEvidenceFilter}
+                  onChange={(event) => setAuditEvidenceFilter(event.target.value as AuditEvidenceFilter)}
+                >
+                  <option value="all">all</option>
+                  <option value="complete">complete</option>
+                  <option value="partial">partial</option>
+                  <option value="invalid">invalid</option>
+                </select>
+              </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Payload</span>
+                <select
+                  className="h-8 rounded-[0.5rem] border bg-[var(--panel)] px-2 text-xs text-[var(--foreground)]"
+                  value={auditPayloadFilter}
+                  onChange={(event) => setAuditPayloadFilter(event.target.value as AuditPayloadFilter)}
+                >
+                  <option value="all">all</option>
+                  <option value="not-retained">not-retained</option>
+                  <option value="redacted">redacted</option>
+                  <option value="omitted">omitted</option>
+                </select>
+              </label>
+            </div>
+          </div>
           <div className="mt-2 grid gap-2">
-            {auditEntries.map((entry) => {
+            {filteredAuditEntries.map((entry) => {
               const auditCounts = orderedCountEntries(entry.queueCounts ?? {});
               const stopLines = entry.stopLines ?? [];
               return (
@@ -157,6 +247,9 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
                 </div>
               );
             })}
+            {filteredAuditEntries.length === 0 ? (
+              <p className="rounded-[0.5rem] border bg-[var(--panel)] px-2 py-1 text-[var(--muted)]">No audit entries match the current query.</p>
+            ) : null}
           </div>
         </div>
       ) : null}
