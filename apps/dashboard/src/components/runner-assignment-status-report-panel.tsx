@@ -11,6 +11,12 @@ import {
 
 type AuditEvidenceFilter = "all" | RunnerHandoffAuditEntryView["evidenceStatus"];
 type AuditPayloadFilter = "all" | RunnerHandoffAuditEntryView["payloadRetention"];
+type AssignmentClassificationFilter = "attention" | "active" | "blocked" | "assignable" | "closed" | "all";
+type AssignmentSourceFilter = "all" | "workspace" | "lane" | "backlog";
+type SourcedAssignmentRow = {
+  row: RunnerAssignmentStatusRowView;
+  source: Exclude<AssignmentSourceFilter, "all">;
+};
 
 function formatGenerated(value: string): string {
   return new Date(value).toLocaleString();
@@ -20,6 +26,27 @@ function labelFor(classification: string): string {
   if (classification === "blocked_stale_owner_needs_takeover") return "Stale";
   if (classification.startsWith("blocked_")) return "Blocked";
   return classification.replaceAll("_", " ");
+}
+
+function sourceLabel(source: AssignmentSourceFilter): string {
+  if (source === "all") return "All sources";
+  if (source === "workspace") return "Workspace";
+  if (source === "lane") return "Lane assignment";
+  return "Backlog";
+}
+
+function classificationFilterLabel(filter: AssignmentClassificationFilter): string {
+  if (filter === "attention") return "Needs attention";
+  if (filter === "all") return "All classifications";
+  return labelFor(filter);
+}
+
+function classificationMatches(row: RunnerAssignmentStatusRowView, filter: AssignmentClassificationFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "attention") return row.classification !== "closed";
+  if (filter === "active") return row.classification === "active" || row.classification === "claimed";
+  if (filter === "blocked") return row.classification.startsWith("blocked_") || row.classification === "unknown";
+  return row.classification === filter;
 }
 
 function orderedCountEntries(counts: Record<string, number>): [string, number][] {
@@ -120,7 +147,7 @@ function auditJsonFilename(row: RunnerAssignmentStatusRowView, entries: RunnerHa
   return auditExportFilename(row, entries).replace(/\.txt$/, ".json");
 }
 
-function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
+function Row({ row, source }: { row: RunnerAssignmentStatusRowView; source: Exclude<AssignmentSourceFilter, "all"> }) {
   const hasAvailableHandoff = row.handoffStatus === "available";
   const countEntries = handoffCountEntries(row);
   const auditEntries = row.handoffAuditTrail ?? [];
@@ -221,6 +248,7 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{row.reason}</p>
       <div className="mt-3 grid gap-2 md:grid-cols-3">
+        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">source: {sourceLabel(source)}</span>
         <span className="break-all rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">owner: {row.owner ?? "none"}</span>
         <span className="break-all rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">branch: {row.branch ?? "none"}</span>
         <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">phase: {row.phase ?? "none"}</span>
@@ -458,9 +486,17 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
 }
 
 export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAssignmentStatusReportView }) {
-  const rows = [...report.workspaceAssignments, ...report.laneAssignments, ...report.backlogCandidates];
-  const urgentRows = rows.filter((row) => row.classification !== "closed");
-  const visibleRows = urgentRows.length > 0 ? urgentRows : rows.slice(0, 3);
+  const [classificationFilter, setClassificationFilter] = useState<AssignmentClassificationFilter>("attention");
+  const [sourceFilter, setSourceFilter] = useState<AssignmentSourceFilter>("all");
+  const rows: SourcedAssignmentRow[] = [
+    ...report.workspaceAssignments.map((row) => ({ row, source: "workspace" as const })),
+    ...report.laneAssignments.map((row) => ({ row, source: "lane" as const })),
+    ...report.backlogCandidates.map((row) => ({ row, source: "backlog" as const })),
+  ];
+  const filteredRows = rows.filter(({ row, source }) => {
+    if (sourceFilter !== "all" && source !== sourceFilter) return false;
+    return classificationMatches(row, classificationFilter);
+  });
   const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
   return (
     <section className="rounded-[1rem] border bg-[var(--surface)] p-4 shadow-sm">
@@ -538,14 +574,55 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
         </div>
       ) : null}
 
-      {visibleRows.length === 0 ? (
+      <div data-testid="assignment-row-filters" className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Assignment row filters</p>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+              Showing {filteredRows.length}/{rows.length} rows for {classificationFilterLabel(classificationFilter)} from {sourceLabel(sourceFilter)}.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Classification</span>
+              <select
+                className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-2 text-xs text-[var(--foreground)]"
+                value={classificationFilter}
+                onChange={(event) => setClassificationFilter(event.target.value as AssignmentClassificationFilter)}
+              >
+                <option value="attention">needs attention</option>
+                <option value="active">active</option>
+                <option value="blocked">blocked</option>
+                <option value="assignable">assignable</option>
+                <option value="closed">closed</option>
+                <option value="all">all</option>
+              </select>
+            </label>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">Source</span>
+              <select
+                className="h-8 rounded-[0.5rem] border bg-[var(--surface)] px-2 text-xs text-[var(--foreground)]"
+                value={sourceFilter}
+                onChange={(event) => setSourceFilter(event.target.value as AssignmentSourceFilter)}
+              >
+                <option value="all">all</option>
+                <option value="workspace">workspace</option>
+                <option value="lane">lane assignment</option>
+                <option value="backlog">backlog</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {filteredRows.length === 0 ? (
         <p className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)]">
-          No active runner assignments. Review the safe backlog and assignment status report before starting work.
+          No assignment rows match the current filters. Adjust classification or source before deciding the queue is empty.
         </p>
       ) : (
         <div className="mt-4 grid gap-3">
-          {visibleRows.map((row) => (
-            <Row key={`${row.id}:${row.classification}:${row.reasonCode}`} row={row} />
+          {filteredRows.map(({ row, source }) => (
+            <Row key={`${source}:${row.id}:${row.classification}:${row.reasonCode}`} row={row} source={source} />
           ))}
         </div>
       )}

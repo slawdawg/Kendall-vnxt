@@ -120,7 +120,7 @@ assertCondition(
 for (const panelText of [
   "Runner Assignment Status",
   "Which lane needs attention now?",
-  "No active runner assignments.",
+  "No assignment rows match the current filters.",
   "Degraded evidence",
   "No assignment action",
   "handoff: {row.handoffStatus}",
@@ -205,6 +205,14 @@ for (const panelText of [
   "Closed assignment evidence",
   "closed assignment evidence",
   "non-dispatchable proof",
+  "AssignmentClassificationFilter",
+  "AssignmentSourceFilter",
+  "classificationMatches",
+  "assignment-row-filters",
+  "Assignment row filters",
+  "classificationFilter",
+  "sourceFilter",
+  "source: {sourceLabel(source)}",
 ]) {
   assertCondition(panelSource.includes(panelText), `Runner assignment panel must render ${panelText}`, failures);
 }
@@ -337,7 +345,7 @@ for (const browserText of [
   "blocked owned active: 1",
   "closed: 9",
   "Lifecycle: prepared",
-  "Recovery action: inspect-handoff-evidence",
+  "Recovery action: resume-prepared-handoff",
   "Queue counts: available",
   "Handoff audit trail",
   "Audit query:",
@@ -375,6 +383,15 @@ for (const browserText of [
   "Closed assignment evidence",
   "lane-closed branch codex/dispatcher-cleanup-assignment-closure-refresh",
   "dispatcher-assignment-panel-filter-refresh: assignable (backlog-assignable)",
+  "Assignment row filters",
+  "Showing 1\\/\\d+ rows for active from Workspace",
+  "source: Workspace",
+  "Showing \\d+\\/\\d+ rows for assignable from Backlog",
+  "source: Backlog",
+  "Showing 1\\/\\d+ rows for blocked from Backlog",
+  "Execution-authority stories",
+  "Showing 1\\/\\d+ rows for closed from Lane assignment",
+  "source: Lane assignment",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert runner assignment handoff badge text: ${browserText}`, failures);
 }
