@@ -1130,6 +1130,9 @@ try {
         "codex/verification-surface-hardening",
         "codex/github-delivery-hygiene",
         "codex/read-only-evidence-polish",
+        "codex/worker-backlog-queue-refresh",
+        "codex/lane-handoff-evidence-refresh",
+        "codex/report-catalog-shortcut-refresh",
       ];
       const manifestPaths = blockedBranches.map((branchName, index) => {
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
@@ -1182,7 +1185,13 @@ try {
         assert(first.code === 0, first.stderr || first.stdout);
       }
       const assignmentsDir = join(claimStateRoot, "assignments");
-      for (const laneSlug of ["github-delivery-hygiene", "read-only-evidence-polish"]) {
+      for (const laneSlug of [
+        "github-delivery-hygiene",
+        "read-only-evidence-polish",
+        "worker-backlog-queue-refresh",
+        "lane-handoff-evidence-refresh",
+        "report-catalog-shortcut-refresh",
+      ]) {
         writeFileSync(
           join(assignmentsDir, `${laneSlug}.json`),
           `${JSON.stringify({
@@ -1196,9 +1205,14 @@ try {
           })}\n`,
         );
       }
-      const assignmentFiles = ["verification-surface-hardening", "github-delivery-hygiene", "read-only-evidence-polish"].map(
-        (laneSlug) => join(assignmentsDir, `${laneSlug}.json`),
-      );
+      const assignmentFiles = [
+        "verification-surface-hardening",
+        "github-delivery-hygiene",
+        "read-only-evidence-polish",
+        "worker-backlog-queue-refresh",
+        "lane-handoff-evidence-refresh",
+        "report-catalog-shortcut-refresh",
+      ].map((laneSlug) => join(assignmentsDir, `${laneSlug}.json`));
       const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
       const second = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
@@ -1516,7 +1530,14 @@ try {
     try {
       const tasksDir = join(ownedStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
-      const manifestPaths = ["verification-surface-hardening", "github-delivery-hygiene", "read-only-evidence-polish"].map((laneSlug) => {
+      const manifestPaths = [
+        "verification-surface-hardening",
+        "github-delivery-hygiene",
+        "read-only-evidence-polish",
+        "worker-backlog-queue-refresh",
+        "lane-handoff-evidence-refresh",
+        "report-catalog-shortcut-refresh",
+      ].map((laneSlug) => {
         const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
         writeFileSync(
           manifestPath,
@@ -2030,7 +2051,14 @@ function seedClosedSafeBacklogManifests(stateRootPath) {
   const tasksDir = join(stateRootPath, "tasks");
   mkdirSync(tasksDir, { recursive: true });
 
-  for (const laneSlug of ["verification-surface-hardening", "github-delivery-hygiene", "read-only-evidence-polish"]) {
+  for (const laneSlug of [
+    "verification-surface-hardening",
+    "github-delivery-hygiene",
+    "read-only-evidence-polish",
+    "worker-backlog-queue-refresh",
+    "lane-handoff-evidence-refresh",
+    "report-catalog-shortcut-refresh",
+  ]) {
     const manifestPath = join(tasksDir, `closed-${laneSlug}.json`);
     if (existsSync(manifestPath)) {
       continue;

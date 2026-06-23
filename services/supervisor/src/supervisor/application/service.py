@@ -3363,6 +3363,54 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
+        worker_backlog_queue_lane = self._safe_backlog_next_lane(
+            lane_slug="worker-backlog-queue-refresh",
+            lane_title="Worker backlog queue refresh",
+            scope=[
+                "safe backlog queue capacity for end-to-end lane workers",
+                "claim-next and assignment-report evidence for newly generated work",
+                "dashboard safe backlog handoff text for generated worker lanes",
+                "static drift checks that prevent stale ready-lane starvation",
+            ],
+            verification_commands=[
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+        )
+        lane_handoff_evidence_lane = self._safe_backlog_next_lane(
+            lane_slug="lane-handoff-evidence-refresh",
+            lane_title="Lane handoff evidence refresh",
+            scope=[
+                "workspace handoff evidence shown to future lane runners",
+                "current-session runbook and verification handoff text",
+                "supervisor report references for safe continuation decisions",
+                "focused checks that prove handoff work remains read-only until claimed",
+            ],
+            verification_commands=[
+                "pnpm run check:verification-readiness",
+                "pnpm run check:runbooks",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+        )
+        report_catalog_shortcut_lane = self._safe_backlog_next_lane(
+            lane_slug="report-catalog-shortcut-refresh",
+            lane_title="Report catalog shortcut refresh",
+            scope=[
+                "operator shortcuts from safe backlog items to existing supervisor reports",
+                "dashboard report-link coverage for generated worker lanes",
+                "report catalog references that avoid execution-authority expansion",
+                "browser assertions for read-only report navigation",
+            ],
+            verification_commands=[
+                "pnpm run check:reports",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:dashboard-e2e-runner",
+                "pnpm run check:static",
+            ],
+        )
 
         items = [
             SafeDevelopmentBacklogItemView(
@@ -3503,6 +3551,101 @@ class SupervisorService:
                 ],
                 nextLane=read_only_evidence_lane,
                 nextAction="Prefer review shortcuts that reduce operator navigation across existing read-only evidence.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="worker-backlog-queue-refresh",
+                label="Worker backlog queue refresh",
+                priority="P1",
+                status="ready",
+                summary="Generate fresh, source-owned safe backlog capacity so end-to-end lane workers can claim work without taking over active lanes.",
+                recommendedSliceSize="large",
+                evidence=[
+                    "Current claim-next evidence can become starved when all ready lanes are active or assigned to other runners.",
+                    "New generated worker lanes must remain source-owned, branch-scoped, and claimable through codex-workspace rather than ad hoc chat state.",
+                    "The assignment report and safe backlog drift check should prove generated work stays dispatchable without touching owned lanes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/verification-readiness-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#safe-development-backlog",
+                    "/controls#runner-assignment-status",
+                    "/controls#development-runway-report",
+                    "/controls#verification-readiness-report",
+                ],
+                nextLane=worker_backlog_queue_lane,
+                nextAction="Refresh source-owned backlog queue evidence so the next worker can claim a new lane instead of taking over active work.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="lane-handoff-evidence-refresh",
+                label="Lane handoff evidence refresh",
+                priority="P1",
+                status="ready",
+                summary="Tighten handoff evidence for prepared worktrees so future lane runners can continue safely with fewer ownership ambiguities.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Prepared handoff worktrees should surface owner, readiness, dirty-worktree, and next-command evidence without requiring hidden context.",
+                    "Current-session runbooks and verification readiness guidance need to stay aligned with codex-workspace handoff behavior.",
+                    "This lane is limited to source-owned docs, reports, tests, and static checks; it is not takeover approval.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/report-catalog",
+                    "GET /supervisor/safe-development-backlog",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#verification-readiness-report",
+                    "/controls#runner-assignment-status",
+                    "/controls#supervisor-report-catalog",
+                    "/controls#safe-development-backlog",
+                ],
+                nextLane=lane_handoff_evidence_lane,
+                nextAction="Improve handoff evidence that tells the next runner whether to continue, ask for takeover, or start a different safe lane.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="report-catalog-shortcut-refresh",
+                label="Report catalog shortcut refresh",
+                priority="P2",
+                status="ready",
+                summary="Keep report shortcuts for generated worker lanes precise so operators can inspect existing read-only evidence quickly.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Generated backlog items should link to explicit dashboard report anchors rather than falling back to the report catalog.",
+                    "Controls-page assertions should cover new worker-lane report links and dashboard anchors.",
+                    "Shortcut refresh work must preserve read-only evidence boundaries and avoid provider, worker launch, or credential changes.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/report-catalog",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/delivery-readiness-policy-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#supervisor-report-catalog",
+                    "/controls#safe-development-backlog",
+                    "/controls#github-workflow-policy-report",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                nextLane=report_catalog_shortcut_lane,
+                nextAction="Refresh report shortcut evidence for generated lanes while keeping all links read-only and dashboard-local.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
