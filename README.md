@@ -147,6 +147,7 @@ embed them in bootstrap scripts.
 - `pnpm run check:linux-install-lane` verifies the delivered Linux install package, docs, and unsupported Windows/remote-install boundary
 - `pnpm run check:bmad-work-products` verifies generated BMAD work products stay outside the Git-tracked clean-install surface
 - `pnpm run check:clean-install-boundary` rejects tracked local-only BMAD/runtime/secret/unsupported Windows or WSL install artifacts
+- Required aggregate test and build commands currently include `pnpm run test:clean-install-boundary`, `pnpm run test:codex-workspace`, `pnpm run test:codex-workspace-state`, `pnpm run test:workspace-command-resolution`, `pnpm run test:anti-churn-event-writer`, `pnpm run test:anti-churn-signature-classifier`, `pnpm run test:anti-churn-event-reader`, `pnpm run test:anti-churn-guidance-candidate-classifier`, `pnpm run test:anti-churn-guidance-dedupe`, `pnpm run test:anti-churn-guidance-output`, `pnpm run test:anti-churn-verification-routing`, `pnpm run test:anti-churn-apply-safe-gate`, `pnpm run test:anti-churn-hook-transaction-store`, `pnpm run test:anti-churn-source-apply`, `pnpm run test:anti-churn-verification-rollback`, `pnpm run test:dashboard-e2e-runner`, and `pnpm run build:dashboard`
 - `pnpm run test:supervisor` runs supervisor tests through a repo-local uv cache wrapper
 - `pnpm run test:e2e:dashboard` runs browser coverage for intake drafts, workflow actions, and detail navigation
 - `pnpm run test:e2e:dashboard:controls` runs the focused controls-page browser slice with repo-local Playwright cache defaults
