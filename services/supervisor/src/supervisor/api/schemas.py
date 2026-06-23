@@ -1090,6 +1090,20 @@ class RunnerAssignmentStatusSummaryView(BaseModel):
     missing: int = 0
 
 
+class RunnerDispatcherContinuitySnapshotView(BaseModel):
+    snapshotId: str
+    selectedBacklogItemId: str | None = None
+    selectedBranch: str | None = None
+    dryRunCommand: str
+    assignableCount: int
+    activeCount: int
+    blockedCount: int
+    ambiguousCount: int
+    closedCount: int
+    blockerCodes: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
 class RunnerAssignmentStatusRowView(BaseModel):
     id: str
     title: str
@@ -1142,6 +1156,7 @@ class RunnerAssignmentStatusReportView(BaseModel):
     currentOwner: str | None = None
     staleAfterSeconds: int
     summary: RunnerAssignmentStatusSummaryView
+    dispatcherContinuity: RunnerDispatcherContinuitySnapshotView
     workspaceAssignments: list[RunnerWorkspaceAssignmentView] = Field(default_factory=list)
     laneAssignments: list[RunnerLaneAssignmentView] = Field(default_factory=list)
     backlogCandidates: list[RunnerBacklogCandidateView] = Field(default_factory=list)

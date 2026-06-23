@@ -2131,6 +2131,20 @@ export interface RunnerAssignmentStatusSummaryView {
   missing: number;
 }
 
+export interface RunnerDispatcherContinuitySnapshotView {
+  snapshotId: string;
+  selectedBacklogItemId?: string | null;
+  selectedBranch?: string | null;
+  dryRunCommand: string;
+  assignableCount: number;
+  activeCount: number;
+  blockedCount: number;
+  ambiguousCount: number;
+  closedCount: number;
+  blockerCodes: string[];
+  nextAction: string;
+}
+
 export interface RunnerAssignmentStatusRowView {
   id: string;
   title: string;
@@ -2182,6 +2196,7 @@ export interface RunnerAssignmentStatusReportView {
   currentOwner?: string | null;
   staleAfterSeconds: number;
   summary: RunnerAssignmentStatusSummaryView;
+  dispatcherContinuity: RunnerDispatcherContinuitySnapshotView;
   workspaceAssignments: RunnerWorkspaceAssignmentView[];
   laneAssignments: RunnerLaneAssignmentView[];
   backlogCandidates: RunnerBacklogCandidateView[];

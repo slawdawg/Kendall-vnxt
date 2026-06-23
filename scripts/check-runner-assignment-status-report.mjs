@@ -27,7 +27,13 @@ assertCondition(packageJson.scripts?.["check:runner-assignment-status"] === "nod
 assertCondition(packageJson.scripts?.["check:static"]?.includes("pnpm run check:runner-assignment-status"), "check:static must include check:runner-assignment-status", failures);
 assertCondition(packageJson.scripts?.check?.includes("pnpm run check:runner-assignment-status"), "check must include check:runner-assignment-status", failures);
 
-for (const typeName of ["RunnerAssignmentStatusReportView", "RunnerAssignmentStatusRowView", "RunnerAssignmentStatusSummaryView", "RunnerAssignmentWarningView"]) {
+for (const typeName of [
+  "RunnerAssignmentStatusReportView",
+  "RunnerAssignmentStatusRowView",
+  "RunnerAssignmentStatusSummaryView",
+  "RunnerDispatcherContinuitySnapshotView",
+  "RunnerAssignmentWarningView",
+]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
   assertCondition(schemaSource.includes(`class ${typeName}`), `Supervisor schemas must include ${typeName}`, failures);
 }
@@ -49,6 +55,9 @@ for (const serviceText of [
   "handoffNextCommand",
   "handoffReadinessStatus",
   "handoffTakeoverStopLines",
+  "dispatcherContinuity",
+  "dispatcher-continuity-snapshot-v1",
+  "dispatch-next --dry-run --owner <owner>",
   "stop_lines",
   "worktree-outside-managed-root",
   "runner-assignment-status-report-v1",
@@ -90,11 +99,22 @@ for (const panelText of [
   "report.summary",
   "row.reasonCode",
   "row.warnings",
+  "Dispatcher continuity snapshot",
+  "report.dispatcherContinuity.snapshotId",
+  "Candidate:",
+  "Dry run:",
+  "Blockers:",
 ]) {
   assertCondition(panelSource.includes(panelText), `Runner assignment panel must render ${panelText}`, failures);
 }
 
 for (const contractText of [
+  "RunnerDispatcherContinuitySnapshotView",
+  "dispatcherContinuity",
+  "selectedBacklogItemId",
+  "selectedBranch",
+  "dryRunCommand",
+  "blockerCodes",
   "handoffStatus",
   "handoffNextCommand",
   "handoffReadinessStatus",

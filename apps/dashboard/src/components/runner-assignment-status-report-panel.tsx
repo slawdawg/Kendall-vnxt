@@ -135,6 +135,25 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
         ))}
       </div>
 
+      <div className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Dispatcher continuity snapshot</p>
+        <p className="mt-1 text-sm font-semibold">{report.dispatcherContinuity.snapshotId}</p>
+        <div className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)] sm:grid-cols-2">
+          <p className="break-all">Candidate: {report.dispatcherContinuity.selectedBacklogItemId ?? "none"}</p>
+          <p className="break-all">Branch: {report.dispatcherContinuity.selectedBranch ?? "none"}</p>
+          <p className="break-all">Dry run: {report.dispatcherContinuity.dryRunCommand}</p>
+          <p>Assignable: {report.dispatcherContinuity.assignableCount}</p>
+          <p>Active: {report.dispatcherContinuity.activeCount}</p>
+          <p>Blocked: {report.dispatcherContinuity.blockedCount}</p>
+          <p>Ambiguous: {report.dispatcherContinuity.ambiguousCount}</p>
+          <p>Closed: {report.dispatcherContinuity.closedCount}</p>
+        </div>
+        {report.dispatcherContinuity.blockerCodes.length > 0 ? (
+          <p className="mt-2 break-all text-xs leading-5 text-[var(--muted)]">Blockers: {report.dispatcherContinuity.blockerCodes.join(", ")}</p>
+        ) : null}
+        <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{report.dispatcherContinuity.nextAction}</p>
+      </div>
+
       {visibleRows.length === 0 ? (
         <p className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)]">
           No active runner assignments. Review the safe backlog and assignment status report before starting work.

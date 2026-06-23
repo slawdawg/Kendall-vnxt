@@ -114,6 +114,7 @@ from supervisor.api.schemas import (
     RuntimeEvidenceExportSafetyView,
     RuntimeEvidenceSubscriptionLaunchView,
     RunnerAssignmentDegradedInputView,
+    RunnerDispatcherContinuitySnapshotView,
     RunnerAssignmentStatusReportView,
     RunnerAssignmentStatusRowView,
     RunnerAssignmentStatusSummaryView,
@@ -2511,6 +2512,27 @@ class SupervisorService:
 
         all_rows = workspace_rows + lane_rows + backlog_rows
         summary = self._runner_summary(all_rows, degraded_inputs)
+        selected_backlog = next((row for row in backlog_rows if row.classification == "assignable"), None)
+        blocker_codes = list(
+            dict.fromkeys(
+                row.reasonCode
+                for row in backlog_rows
+                if row.classification not in {"assignable", "closed"}
+            )
+        )
+        dispatcher_continuity = RunnerDispatcherContinuitySnapshotView(
+            snapshotId="dispatcher-continuity-snapshot-v1",
+            selectedBacklogItemId=selected_backlog.backlogItemId if selected_backlog else None,
+            selectedBranch=selected_backlog.branch if selected_backlog else None,
+            dryRunCommand="node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>",
+            assignableCount=summary.assignable,
+            activeCount=summary.active,
+            blockedCount=summary.blocked,
+            ambiguousCount=summary.ambiguous,
+            closedCount=summary.closed,
+            blockerCodes=blocker_codes,
+            nextAction=selected_backlog.nextSafeAction if selected_backlog else "Resolve blockers before dispatch; do not infer work from chat-only state.",
+        )
         partial = bool(degraded_inputs) or any(row.degraded for row in all_rows)
         report_status = "partial" if partial else "ok"
         if state_root_status == "available" and partial:
@@ -2525,6 +2547,7 @@ class SupervisorService:
             currentOwner=current_owner,
             staleAfterSeconds=stale_after_seconds,
             summary=summary,
+            dispatcherContinuity=dispatcher_continuity,
             workspaceAssignments=workspace_rows,
             laneAssignments=lane_rows,
             backlogCandidates=backlog_rows,
@@ -3042,6 +3065,22 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
+        assignment_queue_proof_lane = self._safe_backlog_next_lane(
+            lane_slug="assignment-report-queue-proof-refresh",
+            lane_title="Assignment report queue proof refresh",
+            scope=[
+                "runner assignment continuity snapshot drift coverage",
+                "safe backlog queue proof links",
+                "dashboard dispatcher dry-run evidence",
+                "workspace dispatcher starvation prevention checks",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+        )
 
         slices = [
             DevelopmentRunwaySliceView(
@@ -3050,7 +3089,7 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
                 summary="Use this slice for dispatcher continuity and report navigation work that improves read-only lane visibility without expanding execution authority.",
-                includedBacklogItems=["dispatcher-continuity-snapshot-refresh"],
+                includedBacklogItems=["assignment-report-queue-proof-refresh"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:reports",
@@ -3075,14 +3114,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-item",
                         label="Ready backlog item",
-                        status="ready" if "dispatcher-continuity-snapshot-refresh" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the dispatcher continuity snapshot item is the next safe backlog item for read-only lane visibility work.",
-                        evidence=["dispatcher-continuity-snapshot-refresh"],
+                        status="ready" if "assignment-report-queue-proof-refresh" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the assignment report queue proof item is the next safe backlog item for read-only lane visibility work.",
+                        evidence=["assignment-report-queue-proof-refresh"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the dispatcher continuity item ready before changing lane visibility or queue snapshot surfaces.",
+                        nextAction="Keep the assignment report queue proof item ready before changing lane visibility or queue snapshot surfaces.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3112,8 +3151,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=dispatcher_continuity_lane,
-                nextAction="Select this slice for dispatcher continuity work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=assignment_queue_proof_lane,
+                nextAction="Select this slice for assignment report queue proof work, and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -3513,6 +3552,22 @@ class SupervisorService:
                 "pnpm run check:static",
             ],
         )
+        assignment_queue_proof_lane = self._safe_backlog_next_lane(
+            lane_slug="assignment-report-queue-proof-refresh",
+            lane_title="Assignment report queue proof refresh",
+            scope=[
+                "runner assignment continuity snapshot drift coverage",
+                "safe backlog queue proof links",
+                "dashboard dispatcher dry-run evidence",
+                "workspace dispatcher starvation prevention checks",
+            ],
+            verification_commands=[
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:safe-backlog",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+        )
 
         items = [
             SafeDevelopmentBacklogItemView(
@@ -3765,13 +3820,18 @@ class SupervisorService:
                 itemId="dispatcher-continuity-snapshot-refresh",
                 label="Dispatcher continuity snapshot refresh",
                 priority="P2",
-                status="ready",
-                summary="Keep dispatcher queue snapshots explicit so end-to-end lane runners can continue from source-owned safe work without hidden chat state.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Delivered dispatcher queue snapshots so end-to-end lane runners can continue from source-owned safe work without hidden chat state.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Continuous lane work should expose the next claimable safe backlog item after completed generated lanes close.",
-                    "Runner assignment status and safe backlog reports provide read-only evidence for active owners, blockers, and next safe dispatcher action.",
-                    "This lane must preserve dispatch dry-run evidence only; it must not launch workers, call providers, or take over owned lanes.",
+                    "Runner assignment status now exposes a dispatcher continuity snapshot with candidate, branch, counts, dry-run command, blockers, and next action.",
+                    "Safe backlog and development runway reports advance to the next source-owned queue proof lane.",
+                    "This completed lane preserved dispatch dry-run evidence only; it did not launch workers, call providers, or take over owned lanes.",
+                ],
+                sourceEvidenceLabels=[
+                    "3-27-safe-development-backlog-report.md",
+                    "3-32-safe-development-backlog-drift-check.md",
+                    "3-60-safe-backlog-report-anchors.md",
                 ],
                 relatedReports=[
                     "GET /supervisor/safe-development-backlog",
@@ -3790,8 +3850,37 @@ class SupervisorService:
                     "/controls#development-runway-report",
                     "/controls#supervisor-report-catalog",
                 ],
-                nextLane=dispatcher_continuity_lane,
-                nextAction="Refresh dispatcher continuity snapshots while keeping all evidence read-only and source-owned.",
+                nextAction="Use this completed dispatcher continuity evidence only; do not requeue dispatcher-continuity-snapshot-refresh. Continue with assignment-report-queue-proof-refresh.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="assignment-report-queue-proof-refresh",
+                label="Assignment report queue proof refresh",
+                priority="P2",
+                status="ready",
+                summary="Keep runner-assignment queue proof explicit so generated lane workers can see why the next dispatch is safe, blocked, or ambiguous.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Continuity snapshots should be backed by dashboard assertions and drift checks, not by chat-only resume state.",
+                    "Queue proof work must preserve read-only local evidence boundaries and avoid provider, worker launch, or takeover behavior.",
+                    "Generated lane starvation prevention needs source-owned tests for assignable, active, ambiguous, blocked, and closed candidates.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#runner-assignment-status",
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                ],
+                nextLane=assignment_queue_proof_lane,
+                nextAction="Refresh assignment report queue proof while keeping dispatcher evidence read-only and source-owned.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
