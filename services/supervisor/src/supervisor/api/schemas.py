@@ -1113,6 +1113,35 @@ class RunnerDispatcherContinuitySnapshotView(BaseModel):
     nextAction: str
 
 
+class RunnerHandoffAuditEntryView(BaseModel):
+    sequence: int
+    lane: str | None = None
+    branch: str | None = None
+    taskId: str | None = None
+    workspaceAction: str | None = None
+    nextCommand: str | None = None
+    generatedAt: str | None = None
+    readinessStatus: str | None = None
+    readinessCommand: str | None = None
+    readinessSummary: str | None = None
+    queueCounts: dict[str, int] = Field(default_factory=dict)
+    queueCountsStatus: Literal["available", "empty", "invalid", "missing", "not-applicable"] = "missing"
+    stopLines: list[str] = Field(default_factory=list)
+    lifecycleState: Literal["prepared", "claimed", "delivered", "cleaned", "missing", "not-applicable"] = "not-applicable"
+    recoveryAction: Literal[
+        "resume-prepared-handoff",
+        "wait-for-owner",
+        "request-takeover-approval",
+        "request-explicit-approval",
+        "inspect-handoff-evidence",
+        "resume-cleanup",
+        "no-action",
+    ] = "no-action"
+    recoverySummary: str = "No handoff recovery action required."
+    evidenceStatus: Literal["complete", "partial", "invalid"] = "partial"
+    evidenceSummary: str
+
+
 class RunnerAssignmentStatusRowView(BaseModel):
     id: str
     title: str
@@ -1158,6 +1187,7 @@ class RunnerAssignmentStatusRowView(BaseModel):
         "no-action",
     ] = "no-action"
     handoffRecoverySummary: str = "No handoff recovery action required."
+    handoffAuditTrail: list[RunnerHandoffAuditEntryView] = Field(default_factory=list)
     deliveryState: str = "unknown"
     localEvidenceStatus: str = "available"
     evidencePath: str | None = None

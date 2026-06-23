@@ -1943,11 +1943,11 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
     assert report_slice["status"] == "ready"
-    assert report_slice["includedBacklogItems"] == ["dispatcher-queue-handoff-audit-refresh"]
+    assert report_slice["includedBacklogItems"] == ["dispatcher-queue-handoff-audit-retention-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-queue-handoff-audit-refresh"
-    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-audit-refresh"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit refresh"'
+    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-queue-handoff-audit-retention-refresh"
+    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-audit-retention-refresh"
+    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit retention refresh"'
     assert "pnpm run check:runner-assignment-status" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
     assert "pnpm run test:codex-workspace" in report_slice["nextLane"]["verificationCommands"]
@@ -2258,6 +2258,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "dispatcher-queue-handoff-lifecycle-refresh",
         "dispatcher-queue-handoff-recovery-refresh",
         "dispatcher-queue-handoff-audit-refresh",
+        "dispatcher-queue-handoff-audit-retention-refresh",
         "authority-blocked-work",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
@@ -2420,11 +2421,17 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "do not requeue dispatcher-queue-handoff-recovery-refresh" in handoff_recovery_item["nextAction"]
     assert "GET /supervisor/runner-assignment-status-report" in handoff_recovery_item["relatedReports"]
     handoff_audit_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-queue-handoff-audit-refresh")
-    assert handoff_audit_item["status"] == "ready"
-    assert handoff_audit_item["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-audit-refresh"
-    assert handoff_audit_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit refresh"'
-    assert "pnpm run test:codex-workspace" in handoff_audit_item["nextLane"]["verificationCommands"]
+    assert handoff_audit_item["status"] == "closed"
+    assert handoff_audit_item["recommendedSliceSize"] == "complete"
+    assert handoff_audit_item["nextLane"] is None
+    assert "do not requeue dispatcher-queue-handoff-audit-refresh" in handoff_audit_item["nextAction"]
     assert "GET /supervisor/runner-assignment-status-report" in handoff_audit_item["relatedReports"]
+    handoff_retention_item = next(item for item in report["items"] if item["itemId"] == "dispatcher-queue-handoff-audit-retention-refresh")
+    assert handoff_retention_item["status"] == "ready"
+    assert handoff_retention_item["nextLane"]["branchName"] == "codex/dispatcher-queue-handoff-audit-retention-refresh"
+    assert handoff_retention_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher queue handoff audit retention refresh"'
+    assert "pnpm run test:codex-workspace" in handoff_retention_item["nextLane"]["verificationCommands"]
+    assert "GET /supervisor/runner-assignment-status-report" in handoff_retention_item["relatedReports"]
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
@@ -8280,8 +8287,11 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert handoff_recovery_backlog["classification"] == "closed"
     assert handoff_recovery_backlog["reasonCode"] == "backlog-closed"
     handoff_audit_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-queue-handoff-audit-refresh")
-    assert handoff_audit_backlog["classification"] == "assignable"
-    assert handoff_audit_backlog["reasonCode"] == "backlog-assignable"
+    assert handoff_audit_backlog["classification"] == "closed"
+    assert handoff_audit_backlog["reasonCode"] == "backlog-closed"
+    handoff_retention_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-queue-handoff-audit-retention-refresh")
+    assert handoff_retention_backlog["classification"] == "assignable"
+    assert handoff_retention_backlog["reasonCode"] == "backlog-assignable"
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
     assert continuity["selectedBacklogItemId"] == "read-only-evidence-polish"
@@ -8294,8 +8304,9 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert queue_proof_rows["dispatcher-queue-handoff-status-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-lifecycle-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-recovery-refresh"]["classification"] == "closed"
-    assert queue_proof_rows["dispatcher-queue-handoff-audit-refresh"]["classification"] == "assignable"
-    assert queue_proof_rows["dispatcher-queue-handoff-audit-refresh"]["reasonCode"] == "backlog-assignable"
+    assert queue_proof_rows["dispatcher-queue-handoff-audit-refresh"]["classification"] == "closed"
+    assert queue_proof_rows["dispatcher-queue-handoff-audit-retention-refresh"]["classification"] == "assignable"
+    assert queue_proof_rows["dispatcher-queue-handoff-audit-retention-refresh"]["reasonCode"] == "backlog-assignable"
     assert queue_proof_rows["dispatcher-queue-state-fixtures-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-continuity-snapshot-refresh"]["classification"] == "closed"
     assert queue_proof_rows["assignment-report-queue-proof-refresh"]["classification"] == "closed"
@@ -8391,6 +8402,36 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     assert row["handoffRecoveryAction"] == "inspect-handoff-evidence"
     assert row["handoffRecoverySummary"] == "Inspect the handoff packet and worktree state before resuming this lane."
     assert row["worktreeState"] == "missing"
+    assert row["handoffAuditTrail"] == [
+        {
+            "sequence": 1,
+            "lane": "prepared-handoff",
+            "branch": "codex/prepared-handoff",
+            "taskId": "prepared-handoff",
+            "workspaceAction": "create_workspace",
+            "nextCommand": "cd /tmp/prepared-handoff",
+            "generatedAt": "2026-06-23T01:00:00Z",
+            "readinessStatus": "passed",
+            "readinessCommand": "node ./scripts/codex-workspace.mjs doctor",
+            "readinessSummary": "OK: git | OK: node",
+            "queueCounts": {
+                "active": 1,
+                "blocked_authority": 1,
+                "blocked_owned_active": 1,
+                "closed": 9,
+            },
+            "queueCountsStatus": "available",
+            "stopLines": [
+                "no automatic takeover without evidence and approval",
+                "no authority-blocked work mutation",
+            ],
+            "lifecycleState": "not-applicable",
+            "recoveryAction": "no-action",
+            "recoverySummary": "No handoff recovery action required.",
+            "evidenceStatus": "complete",
+            "evidenceSummary": "complete handoff packet; readiness passed; queue counts available; stop lines 2.",
+        }
+    ]
 
     incomplete_path = tasks_dir / "incomplete-handoff.json"
     incomplete_path.write_text(
@@ -8503,6 +8544,8 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     assert incomplete_row["handoffCandidateStateCounts"] == {}
     assert incomplete_row["handoffCandidateStateCountsStatus"] == "missing"
     assert incomplete_row["handoffLifecycleState"] == "claimed"
+    assert incomplete_row["handoffAuditTrail"][0]["evidenceStatus"] == "partial"
+    assert incomplete_row["handoffAuditTrail"][0]["evidenceSummary"] == "partial handoff packet; readiness missing; queue counts missing; stop lines 1."
     unowned_prepared_row = next(item for item in incomplete_report["workspaceAssignments"] if item["taskId"] == "unowned-prepared-handoff")
     assert unowned_prepared_row["classification"] == "blocked_missing_worktree"
     assert unowned_prepared_row["handoffCandidateStateCounts"] == {"assignable": 1}
@@ -8718,6 +8761,8 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     assert invalid_counts_row["handoffCandidateStateCounts"] == {}
     assert invalid_counts_row["handoffCandidateStateCountsStatus"] == "invalid"
     assert invalid_counts_row["handoffLifecycleState"] == "claimed"
+    assert [entry["queueCountsStatus"] for entry in invalid_counts_row["handoffAuditTrail"]] == ["invalid", "invalid"]
+    assert [entry["evidenceStatus"] for entry in invalid_counts_row["handoffAuditTrail"]] == ["invalid", "invalid"]
     fallback_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "fallback-handoff")
     assert fallback_row["handoffNextCommand"] == "cd /tmp/fallback-handoff"
     assert fallback_row["handoffReadinessStatus"] == "passed"
@@ -8725,12 +8770,14 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     assert fallback_row["handoffCandidateStateCountsStatus"] == "available"
     assert fallback_row["handoffLifecycleState"] == "claimed"
     assert fallback_row["handoffRecoveryAction"] == "inspect-handoff-evidence"
+    assert [entry["evidenceStatus"] for entry in fallback_row["handoffAuditTrail"]] == ["partial", "partial"]
     stale_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "stale-handoff")
     assert stale_row["classification"] == "blocked_stale_owner_needs_takeover"
     assert stale_row["handoffRecoveryAction"] == "request-takeover-approval"
     failed_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "failed-handoff")
     assert failed_row["handoffReadinessStatus"] == "failed"
     assert failed_row["handoffRecoveryAction"] == "inspect-handoff-evidence"
+    assert failed_row["handoffAuditTrail"][0]["evidenceStatus"] == "invalid"
     delivered_row = next(item for item in counts_report["workspaceAssignments"] if item["taskId"] == "delivered-handoff")
     assert delivered_row["handoffLifecycleState"] == "delivered"
     assert delivered_row["deliveryState"] == "pr-open"
@@ -8741,6 +8788,46 @@ def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_
     assert cleaned_row["handoffLifecycleState"] == "cleaned"
     assert cleaned_row["handoffRecoveryAction"] == "no-action"
     assert cleaned_row["classification"] == "closed"
+
+    capped_path = tasks_dir / "capped-handoff.json"
+    capped_path.write_text(
+        json.dumps(
+            {
+                "task_id": "capped-handoff",
+                "title": "Capped handoff",
+                "branch": "codex/capped-handoff",
+                "status": "active",
+                "owner": "runner-a",
+                "owner_updated_at": datetime.now(timezone.utc).isoformat(),
+                "worktree_path": (state_root / "worktrees" / "capped-handoff").as_posix(),
+                "dispatch_handoffs": [
+                    {
+                        "lane": "capped-handoff",
+                        "branch": "codex/capped-handoff",
+                        "task_id": "capped-handoff",
+                        "workspace_action": "create_workspace",
+                        "next_command": f"cd /tmp/capped-handoff-{index}",
+                        "generated_at": f"2026-06-23T02:{index:02d}:00Z",
+                        "candidate_state_counts": {"active": 1},
+                        "readiness": {"status": "passed", "command": "node ./scripts/codex-workspace.mjs doctor"},
+                    }
+                    for index in range(22)
+                ]
+                + ["not-a-dict"],
+            }
+        )
+    )
+
+    capped_response = client.get("/supervisor/runner-assignment-status-report")
+
+    assert capped_response.status_code == 200
+    capped_report = capped_response.json()["data"]
+    capped_row = next(item for item in capped_report["workspaceAssignments"] if item["taskId"] == "capped-handoff")
+    assert capped_row["handoffAuditTrail"][0]["sequence"] == 3
+    assert capped_row["handoffAuditTrail"][0]["evidenceSummary"] == "retention capped; 3 older handoff packet(s) omitted."
+    assert capped_row["handoffAuditTrail"][-1]["sequence"] == 23
+    assert capped_row["handoffAuditTrail"][-1]["evidenceStatus"] == "invalid"
+    assert capped_row["handoffAuditTrail"][-1]["evidenceSummary"] == "invalid handoff packet; entry is not an object."
 
 
 def test_runner_assignment_status_report_treats_unowned_active_workspace_as_assignable(tmp_path, monkeypatch) -> None:

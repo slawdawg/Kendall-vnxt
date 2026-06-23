@@ -2154,6 +2154,34 @@ export interface RunnerDispatcherContinuitySnapshotView {
   nextAction: string;
 }
 
+export interface RunnerHandoffAuditEntryView {
+  sequence: number;
+  lane?: string | null;
+  branch?: string | null;
+  taskId?: string | null;
+  workspaceAction?: string | null;
+  nextCommand?: string | null;
+  generatedAt?: string | null;
+  readinessStatus?: string | null;
+  readinessCommand?: string | null;
+  readinessSummary?: string | null;
+  queueCounts: Record<string, number>;
+  queueCountsStatus: "available" | "empty" | "invalid" | "missing" | "not-applicable";
+  stopLines: string[];
+  lifecycleState: "prepared" | "claimed" | "delivered" | "cleaned" | "missing" | "not-applicable";
+  recoveryAction:
+    | "resume-prepared-handoff"
+    | "wait-for-owner"
+    | "request-takeover-approval"
+    | "request-explicit-approval"
+    | "inspect-handoff-evidence"
+    | "resume-cleanup"
+    | "no-action";
+  recoverySummary: string;
+  evidenceStatus: "complete" | "partial" | "invalid";
+  evidenceSummary: string;
+}
+
 export interface RunnerAssignmentStatusRowView {
   id: string;
   title: string;
@@ -2198,6 +2226,7 @@ export interface RunnerAssignmentStatusRowView {
     | "resume-cleanup"
     | "no-action";
   handoffRecoverySummary: string;
+  handoffAuditTrail: RunnerHandoffAuditEntryView[];
   deliveryState: "no-pr" | "draft-pr" | "pr-open" | "pr-closed-unmerged" | "merged" | "cleanup-ready" | "cleanup-partial" | "closed" | "unknown-pr-state" | "unknown";
   localEvidenceStatus: "available" | "missing" | "unreadable" | "malformed" | "skipped";
   evidencePath?: string | null;

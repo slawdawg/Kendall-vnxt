@@ -10,7 +10,7 @@ function labelFor(classification: string): string {
   return classification.replaceAll("_", " ");
 }
 
-function handoffCountEntries(row: RunnerAssignmentStatusRowView): [string, number][] {
+function orderedCountEntries(counts: Record<string, number>): [string, number][] {
   const preferredOrder = [
     "assignable",
     "active",
@@ -21,7 +21,6 @@ function handoffCountEntries(row: RunnerAssignmentStatusRowView): [string, numbe
     "blocked_stale_owner_needs_takeover",
     "closed",
   ];
-  const counts = row.handoffCandidateStateCounts ?? {};
   return [
     ...preferredOrder.filter((key) => Object.hasOwn(counts, key)),
     ...Object.keys(counts)
@@ -30,9 +29,14 @@ function handoffCountEntries(row: RunnerAssignmentStatusRowView): [string, numbe
   ].map((key) => [key, counts[key]]);
 }
 
+function handoffCountEntries(row: RunnerAssignmentStatusRowView): [string, number][] {
+  return orderedCountEntries(row.handoffCandidateStateCounts ?? {});
+}
+
 function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
   const hasAvailableHandoff = row.handoffStatus === "available";
   const countEntries = handoffCountEntries(row);
+  const auditEntries = row.handoffAuditTrail ?? [];
 
   return (
     <article className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
@@ -66,7 +70,7 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
       {row.currentCommand ? <p className="mt-2 text-xs leading-5 text-[var(--muted)]">Current command: {row.currentCommand}</p> : null}
       {row.lastResult ? <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Last result: {row.lastResult}</p> : null}
       {hasAvailableHandoff ? (
-        <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        <div data-testid="handoff-audit-trail" className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
           <p className="font-semibold text-[var(--foreground)]">Resume packet</p>
           <p className="break-all">Owner: {row.owner ?? "none"}</p>
           <p className="break-all">Branch: {row.branch ?? "none"}</p>
@@ -102,6 +106,54 @@ function Row({ row }: { row: RunnerAssignmentStatusRowView }) {
               ))}
             </ul>
           ) : null}
+        </div>
+      ) : null}
+      {auditEntries.length > 0 ? (
+        <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+          <p className="font-semibold text-[var(--foreground)]">Handoff audit trail</p>
+          <div className="mt-2 grid gap-2">
+            {auditEntries.map((entry) => {
+              const auditCounts = orderedCountEntries(entry.queueCounts ?? {});
+              const stopLines = entry.stopLines ?? [];
+              return (
+                <div key={`${row.id}:handoff-audit:${entry.sequence}`} className="border-t pt-2 first:border-t-0 first:pt-0">
+                  <p className="break-all">
+                    Audit #{entry.sequence}: {entry.evidenceStatus}; lifecycle {entry.lifecycleState}; recovery {entry.recoveryAction}
+                  </p>
+                  <p className="break-all">
+                    Handoff: {entry.workspaceAction ?? "unknown"} {entry.generatedAt ? `at ${entry.generatedAt}` : "with no timestamp"}
+                  </p>
+                  {entry.readinessStatus || entry.readinessCommand ? (
+                    <p className="break-all">
+                      Readiness evidence: {entry.readinessStatus ?? "missing"}
+                      {entry.readinessCommand ? ` via ${entry.readinessCommand}` : ""}
+                    </p>
+                  ) : null}
+                  {entry.readinessSummary ? <p className="break-all">Readiness summary: {entry.readinessSummary}</p> : null}
+                  <p>Queue evidence: {entry.queueCountsStatus}</p>
+                  {auditCounts.length > 0 ? (
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      {auditCounts.map(([state, count]) => (
+                        <span key={`${row.id}:handoff-audit:${entry.sequence}:${state}`} className="rounded-full border bg-[var(--panel)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+                          {state.replaceAll("_", " ")}: {count}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {stopLines.length > 0 ? (
+                    <ul className="mt-1 grid gap-1 text-[var(--warn)]">
+                      {stopLines.map((stopLine, stopLineIndex) => (
+                        <li key={`${row.id}:handoff-audit:${entry.sequence}:${stopLineIndex}:${stopLine}`} className="break-all">
+                          Audit stop: {stopLine}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  <p className="break-all">{entry.evidenceSummary}</p>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : null}
       {!hasAvailableHandoff && row.handoffNextCommand ? (
