@@ -2924,19 +2924,18 @@ class SupervisorService:
         ready_backlog_item_ids = {item.itemId for item in backlog.items if item.status == "ready"}
         action_step_ids = {step.stepId for step in action_plan.steps}
         verification_command_ids = {command.commandId for command in verification.requiredCommands + verification.optionalCommands}
-        verification_surface_lane = self._safe_backlog_next_lane(
-            lane_slug="verification-surface-hardening",
-            lane_title="Verification surface hardening",
+        github_delivery_lane = self._safe_backlog_next_lane(
+            lane_slug="github-delivery-hygiene",
+            lane_title="GitHub delivery hygiene",
             scope=[
-                "verification readiness report entries and package scripts",
-                "runbook and handoff verification guidance",
-                "focused dashboard and static drift checks",
-                "supervisor integration tests for verification surfaces",
+                "GitHub workflow policy report guidance",
+                "delivery readiness policy report guidance",
+                "workspace finish, merge, and cleanup runbooks",
+                "static drift checks for GitHub delivery safety",
             ],
             verification_commands=[
-                "pnpm run check:verification-readiness",
-                "pnpm run check:runbooks",
-                "pnpm run check:e2e-report",
+                "pnpm run check:github-workflow-policy",
+                "pnpm run check:delivery-readiness",
                 "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
                 "pnpm run check:static",
             ],
@@ -2946,9 +2945,9 @@ class SupervisorService:
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
                 label="Report and evidence navigation slice",
-                status="ready",
+                status="closed",
                 recommendedPrScope="Bundle contracts, supervisor report construction, dashboard panel or shortcut updates, browser assertions, story evidence, and drift checks in one PR.",
-                summary="Use this slice when improving read-only report navigation, runtime evidence shortcuts, or operator review surfaces.",
+                summary="Completed verification surface hardening remains evidence for future read-only report navigation, runtime evidence shortcuts, and operator review surfaces.",
                 includedBacklogItems=["verification-surface-hardening"],
                 includedActionSteps=["select-large-safe-slice", "verify-evidence-surfaces"],
                 requiredVerification=[
@@ -2972,16 +2971,16 @@ class SupervisorService:
                 ],
                 readinessChecks=[
                     DevelopmentRunwayReadinessCheckView(
-                        checkId="ready-backlog-item",
-                        label="Ready backlog item",
-                        status="ready" if "verification-surface-hardening" in ready_backlog_item_ids else "missing",
-                        summary="Confirms the slice maps to the next safe backlog item that is not authority-blocked.",
+                        checkId="completed-backlog-item",
+                        label="Completed backlog item",
+                        status="closed",
+                        summary="Confirms the verification surface hardening slice is completed evidence and not the next dispatchable lane.",
                         evidence=["verification-surface-hardening"],
                         requiredCommandIds=["check-safe-backlog"],
                         relatedReports=["GET /supervisor/safe-development-backlog"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog"],
-                        nextAction="Keep the verification surface hardening item ready before starting report/evidence navigation work.",
+                        nextAction="Use the completed verification surface hardening item as evidence only; do not requeue it.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="action-plan-coverage",
@@ -3011,8 +3010,8 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
-                nextLane=verification_surface_lane,
-                nextAction="Select this slice for read-only verification, navigation, or evidence-surface work, and keep every touched report registered in the catalog and runtime export references.",
+                nextLane=None,
+                nextAction="Use this completed slice as evidence for future read-only navigation work and keep every touched report registered in the catalog and runtime export references.",
             ),
             DevelopmentRunwaySliceView(
                 sliceId="verification-runbook-hardening-slice",
@@ -3020,11 +3019,13 @@ class SupervisorService:
                 status="ready",
                 recommendedPrScope="Bundle package script changes, verification readiness entries, runbook text, focused tests, dashboard assertions, and static drift checks in one PR.",
                 summary="Use this slice when verification commands, setup guidance, or fresh-VM/handoff instructions change.",
-                includedBacklogItems=["verification-surface-hardening", "github-delivery-hygiene"],
+                includedBacklogItems=["github-delivery-hygiene"],
                 includedActionSteps=["run-verification-chain", "verify-evidence-surfaces"],
                 requiredVerification=[
                     "pnpm run check:verification-readiness",
                     "pnpm run check:runbooks",
+                    "pnpm run check:github-workflow-policy",
+                    "pnpm run check:delivery-readiness",
                     "pnpm run check:e2e-report",
                     "pnpm run check",
                 ],
@@ -3045,16 +3046,14 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="ready-backlog-items",
                         label="Ready backlog items",
-                        status="ready"
-                        if {"verification-surface-hardening", "github-delivery-hygiene"}.issubset(ready_backlog_item_ids)
-                        else "missing",
-                        summary="Confirms verification and GitHub delivery hygiene backlog items are safe to work.",
-                        evidence=["verification-surface-hardening", "github-delivery-hygiene"],
+                        status="ready" if "github-delivery-hygiene" in ready_backlog_item_ids else "missing",
+                        summary="Confirms the GitHub delivery hygiene backlog item is safe to work.",
+                        evidence=["github-delivery-hygiene"],
                         requiredCommandIds=["check-safe-backlog", "check-development-runway"],
                         relatedReports=["GET /supervisor/safe-development-backlog", "GET /supervisor/development-runway-report"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#safe-development-backlog", "/controls#development-runway-report"],
-                        nextAction="Keep both backlog items ready before changing verification or runbook guidance.",
+                        nextAction="Keep the GitHub delivery hygiene item ready before changing delivery or runbook guidance.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="handoff-checkpoint-coverage",
@@ -3085,6 +3084,7 @@ class SupervisorService:
                     ),
                 ],
                 blockedBy=[],
+                nextLane=github_delivery_lane,
                 nextAction="Select this slice when a verification command or runbook changes, and prove the full local chain still names the new command.",
             ),
             DevelopmentRunwaySliceView(
