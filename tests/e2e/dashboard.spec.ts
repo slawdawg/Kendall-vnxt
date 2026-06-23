@@ -951,8 +951,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
     await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
-    await expect(runwayPanel.getByText("branch: codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh")).toBeVisible();
-    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut counts refresh"')).toBeVisible();
+    await expect(runwayPanel.getByText("branch: codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh")).toBeVisible();
+    await expect(runwayPanel.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut disabled reasons refresh"')).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:runner-assignment-status").first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("Do not treat this lane-start recommendation as merge, cleanup, issue-sync, or execution-authority approval.")).toBeVisible();
@@ -1242,9 +1242,14 @@ test.describe("dashboard workflow coverage", () => {
     const closedSourceGuardFilterEmptyStateShortcutCountsCard = safeBacklogPanel
       .locator("article")
       .filter({ has: page.getByRole("heading", { name: "Dispatcher closed source guard filter empty state shortcut counts refresh", exact: true }) });
-    await expect(closedSourceGuardFilterEmptyStateShortcutCountsCard.getByText("branch: codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh")).toBeVisible();
-    await expect(closedSourceGuardFilterEmptyStateShortcutCountsCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut counts refresh"')).toBeVisible();
-    await expect(closedSourceGuardFilterEmptyStateShortcutCountsCard.getByText("pnpm run test:e2e:dashboard:controls")).toBeVisible();
+    await expect(closedSourceGuardFilterEmptyStateShortcutCountsCard.getByText("Slice: complete")).toBeVisible();
+    await expect(closedSourceGuardFilterEmptyStateShortcutCountsCard.getByText("do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh")).toBeVisible();
+    const closedSourceGuardFilterEmptyStateShortcutDisabledReasonsCard = safeBacklogPanel
+      .locator("article")
+      .filter({ has: page.getByRole("heading", { name: "Dispatcher closed source guard filter empty state shortcut disabled reasons refresh", exact: true }) });
+    await expect(closedSourceGuardFilterEmptyStateShortcutDisabledReasonsCard.getByText("branch: codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh")).toBeVisible();
+    await expect(closedSourceGuardFilterEmptyStateShortcutDisabledReasonsCard.getByText('start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut disabled reasons refresh"')).toBeVisible();
+    await expect(closedSourceGuardFilterEmptyStateShortcutDisabledReasonsCard.getByText("pnpm run test:e2e:dashboard:controls")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 
@@ -1253,7 +1258,7 @@ test.describe("dashboard workflow coverage", () => {
     const closedAssignmentEvidence = runnerAssignmentPanel.getByTestId("closed-assignment-evidence");
     await expect(closedAssignmentEvidence.getByText("Closed assignment evidence", { exact: true })).toBeVisible();
     await expect(closedAssignmentEvidence.getByText("dispatcher-cleanup-assignment-closure-refresh: lane-closed branch codex/dispatcher-cleanup-assignment-closure-refresh - No assignment action")).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh: assignable (backlog-assignable) branch codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh: assignable (backlog-assignable) branch codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh")).toBeVisible();
     const sourceCompletionRollup = runnerAssignmentPanel.getByTestId("source-completion-rollup");
     await expect(sourceCompletionRollup.getByText("Source completion rollup", { exact: true })).toBeVisible();
     await expect(sourceCompletionRollup.getByText("Total: 1", { exact: true })).toBeVisible();
@@ -1270,7 +1275,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(filteredSourceSummary.getByText(/Source completion: assignment \d+, workspace \d+, none \d+/)).toBeVisible();
     const resetAssignmentFilters = assignmentRowFilters.getByRole("button", { name: "Reset assignment row filters" });
     await expect(resetAssignmentFilters).toBeDisabled();
-    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("active");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("workspace");
     await expect(resetAssignmentFilters).toBeEnabled();
@@ -1278,11 +1283,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(filteredSourceSummary.getByText("Rows: workspace 1, lane assignment 0, backlog 0", { exact: true })).toBeVisible();
     await expect(filteredSourceSummary.getByText("Source completion: assignment 0, workspace 0, none 1", { exact: true })).toBeVisible();
     await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "e2e-dispatcher-queue-handoff-badges-refresh" }).getByText("source: Workspace")).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("assignable");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("backlog");
     await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for assignable from Backlog with all source-completion states\./)).toBeVisible();
-    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Dispatcher closed source guard filter empty state shortcut counts refresh" }).getByText("source: Backlog")).toBeVisible();
+    await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Dispatcher closed source guard filter empty state shortcut disabled reasons refresh" }).getByText("source: Backlog")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("blocked");
     await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for blocked from Backlog with all source-completion states\./)).toBeVisible();
     await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "Execution-authority stories" }).getByText("source: Backlog")).toBeVisible();
@@ -1323,7 +1328,7 @@ test.describe("dashboard workflow coverage", () => {
     const uncompletedPreset = assignmentRowFilters.getByRole("button", { name: "Show uncompleted rows" });
     await expect(assignmentBackedPreset).toHaveText(/Assignment-backed\s+0/);
     await expect(workspaceBackedPreset).toHaveText(/Workspace-backed\s+1/);
-    await expect(uncompletedPreset).toHaveText(/Uncompleted\s+\d+/);
+    await expect(uncompletedPreset).toHaveText(/Uncompleted\s+43/);
     await assignmentBackedPreset.click();
     await expect(resetAssignmentFilters).toBeEnabled();
     await expect(assignmentRowFilters.getByLabel("Classification")).toHaveValue("all");
@@ -1339,6 +1344,9 @@ test.describe("dashboard workflow coverage", () => {
     const emptyStateAssignmentShortcut = runnerAssignmentPanel.getByRole("button", { name: "Show assignment-backed rows from empty state" });
     const emptyStateWorkspaceShortcut = runnerAssignmentPanel.getByRole("button", { name: "Show workspace-backed rows from empty state" });
     const emptyStateUncompletedShortcut = runnerAssignmentPanel.getByRole("button", { name: "Show uncompleted rows from empty state" });
+    await expect(emptyStateAssignmentShortcut).toHaveText(/Assignment-backed\s+0/);
+    await expect(emptyStateWorkspaceShortcut).toHaveText(/Workspace-backed\s+1/);
+    await expect(emptyStateUncompletedShortcut).toHaveText(/Uncompleted\s+43/);
     await expect(emptyStateAssignmentShortcut).toBeDisabled();
     await expect(emptyStateWorkspaceShortcut).toBeVisible();
     await expect(emptyStateUncompletedShortcut).toBeVisible();
@@ -1397,7 +1405,7 @@ test.describe("dashboard workflow coverage", () => {
     await assignmentRowFilters.getByLabel("Source completion").selectOption("all");
     await expect(assignmentRowFilters.getByText(/Showing 1\/\d+ rows for closed from Lane assignment with all source-completion states\./)).toBeVisible();
     await expect(runnerAssignmentPanel.locator("article").filter({ hasText: "codex/dispatcher-cleanup-assignment-closure-refresh" }).getByText("source: Lane assignment")).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("attention");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("all");
     await expect(runnerAssignmentPanel.getByText("Resume packet")).toBeVisible();
