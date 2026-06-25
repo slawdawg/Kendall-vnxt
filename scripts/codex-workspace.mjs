@@ -14,12 +14,15 @@ import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAntiChurnGuidanceHookCli } from "./anti-churn-guidance-hook.mjs";
+import { protectedBranches as branchFoundationProtectedBranches } from "./lib/branch-foundation.mjs";
 import { currentGitRoot, workspaceKey, workspaceState } from "./lib/codex-workspace-state.mjs";
 import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
-const defaultBaseBranch = "main";
-const protectedBranches = new Set(["main", "master"]);
+const defaultBaseBranch = "dev";
+const cleanupBranchesDefaultBaseRef = "origin/main";
+const rebuildIndexBaseBranch = "main";
+const protectedBranches = new Set(branchFoundationProtectedBranches);
 const args = process.argv.slice(2);
 const command = args[0];
 const commandArgs = args.slice(1);
@@ -112,7 +115,7 @@ Common options:
   --takeover-reason <text>  Required with --take-ownership when another owner is recorded.
 
 start options:
-  --base <branch>           Base branch. Defaults to main.
+  --base <branch>           Base branch. Defaults to dev.
   --branch <branch>         Override generated branch name.
   --mode <pr|experiment>    Task mode. Defaults to pr.
   --no-fetch                Do not fetch origin before creating the branch.
@@ -150,7 +153,7 @@ dispatch-next options:
   --dry-run                 Preview dispatch without mutation.
   --apply                   Claim/prepare one lane and record handoff evidence.
   --readiness <profile>     Readiness profile: doctor, preflight, none. Defaults to doctor.
-  --base <branch>           Base branch for a created worktree. Defaults to main.
+  --base <branch>           Base branch for a created worktree. Defaults to dev.
   --task-id <id>            Override task id when creating a workspace.
   --worktree <path>         Override worktree path when creating a workspace.
   --no-fetch                Do not fetch origin before creating a workspace.
@@ -218,7 +221,9 @@ function startWorkspace(argv) {
     throw new Error("start requires a task description.");
   }
 
+  const usingDefaultBase = !options.base;
   const baseBranch = String(options.base || defaultBaseBranch);
+  assertSafeBaseBranch(baseBranch);
   const mode = String(options.mode || "pr");
   if (!["pr", "experiment"].includes(mode)) {
     throw new Error("--mode must be either pr or experiment.");
@@ -235,9 +240,9 @@ function startWorkspace(argv) {
   const manifestPath = join(state.tasksDir, `${taskId}.json`);
   const shouldFetch = !options.noFetch;
   if (!options.dryRun && shouldFetch) {
-    runChecked("git", ["fetch", "origin", baseBranch], { cwd: repoRoot });
+    fetchBaseBranch(baseBranch, { usingDefaultBase });
   }
-  const baseRef = resolveBaseRef(baseBranch);
+  const baseRef = resolveBaseRef(baseBranch, { usingDefaultBase });
 
   if (existsSync(manifestPath)) {
     throw new Error(`Task manifest already exists: ${manifestPath}`);
@@ -653,6 +658,8 @@ function resumeWorkspace(argv) {
     console.log(ownerWarning);
   }
   console.log(`Branch: ${manifest.branch}`);
+  console.log(`Base branch: ${manifest.base_branch || "unknown"}`);
+  console.log(`Base ref: ${manifest.base_ref || "unknown"}`);
   console.log(`Worktree: ${manifest.worktree_path}`);
   if (manifest.pr_url) {
     console.log(`PR: ${manifest.pr_url}`);
@@ -1535,7 +1542,7 @@ function cleanupBranches(argv) {
   const { positional, options } = parseOptions(argv);
   const query = positional.join(" ").trim().toLowerCase();
   const apply = Boolean(options.apply);
-  const baseRef = String(options.base || `origin/${defaultBaseBranch}`);
+  const baseRef = String(options.base || cleanupBranchesDefaultBaseRef);
 
   if (!refExists(baseRef)) {
     throw new Error(`Base ref not found locally: ${baseRef}`);
@@ -1637,8 +1644,8 @@ function rebuildIndex(argv) {
       repo_name: workspaceKey(),
       repo_root: repoRoot,
       state_root: state.root,
-      base_branch: defaultBaseBranch,
-      base_ref: defaultBaseBranch,
+      base_branch: rebuildIndexBaseBranch,
+      base_ref: rebuildIndexBaseBranch,
       branch,
       worktree_path: record.path,
       status: "active",
@@ -1875,7 +1882,25 @@ function writeAssignment(path, assignment) {
   writeFileSync(path, `${JSON.stringify(assignment, null, 2)}\n`);
 }
 
-function resolveBaseRef(baseBranch) {
+function fetchBaseBranch(baseBranch, options = {}) {
+  assertSafeBaseBranch(baseBranch);
+  const result = git(["fetch", "origin", baseBranch], { cwd: repoRoot });
+  if (result.code === 0) {
+    return;
+  }
+  if (
+    options.usingDefaultBase &&
+    baseBranch === defaultBaseBranch &&
+    !baseRefAvailable(baseBranch) &&
+    fetchFailureLooksMissingRemoteRef(result)
+  ) {
+    throw new Error(branchFoundationDefaultBaseMessage(baseBranch));
+  }
+  throw new Error(result.stderr || `git fetch origin ${baseBranch} failed`);
+}
+
+function resolveBaseRef(baseBranch, options = {}) {
+  assertSafeBaseBranch(baseBranch);
   const originRef = `origin/${baseBranch}`;
   if (git(["rev-parse", "--verify", "--quiet", originRef], { cwd: repoRoot }).code === 0) {
     return originRef;
@@ -1883,7 +1908,26 @@ function resolveBaseRef(baseBranch) {
   if (git(["rev-parse", "--verify", "--quiet", baseBranch], { cwd: repoRoot }).code === 0) {
     return baseBranch;
   }
+  if (options.usingDefaultBase && baseBranch === defaultBaseBranch) {
+    throw new Error(branchFoundationDefaultBaseMessage(baseBranch));
+  }
   throw new Error(`Base branch not found locally: ${baseBranch}`);
+}
+
+function baseRefAvailable(baseBranch) {
+  return refExists(`origin/${baseBranch}`) || refExists(baseBranch);
+}
+
+function fetchFailureLooksMissingRemoteRef(result) {
+  return /could(n't| not) find remote ref|fatal: couldn't find remote ref/i.test(result.stderr || "");
+}
+
+function branchFoundationDefaultBaseMessage(baseBranch) {
+  return [
+    `Branch foundation default base ${baseBranch} was not found locally or as origin/${baseBranch}.`,
+    "Run node ./scripts/branch-foundation.mjs report to inspect branch foundation state.",
+    "Create or push the missing branch only through the approval-gated branch foundation setup flow.",
+  ].join(" ");
 }
 
 function branchExists(branch, cwd = repoRoot) {
@@ -1918,6 +1962,22 @@ function assertSafeBranch(branch) {
   const short = branch.replace(/^refs\/heads\//, "");
   if (protectedBranches.has(short)) {
     throw new Error(`Refusing to operate on protected branch: ${branch}`);
+  }
+}
+
+function assertSafeBaseBranch(branch) {
+  const value = String(branch || "").trim();
+  if (
+    !value ||
+    value !== branch ||
+    value.startsWith("-") ||
+    value.startsWith("refs/") ||
+    /[\s:*]/.test(value) ||
+    value.includes("..") ||
+    value.includes("@{") ||
+    git(["check-ref-format", "--branch", value], { cwd: repoRoot }).code !== 0
+  ) {
+    throw new Error(`Invalid base branch: ${branch}`);
   }
 }
 
@@ -2497,6 +2557,7 @@ function dispatchPacket(selected, evaluations, context) {
     selected_lane: selected?.item.itemId || null,
     owner: context.currentOwner,
     branch: selected?.item.branchName || null,
+    base_branch: selected ? dispatchPacketBaseBranch(selected, context) : null,
     claim_action: selected?.action || null,
     claim_mutation: selected?.mutation || null,
     workspace_action: selected ? dispatchWorkspaceAction(selected) : null,
@@ -2556,6 +2617,7 @@ function applyDispatchNext(plan, context) {
   if (!plan.selected) {
     throw new Error("No dispatchable safe backlog lane found.");
   }
+  preflightDispatchWorkspaceBase(plan.selected, context);
 
   const claim = applyClaimNext(plan.selected, {
     state: context.state,
@@ -2667,7 +2729,9 @@ function dispatchManifestForAssignment(state, assignment) {
 function createDispatchWorkspace(item, assignment, context) {
   const branch = String(item.branchName || assignment.branch || "");
   assertSafeBranch(branch);
+  const usingDefaultBase = !context.options.base;
   const baseBranch = String(context.options.base || defaultBaseBranch);
+  assertSafeBaseBranch(baseBranch);
   const taskId = String(context.options.taskId || nextDispatchTaskId(context.state, laneSlugFromBranch(branch)));
   assertSafeTaskId(taskId);
   const worktreePath = resolve(String(context.options.worktree || join(context.state.worktreesDir, taskId)));
@@ -2687,9 +2751,9 @@ function createDispatchWorkspace(item, assignment, context) {
     throw new Error(`Remote branch already exists: origin/${branch}`);
   }
   if (shouldFetch) {
-    runChecked("git", ["fetch", "origin", baseBranch], { cwd: repoRoot });
+    fetchBaseBranch(baseBranch, { usingDefaultBase });
   }
-  const baseRef = resolveBaseRef(baseBranch);
+  const baseRef = resolveBaseRef(baseBranch, { usingDefaultBase });
 
   const now = new Date().toISOString();
   const manifest = {
@@ -2893,11 +2957,47 @@ function defaultDispatchStopLines() {
   ];
 }
 
+function dispatchPacketBaseBranch(selected, context) {
+  if (dispatchWorkspaceAction(selected) === "claim_and_create_workspace") {
+    return String(context.options.base || defaultBaseBranch);
+  }
+  const taskId = String(selected.targetTaskId || "");
+  if (taskId) {
+    const record = readManifests(context.state).find(({ manifest }) => manifest.task_id === taskId);
+    return record?.manifest?.base_branch || null;
+  }
+  const assignmentId = String(selected.targetAssignmentId || "");
+  if (assignmentId) {
+    const assignmentRecord = readAssignments(context.state).find(
+      ({ assignment }) => assignment.assignment_id === assignmentId,
+    );
+    if (assignmentRecord) {
+      const manifestRecord = dispatchManifestForAssignment(context.state, assignmentRecord.assignment);
+      return manifestRecord?.manifest?.base_branch || null;
+    }
+  }
+  return null;
+}
+
+function preflightDispatchWorkspaceBase(selected, context) {
+  if (dispatchWorkspaceAction(selected) !== "claim_and_create_workspace") {
+    return;
+  }
+  const usingDefaultBase = !context.options.base;
+  const baseBranch = String(context.options.base || defaultBaseBranch);
+  assertSafeBaseBranch(baseBranch);
+  if (!context.options.noFetch) {
+    fetchBaseBranch(baseBranch, { usingDefaultBase });
+  }
+  resolveBaseRef(baseBranch, { usingDefaultBase });
+}
+
 function printDispatchPacket(label, packet) {
   console.log(`${label}: dispatch-next`);
   console.log(`- owner ${packet.owner}`);
   console.log(`- selected lane ${packet.selected_lane || packet.lane || "none"}`);
   console.log(`- branch ${packet.branch || "none"}`);
+  console.log(`- base branch ${packet.base_branch || "none"}`);
   console.log(`- claim action ${packet.claim_action || "none"}`);
   console.log(`- workspace action ${packet.workspace_action || "none"}`);
   console.log(`- readiness ${packet.readiness_profile || packet.readiness?.profile || "none"}`);
@@ -3923,7 +4023,8 @@ function printManifestSummary(manifest) {
   console.log(`Task: ${manifest.task_id}`);
   console.log(`Owner: ${manifest.owner || "unowned"}`);
   console.log(`Branch: ${manifest.branch}`);
-  console.log(`Base: ${manifest.base_ref}`);
+  console.log(`Base branch: ${manifest.base_branch}`);
+  console.log(`Base ref: ${manifest.base_ref}`);
   console.log(`Worktree: ${manifest.worktree_path}`);
   console.log(`Manifest: ${join(manifest.state_root, "tasks", `${manifest.task_id}.json`)}`);
 }

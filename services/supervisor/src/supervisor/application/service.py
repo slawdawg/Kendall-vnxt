@@ -176,6 +176,16 @@ from supervisor.api.schemas import (
     WorkItemFilterView,
     WorkerRegistryEntryView,
     WorkflowEventView,
+    ArtifactRefV0View,
+    EvidenceRefV0View,
+    RecoveryActionV0View,
+    AlphaMemorySourceStatusV0View,
+    SourceRefV0View,
+    WorkPacketExecutionAttemptSummaryV0View,
+    WorkPacketLaneCardV0View,
+    WorkPacketRouteSummaryV0View,
+    WorkPacketReviewSummaryV0View,
+    WorkPacketV0View,
     WorkItemView,
 )
 from supervisor.config.settings import Settings
@@ -474,6 +484,49 @@ class SupervisorService:
         result = await session.execute(select(CandidateWork).order_by(CandidateWork.sort_order.asc(), CandidateWork.created_at.desc()))
         return list(result.scalars())
 
+    async def list_work_packets(self, session: AsyncSession) -> list[WorkPacketV0View]:
+        candidates = await self.list_candidate_work(session)
+        items = await self.list_work_items(session)
+        candidate_by_work_item_id = self._candidate_by_work_item_id(candidates, items)
+        item_ids = {item.id for item in items}
+        packet_views: list[WorkPacketV0View] = []
+        emitted_candidate_ids: set[str] = set()
+
+        for item in items:
+            candidate = candidate_by_work_item_id.get(item.id)
+            if candidate:
+                emitted_candidate_ids.add(candidate.id)
+            packet_views.append(await self._assemble_work_packet(session, candidate=candidate, item=item))
+
+        for candidate in candidates:
+            if candidate.id in emitted_candidate_ids:
+                continue
+            if candidate.promoted_work_item_id and candidate.promoted_work_item_id in item_ids:
+                continue
+            packet_views.append(await self._assemble_work_packet(session, candidate=candidate, item=None))
+
+        return packet_views
+
+    async def get_work_packet(self, session: AsyncSession, packet_id: str) -> WorkPacketV0View | None:
+        if packet_id.startswith("work_item:"):
+            work_item_id = packet_id.removeprefix("work_item:")
+            item = await session.get(WorkItem, work_item_id)
+            if not item:
+                return None
+            candidate = self._candidate_by_work_item_id(await self.list_candidate_work(session), [item]).get(item.id)
+            return await self._assemble_work_packet(session, candidate=candidate, item=item)
+        if packet_id.startswith("candidate_work:"):
+            candidate_id = packet_id.removeprefix("candidate_work:")
+            candidate = await session.get(CandidateWork, candidate_id)
+            if not candidate:
+                return None
+            if candidate.promoted_work_item_id:
+                item = await session.get(WorkItem, candidate.promoted_work_item_id)
+                if item:
+                    return await self._assemble_work_packet(session, candidate=candidate, item=item)
+            return await self._assemble_work_packet(session, candidate=candidate, item=None)
+        return None
+
     async def update_candidate_work(self, session: AsyncSession, candidate_work_id: str, payload: CandidateWorkUpdate) -> CandidateWork | None:
         candidate = await session.get(CandidateWork, candidate_work_id)
         if not candidate:
@@ -711,6 +764,50 @@ class SupervisorService:
                 evidence=[
                     "Validates verification readiness contracts, schemas, API route, service commands, dashboard rendering, browser assertions, and story evidence stay aligned.",
                     "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-pipeline-implementation-readiness",
+                label="Pipeline implementation readiness evidence drift",
+                command="pnpm run check:pipeline-implementation-readiness",
+                status="required",
+                requiredFor=["pipeline implementation readiness changes", "pipeline cockpit evidence changes", "BMAD readiness gate changes"],
+                evidence=[
+                    "Validates pipeline implementation readiness evidence covers contracts, fixtures, UI, guards, model/worker/review lanes, memory/source boundaries, refined UI readiness, and live-integration stop lines.",
+                    "Runs as part of the full local verification command without approving execution authority.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-pipeline-implementation-readiness",
+                label="Pipeline implementation readiness tests",
+                command="pnpm run test:pipeline-implementation-readiness",
+                status="required",
+                requiredFor=["pipeline implementation readiness evidence changes", "refined cockpit follow-up changes", "live-integration stop-line changes"],
+                evidence=[
+                    "Validates missing evidence, unresolved blocker status, refined UI follow-up, runtime enforcement stop lines, and authority-report evidence fail closed.",
+                    "Runs as part of the full local verification command without approving execution authority.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-live-memory-source-enforcement",
+                label="Live memory/source enforcement policy tests",
+                command="pnpm run test:live-memory-source-enforcement",
+                status="required",
+                requiredFor=["live memory/source enforcement policy changes", "Obsidian write-back boundary changes", "LLM-Wiki source-boundary changes"],
+                evidence=[
+                    "Validates the source-owned policy, fake-adapter evaluator, stop lines, rollback metadata, metadata-only audit event, and no default write authority.",
+                    "Runs as part of the static and full local verification commands without approving live memory/source mutation.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-bounded-live-memory-source",
+                label="Bounded live memory/source integration tests",
+                command="pnpm run test:bounded-live-memory-source",
+                status="required",
+                requiredFor=["bounded live memory/source integration changes", "Obsidian draft-preview boundary changes", "read-only source inspection changes"],
+                evidence=[
+                    "Validates dry-run write plans, read-only approved source metadata inspection, fail-closed source states, and approval-gated draft-preview artifacts.",
+                    "Runs as part of the static and full local verification commands without approving canonical memory/source mutation.",
                 ],
             ),
             VerificationCommandView(
@@ -1066,6 +1163,61 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-work-packet-contracts",
+                label="Work Packet contract tests",
+                command="pnpm run test:work-packet-contracts",
+                status="required",
+                requiredFor=["Work Packet contract changes", "source/evidence/artifact boundary changes", "pipeline cockpit readiness"],
+                evidence=[
+                    "Validates the shared WorkPacketV0 contract, metadata-only evidence boundary, and package script wiring.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-work-packet-stage-map",
+                label="Work Packet stage-map tests",
+                command="pnpm run test:work-packet-stage-map",
+                status="required",
+                requiredFor=["pipeline stage mapping changes", "owner/status mapping changes", "pipeline cockpit readiness"],
+                evidence=[
+                    "Validates deterministic Work Packet stage, owner, status, reason-code, and ambiguity mapping.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-work-packet-fixtures",
+                label="Work Packet fixture tests",
+                command="pnpm run test:work-packet-fixtures",
+                status="required",
+                requiredFor=["Work Packet fixture changes", "evidence-boundary fixture changes", "pipeline cockpit readiness"],
+                evidence=[
+                    "Validates canonical Work Packet fixtures, source-ref visibility, and forbidden raw-retention fixture boundaries.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-pipeline-state-matrix",
+                label="Pipeline state/evidence matrix tests",
+                command="pnpm run test:pipeline-state-matrix",
+                status="required",
+                requiredFor=["pipeline matrix changes", "fixture catalog changes", "implementation readiness checks"],
+                evidence=[
+                    "Validates Pipeline State/Evidence Matrix completeness, fixture catalog coverage, and readiness failure reporting.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-dashboard-pipeline-fixtures",
+                label="Dashboard pipeline fixture tests",
+                command="pnpm run test:dashboard-pipeline-fixtures",
+                status="required",
+                requiredFor=["pipeline cockpit fixture changes", "Human Gate UI changes", "dashboard no-live-call boundary changes"],
+                evidence=[
+                    "Validates the fixture-backed /pipeline cockpit, visible Human Gate metadata, no-live-call guards, and dashboard fixture wiring.",
+                    "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="test-codex-workspace",
                 label="Codex workspace protocol tests",
                 command="pnpm run test:codex-workspace",
@@ -1384,6 +1536,10 @@ class SupervisorService:
                     "check-docs",
                     "check-documentation-authority",
                     "check-verification-readiness",
+                    "check-pipeline-implementation-readiness",
+                    "test-pipeline-implementation-readiness",
+                    "test-live-memory-source-enforcement",
+                    "test-bounded-live-memory-source",
                     "check-authority-readiness",
                     "check-adaptive-scoring",
                     "check-premium-execution",
@@ -1415,6 +1571,11 @@ class SupervisorService:
                     "check-knx-obsidian-memory",
                     "test-clean-install-boundary",
                     "test-knx-obsidian-memory",
+                    "test-work-packet-contracts",
+                    "test-work-packet-stage-map",
+                    "test-work-packet-fixtures",
+                    "test-pipeline-state-matrix",
+                    "test-dashboard-pipeline-fixtures",
                     "check-clean-install-boundary",
                     "test-codex-workspace",
                     "test-codex-workspace-state",
@@ -17374,6 +17535,718 @@ class SupervisorService:
             return "general"
 
         return None
+
+    def _candidate_by_work_item_id(self, candidates: list[CandidateWork], items: list[WorkItem] | None = None) -> dict[str, CandidateWork]:
+        matches: dict[str, CandidateWork] = {}
+        candidate_by_id = {candidate.id: candidate for candidate in candidates}
+        for candidate in candidates:
+            if candidate.promoted_work_item_id:
+                matches[candidate.promoted_work_item_id] = candidate
+        for item in items or []:
+            metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+            candidate_id = metadata.get("candidateWorkId")
+            if isinstance(candidate_id, str) and candidate_id in candidate_by_id:
+                matches.setdefault(item.id, candidate_by_id[candidate_id])
+        return matches
+
+    async def _assemble_work_packet(
+        self,
+        session: AsyncSession,
+        *,
+        candidate: CandidateWork | None,
+        item: WorkItem | None,
+    ) -> WorkPacketV0View:
+        candidate_view = self.to_candidate_work_view(candidate) if candidate else None
+        item_view = self.to_work_item_view(item) if item else None
+        attempts = await self.list_execution_attempts(session, item.id) if item else []
+        latest_attempt = attempts[0] if attempts else None
+        task_kind = self._task_kind_from_attempt(latest_attempt)
+        routing_preview = (
+            await self.get_routing_preview(
+                session,
+                item.id,
+                WorkItemRoutingPreviewRequest(taskKind=task_kind, recordEvent=False) if task_kind else None,
+            )
+            if item
+            else None
+        )
+        task_packet = self._task_packet_from_preview(item, routing_preview) if item and routing_preview else None
+        stage, owner, status, mapping_reason_codes = self._map_work_packet_state(
+            candidate=candidate_view,
+            item=item_view,
+            routing_preview=routing_preview,
+            attempts=attempts,
+        )
+        evidence_refs = self._work_packet_evidence_refs(item_view, routing_preview, attempts)
+        artifact_refs = self._work_packet_artifact_refs(candidate_view, item_view, task_packet, attempts)
+
+        packet_id = self._work_packet_id(candidate_view, item_view)
+        source_refs = self._work_packet_source_refs(candidate_view, item_view)
+
+        return WorkPacketV0View(
+            packetId=packet_id,
+            title=item_view.title if item_view else candidate_view.title if candidate_view else "Unknown Work Packet",
+            requestedOutcome=(
+                item_view.requestedOutcome
+                if item_view
+                else candidate_view.requestedOutcome
+                if candidate_view
+                else "not_available"
+            ),
+            currentStage=stage,
+            currentOwner=owner,
+            status=status,
+            riskLevel=item_view.riskLevel if item_view else candidate_view.riskLevel if candidate_view else "low",
+            priority=self._work_packet_priority(candidate_view, item_view),
+            candidateWork=candidate_view,
+            workItem=item_view,
+            taskPacket=task_packet,
+            routingPreview=routing_preview,
+            routeSummary=self._work_packet_route_summary(routing_preview, latest_attempt, mapping_reason_codes),
+            executionAttempts=self._work_packet_attempt_summaries(attempts),
+            sourceRefs=source_refs,
+            evidenceRefs=evidence_refs,
+            artifactRefs=artifact_refs,
+            humanGateActions=[],
+            laneCards=self._work_packet_lane_cards(attempts, routing_preview),
+            memoryProposals=[],
+            alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs),
+            reviewSummaries=self._work_packet_review_summaries(item_view, evidence_refs, artifact_refs),
+            recoveryActions=self._work_packet_recovery_actions(status, evidence_refs),
+        )
+
+    def _work_packet_id(self, candidate: CandidateWorkView | None, item: WorkItemView | None) -> str:
+        if item:
+            return f"work_item:{item.id}"
+        if candidate:
+            return f"candidate_work:{candidate.id}"
+        return "work_packet:unknown"
+
+    def _work_packet_priority(self, candidate: CandidateWorkView | None, item: WorkItemView | None) -> str:
+        if candidate:
+            return candidate.priority
+        metadata = item.metadata if item and isinstance(item.metadata, dict) else {}
+        value = metadata.get("candidatePriority")
+        return value if isinstance(value, str) and value in {"low", "normal", "high", "urgent"} else "normal"
+
+    def _task_kind_from_attempt(self, attempt: ExecutionAttemptView | None) -> str | None:
+        if not attempt:
+            return None
+        for artifact_ref in attempt.artifactRefs:
+            if isinstance(artifact_ref, dict):
+                task_kind = artifact_ref.get("taskKind")
+                if isinstance(task_kind, str) and task_kind:
+                    return task_kind
+        return None
+
+    def _task_packet_from_preview(self, item: WorkItem, preview: RoutingPreviewView) -> TaskPacketV0View:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        source_artifact_path = metadata.get("sourceArtifactPath")
+        priority = metadata.get("candidatePriority")
+        verification_summary = metadata.get("verificationSummary")
+        return TaskPacketV0View(
+            workItemId=item.id,
+            title=item.title,
+            requestedOutcome=item.requested_outcome,
+            source=item.source,
+            sourceArtifactPath=source_artifact_path if isinstance(source_artifact_path, str) and source_artifact_path else "not_recorded",
+            taskKind=preview.profile.taskKind,
+            riskLevel=item.risk_level,
+            priority=priority if isinstance(priority, str) and priority else "normal",
+            approvalMode=preview.decision.authorityMode,
+            verificationSummary=verification_summary
+            if isinstance(verification_summary, str) and verification_summary
+            else "Verification evidence is not recorded for this Work Item.",
+        )
+
+    def _map_work_packet_state(
+        self,
+        *,
+        candidate: CandidateWorkView | None,
+        item: WorkItemView | None,
+        routing_preview: RoutingPreviewView | None,
+        attempts: list[ExecutionAttemptView],
+    ) -> tuple[str, str, str, list[str]]:
+        if attempts:
+            latest = attempts[0]
+            owner = self._owner_for_lane(latest.lane)
+            match latest.status.value:
+                case "planned":
+                    return "shape", "kendall", "waiting", self._execution_lane_reason_codes(latest.lane, "execution_attempt.planned")
+                case "approved":
+                    return "human_gate", "operator", "waiting", self._execution_lane_reason_codes(latest.lane, "execution_attempt.approved")
+                case "starting" | "running":
+                    return "execute", owner, "active", self._execution_lane_reason_codes(latest.lane, f"execution_attempt.{latest.status.value}")
+                case "completed":
+                    return "review", "kendall", "complete", self._execution_lane_reason_codes(latest.lane, "execution_attempt.completed")
+                case "cancelled":
+                    return "execute", "blocked", "blocked", self._execution_lane_reason_codes(latest.lane, "execution_attempt.cancelled")
+                case "cancel_requested" | "timed_out" | "failed" | "rejected":
+                    return "execute", "blocked", "failed", self._execution_lane_reason_codes(
+                        latest.lane,
+                        f"execution_attempt.{latest.status.value}",
+                    )
+
+        if item:
+            delivery_ready = item.deliveryReadiness.readyForApproval if item.deliveryReadiness else False
+            if item.state.value == "done":
+                if delivery_ready or (item.deliveryReadiness and item.deliveryReadiness.pullRequestUrl):
+                    owner = "github" if item.deliveryReadiness and item.deliveryReadiness.pullRequestUrl else "kendall"
+                    return "deliver", owner, "complete", ["work_item.done", "delivery.evidence_present"]
+                return "deliver", "kendall", "complete", ["work_item.done", "delivery.evidence_missing"]
+            if item.state.value == "triaged" and routing_preview:
+                return "route", "kendall", "active", ["work_item.triaged", "routing_preview.present"]
+            state_map = {
+                "queued": ("capture", "kendall", "active"),
+                "triaged": ("classify", "kendall", "active"),
+                "ready": ("human_gate", "operator", "waiting"),
+                "implementing": ("execute", self._owner_for_lane(item.lane.value if item.lane else None), "active"),
+                "validating": ("review", "kendall", "active"),
+                "reviewing": ("review", "kendall", "active"),
+                "awaiting_audit": ("review", "operator", "waiting"),
+                "needs_rework": ("shape", "kendall", "active"),
+                "blocked": ("human_gate", "blocked", "blocked"),
+            }
+            if item.state.value in state_map:
+                stage, owner, status = state_map[item.state.value]
+                return stage, owner, status, [f"work_item.{item.state.value}"]
+
+        if candidate:
+            if candidate.status.value == "approved" and not candidate.promotedWorkItemId:
+                return "promote", "operator", "waiting", ["candidate_work.approved", "candidate_work.not_promoted"]
+            if candidate.status.value == "approved" and candidate.promotedWorkItemId:
+                return "capture", "kendall", "waiting", ["candidate.promoted_missing_work_item"]
+            if candidate.status.value == "deferred":
+                return "capture", "operator", "deferred", ["candidate_work.deferred"]
+            if candidate.status.value == "rejected":
+                return "capture", "operator", "deferred", ["candidate_work.rejected"]
+            return "capture", "kendall", "waiting", [f"candidate.{candidate.status.value}"]
+
+        return "capture", "kendall", "waiting", ["source.missing"]
+
+    def _owner_for_lane(self, lane: str | None) -> str:
+        return {
+            "local_readonly": "local_model",
+            "utility": "kendall",
+            "local_patch_draft": "kendall",
+            "local_sandbox_execute": "codex_worker",
+            "subscription_handoff": "codex_worker",
+            "subscription_agent": "codex_worker",
+            "premium_approval": "operator",
+            "codex_cli_worker": "codex_worker",
+            "hermes_worker_mock": "hermes_worker_mock",
+            "claude_reviewer": "claude_reviewer",
+            "github": "github",
+            "memory_review": "memory_review",
+        }.get(lane or "", "kendall")
+
+    def _execution_lane_reason_codes(self, lane: str | None, status_reason_code: str) -> list[str]:
+        if not lane:
+            return [status_reason_code, "execution_lane.missing"]
+        if lane == "local_patch_draft":
+            return [status_reason_code, "execution_lane.local_patch_draft_kendall_owned"]
+        if self._lane_type(lane) == "unknown":
+            return [status_reason_code, f"execution_lane.unsupported.{lane}"]
+        return [status_reason_code, f"execution_lane.{lane}"]
+
+    def _lane_type(self, lane: str | None) -> str:
+        allowed = {
+            "local_model",
+            "hermes_worker_mock",
+            "codex_worker",
+            "claude_reviewer",
+            "github",
+            "memory_review",
+            "utility",
+            "local_readonly",
+            "local_patch_draft",
+            "local_sandbox_execute",
+            "subscription_handoff",
+            "subscription_agent",
+            "premium_approval",
+            "codex_cli_worker",
+        }
+        return lane if lane in allowed else "unknown"
+
+    def _work_packet_source_refs(
+        self,
+        candidate: CandidateWorkView | None,
+        item: WorkItemView | None,
+    ) -> list[SourceRefV0View]:
+        refs: list[SourceRefV0View] = []
+        if candidate:
+            refs.append(
+                SourceRefV0View(
+                    refId=f"candidate_work:{candidate.id}",
+                    sourceType="candidate_work",
+                    label=f"Candidate Work: {candidate.title}",
+                    pathOrUrl=candidate.sourceArtifactPath,
+                    freshness="fresh",
+                    accessState="allowed",
+                    summaryOnly=True,
+                )
+            )
+        if item:
+            metadata = item.metadata if isinstance(item.metadata, dict) else {}
+            path = metadata.get("sourceArtifactPath")
+            refs.append(
+                SourceRefV0View(
+                    refId=f"work_item:{item.id}",
+                    sourceType="work_item",
+                    label=f"Work Item: {item.title}",
+                    pathOrUrl=path if isinstance(path, str) and path else None,
+                    freshness="fresh",
+                    accessState="allowed",
+                    summaryOnly=True,
+                )
+            )
+            refs.extend(self._work_packet_metadata_source_refs(metadata))
+        return refs
+
+    def _work_packet_metadata_source_refs(self, metadata: dict) -> list[SourceRefV0View]:
+        raw_refs = metadata.get("workPacketSourceRefs")
+        if not isinstance(raw_refs, list):
+            return []
+        allowed_source_types = {"bmad_artifact", "obsidian", "llm_wiki", "github", "research", "manual"}
+        allowed_freshness = {"fresh", "stale", "unknown", "not_applicable"}
+        allowed_access = {"allowed", "excluded", "missing", "blocked"}
+        refs: list[SourceRefV0View] = []
+        for index, raw_ref in enumerate(raw_refs):
+            if not isinstance(raw_ref, dict):
+                refs.append(
+                    SourceRefV0View(
+                        refId=f"metadata_source:{index}",
+                        sourceType="manual",
+                        label=f"Blocked metadata source {index + 1}: malformed source ref",
+                        freshness="unknown",
+                        accessState="blocked",
+                        summaryOnly=True,
+                    )
+                )
+                continue
+            source_type = raw_ref.get("sourceType")
+            access_state = raw_ref.get("accessState")
+            freshness = raw_ref.get("freshness")
+            invalid_reasons: list[str] = []
+            if source_type not in allowed_source_types:
+                invalid_reasons.append("invalid source type")
+            if access_state not in allowed_access:
+                invalid_reasons.append("invalid access state")
+            if freshness not in allowed_freshness:
+                invalid_reasons.append("invalid freshness")
+            ref_id = raw_ref.get("refId")
+            label = raw_ref.get("label")
+            path_or_url = raw_ref.get("pathOrUrl")
+            safe_source_type = source_type if source_type in allowed_source_types else "manual"
+            safe_freshness = freshness if freshness in allowed_freshness else "unknown"
+            if access_state == "unavailable":
+                safe_access_state = "missing"
+            elif access_state in allowed_access:
+                safe_access_state = access_state
+            else:
+                safe_access_state = "blocked"
+            if invalid_reasons and safe_access_state == "allowed":
+                safe_access_state = "blocked"
+            safe_label = label if isinstance(label, str) and label else f"Metadata source {index + 1}"
+            if invalid_reasons:
+                safe_label = f"{safe_label} ({', '.join(invalid_reasons)})"
+            refs.append(
+                SourceRefV0View(
+                    refId=ref_id if isinstance(ref_id, str) and ref_id else f"metadata_source:{index}",
+                    sourceType=safe_source_type,
+                    label=safe_label,
+                    pathOrUrl=path_or_url
+                    if not invalid_reasons and safe_access_state == "allowed" and isinstance(path_or_url, str) and path_or_url
+                    else None,
+                    freshness=safe_freshness,
+                    accessState=safe_access_state,
+                    summaryOnly=True,
+                )
+            )
+        return refs
+
+    def _work_packet_alpha_memory_source_status(
+        self,
+        packet_id: str,
+        source_refs: list[SourceRefV0View],
+        evidence_refs: list[EvidenceRefV0View],
+    ) -> AlphaMemorySourceStatusV0View | None:
+        alpha_source_refs = [ref for ref in source_refs if ref.sourceType not in {"candidate_work", "work_item"}]
+        if not alpha_source_refs:
+            return None
+
+        blocked_reasons: list[str] = ["approval_metadata.missing"]
+        for source_ref in alpha_source_refs:
+            if source_ref.accessState != "allowed":
+                blocked_reasons.append(f"source_ref.invalid_or_blocked.{source_ref.refId}")
+            if source_ref.freshness == "stale":
+                blocked_reasons.append(f"source_ref.stale.{source_ref.refId}")
+            if source_ref.sourceType == "llm_wiki":
+                blocked_reasons.append(f"source_ref.derived_non_canonical.{source_ref.refId}")
+
+        blocked_reasons = list(dict.fromkeys(blocked_reasons))
+        decision_state = "blocked" if blocked_reasons else "ready"
+        recovery_options = (
+            [
+                "Review blocked source refs",
+                "Provide explicit approval metadata",
+                "Refresh source refs or send back to Research",
+                "Keep Obsidian canonical; do not promote LLM-Wiki",
+            ]
+            if blocked_reasons
+            else ["Run dry-run preview with explicit approval metadata"]
+        )
+
+        return AlphaMemorySourceStatusV0View(
+            statusId=f"alpha-memory-source:{packet_id}",
+            operationMode="dry_run",
+            decisionState=decision_state,
+            sourceRefs=[ref.refId for ref in alpha_source_refs],
+            targetMetadata={
+                "targetKind": "draft_or_quarantine_preview",
+                "canonicalMutationAllowed": False,
+                "sourceMutationAllowed": False,
+            },
+            backupPath="not_authorized_for_alpha_status",
+            rollbackPath="no_mutation_performed",
+            auditEventSummary=(
+                "Alpha memory/source dry-run status is supervisor-owned metadata. "
+                "No canonical memory, source, provider, worker, GitHub, or network mutation is authorized."
+            ),
+            blockedReasons=blocked_reasons,
+            recoveryOptions=recovery_options,
+            evidenceRefs=[ref.refId for ref in evidence_refs],
+        )
+
+    def _work_packet_evidence_refs(
+        self,
+        item: WorkItemView | None,
+        routing_preview: RoutingPreviewView | None,
+        attempts: list[ExecutionAttemptView],
+    ) -> list[EvidenceRefV0View]:
+        refs: list[EvidenceRefV0View] = []
+        if item and item.deliveryReadiness and (
+            item.deliveryReadiness.readyForApproval
+            or item.deliveryReadiness.pullRequestUrl
+            or item.deliveryReadiness.deliveryWaived
+        ):
+            refs.append(
+                EvidenceRefV0View(
+                    refId=f"delivery:{item.id}",
+                    evidenceType="gate",
+                    label="Delivery readiness",
+                    retentionClass="metadata_only",
+                )
+            )
+        if routing_preview:
+            refs.append(
+                EvidenceRefV0View(
+                    refId=f"route:{routing_preview.decision.decisionId}",
+                    evidenceType="route",
+                    label="Routing preview",
+                    retentionClass="metadata_only",
+                )
+            )
+        for attempt in attempts:
+            refs.append(
+                EvidenceRefV0View(
+                    refId=f"attempt:{attempt.attemptId}",
+                    evidenceType="attempt",
+                    label=f"Execution attempt {attempt.status.value}",
+                    retentionClass="metadata_only",
+                )
+            )
+            for event_ref in attempt.eventRefs:
+                if isinstance(event_ref, dict) and isinstance(event_ref.get("eventId"), str):
+                    refs.append(
+                        EvidenceRefV0View(
+                            refId=f"event:{event_ref['eventId']}",
+                            evidenceType="event",
+                            label=str(event_ref.get("eventType") or "Workflow event"),
+                            retentionClass="metadata_only",
+                        )
+                    )
+        return refs
+
+    def _work_packet_artifact_refs(
+        self,
+        candidate: CandidateWorkView | None,
+        item: WorkItemView | None,
+        task_packet: TaskPacketV0View | None,
+        attempts: list[ExecutionAttemptView],
+    ) -> list[ArtifactRefV0View]:
+        refs: list[ArtifactRefV0View] = []
+        if candidate:
+            refs.append(
+                ArtifactRefV0View(
+                    refId=f"artifact:candidate_work:{candidate.id}",
+                    artifactType="plan",
+                    label="Candidate source artifact",
+                    pathOrUrl=candidate.sourceArtifactPath,
+                    status="available",
+                )
+            )
+        if item:
+            metadata = item.metadata if isinstance(item.metadata, dict) else {}
+            path = metadata.get("sourceArtifactPath")
+            if isinstance(path, str) and path:
+                refs.append(
+                    ArtifactRefV0View(
+                        refId=f"artifact:work_item:{item.id}",
+                        artifactType="plan",
+                        label="Work Item source artifact",
+                        pathOrUrl=path,
+                        status="available",
+                    )
+                )
+            if item.deliveryReadiness and item.deliveryReadiness.pullRequestUrl:
+                refs.append(
+                    ArtifactRefV0View(
+                        refId=f"artifact:delivery:{item.id}:pull_request",
+                        artifactType="pull_request",
+                        label="Delivery pull request",
+                        pathOrUrl=item.deliveryReadiness.pullRequestUrl,
+                        status="available",
+                    )
+                )
+        if task_packet:
+            refs.append(
+                ArtifactRefV0View(
+                    refId=f"artifact:task_packet:{task_packet.workItemId}",
+                    artifactType="fixture",
+                    label="Task Packet V0",
+                    status="available",
+                )
+            )
+        for attempt in attempts:
+            for index, artifact_ref in enumerate(attempt.artifactRefs):
+                label = f"Execution artifact {index + 1}"
+                path_or_url = None
+                if isinstance(artifact_ref, dict):
+                    label = str(artifact_ref.get("artifactType") or label)
+                    path_or_url = self._artifact_ref_path(artifact_ref)
+                refs.append(
+                    ArtifactRefV0View(
+                        refId=f"artifact:attempt:{attempt.attemptId}:{index}",
+                        artifactType="fixture",
+                        label=label,
+                        pathOrUrl=path_or_url,
+                        status="available" if path_or_url else "missing",
+                    )
+                )
+        return refs
+
+    def _artifact_ref_path(self, artifact_ref: dict) -> str | None:
+        for key in ("pathOrUrl", "artifactPath", "sourceArtifactPath", "path", "artifactRef", "url"):
+            value = artifact_ref.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _work_packet_attempt_summaries(
+        self,
+        attempts: list[ExecutionAttemptView],
+    ) -> list[WorkPacketExecutionAttemptSummaryV0View]:
+        return [
+            WorkPacketExecutionAttemptSummaryV0View(
+                attemptId=attempt.attemptId,
+                workItemId=attempt.workItemId,
+                routeDecisionId=attempt.routeDecisionId,
+                workerId=attempt.workerId,
+                lane=attempt.lane,
+                authorityMode=attempt.authorityMode,
+                status=attempt.status,
+                requestedById=attempt.requestedById,
+                requestedByLabel=attempt.requestedByLabel,
+                createdAt=attempt.createdAt,
+                updatedAt=attempt.updatedAt,
+                startedAt=attempt.startedAt,
+                completedAt=attempt.completedAt,
+                heartbeatAt=attempt.heartbeatAt,
+                timeoutAt=attempt.timeoutAt,
+                cancelRequestedAt=attempt.cancelRequestedAt,
+                cancelReason=attempt.cancelReason,
+                rejectionReason=attempt.rejectionReason,
+                failureReason=attempt.failureReason,
+                evidenceRefs=[f"attempt:{attempt.attemptId}"]
+                + [
+                    f"event:{event_ref['eventId']}"
+                    for event_ref in attempt.eventRefs
+                    if isinstance(event_ref, dict) and isinstance(event_ref.get("eventId"), str)
+                ],
+                artifactRefs=[f"artifact:attempt:{attempt.attemptId}:{index}" for index, _ in enumerate(attempt.artifactRefs)],
+            )
+            for attempt in attempts
+        ]
+
+    def _work_packet_route_summary(
+        self,
+        routing_preview: RoutingPreviewView | None,
+        latest_attempt: ExecutionAttemptView | None,
+        mapping_reason_codes: list[str],
+    ) -> WorkPacketRouteSummaryV0View:
+        if latest_attempt and (
+            not routing_preview
+            or routing_preview.decision.decisionId != latest_attempt.routeDecisionId
+            or routing_preview.decision.selectedLane != latest_attempt.lane
+        ):
+            return WorkPacketRouteSummaryV0View(
+                recommendation=latest_attempt.lane or "unknown",
+                confidenceScore=None,
+                confidenceBand="unknown",
+                reasonCodes=list(dict.fromkeys([*mapping_reason_codes, f"execution_lane.{latest_attempt.lane}"])),
+            )
+        if routing_preview:
+            return WorkPacketRouteSummaryV0View(
+                recommendation=routing_preview.decision.selectedLane,
+                confidenceScore=routing_preview.decision.confidenceScore,
+                confidenceBand=routing_preview.decision.confidenceBand,
+                reasonCodes=list(dict.fromkeys([*routing_preview.decision.reasonCodes, *mapping_reason_codes])),
+            )
+        if latest_attempt:
+            return WorkPacketRouteSummaryV0View(
+                recommendation=latest_attempt.lane or "unknown",
+                confidenceScore=None,
+                confidenceBand="unknown",
+                reasonCodes=list(dict.fromkeys([*mapping_reason_codes, f"execution_lane.{latest_attempt.lane}"])),
+            )
+        return WorkPacketRouteSummaryV0View(
+            recommendation="not_available",
+            confidenceScore=0,
+            confidenceBand="not_available",
+            reasonCodes=mapping_reason_codes or ["route.not_available"],
+        )
+
+    def _work_packet_lane_cards(
+        self,
+        attempts: list[ExecutionAttemptView],
+        routing_preview: RoutingPreviewView | None,
+    ) -> list[WorkPacketLaneCardV0View]:
+        cards: list[WorkPacketLaneCardV0View] = []
+        if not attempts and routing_preview:
+            lane = routing_preview.decision.selectedLane
+            cards.append(
+                WorkPacketLaneCardV0View(
+                    laneId=f"route:{routing_preview.decision.decisionId}",
+                    laneType=self._lane_type(lane),
+                    label=f"{lane} lane",
+                    status="available",
+                    summary=routing_preview.decision.humanExplanation,
+                    currentOwner=self._owner_for_lane(lane),
+                    routeConfidence=routing_preview.decision.confidenceScore,
+                    reasonCodes=list(routing_preview.decision.reasonCodes),
+                    evidenceRefs=[f"route:{routing_preview.decision.decisionId}"],
+                    artifactRefs=[],
+                )
+            )
+        for attempt in attempts:
+            cards.append(
+                WorkPacketLaneCardV0View(
+                    laneId=f"attempt:{attempt.attemptId}",
+                    laneType=self._lane_type(attempt.lane),
+                    label=f"{attempt.lane} lane",
+                    status=self._lane_status_for_attempt(attempt.status.value),
+                    summary=attempt.failureReason
+                    or attempt.rejectionReason
+                    or attempt.cancelReason
+                    or f"Execution attempt is {attempt.status.value}.",
+                    currentOwner=self._owner_for_lane(attempt.lane),
+                    routeConfidence=None,
+                    reasonCodes=[f"execution.{attempt.status.value}", f"execution_lane.{attempt.lane}"],
+                    evidenceRefs=[f"attempt:{attempt.attemptId}"],
+                    artifactRefs=[f"artifact:attempt:{attempt.attemptId}:{index}" for index, _ in enumerate(attempt.artifactRefs)],
+                )
+            )
+        return cards
+
+    def _lane_status_for_attempt(self, status: str) -> str:
+        if status in {"starting", "running"}:
+            return "running"
+        if status in {"planned", "approved", "cancel_requested"}:
+            return "pending"
+        if status == "completed":
+            return "complete"
+        if status in {"cancelled", "timed_out", "failed", "rejected"}:
+            return "blocked"
+        return "idle"
+
+    def _work_packet_review_summaries(
+        self,
+        item: WorkItemView | None,
+        evidence_refs: list[EvidenceRefV0View],
+        artifact_refs: list[ArtifactRefV0View],
+    ) -> list[WorkPacketReviewSummaryV0View]:
+        if not item:
+            return [
+                WorkPacketReviewSummaryV0View(
+                    reviewer="kendall",
+                    status="not_applicable",
+                    summary="No active Work Item review is available.",
+                    evidenceRefs=[],
+                    artifactRefs=[],
+                )
+            ]
+        if item.state.value in {"validating", "reviewing", "awaiting_audit"}:
+            reviewer = "operator" if item.state.value == "awaiting_audit" else "kendall"
+            return [
+                WorkPacketReviewSummaryV0View(
+                    reviewer=reviewer,
+                    status="pending",
+                    summary=item.statusSummary,
+                    evidenceRefs=[ref.refId for ref in evidence_refs],
+                    artifactRefs=[ref.refId for ref in artifact_refs],
+                )
+            ]
+        if item.state.value == "done":
+            return [
+                WorkPacketReviewSummaryV0View(
+                    reviewer="kendall",
+                    status="complete",
+                    summary=item.statusSummary,
+                    evidenceRefs=[ref.refId for ref in evidence_refs],
+                    artifactRefs=[ref.refId for ref in artifact_refs],
+                )
+            ]
+        return [
+            WorkPacketReviewSummaryV0View(
+                reviewer="kendall",
+                status="not_applicable",
+                summary="Review is not active for this Work Packet.",
+                evidenceRefs=[],
+                artifactRefs=[],
+            )
+        ]
+
+    def _work_packet_recovery_actions(
+        self,
+        status: str,
+        evidence_refs: list[EvidenceRefV0View],
+    ) -> list[RecoveryActionV0View]:
+        if status not in {"blocked", "failed"}:
+            return []
+        evidence_ids = [ref.refId for ref in evidence_refs]
+        return [
+            RecoveryActionV0View(
+                actionId="retry-smaller",
+                actionType="retry_smaller",
+                label="Retry smaller",
+                availability="available",
+                consequence="Return the packet to Shape with a narrower recovery path.",
+                resultingStage="shape",
+                resultingOwner="kendall",
+                evidenceRefs=evidence_ids,
+            ),
+            RecoveryActionV0View(
+                actionId="preserve-evidence",
+                actionType="preserve_evidence",
+                label="Preserve evidence",
+                availability="available",
+                consequence="Keep metadata-only evidence available for review without retaining raw payloads.",
+                resultingStage="review",
+                resultingOwner="operator",
+                evidenceRefs=evidence_ids,
+            ),
+        ]
 
     def to_candidate_work_view(self, candidate: CandidateWork) -> CandidateWorkView:
         return CandidateWorkView(

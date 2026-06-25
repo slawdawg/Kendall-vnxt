@@ -16,6 +16,7 @@ const linkGroups: { label: string; intent: string; links: ShellLink[] }[] = [
     intent: "Watch state",
     links: [
       { href: "/", label: "Overview" },
+      { href: "/pipeline", label: "Pipeline" },
       { href: "/attention", label: "Attention", statKey: "attention" },
       { href: "/active-work", label: "Active Work", statKey: "active" },
     ],
@@ -105,4 +106,3 @@ export function OperationalNav({ navStats }: { navStats?: NavStats }) {
     </nav>
   );
 }
-

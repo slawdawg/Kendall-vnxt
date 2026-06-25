@@ -10,6 +10,9 @@ AGENTS.md
 docs/ai-context/index.md
 docs/workflows/linux-primary-development-runbook.md
 docs/workflows/planning-doc-clean-install-boundary.md
+docs/workflows/alpha-daily-use-runbook.md
+docs/workflows/cockpit-autostart-runbook.md
+docs/workflows/branch-foundation-setup.md
 ```
 
 Then use these navigation indexes before starting architecture, PRD, story, or
@@ -41,6 +44,10 @@ asks for takeover.
 `pnpm run check` includes `pnpm run check:docs`,
 `pnpm run check:documentation-authority`,
 `pnpm run check:verification-readiness`,
+`pnpm run check:pipeline-implementation-readiness`,
+`pnpm run test:pipeline-implementation-readiness`,
+`pnpm run test:live-memory-source-enforcement`,
+`pnpm run test:bounded-live-memory-source`,
 `pnpm run check:authority-readiness`, `pnpm run check:adaptive-scoring`,
 `pnpm run check:premium-execution`, `pnpm run check:worker-launch`,
 `pnpm run check:e2e-report`,
@@ -60,6 +67,12 @@ verification, `pnpm run check:runtime-export`, `pnpm run check:runtime-review`,
 `pnpm run check:linux-install-lane`, `pnpm run check:bmad-work-products`,
 `pnpm run check:knx-obsidian-memory`,
 `pnpm run test:clean-install-boundary`, `pnpm run test:knx-obsidian-memory`,
+`pnpm run test:work-packet-contracts`, `pnpm run test:work-packet-stage-map`,
+`pnpm run test:work-packet-fixtures`, `pnpm run test:pipeline-state-matrix`,
+`pnpm run test:dashboard-pipeline-fixtures`,
+`pnpm run test:pipeline-implementation-readiness`,
+`pnpm run test:live-memory-source-enforcement`,
+`pnpm run test:bounded-live-memory-source`,
 `pnpm run check:clean-install-boundary`,
 `pnpm run test:codex-workspace`, `pnpm run test:codex-workspace-state`,
 `pnpm run test:workspace-command-resolution`,

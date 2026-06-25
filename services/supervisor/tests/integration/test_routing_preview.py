@@ -1568,6 +1568,10 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-docs",
         "check-documentation-authority",
         "check-verification-readiness",
+        "check-pipeline-implementation-readiness",
+        "test-pipeline-implementation-readiness",
+        "test-live-memory-source-enforcement",
+        "test-bounded-live-memory-source",
         "check-authority-readiness",
         "check-adaptive-scoring",
         "check-premium-execution",
@@ -1602,6 +1606,11 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-clean-install-boundary",
         "test-codex-workspace",
         "test-codex-workspace-state",
+        "test-work-packet-contracts",
+        "test-work-packet-stage-map",
+        "test-work-packet-fixtures",
+        "test-pipeline-state-matrix",
+        "test-dashboard-pipeline-fixtures",
         "test-anti-churn-event-writer",
         "test-anti-churn-signature-classifier",
         "test-anti-churn-event-reader",
@@ -1640,6 +1649,10 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     }
     static_group = next(group for group in report["commandGroups"] if group["groupId"] == "static-drift-chain")
     assert "check-runtime-review" in static_group["commandIds"]
+    assert "check-pipeline-implementation-readiness" in static_group["commandIds"]
+    assert "test-pipeline-implementation-readiness" in static_group["commandIds"]
+    assert "test-live-memory-source-enforcement" in static_group["commandIds"]
+    assert "test-bounded-live-memory-source" in static_group["commandIds"]
     assert "check-development-runway" in static_group["commandIds"]
     assert "check-runner-assignment-status" in static_group["commandIds"]
     assert "test-runner-handoff-audit-json-validation" in static_group["commandIds"]
@@ -1647,6 +1660,11 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "check-knx-obsidian-memory" in static_group["commandIds"]
     assert "test-clean-install-boundary" in static_group["commandIds"]
     assert "test-knx-obsidian-memory" in static_group["commandIds"]
+    assert "test-work-packet-contracts" in static_group["commandIds"]
+    assert "test-work-packet-stage-map" in static_group["commandIds"]
+    assert "test-work-packet-fixtures" in static_group["commandIds"]
+    assert "test-pipeline-state-matrix" in static_group["commandIds"]
+    assert "test-dashboard-pipeline-fixtures" in static_group["commandIds"]
     assert "check-clean-install-boundary" in static_group["commandIds"]
     assert "test-codex-workspace" in static_group["commandIds"]
     assert "test-codex-workspace-state" in static_group["commandIds"]

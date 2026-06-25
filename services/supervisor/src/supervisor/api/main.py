@@ -117,6 +117,20 @@ async def list_candidate_work(session: AsyncSession = Depends(get_session)):
     return ApiEnvelope(data=[service.to_candidate_work_view(candidate) for candidate in candidates])
 
 
+@app.get("/work-packets", response_model=ApiEnvelope)
+async def list_work_packets(session: AsyncSession = Depends(get_session)):
+    packets = await service.list_work_packets(session)
+    return ApiEnvelope(data=packets)
+
+
+@app.get("/work-packets/{packet_id}", response_model=ApiEnvelope)
+async def get_work_packet(packet_id: str, session: AsyncSession = Depends(get_session)):
+    packet = await service.get_work_packet(session, packet_id)
+    if not packet:
+        raise HTTPException(status_code=404, detail=error_response("Work Packet not found.", "work_packet_not_found").model_dump())
+    return ApiEnvelope(data=packet)
+
+
 @app.patch("/candidate-work/{candidate_work_id}", response_model=ApiEnvelope)
 async def update_candidate_work(
     candidate_work_id: str,

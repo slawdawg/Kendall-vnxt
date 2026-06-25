@@ -486,6 +486,264 @@ class TaskPacketPreviewView(BaseModel):
     commandExecutionAllowed: bool = False
 
 
+class SourceRefV0View(BaseModel):
+    refId: str
+    sourceType: Literal["candidate_work", "work_item", "bmad_artifact", "obsidian", "llm_wiki", "github", "research", "manual"]
+    label: str
+    pathOrUrl: str | None = None
+    freshness: Literal["fresh", "stale", "unknown", "not_applicable"] = "unknown"
+    accessState: Literal["allowed", "excluded", "missing", "blocked"] = "allowed"
+    summaryOnly: bool = True
+
+
+class EvidenceRefV0View(BaseModel):
+    refId: str
+    evidenceType: Literal["route", "event", "attempt", "local_model", "review", "gate", "memory", "fixture"]
+    label: str
+    artifactPath: str | None = None
+    retentionClass: Literal["metadata_only", "summary", "fixture"] = "metadata_only"
+    rawPayloadRetained: Literal[False] = False
+
+
+class ArtifactRefV0View(BaseModel):
+    refId: str
+    artifactType: Literal["plan", "progress", "report", "pull_request", "check", "memory_proposal", "fixture"]
+    label: str
+    pathOrUrl: str | None = None
+    status: Literal["available", "missing", "blocked", "deferred"] = "available"
+
+
+class HumanGateActionV0View(BaseModel):
+    actionId: str
+    actionType: Literal["approve", "reject", "revise", "reroute", "retry_smaller", "mark_blocked", "send_back"]
+    label: str
+    availability: Literal["available", "blocked", "stale", "complete"]
+    summary: str
+    requiredEvidenceRefs: list[str] = Field(default_factory=list)
+    resultingStage: Literal[
+        "capture",
+        "classify",
+        "route",
+        "shape",
+        "human_gate",
+        "execute",
+        "review",
+        "promote",
+        "deliver",
+        "learn",
+    ] | None = None
+    resultingOwner: Literal[
+        "kendall",
+        "operator",
+        "local_model",
+        "hermes_worker_mock",
+        "codex_worker",
+        "claude_reviewer",
+        "github",
+        "memory_review",
+        "blocked",
+    ] | None = None
+
+
+class WorkPacketLaneCardV0View(BaseModel):
+    laneId: str
+    laneType: Literal[
+        "local_model",
+        "hermes_worker_mock",
+        "codex_worker",
+        "claude_reviewer",
+        "github",
+        "memory_review",
+        "utility",
+        "local_readonly",
+        "local_patch_draft",
+        "local_sandbox_execute",
+        "subscription_handoff",
+        "subscription_agent",
+        "premium_approval",
+        "codex_cli_worker",
+        "unknown",
+    ]
+    label: str
+    status: Literal["idle", "available", "pending", "running", "blocked", "complete", "skipped"]
+    summary: str
+    currentOwner: Literal[
+        "kendall",
+        "operator",
+        "local_model",
+        "hermes_worker_mock",
+        "codex_worker",
+        "claude_reviewer",
+        "github",
+        "memory_review",
+        "blocked",
+    ] | None = None
+    routeConfidence: float | None = None
+    reasonCodes: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    artifactRefs: list[str] = Field(default_factory=list)
+
+
+class MemoryProposalV0View(BaseModel):
+    proposalId: str
+    label: str
+    status: Literal["not_applicable", "proposed", "pending_human_approval", "approved", "rejected", "blocked", "stale"]
+    summary: str
+    targetRef: SourceRefV0View | None = None
+    sourceRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    writeBackAllowed: Literal[False] = False
+
+
+class AlphaMemorySourceStatusV0View(BaseModel):
+    statusId: str
+    authorityFamily: Literal["memory-writeback-and-source-mutation"] = "memory-writeback-and-source-mutation"
+    operationMode: Literal["dry_run", "read_only", "draft_preview"] = "dry_run"
+    decisionState: Literal["ready", "blocked", "not_configured"] = "not_configured"
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    sourceRefs: list[str] = Field(default_factory=list)
+    targetMetadata: dict[str, object] = Field(default_factory=dict)
+    backupPath: str
+    rollbackPath: str
+    auditEventSummary: str
+    blockedReasons: list[str] = Field(default_factory=list)
+    recoveryOptions: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    canonicalMutationAllowed: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    workerLaunchAllowed: Literal[False] = False
+    githubCallsAllowed: Literal[False] = False
+    networkEgressAllowed: Literal[False] = False
+
+
+class RecoveryActionV0View(BaseModel):
+    actionId: str
+    actionType: Literal[
+        "retry_smaller",
+        "reroute",
+        "cancel_worker",
+        "discard_result",
+        "preserve_evidence",
+        "reopen_human_gate",
+        "mark_blocked",
+        "send_back_to_shape",
+        "send_back_to_research",
+    ]
+    label: str
+    availability: Literal["available", "blocked", "stale", "complete"]
+    consequence: str
+    resultingStage: Literal[
+        "capture",
+        "classify",
+        "route",
+        "shape",
+        "human_gate",
+        "execute",
+        "review",
+        "promote",
+        "deliver",
+        "learn",
+    ]
+    resultingOwner: Literal[
+        "kendall",
+        "operator",
+        "local_model",
+        "hermes_worker_mock",
+        "codex_worker",
+        "claude_reviewer",
+        "github",
+        "memory_review",
+        "blocked",
+    ]
+    evidenceRefs: list[str] = Field(default_factory=list)
+
+
+class WorkPacketRouteSummaryV0View(BaseModel):
+    recommendation: str
+    confidenceScore: float | None = None
+    confidenceBand: str | None = None
+    reasonCodes: list[str] = Field(default_factory=list)
+
+
+class WorkPacketReviewSummaryV0View(BaseModel):
+    reviewer: Literal[
+        "kendall",
+        "operator",
+        "local_model",
+        "hermes_worker_mock",
+        "codex_worker",
+        "claude_reviewer",
+        "github",
+        "memory_review",
+        "blocked",
+    ]
+    status: Literal["not_applicable", "pending", "blocked", "complete", "skipped"]
+    summary: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    artifactRefs: list[str] = Field(default_factory=list)
+
+
+class WorkPacketExecutionAttemptSummaryV0View(BaseModel):
+    attemptId: str
+    workItemId: str
+    routeDecisionId: str
+    workerId: str
+    lane: str
+    authorityMode: str
+    status: ExecutionAttemptStatus
+    requestedById: str | None = None
+    requestedByLabel: str | None = None
+    createdAt: datetime
+    updatedAt: datetime
+    startedAt: datetime | None = None
+    completedAt: datetime | None = None
+    heartbeatAt: datetime | None = None
+    timeoutAt: datetime | None = None
+    cancelRequestedAt: datetime | None = None
+    cancelReason: str | None = None
+    rejectionReason: str | None = None
+    failureReason: str | None = None
+    evidenceRefs: list[str] = Field(default_factory=list)
+    artifactRefs: list[str] = Field(default_factory=list)
+
+
+class WorkPacketV0View(BaseModel):
+    packetId: str
+    title: str
+    requestedOutcome: str
+    currentStage: Literal["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"]
+    currentOwner: Literal[
+        "kendall",
+        "operator",
+        "local_model",
+        "hermes_worker_mock",
+        "codex_worker",
+        "claude_reviewer",
+        "github",
+        "memory_review",
+        "blocked",
+    ]
+    status: Literal["active", "waiting", "blocked", "failed", "complete", "deferred"]
+    riskLevel: RiskLevel
+    priority: CandidateWorkPriority
+    candidateWork: CandidateWorkView | None = None
+    workItem: "WorkItemView | None" = None
+    taskPacket: TaskPacketV0View | None = None
+    routingPreview: RoutingPreviewView | None = None
+    routeSummary: WorkPacketRouteSummaryV0View | None = None
+    executionAttempts: list[WorkPacketExecutionAttemptSummaryV0View] = Field(default_factory=list)
+    sourceRefs: list[SourceRefV0View] = Field(default_factory=list)
+    evidenceRefs: list[EvidenceRefV0View] = Field(default_factory=list)
+    artifactRefs: list[ArtifactRefV0View] = Field(default_factory=list)
+    humanGateActions: list[HumanGateActionV0View] = Field(default_factory=list)
+    laneCards: list[WorkPacketLaneCardV0View] = Field(default_factory=list)
+    memoryProposals: list[MemoryProposalV0View] = Field(default_factory=list)
+    alphaMemorySourceStatus: AlphaMemorySourceStatusV0View | None = None
+    reviewSummaries: list[WorkPacketReviewSummaryV0View] = Field(default_factory=list)
+    recoveryActions: list[RecoveryActionV0View] = Field(default_factory=list)
+
+
 class SubscriptionHandoffEvidenceView(BaseModel):
     eventType: str
     summary: str

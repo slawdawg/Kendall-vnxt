@@ -120,6 +120,35 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   `knx-safety-validation-review` only as follow-up lenses when the bundled
   code-review workflow leaves a specific gap.
 
+## Alpha Slice Operating Model
+
+Kendall_Nxt is a pre-alpha project. When the operator asks to move faster or get
+more done, interpret that as a request for more aggressive, smaller alpha slices,
+not as permission to skip BMAD quality gates.
+
+- Preserve the full BMAD-method workflow for meaningful product work: PRD,
+  UX when UI or operator experience is involved, architecture, epics/stories,
+  implementation readiness, sprint planning, story implementation, and review.
+- Prefer narrow alpha slices that can move end to end quickly over broad
+  planning lanes. A good slice should be dogfoodable in daily use, even if it
+  is not production-complete.
+- Make slices more aggressive by reducing scope, deferring polish, and choosing
+  bounded functionality, not by weakening source boundaries, authority gates,
+  evidence requirements, tests, or human approvals.
+- When a capability has separable concerns, split them into independently
+  shippable slices. For example, handle Git branch structure, tmux orientation,
+  dashboard visualization, promotion packets, and GitHub protections as
+  separate slices unless the operator explicitly asks for a combined lane.
+- For each alpha slice, define the smallest useful outcome, the BMAD artifacts
+  required for that slice, the verification needed to dogfood it, and the next
+  slice it unlocks.
+- Treat "pre-alpha" as permission to accept rough edges and fixture-backed or
+  read-only starts, but not hidden mutation, unclear ownership, missing
+  recovery paths, or undocumented authority expansion.
+- If a slice is mostly backend/workflow behavior, do not force heavy UX work.
+  If it changes `/pipeline`, cockpit, tmux orientation, operator wording, or
+  daily workflow comprehension, run the UX workflow for that slice.
+
 ## Long-Running Dev Goals
 
 When the operator starts or approves a long-running development goal, treat it as a

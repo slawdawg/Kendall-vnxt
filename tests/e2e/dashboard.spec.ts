@@ -541,6 +541,412 @@ test.describe("dashboard workflow coverage", () => {
     await expect(intake.getByText(/pnpm run test:e2e:dashboard/)).toBeVisible();
   });
 
+  test("opens fixture-backed pipeline cockpit without live execution framing", async ({ page, baseURL }) => {
+    const dashboardOrigin = new URL(baseURL ?? "http://127.0.0.1:3100").origin;
+    const supervisorOrigin = new URL(supervisorUrl).origin;
+    const liveSupervisorRequests: string[] = [];
+    const sameOriginRuntimeRequests: string[] = [];
+    const forbiddenExternalRequests: string[] = [];
+    page.on("request", (request) => {
+      const requestUrl = request.url();
+      const parsedRequestUrl = new URL(requestUrl);
+      if (parsedRequestUrl.origin === supervisorOrigin) {
+        liveSupervisorRequests.push(requestUrl);
+      }
+      if (
+        parsedRequestUrl.origin === dashboardOrigin &&
+        /^\/(api|supervisor|provider|worker|obsidian|github|ollama|claude|execution|runtime)(\/|$)/i.test(parsedRequestUrl.pathname)
+      ) {
+        sameOriginRuntimeRequests.push(requestUrl);
+      }
+      const forbiddenProviderHost =
+        parsedRequestUrl.hostname === "api.openai.com" ||
+        parsedRequestUrl.hostname.endsWith(".openai.com") ||
+        parsedRequestUrl.hostname === "api.anthropic.com" ||
+        parsedRequestUrl.hostname.endsWith(".anthropic.com") ||
+        parsedRequestUrl.hostname === "claude.ai" ||
+        parsedRequestUrl.hostname.endsWith(".claude.ai") ||
+        parsedRequestUrl.hostname === "github.com" ||
+        parsedRequestUrl.hostname.endsWith(".github.com") ||
+        parsedRequestUrl.hostname.toLowerCase().includes("obsidian") ||
+        ((parsedRequestUrl.hostname === "localhost" || parsedRequestUrl.hostname === "127.0.0.1") && parsedRequestUrl.port === "11434");
+      if (forbiddenProviderHost) {
+        forbiddenExternalRequests.push(requestUrl);
+      }
+    });
+
+    await page.goto("/pipeline");
+
+    await expect(page.getByRole("navigation", { name: "Dashboard sections" })).toBeVisible();
+    await expect(page.locator("nav a[href=\"/pipeline\"]")).toHaveAttribute("aria-current", "page");
+    const cockpit = page.getByRole("main", { name: "Pipeline cockpit" });
+    await expect(cockpit).toBeVisible();
+    const refinedFrame = page.getByLabel("Refined pipeline cockpit frame");
+    await expect(refinedFrame).toBeVisible();
+    const firstFrame = page.getByLabel("Cockpit first-frame hierarchy");
+    await expect(firstFrame).toBeVisible();
+    await expect(firstFrame.getByText("Chief-of-Staff cockpit", { exact: true })).toBeVisible();
+    await expect(firstFrame.getByText("Refined first frame", { exact: true })).toBeVisible();
+    const commandStrip = page.getByLabel("Pipeline command strip");
+    await expect(commandStrip).toBeVisible();
+    await expect(page.getByLabel("Operator command center")).toBeVisible();
+    await expect(commandStrip.getByText("Current mode", { exact: true })).toBeVisible();
+    await expect(commandStrip.getByText("Fixture mode", { exact: true })).toBeVisible();
+    await expect(commandStrip.getByLabel("Active packets: 10", { exact: true })).toBeVisible();
+    await expect(commandStrip.getByLabel("Blocked gates: 4", { exact: true })).toBeVisible();
+    await expect(commandStrip.getByLabel("Provider approval: disabled", { exact: true })).toBeVisible();
+    await expect(commandStrip.getByLabel("Top blocked packet: Approve bounded cockpit fixture plan", { exact: true })).toBeVisible();
+    await expect(commandStrip.getByLabel("Global recovery: 49 fixture-only", { exact: true })).toBeVisible();
+    const packetSearch = commandStrip.getByLabel("Packet search", { exact: true });
+    await expect(packetSearch).toBeVisible();
+    const fixtureScenarioSelector = page.getByLabel("Fixture scenario selector");
+    await expect(fixtureScenarioSelector).toBeVisible();
+    await expect(fixtureScenarioSelector.getByText("Read-only static import mode", { exact: false })).toBeVisible();
+    for (const scenarioLabel of [
+      "happy path",
+      "model unavailable",
+      "local GPU busy",
+      "low-confidence route",
+      "source excluded",
+      "stale memory",
+      "contradiction detected",
+      "Hermes timeout",
+      "Claude skipped",
+      "rejected Claude finding",
+      "blocked Obsidian write-back",
+      "provider approval required",
+      "recovery action available",
+      "no-packets",
+    ]) {
+      await expect(fixtureScenarioSelector.getByRole("heading", { name: scenarioLabel, exact: true })).toBeVisible();
+    }
+    await expect(fixtureScenarioSelector.getByText("Current owner", { exact: true }).first()).toBeVisible();
+    await expect(fixtureScenarioSelector.getByText("Blocked reason", { exact: true }).first()).toBeVisible();
+    await expect(fixtureScenarioSelector.getByText("Next operator option", { exact: true }).first()).toBeVisible();
+    await expect(fixtureScenarioSelector.getByText("Stop-line", { exact: true }).first()).toBeVisible();
+    await expect(fixtureScenarioSelector.getByText("Rollback path", { exact: true }).first()).toBeVisible();
+    const goldenPathLifecycle = page.getByLabel("Golden path lifecycle");
+    await expect(goldenPathLifecycle).toBeVisible();
+    await expect(goldenPathLifecycle.getByText("Local fixture selection only", { exact: false })).toBeVisible();
+    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Capture", exact: true })).toBeVisible();
+    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Classify", exact: true })).toBeVisible();
+    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Route", exact: true })).toBeVisible();
+    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Shape", exact: true })).toBeVisible();
+    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Human Gate", exact: true })).toBeVisible();
+    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Execute", exact: true })).toBeVisible();
+    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Review", exact: true })).toBeVisible();
+    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Deliver", exact: true })).toBeVisible();
+    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Learn", exact: true })).toBeVisible();
+    await expect(goldenPathLifecycle.getByText(/Decision consequence:/).first()).toBeVisible();
+    await expect(goldenPathLifecycle.getByText(/Why here:/).first()).toBeVisible();
+    await expect(goldenPathLifecycle.getByText(/Needs operator:/).first()).toBeVisible();
+    await expect(goldenPathLifecycle.getByText(/What happens next:/).first()).toBeVisible();
+    const sourceRail = page.getByLabel("Pipeline source rail", { exact: true });
+    await expect(sourceRail).toBeVisible();
+    const pipelineBoard = page.getByLabel("Pipeline board");
+    await expect(pipelineBoard).toBeVisible();
+    await expect(pipelineBoard.locator("article")).toHaveCount(35);
+    await pipelineBoard.focus();
+    await page.keyboard.press("Slash");
+    if (!(await packetSearch.evaluate((element) => element === document.activeElement))) {
+      await packetSearch.focus();
+    }
+    await expect(packetSearch).toBeFocused();
+    await packetSearch.fill("stale");
+    await expect(pipelineBoard.getByRole("button", { name: /Select packet: Resolve stale research source before routing/ })).toBeVisible();
+    await packetSearch.fill("");
+    for (const stage of [
+      "capture",
+      "classify",
+      "route",
+      "shape",
+      "human_gate",
+      "execute",
+      "review",
+      "promote",
+      "deliver",
+      "learn",
+    ]) {
+      const lane = pipelineBoard.locator(`section[aria-label="${stage} stage lane"]`);
+      await expect(lane).toHaveCount(1);
+      await lane.scrollIntoViewIfNeeded();
+      await expect(lane).toBeVisible();
+      await expect(lane.getByRole("heading", { level: 2 })).toBeVisible();
+      await expect(lane.getByText(/^Health:/)).toBeVisible();
+      await expect(lane.locator("article").first()).toBeVisible();
+      const laneCard = lane.locator("article").first();
+      await expect(laneCard.getByText(/Source: Matrix rows:/)).toBeVisible();
+      await expect(laneCard.getByText("Owner", { exact: true })).toBeVisible();
+      await expect(laneCard.getByText("Confidence", { exact: true })).toBeVisible();
+      await expect(laneCard.getByText(/Risk:/)).toBeVisible();
+      await expect(laneCard.getByText("Evidence", { exact: true })).toBeVisible();
+      await expect(laneCard.getByText("Freshness", { exact: true })).toBeVisible();
+      await expect(laneCard.getByText(/Next:/)).toBeVisible();
+    }
+    const representativeCard = pipelineBoard.getByRole("button", { name: "Select packet: Resolve stale research source before routing", exact: true });
+    await expect(representativeCard.getByText(/Source: Matrix rows:/)).toBeVisible();
+    await expect(representativeCard.getByText("Owner", { exact: true })).toBeVisible();
+    await expect(representativeCard.getByText("Confidence", { exact: true })).toBeVisible();
+    await expect(representativeCard.getByText(/Risk:/)).toBeVisible();
+    await expect(representativeCard.getByText("Evidence", { exact: true })).toBeVisible();
+    await expect(representativeCard.getByText("Freshness", { exact: true })).toBeVisible();
+    await expect(representativeCard.getByText(/Next:/)).toBeVisible();
+    const activeDrawer = page.getByLabel("Active packet drawer");
+    await expect(activeDrawer).toBeVisible();
+    await expect(page.getByLabel("Worker review memory recovery rail")).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "5 Whys", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "Sources", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "Route", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "Status", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "Decision", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "Proof", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "Workers", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "Memory", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "Safety", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("tab", { name: "Recovery", exact: true })).toBeVisible();
+    const intentDrawerTab = activeDrawer.getByRole("tab", { name: "5 Whys", exact: true });
+    const recoveryDrawerTab = activeDrawer.getByRole("tab", { name: "Recovery", exact: true });
+    await recoveryDrawerTab.click();
+    await expect(recoveryDrawerTab).toHaveAttribute("aria-selected", "true");
+    await intentDrawerTab.click();
+    await expect(intentDrawerTab).toHaveAttribute("aria-selected", "true");
+    const routeCard = pipelineBoard.getByRole("button", { name: "Select packet: Shape cockpit route from Work Packet matrix", exact: true });
+    const densityRouteCard = pipelineBoard.getByRole("button", { name: "Select packet: Density 1: Shape cockpit route from Work Packet matrix", exact: true });
+    await routeCard.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(densityRouteCard).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(activeDrawer.getByRole("heading", { name: "Density 1: Shape cockpit route from Work Packet matrix" })).toBeVisible();
+    await goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Shape", exact: true }).click();
+    await expect(activeDrawer.getByRole("heading", { name: "Shape execution recipe preview" })).toBeVisible();
+    const stalePacketCard = pipelineBoard.getByRole("button", { name: "Select packet: Resolve stale research source before routing", exact: true });
+    await stalePacketCard.scrollIntoViewIfNeeded();
+    await stalePacketCard.click();
+    await expect(activeDrawer.getByRole("heading", { name: "Resolve stale research source before routing" })).toBeVisible();
+    await expect(activeDrawer.getByRole("heading", { name: "5 Whys" })).toBeVisible();
+    await expect(activeDrawer.getByLabel("Packet at a glance")).toBeVisible();
+    for (const fiveWhyLabel of [
+      "What is this?",
+      "Why is it here?",
+      "Why does it matter?",
+      "Why does it need me?",
+      "What happens next?",
+    ]) {
+      await expect(activeDrawer.getByText(fiveWhyLabel, { exact: true })).toBeVisible();
+    }
+    await expect(activeDrawer.getByLabel("Packet at a glance").getByText("Resolve stale or contradictory source context.", { exact: true })).toBeVisible();
+    await activeDrawer.getByText("Technical details", { exact: true }).click();
+    await expect(activeDrawer.getByText("Last event", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByText("Next allowed actions", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByText("Risk flags", { exact: true })).toBeVisible();
+    const routeDrawerTab = activeDrawer.getByRole("tab", { name: "Route", exact: true });
+    await routeDrawerTab.focus();
+    await expect(routeDrawerTab).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(activeDrawer.getByRole("heading", { name: "Route Fork Panel" })).toBeVisible();
+    await expect(activeDrawer.getByText("Selected route", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByText("Rejected routes", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByText("Source context", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByText("Reason codes", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("button", { name: "Clarify", exact: true })).toBeDisabled();
+    await expect(activeDrawer.getByRole("button", { name: "Downgrade to reference", exact: true })).toBeDisabled();
+    await expect(activeDrawer.getByRole("button", { name: "Send back to Research", exact: true })).toBeDisabled();
+    await activeDrawer.getByRole("tab", { name: "Proof", exact: true }).click();
+    await expect(activeDrawer.getByRole("heading", { name: "Evidence links" })).toBeVisible();
+    await expect(activeDrawer.getByText("What exists", { exact: true }).first()).toBeVisible();
+    await expect(activeDrawer.getByText("Why it matters", { exact: true }).first()).toBeVisible();
+    await expect(activeDrawer.getByText("Where it came from", { exact: true }).first()).toBeVisible();
+    await expect(activeDrawer.getByText("Retention", { exact: true }).first()).toBeVisible();
+    await expect(activeDrawer.getByText("Evidence state", { exact: true }).first()).toBeVisible();
+    await expect(activeDrawer.getByText(/summary-only source ref/).first()).toBeVisible();
+    await expect(activeDrawer.getByText(/fixture evidence ref/).first()).toBeVisible();
+    await activeDrawer.getByRole("tab", { name: "Decision", exact: true }).click();
+    await expect(activeDrawer.getByText(/blocked source boundary prevents authority escalation/)).toBeVisible();
+    await expect(activeDrawer.getByText(/known stage: capture/).first()).toBeVisible();
+    await activeDrawer.getByRole("tab", { name: "Memory", exact: true }).click();
+    await expect(activeDrawer.getByRole("heading", { name: "Resolve stale research source before routing" })).toBeVisible();
+    await expect(activeDrawer.getByText(/Memory proposal blocked/).first()).toBeVisible();
+    await activeDrawer.getByRole("tab", { name: "Safety", exact: true }).click();
+    await expect(activeDrawer.getByRole("heading", { name: "Alpha action status", exact: true })).toBeVisible();
+    await expect(activeDrawer.getByText("Supervisor-owned alpha status", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByText("memory-writeback-and-source-mutation", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByText(/source_ref.stale/)).toBeVisible();
+    await expect(activeDrawer.getByText(/Review blocked source refs/)).toBeVisible();
+    await expect(activeDrawer.getByText("Canonical mutation: blocked", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByText("Provider calls: blocked", { exact: true })).toBeVisible();
+    await expect(activeDrawer.getByRole("button", { name: "Preview dry-run evidence", exact: true })).toBeDisabled();
+    await packetSearch.fill("review obsidian memory proposal");
+    const learnPacketCard = pipelineBoard.getByRole("button", { name: "Select packet: Review Obsidian memory proposal", exact: true });
+    await expect(learnPacketCard).toBeVisible();
+    await expect(activeDrawer.getByRole("heading", { name: "Review Obsidian memory proposal" })).toBeVisible();
+    await activeDrawer.getByRole("tab", { name: "Memory", exact: true }).click();
+    await expect(activeDrawer.getByText(/Memory proposal blocked/).first()).toBeVisible();
+    await activeDrawer.getByRole("tab", { name: "Memory", exact: true }).focus();
+    await page.keyboard.press("Escape");
+    await expect(learnPacketCard).toBeFocused();
+    await packetSearch.fill("");
+    await stalePacketCard.click();
+    await activeDrawer.getByRole("tab", { name: "Recovery", exact: true }).click();
+    await expect(activeDrawer.getByRole("heading", { name: "Resolve stale research source before routing" })).toBeVisible();
+    await expect(activeDrawer.getByText("Recovery availability", { exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(stalePacketCard).toBeFocused();
+    await expect(page.getByLabel("Pipeline evidence strip")).toBeVisible();
+    await expect(page.getByText(/No provider, worker, GitHub, or Obsidian calls/)).toBeVisible();
+    await expect(page.getByText(/fixture-only:/).first()).toBeVisible();
+    await expect(page.getByText(/mocked:/).first()).toBeVisible();
+    await expect(page.getByText("Hermes Worker Mock", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(/Source: Matrix rows:/).first()).toBeVisible();
+    await expect(sourceRail.getByText("Candidate Work", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("Obsidian inbox", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("BMAD artifacts", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("research/video", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("GitHub", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("manual capture", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("included", { exact: true }).first()).toBeVisible();
+    await expect(sourceRail.getByText("excluded", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("stale", { exact: true }).first()).toBeVisible();
+    await expect(sourceRail.getByText("contradictory", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("unavailable", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("derived-only", { exact: true })).toBeVisible();
+    await expect(stalePacketCard.getByText("Source trust: excluded, stale, contradictory, derived-only", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("LLM-Wiki digest", { exact: true })).toBeVisible();
+    await expect(sourceRail.getByText("derived, non-canonical", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Memory proposal blocked/).first()).toBeVisible();
+    await expect(cockpit.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
+    const refinedScreenshotPaths = [
+      "test-results/pipeline-refined-1440.png",
+      "test-results/pipeline-refined-900.png",
+      "test-results/pipeline-refined-390.png",
+    ];
+    for (const viewport of [
+      { width: 1440, height: 960, collapsedRail: false, visiblePackets: 35 },
+      { width: 900, height: 960, collapsedRail: true, visiblePackets: 35 },
+      { width: 390, height: 900, collapsedRail: true, visiblePackets: 1 },
+    ] as const) {
+      await page.setViewportSize(viewport);
+      await expect(commandStrip).toBeVisible();
+      if (viewport.collapsedRail) {
+        await expect(page.getByLabel("Pipeline source rail collapsed", { exact: true })).toBeVisible();
+        await expect(page.getByLabel("Pipeline source rail", { exact: true })).toBeHidden();
+      } else {
+        await expect(page.getByLabel("Pipeline source rail", { exact: true })).toBeVisible();
+        await expect(page.getByLabel("Pipeline source rail collapsed", { exact: true })).toBeHidden();
+      }
+      await expect(pipelineBoard).toBeVisible();
+      await expect(pipelineBoard.locator("article:visible")).toHaveCount(viewport.visiblePackets);
+      await expect(activeDrawer).toBeVisible();
+      await expect(page.getByLabel("Pipeline evidence strip")).toBeVisible();
+      for (const drawerTab of [
+        { name: "Decision", heading: "Human Gate context" },
+        { name: "Proof", heading: "Evidence links" },
+        { name: "Workers", heading: "Worker activity" },
+        { name: "Memory", heading: "Memory proposal" },
+        { name: "Safety", heading: "Alpha action status" },
+        { name: "Recovery", heading: "Recovery availability" },
+      ]) {
+        await activeDrawer.getByRole("tab", { name: drawerTab.name, exact: true }).click();
+        await expect(activeDrawer.getByRole("tab", { name: drawerTab.name, exact: true })).toHaveAttribute("aria-selected", "true");
+        await expect(activeDrawer.getByRole("heading", { name: drawerTab.heading, exact: true })).toBeVisible();
+      }
+      const visualIntegrityEvidence = await page.evaluate(() => {
+        const checkSelectors = [
+          '[aria-label="Pipeline command strip"]',
+          '[aria-label="Pipeline source rail"], [aria-label="Pipeline source rail collapsed"]',
+          '[aria-label="Pipeline board"]',
+          '[aria-label="Active packet drawer"]',
+          '[aria-label="Worker review memory recovery rail"]',
+          '[aria-label="Pipeline evidence strip"]',
+        ];
+        const boxes = checkSelectors.flatMap((selector) =>
+          Array.from(document.querySelectorAll(selector))
+            .filter((element) => {
+              const style = window.getComputedStyle(element);
+              return style.display !== "none" && style.visibility !== "hidden";
+            })
+            .map((element) => {
+              const rect = element.getBoundingClientRect();
+              return {
+                label: element.getAttribute("aria-label") ?? selector,
+                height: Math.round(rect.height),
+                width: Math.round(rect.width),
+              };
+            })
+        );
+        const crampedBoxes = boxes.filter((box) => box.width < 120 || box.height < 24);
+        const overflowingText = Array.from(document.querySelectorAll("button, span, p, h1, h2, h3, h4, dd, dt"))
+          .filter((element) => !element.classList.contains("sr-only"))
+          .map((element) => {
+            const htmlElement = element as HTMLElement;
+            const rect = htmlElement.getBoundingClientRect();
+            return {
+              text: htmlElement.textContent?.trim().slice(0, 48) ?? htmlElement.tagName,
+              clientWidth: Math.round(htmlElement.clientWidth),
+              scrollWidth: Math.round(htmlElement.scrollWidth),
+              width: Math.round(rect.width),
+            };
+          })
+          .filter((entry) => entry.scrollWidth > entry.clientWidth + 8)
+          .slice(0, 8);
+        return {
+          boxes,
+          crampedBoxes,
+          overflowingText,
+        };
+      });
+      expect(visualIntegrityEvidence, JSON.stringify({ viewport, visualIntegrityEvidence })).toMatchObject({
+        crampedBoxes: [],
+        overflowingText: [],
+      });
+      const overflowEvidence = await page.evaluate(() => {
+        const viewportWidth = window.innerWidth;
+        const documentWidth = document.documentElement.scrollWidth;
+        const offenders = Array.from(document.querySelectorAll("body *"))
+          .filter((element) => {
+            let current = element.parentElement;
+            while (current !== null) {
+              const style = window.getComputedStyle(current);
+              if ((style.overflowX === "auto" || style.overflowX === "scroll") && current.scrollWidth > current.clientWidth + 8) {
+                return false;
+              }
+              current = current.parentElement;
+            }
+            return true;
+          })
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              label: element.getAttribute("aria-label") ?? element.textContent?.trim().slice(0, 48) ?? element.tagName,
+              tag: element.tagName,
+              left: Math.round(rect.left),
+              right: Math.round(rect.right),
+              width: Math.round(rect.width),
+            };
+          })
+          .filter((entry) => entry.left < -24 || entry.right > viewportWidth + 24)
+          .slice(0, 5);
+        return {
+          viewportWidth,
+          documentWidth,
+          hasPageOverflow: offenders.length > 0,
+          offenders,
+        };
+      });
+      expect(overflowEvidence, JSON.stringify({ viewport, overflowEvidence })).toMatchObject({ hasPageOverflow: false });
+      await page.screenshot({
+        fullPage: true,
+        path: refinedScreenshotPaths.find((path) => path.includes(String(viewport.width))) ?? `test-results/pipeline-refined-${viewport.width}.png`,
+      });
+    }
+    await page.waitForLoadState("networkidle");
+    await expect
+      .poll(() => liveSupervisorRequests.length + sameOriginRuntimeRequests.length + forbiddenExternalRequests.length, { timeout: 2_000 })
+      .toBe(0);
+    expect(liveSupervisorRequests).toEqual([]);
+    expect(sameOriginRuntimeRequests).toEqual([]);
+    expect(forbiddenExternalRequests).toEqual([]);
+  });
+
   test("opens to a monitoring-first home without authority-gated action controls", async ({ page, request }) => {
     await page.goto("/");
     await expect(page.getByRole("navigation", { name: "Dashboard sections" })).toBeVisible();
@@ -769,6 +1175,10 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:docs", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:pipeline-implementation-readiness", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:pipeline-implementation-readiness", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:live-memory-source-enforcement", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:bounded-live-memory-source", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:authority-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:adaptive-scoring", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:premium-execution", { exact: true })).toBeVisible();
@@ -800,6 +1210,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:knx-obsidian-memory", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:clean-install-boundary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:knx-obsidian-memory", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:work-packet-contracts", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:work-packet-stage-map", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:work-packet-fixtures", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:pipeline-state-matrix", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:dashboard-pipeline-fixtures", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:clean-install-boundary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:codex-workspace", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:codex-workspace-state", { exact: true })).toBeVisible();

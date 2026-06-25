@@ -52,13 +52,125 @@ try {
     );
   });
 
-  test("start dry-run plans fetch, worktree creation, and manifest write", () => {
-    const result = run(["start", "test task", "--dry-run", "--owner", "runner-a", "--state-root", stateRoot]);
-    assert(result.code === 0, result.stderr || result.stdout);
-    assert(result.stdout.includes("git fetch origin main"), result.stdout || result.stderr);
-    assert(result.stdout.includes("git worktree add -b codex/test-task"), result.stdout || result.stderr);
-    assert(result.stdout.includes("write "), result.stdout || result.stderr);
-    assert(result.stdout.includes("Owner: runner-a"), result.stdout || result.stderr);
+  test("start dry-run defaults new work to dev when branch foundation exists", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    try {
+      const result = runFixtureScript(fixture, [
+        "start",
+        "test task",
+        "--dry-run",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("git fetch origin dev"), result.stdout || result.stderr);
+      assert(result.stdout.includes("git worktree add -b codex/test-task"), result.stdout || result.stderr);
+      assert(result.stdout.includes("Base branch: dev"), result.stdout || result.stderr);
+      assert(result.stdout.includes("Base ref: origin/dev"), result.stdout || result.stderr);
+      assert(result.stdout.includes("write "), result.stdout || result.stderr);
+      assert(result.stdout.includes("Owner: runner-a"), result.stdout || result.stderr);
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
+  test("start dry-run preserves explicit main base override", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    try {
+      const result = runFixtureScript(fixture, [
+        "start",
+        "main override task",
+        "--base",
+        "main",
+        "--dry-run",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("git fetch origin main"), result.stdout || result.stderr);
+      assert(!result.stdout.includes("git fetch origin dev"), result.stdout || result.stderr);
+      assert(result.stdout.includes("Base branch: main"), result.stdout || result.stderr);
+      assert(result.stdout.includes("Base ref: origin/main"), result.stdout || result.stderr);
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
+  test("start rejects refspec-shaped base before fetch or worktree planning", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    try {
+      const beforeRefs = refSnapshot(fixture.root);
+      const result = runFixtureScript(fixture, [
+        "start",
+        "bad base task",
+        "--base",
+        "dev:refs/heads/injected",
+        "--dry-run",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      const afterRefs = refSnapshot(fixture.root);
+
+      assert(result.code !== 0, "refspec-shaped base unexpectedly passed");
+      assert(result.stderr.includes("Invalid base branch"), result.stderr || result.stdout);
+      assert(beforeRefs === afterRefs, "invalid base branch changed refs");
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
+  test("start dry-run fails closed when default dev branch is missing", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: false });
+    try {
+      const result = runFixtureScript(fixture, [
+        "start",
+        "missing dev task",
+        "--dry-run",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+
+      assert(result.code !== 0, "missing default dev unexpectedly passed");
+      assert(result.stderr.includes("Branch foundation default base dev"), result.stderr || result.stdout);
+      assert(result.stderr.includes("node ./scripts/branch-foundation.mjs report"), result.stderr || result.stdout);
+      assert(!result.stderr.includes("falling back to main"), result.stderr || result.stdout);
+      assert(!result.stdout.includes("Base branch: main"), result.stdout || result.stderr);
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
+  test("start reports fetch errors distinctly when local default dev exists", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withLocalDevOnly: true });
+    try {
+      const beforeTasks = taskSnapshot(join(fixture.stateRoot, "tasks"));
+      const result = runFixtureScript(fixture, [
+        "start",
+        "fetch failure task",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+      const afterTasks = taskSnapshot(join(fixture.stateRoot, "tasks"));
+
+      assert(result.code !== 0, "fetch failure unexpectedly passed");
+      assert(!result.stderr.includes("Branch foundation default base dev"), result.stderr || result.stdout);
+      assert(result.stderr.includes("origin") || result.stderr.includes("fetch"), result.stderr || result.stdout);
+      assert(beforeTasks === afterTasks, "failed fetch wrote a task manifest");
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
   });
 
   test("help lists local codex branch cleanup", () => {
@@ -70,12 +182,16 @@ try {
     assert(result.stdout.includes("takeover <query>"), result.stdout || result.stderr);
     assert(result.stdout.includes("dispatch-next"), result.stdout || result.stderr);
     assert(result.stdout.includes("--base <ref>"), result.stdout || result.stderr);
+    assert(result.stdout.includes("Defaults to dev"), result.stdout || result.stderr);
+    assert(result.stdout.includes("Defaults to origin/main"), result.stdout || result.stderr);
   });
 
-  test("start refuses protected branch override", () => {
-    const result = run(["start", "bad task", "--branch", "main", "--dry-run", "--state-root", stateRoot]);
-    assert(result.code !== 0, "protected branch override unexpectedly passed");
-    assert(result.stderr.includes("Refusing to operate on protected branch"));
+  test("start refuses protected branch overrides", () => {
+    for (const branch of ["main", "master", "prod"]) {
+      const result = run(["start", `bad ${branch} task`, "--branch", branch, "--dry-run", "--state-root", stateRoot]);
+      assert(result.code !== 0, `${branch} branch override unexpectedly passed`);
+      assert(result.stderr.includes("Refusing to operate on protected branch"), result.stderr || result.stdout);
+    }
   });
 
   test("start validates mode", () => {
@@ -440,6 +556,42 @@ try {
     const result = run(["list", "owned-lane", "--state-root", stateRoot]);
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("owner=runner-a"), result.stdout || result.stderr);
+  });
+
+  test("list and resume preserve existing main-targeting manifests", () => {
+    const legacyStateRoot = mkdtempSync(join(tmpdir(), "codex-legacy-main-manifest-"));
+    try {
+      const tasksDir = join(legacyStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "legacy-main.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify({
+          task_id: "legacy-main",
+          branch: "codex/legacy-main",
+          worktree_path: rootDir,
+          base_branch: "main",
+          base_ref: "origin/main",
+          status: "active",
+          owner: "runner-a",
+        }, null, 2)}\n`,
+      );
+      const before = readFileSync(manifestPath, "utf8");
+
+      const list = run(["list", "legacy-main", "--state-root", legacyStateRoot]);
+      const afterList = readFileSync(manifestPath, "utf8");
+      const resume = run(["resume", "legacy-main", "--state-root", legacyStateRoot]);
+      const afterResume = readFileSync(manifestPath, "utf8");
+
+      assert(list.code === 0, list.stderr || list.stdout);
+      assert(resume.code === 0, resume.stderr || resume.stdout);
+      assert(resume.stdout.includes("Base branch: main"), resume.stdout || resume.stderr);
+      assert(resume.stdout.includes("Base ref: origin/main"), resume.stdout || resume.stderr);
+      assert(before === afterList, "list rewrote a legacy main-targeting manifest");
+      assert(before === afterResume, "resume rewrote a legacy main-targeting manifest");
+    } finally {
+      rmSync(legacyStateRoot, { recursive: true, force: true });
+    }
   });
 
   test("assignment-report classifies safe backlog and workspace ownership without mutation", () => {
@@ -1173,12 +1325,43 @@ try {
           result.stdout.includes("- workspace action claim_existing_workspace"),
         result.stdout || result.stderr,
       );
+      assert(result.stdout.includes("- base branch "), result.stdout || result.stderr);
       assert(result.stdout.includes("- blockers none"), result.stdout || result.stderr);
       assert(result.stdout.includes("- queue states "), result.stdout || result.stderr);
       assert(result.stdout.includes("blocked_authority=1"), result.stdout || result.stderr);
       assert(result.stdout.includes("closed="), result.stdout || result.stderr);
       assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch dry-run mutated assignments");
       assert(taskSnapshot(tasksDir) === beforeTasks, "dispatch dry-run mutated manifests");
+    } finally {
+      rmSync(dispatchStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("dispatch-next apply validates workspace base before assignment mutation", () => {
+    const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-invalid-base-"));
+    try {
+      seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
+      const tasksDir = join(dispatchStateRoot, "tasks");
+      const assignmentsDir = join(dispatchStateRoot, "assignments");
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run([
+        "dispatch-next",
+        "--apply",
+        "--base",
+        "bad:refs/heads/injected",
+        "--no-fetch",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        dispatchStateRoot,
+      ]);
+
+      assert(result.code !== 0, "dispatch-next unexpectedly accepted invalid base");
+      assert(result.stderr.includes("Invalid base branch"), result.stderr || result.stdout);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "invalid dispatch base mutated assignments");
+      assert(taskSnapshot(tasksDir) === beforeTasks, "invalid dispatch base mutated manifests");
     } finally {
       rmSync(dispatchStateRoot, { recursive: true, force: true });
     }
@@ -2226,6 +2409,39 @@ function cleanupMergedCleanupFixture(fixture) {
   rmSync(fixture.root, { recursive: true, force: true });
 }
 
+function createWorkspaceDefaultBaseFixture(options = {}) {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-default-base-"));
+  const stateRootFixture = join(fixtureRoot, "state");
+  copyWorkspaceScriptFixture(fixtureRoot);
+
+  runGit(fixtureRoot, ["init", "-q"]);
+  runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
+  runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
+  commitFile(fixtureRoot, "base.txt", "base\n", "base");
+  runGit(fixtureRoot, ["branch", "-M", "main"]);
+  runGit(fixtureRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  if (options.withDev) {
+    runGit(fixtureRoot, ["branch", "dev", "main"]);
+    runGit(fixtureRoot, ["update-ref", "refs/remotes/origin/dev", "dev"]);
+  }
+  if (options.withLocalDevOnly) {
+    runGit(fixtureRoot, ["branch", "dev", "main"]);
+  }
+
+  return {
+    root: fixtureRoot,
+    script: join(fixtureRoot, "scripts", "codex-workspace.mjs"),
+    stateRoot: stateRootFixture,
+  };
+}
+
+function cleanupWorkspaceDefaultBaseFixture(fixture) {
+  if (!fixture) {
+    return;
+  }
+  rmSync(fixture.root, { recursive: true, force: true });
+}
+
 function createBranchCleanupFixture() {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-branch-cleanup-"));
   const activeWorktree = `${fixtureRoot}-active`;
@@ -2312,6 +2528,10 @@ function runGit(cwd, args) {
     stdout: (result.stdout || "").trim(),
     stderr: (result.stderr || "").trim(),
   };
+}
+
+function refSnapshot(cwd) {
+  return runGit(cwd, ["for-each-ref", "--format=%(refname):%(objectname)", "refs/heads", "refs/remotes"]).stdout;
 }
 
 function commitFile(cwd, path, content, message) {
