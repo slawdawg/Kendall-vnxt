@@ -822,6 +822,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-branch-protection-readiness",
+                label="Branch protection readiness packet drift",
+                command="pnpm run check:branch-protection-readiness",
+                status="required",
+                requiredFor=["branch protection readiness packet changes", "GitHub branch-protection authority boundary changes", "verification command changes"],
+                evidence=[
+                    "Validates the branch protection readiness packet, future approval fields, stop lines, workspace coordination reference, story index reference, and README command reference stay aligned.",
+                    "Runs as part of the static and full local verification commands without approving GitHub branch protection mutation.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-adaptive-scoring",
                 label="Adaptive scoring decision-prep drift",
                 command="pnpm run check:adaptive-scoring",
@@ -1541,6 +1552,7 @@ class SupervisorService:
                     "test-live-memory-source-enforcement",
                     "test-bounded-live-memory-source",
                     "check-authority-readiness",
+                    "check-branch-protection-readiness",
                     "check-adaptive-scoring",
                     "check-premium-execution",
                     "check-worker-launch",
@@ -1982,6 +1994,45 @@ class SupervisorService:
                 ],
                 rollbackPath="Stop before remote mutation when PR state, CI, review, approval-ledger, or branch evidence is stale; preserve delivery evidence and return to dry-run planning.",
                 nextAction="Use the current delivery packet and GitHub state to drive human/connector-backed PR work only.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="github-branch-protection",
+                label="GitHub branch protection",
+                status="readiness_only_no_authority_granted",
+                summary="Branch protection readiness evidence is prepared for dev, staging, main, and prod, but applying branch protection or repository rulesets requires a fresh exact approval packet.",
+                blockedStories=[],
+                requiredApprovals=[
+                    "Exact branch protection approval naming repository, target branch or pattern, implementation surface, operation, required checks, review settings, admin bypass, rollback path, stop lines, retained evidence and redaction policy, operator, timestamp, and expiry.",
+                    "Authenticated GitHub read-back approval evidence for the target branch or ruleset immediately before and after any approved setting change.",
+                ],
+                requiredEvidence=[
+                    "docs/workflows/branch-protection-readiness-packet.md records 2026-06-25 read-only GitHub and local branch foundation evidence.",
+                    "Current evidence says the repository default branch is main, auto-merge is enabled, repository rulesets are empty, main is protected with no enforced required checks, and dev/staging/prod are unprotected.",
+                    "The future approval packet must retain metadata-only GitHub read-back evidence, exact check-context evidence, rollback proof, and the redaction policy without raw credentials or unnecessary source copies.",
+                    "pnpm run check:branch-protection-readiness must pass before the packet can be used as approval-request evidence.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/authority-readiness-matrix-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/delivery-readiness-policy-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/branch-protection-readiness-packet.md",
+                    "docs/workflows/execution-authority-boundary.md#branch-protection-readiness-contract",
+                    "docs/github-connector-workflow.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#authority-readiness-matrix-report",
+                    "/controls#github-workflow-policy-report",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                stopLines=[
+                    "Do not apply branch protection or repository rulesets from the readiness packet alone.",
+                    "Do not change default branch, required checks, merge methods, merge queue, review rules, signed-commit rules, linear-history rules, admin bypass, branch refs, or GitHub Actions workflows from the readiness packet alone.",
+                    "Do not treat repository admin permission, CI success, live evidence, or branch protection readiness as approval.",
+                ],
+                rollbackPath="Stop before GitHub settings mutation when target branch, ruleset, check context, review setting, retained evidence, rollback, approval, or read-back evidence is stale or ambiguous.",
+                nextAction="Use docs/workflows/branch-protection-readiness-packet.md and pnpm run check:branch-protection-readiness to prepare an exact approval request; do not apply settings from readiness alone.",
             ),
             AuthorityReadinessFamilyView(
                 familyId="cleanup-automation",

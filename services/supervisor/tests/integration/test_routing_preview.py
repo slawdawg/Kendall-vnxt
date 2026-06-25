@@ -1573,6 +1573,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-live-memory-source-enforcement",
         "test-bounded-live-memory-source",
         "check-authority-readiness",
+        "check-branch-protection-readiness",
         "check-adaptive-scoring",
         "check-premium-execution",
         "check-worker-launch",
@@ -1681,7 +1682,12 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "test-anti-churn-verification-rollback" in static_group["commandIds"]
     assert "test-workspace-command-resolution" in static_group["commandIds"]
     assert "test-dashboard-e2e-runner" in static_group["commandIds"]
+    assert "check-branch-protection-readiness" in static_group["commandIds"]
     assert "check-adaptive-scoring" in static_group["commandIds"]
+    branch_protection_command = next(
+        command for command in report["requiredCommands"] if command["commandId"] == "check-branch-protection-readiness"
+    )
+    assert branch_protection_command["command"] == "pnpm run check:branch-protection-readiness"
     adaptive_scoring_command = next(
         command for command in report["requiredCommands"] if command["commandId"] == "check-adaptive-scoring"
     )
@@ -2149,6 +2155,7 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
         "worker-command-source-network-credentials",
         "remote-delivery-automation",
         "github-delivery",
+        "github-branch-protection",
         "cleanup-automation",
     }
     for family in report["families"]:
@@ -2188,6 +2195,14 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     assert any("PR #103 recorded merged to main" in evidence for evidence in delivery_family["requiredEvidence"])
     assert any("fresh exact approval packet" in stop_line for stop_line in delivery_family["stopLines"])
     assert "dry-run planning" in delivery_family["rollbackPath"]
+    branch_protection_family = next(family for family in report["families"] if family["familyId"] == "github-branch-protection")
+    assert branch_protection_family["status"] == "readiness_only_no_authority_granted"
+    assert "docs/workflows/branch-protection-readiness-packet.md" in branch_protection_family["relatedDocs"]
+    assert "GET /supervisor/github-workflow-policy-report" in branch_protection_family["relatedReports"]
+    assert any("retained evidence and redaction policy" in approval for approval in branch_protection_family["requiredApprovals"])
+    assert any("metadata-only GitHub read-back evidence" in evidence for evidence in branch_protection_family["requiredEvidence"])
+    assert any("Do not apply branch protection" in stop_line for stop_line in branch_protection_family["stopLines"])
+    assert "Stop before GitHub settings mutation" in branch_protection_family["rollbackPath"]
     cleanup_family = next(family for family in report["families"] if family["familyId"] == "cleanup-automation")
     assert cleanup_family["status"] == "blocked_pending_explicit_approval"
     assert any("fresh GitHub re-check" in evidence for evidence in cleanup_family["requiredEvidence"])

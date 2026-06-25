@@ -81,6 +81,11 @@ history, merge queue, or successful deployments before changes land on a
 protected branch. A PR that does not meet the repository's visible merge
 requirements remains merge-gated.
 
+Use `docs/workflows/branch-protection-readiness-packet.md` as the source-owned
+branch protection readiness packet before proposing branch or ruleset changes.
+That packet is no GitHub mutation authority; it only records current evidence,
+candidate posture, future approval fields, rollback, and stop lines.
+
 Proof for low-risk delivery must come from current GitHub PR metadata, review
 threads, review requests, status/check results for the exact head SHA, local
 verification output, and the reviewed changed-file list. If any evidence source
