@@ -1835,15 +1835,16 @@ class SupervisorService:
                 familyId="adaptive-scoring",
                 label="Adaptive scoring",
                 status="blocked_pending_explicit_approval",
-                summary="Adaptive scoring remains disabled until a scoring policy names approved inputs, outputs, retention, operator review, rollback, and stop lines.",
+                summary="Adaptive scoring remains disabled until a scoring policy names intended use, affected decision surfaces, approved inputs, outputs, retention, operator review, measurement, management response ownership, appeal handling, rollback, and stop lines.",
                 blockedStories=[],
                 requiredApprovals=[
-                    "Explicit operator approval naming the scoring authority, score inputs, output use, review path, and rollback plan.",
-                    "Approved scoring policy before scores can influence priority, launch, delivery, cleanup, or authority decisions.",
+                    "Explicit operator approval naming the scoring authority, intended use, affected decision surfaces, lifecycle actors, score inputs, output display/use, review path, appeal path, and rollback plan.",
+                    "Approved scoring policy with fairness, transparency, explainability, monitoring, drift response, and operator override handling before scores can be displayed or influence priority, launch, delivery, cleanup, or authority decisions.",
                 ],
                 requiredEvidence=[
                     "Current readiness and backlog reports remain read-only evidence surfaces.",
                     "No score is allowed to promote, execute, merge, clean up, or bypass a failed check.",
+                    "Future scoring evidence must define a measurement plan, calibration method, failure thresholds, monitoring cadence, drift response, continual improvement action path, management response owner, and appeal escalation owner before any score output is displayed or used.",
                     "Future scoring evidence must preserve metadata only and avoid raw prompts, completions, provider payloads, secrets, or unbounded source copies.",
                 ],
                 relatedReports=[
