@@ -2172,6 +2172,12 @@ def test_authority_readiness_matrix_report_maps_blocked_authority_without_mutati
     assert scoring_family["status"] == "blocked_pending_explicit_approval"
     assert "GET /supervisor/development-runway-report" in scoring_family["relatedReports"]
     assert "docs/workflows/adaptive-scoring-decision-prep.md" in scoring_family["relatedDocs"]
+    assert any("affected decision surfaces" in approval for approval in scoring_family["requiredApprovals"])
+    assert any("fairness, transparency, explainability" in approval for approval in scoring_family["requiredApprovals"])
+    assert any("before scores can be displayed" in approval for approval in scoring_family["requiredApprovals"])
+    assert any("continual improvement action path" in evidence for evidence in scoring_family["requiredEvidence"])
+    assert any("management response owner" in evidence for evidence in scoring_family["requiredEvidence"])
+    assert any("appeal escalation owner" in evidence for evidence in scoring_family["requiredEvidence"])
     assert any("Do not run adaptive scoring" in stop_line for stop_line in scoring_family["stopLines"])
     command_family = next(family for family in report["families"] if family["familyId"] == "worker-command-source-network-credentials")
     assert command_family["status"] == "blocked_by_default"

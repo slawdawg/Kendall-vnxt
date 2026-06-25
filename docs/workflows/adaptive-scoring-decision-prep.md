@@ -103,18 +103,23 @@ A future adaptive scoring approval packet must name:
 
 - authority family: `adaptive-scoring`;
 - exact operation, such as metadata-only dry-run scoring;
+- intended use statement and affected decision surfaces;
+- lifecycle actors, named reviewer ownership, named operator ownership, and
+  escalation owner for reviewer/operator conflicts;
 - target report, API, or workflow surface;
 - approved input metadata fields;
 - prohibited inputs;
-- output fields and whether they may be displayed;
+- output fields and whether they may be displayed, including display-only
+  report or dashboard surfaces;
 - whether scores are advisory-only or may affect any downstream state;
 - retained evidence and redaction policy;
-- calibration method and failure thresholds;
+- measurement plan, calibration method, failure thresholds, and management
+  response owner;
 - fake/local fixture set and negative test cases;
 - fairness, transparency, and explainability review path;
-- monitoring cadence and drift response;
-- reviewer ownership;
-- operator appeal or override handling;
+- monitoring cadence, drift response, and continual improvement cadence,
+  criteria, owner, and resulting action path;
+- operator appeal or override handling and escalation path;
 - verification commands;
 - rollback path;
 - stop lines;
@@ -122,6 +127,9 @@ A future adaptive scoring approval packet must name:
 
 If any field is missing, stale, ambiguous, or contradicted by current repo or
 GitHub state, the lane remains blocked.
+
+If reviewer ownership, operator ownership, management response ownership, or
+appeal escalation conflicts are unresolved, the lane remains blocked.
 
 ## Acceptance Criteria
 

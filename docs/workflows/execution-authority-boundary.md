@@ -185,12 +185,22 @@ Source package:
 
 Required future approval fields include:
 
+- Intended use and affected decision surfaces.
+- Lifecycle actors, named reviewer ownership, named operator ownership, and
+  escalation owner for reviewer/operator conflicts.
+- Target report, API, or workflow surface.
 - Approved metadata input fields.
 - Prohibited inputs.
 - Output fields and display rules.
 - Advisory-only versus state-changing authority.
 - Retained evidence and redaction policy.
-- Transparency, explainability, and operator review path.
+- Measurement plan, calibration method, failure thresholds, and management
+  response owner.
+- Fake/local fixture set and negative test cases.
+- Transparency, explainability, fairness, and operator review path.
+- Monitoring cadence, drift response, and continual improvement cadence,
+  criteria, owner, and resulting action path.
+- Operator appeal or override handling and escalation path.
 - Verification command.
 - Rollback path.
 - Stop lines.
