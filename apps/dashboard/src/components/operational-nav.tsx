@@ -89,27 +89,37 @@ export function OperationalNav({ compact = false, navStats }: { compact?: boolea
             </span>
           </summary>
           <div className="dashboard-page-menu-links">
-            {linkGroups.flatMap((group) =>
-              group.links.map((link) => {
-                const current = isCurrentPath(pathname, link.href);
-                return (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    aria-current={current ? "page" : undefined}
-                    className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-[0.375rem] border px-2.5 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)] ${
-                      current
-                        ? "border-[var(--accent)] bg-[var(--panel-strong)] text-[var(--foreground)]"
-                        : "bg-[var(--background-elevated)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                    }`}
-                  >
-                    <span className="sr-only">{group.label}: </span>
-                    {link.label}
-                    <NavBadge link={link} navStats={navStats} />
-                  </Link>
-                );
-              })
-            )}
+            {linkGroups.map((group) => {
+              const groupId = `dashboard-page-menu-${group.label.toLowerCase()}`;
+              return (
+                <section aria-labelledby={groupId} className="dashboard-page-menu-group" key={group.label}>
+                  <div className="dashboard-page-menu-group-heading">
+                    <h2 id={groupId}>{group.label}</h2>
+                    <p>{group.intent}</p>
+                  </div>
+                  <div className="dashboard-page-menu-group-links">
+                    {group.links.map((link) => {
+                      const current = isCurrentPath(pathname, link.href);
+                      return (
+                        <Link
+                          key={link.href}
+                          href={link.href}
+                          aria-current={current ? "page" : undefined}
+                          className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-[0.375rem] border px-2.5 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)] ${
+                            current
+                              ? "border-[var(--accent)] bg-[var(--panel-strong)] text-[var(--foreground)]"
+                              : "bg-[var(--background-elevated)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                          }`}
+                        >
+                          {link.label}
+                          <NavBadge link={link} navStats={navStats} />
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </section>
+              );
+            })}
           </div>
         </details>
       </nav>

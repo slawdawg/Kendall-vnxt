@@ -127,9 +127,8 @@ button {
   border: 1px solid color-mix(in srgb, var(--info) 28%, var(--line));
   border-radius: 0.5rem;
   box-shadow: 0 1rem 2.5rem color-mix(in srgb, #000 42%, transparent);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
+  display: grid;
+  gap: 0.65rem;
   left: auto;
   max-width: min(32rem, calc(100vw - 3rem));
   min-width: min(22rem, calc(100vw - 3rem));
@@ -138,6 +137,42 @@ button {
   right: 0;
   top: calc(100% + 0.4rem);
   z-index: 90;
+}
+
+.dashboard-page-menu-group {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.dashboard-page-menu-group-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 0.65rem;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.dashboard-page-menu-group-heading h2 {
+  color: var(--foreground);
+  font-family: var(--font-code);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.dashboard-page-menu-group-heading p {
+  color: var(--muted);
+  font-size: 0.7rem;
+  margin: 0;
+}
+
+.dashboard-page-menu-group-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
 }
 
 input::placeholder,

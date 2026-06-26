@@ -545,9 +545,9 @@ function RouteStation({
   visibleLimit: number;
 }) {
   const sortedPackets = sortPacketsForMap(packets);
-  const visiblePackets = sortedPackets.slice(0, visibleLimit);
-  const hiddenPacketSummary = overflowSummary(sortedPackets.slice(visibleLimit));
   const selected = selectedItem?.type === "stage" && selectedItem.id === stage;
+  const visiblePackets = selected ? sortedPackets : sortedPackets.slice(0, visibleLimit);
+  const hiddenPacketSummary = selected ? null : overflowSummary(sortedPackets.slice(visibleLimit));
   const stageTone = stageToneForPackets(sortedPackets);
   const stagePurposeId = `pipeline-stage-purpose-${stage}`;
 
@@ -917,6 +917,9 @@ function plainStageLabel(stage: PipelineStage) {
 }
 
 function plainNextStageLabel(packet: PipelineFixturePacket) {
+  if (packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate") {
+    return packet.nextAction;
+  }
   const currentIndex = pipelineStages.indexOf(packet.currentStage);
   if (packet.status === "complete" || currentIndex === pipelineStages.length - 1) {
     return "Done for now";

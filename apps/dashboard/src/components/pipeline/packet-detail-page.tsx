@@ -75,7 +75,18 @@ export function PacketDetailPage({
         </DetailSection>
 
         <DetailSection title="Gate, memory, recovery">
-          <RefList title="Human Gate actions" values={packet.humanGateActions.map((action) => `${action.label}: ${action.status}; ${action.disabledReason ?? action.resultingStage}`)} />
+          <RefList
+            title="Human Gate actions"
+            values={packet.humanGateActions.map((action) =>
+              [
+                `${action.label}: ${action.status}; ${action.disabledReason ?? action.resultingStage}`,
+                `required evidence: ${action.requiredEvidenceRefs.join(", ") || "none"}`,
+                `stop lines: ${action.stopLines.join(" | ") || "none"}`,
+                `rollback: ${action.rollbackPath}`,
+                `audit: ${action.auditEventType}`,
+              ].join("; ")
+            )}
+          />
           <RefList title="Memory proposals" values={packet.memoryProposals.map((proposal) => `${proposal.label}: ${proposal.status}; ${proposal.targetVaultPath ?? proposal.targetVaultFolder}`)} empty="No memory proposal for this packet." />
           <RefList title="Recovery actions" values={packet.recoveryActions.map((action) => `${action.label}: ${action.availability}; ${action.resultingStage}`)} empty="No recovery action for this packet." />
         </DetailSection>

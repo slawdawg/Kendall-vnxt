@@ -557,7 +557,7 @@ test.describe("dashboard workflow coverage", () => {
   });
 
   test("opens fixture-backed pipeline cockpit without live execution framing", async ({ page, baseURL }, testInfo) => {
-    testInfo.setTimeout(60_000);
+    testInfo.setTimeout(90_000);
     const dashboardOrigin = new URL(baseURL ?? "http://127.0.0.1:3100").origin;
     const supervisorOrigin = new URL(supervisorUrl).origin;
     const liveSupervisorRequests: string[] = [];
@@ -630,6 +630,9 @@ test.describe("dashboard workflow coverage", () => {
     await pageMenu.click();
     await expect(page.locator("nav a[href=\"/settings\"]")).toBeVisible();
     await expect(page.locator("nav a[href=\"/pipeline\"]")).toHaveAttribute("aria-current", "page");
+    for (const menuLabel of ["Monitor", "Watch state", "Evidence", "Inspect records", "Deliberate", "Control setup"]) {
+      await expect(page.getByRole("navigation", { name: "Dashboard sections" }).getByText(menuLabel, { exact: true })).toBeVisible();
+    }
     await pageMenu.click();
     const cockpit = page.getByRole("main", { name: "Pipeline cockpit" });
     await expect(cockpit).toBeVisible();
@@ -707,6 +710,14 @@ test.describe("dashboard workflow coverage", () => {
     const compactPacketCount = await routeMap.locator("button[aria-label^=\"Inspect packet:\"]").count();
     expect(compactPacketCount).toBeGreaterThan(0);
     expect(compactPacketCount).toBeLessThanOrEqual(40);
+    const executeStation = routeMap.locator(".pipeline-route-station").filter({
+      has: page.getByRole("button", { name: "Execute", exact: true }),
+    });
+    const executeOverflow = executeStation.locator(".pipeline-more-packets").first();
+    await expect(executeOverflow).toBeVisible();
+    await executeOverflow.click();
+    await expect(executeStation.locator(".pipeline-more-packets")).toHaveCount(0);
+    expect(await executeStation.locator("button[aria-label^=\"Inspect packet:\"]").count()).toBeGreaterThan(4);
     await expect(routeMap.getByRole("button", { name: "Needs approval", exact: true })).toBeVisible();
     await expect(routeMap.locator(".pipeline-stage-info-icon")).toHaveCount(10);
     const captureStage = routeMap.getByRole("button", { name: "Capture", exact: true });
@@ -752,6 +763,17 @@ test.describe("dashboard workflow coverage", () => {
     const stalePacketButton = routeMap.getByRole("button", { name: /Inspect packet: Resolve stale research source before routing/ });
     await expect(stalePacketButton).toBeVisible();
     await packetSearch.fill("");
+    await packetSearch.fill("Recover failed");
+    const failedPacketButton = routeMap.getByRole("button", { name: /Inspect packet: Recover failed worker stage/ });
+    await expect(failedPacketButton).toBeVisible();
+    await failedPacketButton.click();
+    const failedInspection = page.getByLabel("Packet inspection panel");
+    await expect(failedInspection).toBeVisible();
+    await expect(failedInspection.getByText("Next", { exact: true })).toBeVisible();
+    await expect(failedInspection.getByText("Recovery", { exact: true })).toBeVisible();
+    await failedPacketButton.click();
+    await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
+    await packetSearch.fill("");
     for (const stage of ["Capture", "Classify", "Route", "Shape", "Needs approval", "Execute", "Review", "Promote", "Deliver", "Learn"]) {
       await expect(routeMap.getByRole("button", { name: stage, exact: true })).toHaveCount(1);
     }
@@ -761,7 +783,7 @@ test.describe("dashboard workflow coverage", () => {
     await routeMap.getByRole("button", { name: "Route", exact: true }).click();
     await expect(page.getByLabel("Stage inspection panel")).toHaveCount(0);
     await packetSearch.fill("stale");
-    await stalePacketButton.scrollIntoViewIfNeeded();
+    await stalePacketButton.evaluate((element) => element.scrollIntoView({ block: "center", inline: "center" }));
     await stalePacketButton.click();
     const packetInspection = page.getByLabel("Packet inspection panel");
     await expect(packetInspection).toBeVisible();
@@ -812,6 +834,16 @@ test.describe("dashboard workflow coverage", () => {
     await expect(packetDetail.getByText("Source Boundary Checklist", { exact: true })).toBeVisible();
     await expect(packetDetail.getByText("Obsidian is canonical and human-owned", { exact: false }).first()).toBeVisible();
     await packetDetail.getByRole("link", { name: "Back to pipeline", exact: true }).click();
+    await expect(page).toHaveURL(/\/pipeline$/);
+    await page.goto("/pipeline/packets/fixture:human-gate-blocked");
+    const gatePacketDetail = page.getByRole("main", { name: "Packet detail" });
+    await expect(gatePacketDetail).toBeVisible();
+    await expect(gatePacketDetail.getByText("required evidence:", { exact: false }).first()).toBeVisible();
+    await expect(gatePacketDetail.getByText("stop lines:", { exact: false }).first()).toBeVisible();
+    await expect(gatePacketDetail.getByText("Do not launch a real worker from fixture mode.", { exact: false })).toBeVisible();
+    await expect(gatePacketDetail.getByText("rollback:", { exact: false }).first()).toBeVisible();
+    await expect(gatePacketDetail.getByText("audit:", { exact: false }).first()).toBeVisible();
+    await gatePacketDetail.getByRole("link", { name: "Back to pipeline", exact: true }).click();
     await expect(page).toHaveURL(/\/pipeline$/);
     await expect(pipelineBoard).toBeVisible();
     await expect(cockpit.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);

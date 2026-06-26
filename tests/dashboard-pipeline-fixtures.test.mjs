@@ -388,6 +388,9 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(cockpitSource, /PacketMiniCard/);
   assert.match(cockpitSource, /PacketInspection/);
   assert.match(cockpitSource, /sortPacketsForMap/);
+  assert.match(cockpitSource, /selected \? sortedPackets : sortedPackets\.slice\(0, visibleLimit\)/);
+  assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
+  assert.match(cockpitSource, /return packet\.nextAction/);
   assert.match(cockpitSource, /plainStageLabel/);
   assert.match(cockpitSource, /onSelectStage/);
   assert.match(cockpitSource, /aria-label=\{`Inspect packet: \$\{packet\.title\}`\}/);
@@ -429,6 +432,9 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(globalsSource, /max-width: 720px[\s\S]*\.dashboard-page-menu-nav[\s\S]*right: auto/);
   assert.match(globalsSource, /\.dashboard-page-menu/);
   assert.match(globalsSource, /\.dashboard-page-menu-links[\s\S]*right: 0/);
+  assert.match(globalsSource, /\.dashboard-page-menu-group/);
+  assert.match(globalsSource, /\.dashboard-page-menu-group-heading/);
+  assert.match(globalsSource, /\.dashboard-page-menu-group-links/);
   assert.match(globalsSource, /max-width: 720px[\s\S]*\.dashboard-page-menu-links[\s\S]*left: 0[\s\S]*right: auto/);
   assert.match(globalsSource, /\.dashboard-page-menu-summary[\s\S]*list-style: none/);
   assert.match(globalsSource, /\.dashboard-page-menu-summary::marker[\s\S]*display: none/);
@@ -468,6 +474,10 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(packetDetailSource, /Evidence and artifacts/);
   assert.match(packetDetailSource, /Workers and review/);
   assert.match(packetDetailSource, /Gate, memory, recovery/);
+  assert.match(packetDetailSource, /required evidence:/);
+  assert.match(packetDetailSource, /stop lines:/);
+  assert.match(packetDetailSource, /rollback:/);
+  assert.match(packetDetailSource, /audit:/);
   assert.match(packetDetailSource, /Packet source boundaries/);
   assert.doesNotMatch(cockpitSource, /FixtureScenarioSelector|GoldenPathLifecycle|ActivePacketDrawer|RecoveryDrawerPanel|ActionGuardPanel|EvidenceDetailList|evaluateFixtureActionDecision/);
   assert.match(fixtureSource, /routeFork/);
