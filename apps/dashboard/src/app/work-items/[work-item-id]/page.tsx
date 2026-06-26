@@ -10,6 +10,7 @@ import { ExecutionRecipePanel } from "../../../components/execution-recipe-panel
 import { GreenGateReadinessPanel } from "../../../components/green-gate-readiness-panel";
 import { LocalEvidencePanel } from "../../../components/local-evidence-panel";
 import { LocalWorktreePlanPanel } from "../../../components/local-worktree-plan-panel";
+import { MemoryProposalReviewPanel } from "../../../components/memory-proposal-review-panel";
 import { RecipeGateAuditPanel } from "../../../components/recipe-gate-audit-panel";
 import { RoutingPreviewPanel } from "../../../components/routing-preview-panel";
 import { RuntimeEvidenceExportPanel } from "../../../components/runtime-evidence-export-panel";
@@ -29,6 +30,7 @@ import {
   getRuntimeEvidenceReviewReport,
   getWorkItemLowRiskDeliveryPlan,
   getWorkItemTrustedDeliveryEligibilityReport,
+  getWorkPacket,
   getWorkItem,
   getWorkItemEvents,
   getWorkItems,
@@ -52,6 +54,7 @@ export default async function WorkItemDetailPage({
     trustedDeliveryReport,
     lowRiskDeliveryPlan,
     cleanupPlan,
+    workPacket,
   ] = await Promise.all([
     getWorkItem(workItemId),
     getWorkItemEvents(workItemId),
@@ -63,6 +66,7 @@ export default async function WorkItemDetailPage({
     getWorkItemTrustedDeliveryEligibilityReport(workItemId),
     getWorkItemLowRiskDeliveryPlan(workItemId),
     getWorkItemCleanupPlan(workItemId),
+    getWorkPacket(`work_item:${workItemId}`),
   ]);
   const recipeGateAudit = item.executionRecipe ? await getRecipeGateAudit(workItemId) : null;
   const localWorktreePlan = item.executionRecipe ? await getLocalWorktreePlan(workItemId) : null;
@@ -154,6 +158,12 @@ export default async function WorkItemDetailPage({
               </a>
             ) : null}
             <a
+              href="#memory-proposals"
+              className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Memory
+            </a>
+            <a
               href="#routing-decision"
               className="rounded-full border bg-[var(--surface)] px-4 py-2 text-sm font-medium transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
@@ -224,6 +234,7 @@ export default async function WorkItemDetailPage({
           <GreenGateReadinessPanel report={trustedDeliveryReport} attempts={executionAttempts} />
           <DeliveryCleanupPlanPanel deliveryPlan={lowRiskDeliveryPlan} cleanupPlan={cleanupPlan} />
           <SubscriptionLaunchReadinessPanel events={events} runtimeEvidenceExport={runtimeEvidenceExport} />
+          <MemoryProposalReviewPanel packet={workPacket} workItemId={item.id} />
           <RoutingPreviewPanel preview={routingPreview} />
           <LocalEvidencePanel workItemId={item.id} />
           <ExecutionAttemptEvidencePanel attempts={executionAttempts} />

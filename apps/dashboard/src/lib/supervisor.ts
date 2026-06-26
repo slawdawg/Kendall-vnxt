@@ -48,6 +48,7 @@ import type {
   WorkItemExecutionRecipeView,
   WorkItemManagedActionPayload,
   WorkItemRecipeGateAuditView,
+  WorkPacketV0View,
   VerificationReadinessReportView,
   WorkflowEventView,
   WorkItemView,
@@ -140,6 +141,10 @@ export async function getWorkItem(id: string): Promise<WorkItemView> {
 
 export async function getWorkItemEvents(id: string): Promise<WorkflowEventView[]> {
   return requestJson<WorkflowEventView[]>(`/work-items/${id}/events`);
+}
+
+export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View> {
+  return requestJson<WorkPacketV0View>(`/work-packets/${encodeURIComponent(packetId)}`);
 }
 
 export async function getExecutionAttempts(workItemId: string): Promise<ExecutionAttemptView[]> {
