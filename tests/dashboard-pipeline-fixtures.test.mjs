@@ -940,6 +940,9 @@ test("pipeline source boundary checklist preserves Obsidian and LLM-Wiki ownersh
   assert.ok(memoryPacket, "learn-memory packet should exist");
   assert.ok(memoryPacket.sourceRefs.some((ref) => ref.sourceType === "obsidian" && /human-owned/i.test(ref.label)), "learn-memory should include human-owned Obsidian ref");
   assert.ok(memoryPacket.sourceRefs.some((ref) => ref.sourceType === "llm_wiki" && /derived-only/i.test(ref.label)), "learn-memory should include derived-only LLM-Wiki ref");
+  assert.equal(memoryPacket.alphaMemorySourceStatus?.llmWikiReadiness?.canonicality, "derived_disposable_rebuildable");
+  assert.equal(memoryPacket.alphaMemorySourceStatus?.llmWikiReadiness?.durableWriteAllowed, false);
+  assert.match(memoryPacket.alphaMemorySourceStatus?.llmWikiReadiness?.boundarySummary ?? "", /never overrides Obsidian/i);
   assert.ok(
     memoryPacket.memoryProposals.some((proposal) => proposal.status === "contradictory" && /Obsidian remains the default authority/i.test(proposal.decisionNeededContext ?? "")),
     "contradictory proposals should state Obsidian wins by default"
@@ -956,6 +959,7 @@ test("pipeline source boundary checklist preserves Obsidian and LLM-Wiki ownersh
     "Boundary summary",
     "Obsidian is canonical and human-owned",
     "LLM-Wiki is derived, disposable, and rebuildable",
+    "LLM-Wiki derived readiness",
     "Obsidian wins by default",
   ]) {
     assert.match(allPipelineSource, new RegExp(visibleLabel, "i"));

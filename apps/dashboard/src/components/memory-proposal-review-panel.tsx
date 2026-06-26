@@ -69,6 +69,22 @@ function canApproveFutureDraft(proposal: MemoryProposalV0): boolean {
   return proposal.freshness === "fresh" && proposal.contradictionStatus === "none" && !["blocked", "stale", "contradictory", "rejected"].includes(proposal.status);
 }
 
+function aiDraftQueued(proposal: MemoryProposalV0): boolean {
+  return /AI draft (written|already exists)/.test(proposal.patchSummary ?? "");
+}
+
+function canCreateAiDraft(proposal: MemoryProposalV0): boolean {
+  return (
+    proposal.status === "approved" &&
+    proposal.operatorAction === "approve" &&
+    proposal.writeBackStatus === "approved_for_future" &&
+    proposal.writeBackAllowed === false &&
+    proposal.freshness === "fresh" &&
+    proposal.contradictionStatus === "none" &&
+    !aiDraftQueued(proposal)
+  );
+}
+
 export function MemoryProposalReviewPanel({
   packet,
   workItemId,
@@ -82,6 +98,7 @@ export function MemoryProposalReviewPanel({
   const [message, setMessage] = useState("Review proposals without writing back to Obsidian.");
   const [pending, startTransition] = useTransition();
   const proposals = packet.memoryProposals;
+  const llmWikiReadiness = packet.alphaMemorySourceStatus?.llmWikiReadiness;
 
   function submit(proposal: MemoryProposalV0, action: (typeof reviewActions)[number]) {
     startTransition(async () => {
@@ -117,6 +134,38 @@ export function MemoryProposalReviewPanel({
     });
   }
 
+  function createAiDraft(proposal: MemoryProposalV0) {
+    startTransition(async () => {
+      setPendingProposalId(proposal.proposalId);
+      setMessage(`Creating AI draft for ${proposal.proposalId}...`);
+      const response = await fetch(
+        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/ai-draft`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            actorId: profile.actorId,
+            actorLabel: profile.actorLabel,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { detail?: { error?: { message?: string } } }
+          | null;
+        setMessage(payload?.detail?.error?.message ?? "The supervisor blocked the AI draft write-back.");
+        setPendingProposalId(null);
+        return;
+      }
+
+      const payload = (await response.json()) as { data?: MemoryProposalV0 };
+      setMessage(`${proposal.proposalId} queued as an Obsidian AI draft at ${payload.data?.targetVaultPath ?? "01 Dashboard Queue/AI Drafts"}.`);
+      setPendingProposalId(null);
+      router.refresh();
+    });
+  }
+
   return (
     <section id="memory-proposals" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -131,6 +180,34 @@ export function MemoryProposalReviewPanel({
           {proposals.length} proposal{proposals.length === 1 ? "" : "s"}
         </span>
       </div>
+
+      {llmWikiReadiness ? (
+        <div className="mt-5 rounded-[1rem] border bg-[var(--surface)] p-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--accent)]">LLM-Wiki readiness</p>
+              <p className="mt-2 text-sm font-semibold">{statusLabel(llmWikiReadiness.decisionState)}</p>
+              <p className="mt-1 text-sm leading-6 text-[var(--muted)]">{llmWikiReadiness.boundarySummary}</p>
+            </div>
+            <span className="w-fit rounded-full bg-[var(--panel)] px-3 py-1 text-xs text-[var(--muted)]">
+              {llmWikiReadiness.canonicality.replaceAll("_", " ")}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {[
+              ["Allowed inputs", llmWikiReadiness.allowedInputs.length > 0 ? llmWikiReadiness.allowedInputs.join(", ") : "none"],
+              ["Blocked reasons", llmWikiReadiness.blockedReasons.length > 0 ? llmWikiReadiness.blockedReasons.join(", ") : "none"],
+              ["Next action", llmWikiReadiness.nextActions.join(" ")],
+              ["Durable writes", llmWikiReadiness.durableWriteAllowed ? "allowed" : "blocked"],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">{label}</p>
+                <p className="mt-1 break-words text-sm">{value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {proposals.length === 0 ? (
         <p className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
@@ -204,6 +281,19 @@ export function MemoryProposalReviewPanel({
                     </button>
                   );
                 })}
+                <button
+                  type="button"
+                  disabled={pending || !canCreateAiDraft(proposal)}
+                  title={
+                    aiDraftQueued(proposal)
+                      ? "This proposal already has an AI draft queued."
+                      : "Requires an approved, fresh, non-contradictory proposal before writing to the AI Drafts queue."
+                  }
+                  onClick={() => createAiDraft(proposal)}
+                  className="rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:border-[var(--border)] disabled:bg-[var(--panel)] disabled:text-[var(--muted)] disabled:opacity-50"
+                >
+                  {pending && pendingProposalId === proposal.proposalId ? "Creating..." : "Create AI draft"}
+                </button>
               </div>
             </article>
           ))}

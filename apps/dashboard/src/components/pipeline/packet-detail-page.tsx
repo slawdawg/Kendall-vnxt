@@ -106,6 +106,22 @@ export function PacketDetailPage({
               </dl>
             </article>
           ))}
+          {packet.alphaMemorySourceStatus?.llmWikiReadiness ? (
+            <article className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
+              <h3 className="text-sm font-semibold">LLM-Wiki derived readiness</h3>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                {packet.alphaMemorySourceStatus.llmWikiReadiness.boundarySummary}
+              </p>
+              <dl className="mt-3 grid gap-2 text-xs">
+                <BoundaryField label="Canonicality" value={packet.alphaMemorySourceStatus.llmWikiReadiness.canonicality} />
+                <BoundaryField label="Decision" value={packet.alphaMemorySourceStatus.llmWikiReadiness.decisionState} />
+                <BoundaryField label="Retention class" value={packet.alphaMemorySourceStatus.llmWikiReadiness.retentionClass} />
+                <BoundaryField label="Allowed inputs" value={packet.alphaMemorySourceStatus.llmWikiReadiness.allowedInputs.join(", ") || "none"} />
+                <BoundaryField label="Blocked reasons" value={packet.alphaMemorySourceStatus.llmWikiReadiness.blockedReasons.join(", ") || "none"} />
+                <BoundaryField label="Durable writes" value={packet.alphaMemorySourceStatus.llmWikiReadiness.durableWriteAllowed ? "allowed" : "blocked"} />
+              </dl>
+            </article>
+          ) : null}
         </div>
       </section>
     </main>
