@@ -88,6 +88,7 @@ from supervisor.api.schemas import (
     LowRiskDeliveryPlanReportView,
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
+    MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     MemoryProposalV0View,
@@ -232,6 +233,21 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
     ExecutionAttemptStatus.RUNNING.value,
     ExecutionAttemptStatus.CANCEL_REQUESTED.value,
 }
+
+
+def _slugify_memory_draft(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:80]
+    return slug or "memory-proposal"
+
+
+def _safe_memory_proposal_id(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        raise ValueError("Memory proposal id must contain only letters, numbers, underscores, and hyphens.")
+    return value
+
+
+def _yaml_string(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
 
 TERMINAL_EXECUTION_ATTEMPT_STATUSES = {
     ExecutionAttemptStatus.CANCELLED.value,
@@ -553,6 +569,245 @@ class SupervisorService:
                 "writeBackStatus": proposal.write_back_status,
                 "writeBackAllowed": False,
                 "retentionClass": "metadata_only",
+            },
+        )
+        await session.commit()
+        await session.refresh(proposal)
+        await self._publish_item(item)
+        return proposal
+
+    def _load_obsidian_memory_draft_config(self) -> dict[str, object]:
+        config_path = (self.settings.obsidian_memory_config_path or "").strip()
+        if not config_path:
+            raise ValueError("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured; AI draft write-back is blocked.")
+
+        path = Path(config_path).expanduser()
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Obsidian memory config file was not found: {config_path}")
+
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Obsidian memory config is not valid JSON: {config_path}") from exc
+
+        config = raw.get("kom", raw) if isinstance(raw, dict) else {}
+        if not isinstance(config, dict):
+            raise ValueError("Obsidian memory config must be a JSON object.")
+
+        profile = str(config.get("profile") or "").strip()
+        if profile not in {"local-folder", "local-folder-manual", "obsidian-sync-headless"}:
+            raise ValueError("Obsidian memory config profile must be local-folder, local-folder-manual, or obsidian-sync-headless.")
+
+        vault = config.get("vault") if isinstance(config.get("vault"), dict) else {}
+        backup = config.get("backup") if isinstance(config.get("backup"), dict) else {}
+        write_policy = config.get("write_policy") if isinstance(config.get("write_policy"), dict) else {}
+        access = config.get("access") if isinstance(config.get("access"), dict) else {}
+        sync = config.get("sync") if isinstance(config.get("sync"), dict) else {}
+
+        vault_root_value = config.get("vault_root") or vault.get("local_path")
+        backup_root_value = config.get("backup_root") or backup.get("destination")
+        draft_folder_value = write_policy.get("draft_folder") or config.get("draft_folder")
+        proposal_queue_folder = str(config.get("proposal_queue_folder") or "01 Dashboard Queue").strip().strip("/")
+        if isinstance(draft_folder_value, str) and draft_folder_value.strip():
+            draft_folder = draft_folder_value.strip().strip("/")
+            proposal_queue_folder = draft_folder.removesuffix("/AI Drafts").strip("/")
+        else:
+            draft_folder = f"{proposal_queue_folder}/AI Drafts"
+
+        if not vault_root_value or not backup_root_value:
+            raise ValueError("Obsidian memory config must include vault.local_path and backup.destination.")
+        if not draft_folder.endswith("/AI Drafts"):
+            raise ValueError("Obsidian memory draft folder must end with AI Drafts.")
+        if Path(draft_folder).is_absolute() or ".." in Path(draft_folder).parts:
+            raise ValueError("Obsidian memory draft folder must be a safe relative vault path.")
+        read_allowlist = access.get("read_allowlist") or config.get("allowed_read_folders") or []
+        excluded_folders = access.get("excluded") or config.get("excluded_folders") or []
+        if draft_folder.removesuffix("/AI Drafts") in {str(folder).strip().strip("/") for folder in read_allowlist}:
+            raise ValueError("Obsidian memory queue folder must not be in the read allowlist.")
+        if draft_folder.removesuffix("/AI Drafts") not in {str(folder).strip().strip("/") for folder in excluded_folders}:
+            raise ValueError("Obsidian memory queue folder must be excluded from reads before AI draft write-back.")
+
+        vault_root = Path(str(vault_root_value)).expanduser().resolve()
+        backup_root = Path(str(backup_root_value)).expanduser().resolve()
+        if not vault_root.exists() or not vault_root.is_dir():
+            raise ValueError(f"Obsidian vault root is not a directory: {vault_root}")
+        try:
+            backup_root.relative_to(vault_root)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("Obsidian backup root must be outside the vault.")
+
+        sync_health = str(sync.get("health") or "").strip()
+        if sync_health and sync_health not in {"healthy", "manual-current"}:
+            raise ValueError("Obsidian sync health must be healthy or manual-current before AI draft write-back.")
+
+        return {
+            "vault_root": vault_root,
+            "backup_root": backup_root,
+            "draft_folder": draft_folder,
+        }
+
+    async def create_memory_proposal_ai_draft(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        proposal_id: str,
+        payload: MemoryProposalAiDraftWriteRequest,
+    ) -> MemoryProposal | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        result = await session.execute(
+            select(MemoryProposal).where(
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.proposal_id == proposal_id,
+            )
+        )
+        proposal = result.scalar_one_or_none()
+        if not proposal:
+            return None
+
+        blockers = []
+        if proposal.status != "approved":
+            blockers.append("missing_approved_status")
+        if proposal.operator_action != "approve":
+            blockers.append("missing_operator_approve_action")
+        if proposal.write_back_status != "approved_for_future":
+            blockers.append("missing_approved_write_back_status")
+        if proposal.write_back_allowed is not False:
+            blockers.append("canonical_write_authority_not_allowed")
+        if proposal.freshness != "fresh":
+            blockers.append("unsafe_source_freshness")
+        if proposal.contradiction_status != "none":
+            blockers.append("unsafe_source_contradiction")
+        if not proposal.source_refs_json:
+            blockers.append("missing_source_refs")
+        if not proposal.evidence_refs_json:
+            blockers.append("missing_evidence_refs")
+        if blockers:
+            raise ValueError(f"AI draft write-back blocked: {', '.join(blockers)}")
+
+        config = self._load_obsidian_memory_draft_config()
+        draft_folder = str(config["draft_folder"])
+        if proposal.target_vault_folder.strip().strip("/") != draft_folder:
+            raise ValueError("AI draft write-back blocked: proposal target folder does not match the configured AI Drafts queue.")
+
+        safe_id = _safe_memory_proposal_id(proposal.proposal_id)
+        vault_root = Path(config["vault_root"]).resolve()
+        draft_dir = vault_root / draft_folder
+        if draft_dir.parent.exists():
+            try:
+                draft_dir.parent.resolve().relative_to(vault_root)
+            except ValueError as exc:
+                raise ValueError("AI draft write-back blocked: draft queue path must remain inside the vault.") from exc
+        if draft_dir.exists():
+            try:
+                draft_dir.resolve().relative_to(vault_root)
+            except ValueError as exc:
+                raise ValueError("AI draft write-back blocked: draft queue path must remain inside the vault.") from exc
+        draft_path = (draft_dir / f"{_slugify_memory_draft(proposal.label)}-{safe_id}.md").resolve()
+        try:
+            draft_path.relative_to(draft_dir.resolve())
+        except ValueError as exc:
+            raise ValueError("AI draft write-back blocked: draft path must remain inside the AI Drafts queue.") from exc
+
+        relative_draft_path = draft_path.relative_to(vault_root).as_posix()
+        if draft_path.exists():
+            existing_text = draft_path.read_text(encoding="utf-8", errors="replace")
+            if f"proposal_id: {safe_id}" not in existing_text or "status: ai-draft" not in existing_text:
+                raise ValueError("AI draft write-back blocked: target draft path already exists but does not match this proposal.")
+            proposal.target_vault_path = relative_draft_path
+            proposal.patch_summary = f"AI draft already exists at {relative_draft_path}; no duplicate draft was written."
+            proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
+            proposal.write_back_allowed = False
+            proposal.updated_at = datetime.now(timezone.utc)
+            await self._record_event(
+                session,
+                item,
+                "memory_proposal.ai_draft_exists",
+                "Memory proposal AI draft already existed in the dashboard queue.",
+                {
+                    "proposalId": proposal.proposal_id,
+                    "draftPath": relative_draft_path,
+                    "writeBackAllowed": False,
+                    "retentionClass": "metadata_only",
+                    "rawPayloadRetained": False,
+                    "sourceContentCopied": False,
+                },
+            )
+            await session.commit()
+            await session.refresh(proposal)
+            await self._publish_item(item)
+            return proposal
+
+        now = datetime.now(timezone.utc)
+        backup_id = f"vault-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
+        backup_root = Path(config["backup_root"])
+        backup_root.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_root / backup_id
+        shutil.copytree(Path(config["vault_root"]), backup_path, symlinks=True)
+
+        approval_ref = f"dashboard:{work_item_id}:{proposal.proposal_id}:ai-draft:{now.strftime('%Y%m%dT%H%M%SZ')}"
+        source_refs = "\n".join(f'  - "{_yaml_string(ref)}"' for ref in proposal.source_refs_json)
+        evidence_refs = "\n".join(f'  - "{_yaml_string(ref)}"' for ref in proposal.evidence_refs_json)
+        actor_label = payload.actorLabel or payload.actorId or "Operator"
+        body = "\n".join(
+            [
+                "---",
+                "author: Kendall",
+                "status: ai-draft",
+                f"proposal_id: {safe_id}",
+                f'approval_ref: "{_yaml_string(approval_ref)}"',
+                f'approved_by: "{_yaml_string(actor_label)}"',
+                "retention_class: metadata_only",
+                "raw_payload_retained: false",
+                "source_content_copied: false",
+                "source_refs:",
+                source_refs,
+                "evidence_refs:",
+                evidence_refs,
+                "---",
+                "",
+                f"# {proposal.label}",
+                "",
+                proposal.summary,
+                "",
+                "## Suggested Content Summary",
+                "",
+                proposal.suggested_content_summary,
+                "",
+                *(
+                    ["## Patch Summary", "", proposal.patch_summary, ""]
+                    if proposal.patch_summary
+                    else []
+                ),
+            ]
+        )
+        draft_dir.mkdir(parents=True, exist_ok=True)
+        draft_path.write_text(body, encoding="utf-8")
+
+        proposal.target_vault_path = relative_draft_path
+        proposal.patch_summary = f"AI draft written to {relative_draft_path}; backup created at {backup_path}. Metadata-only; no raw source note content copied."
+        proposal.decision_needed_context = "AI draft is queued for operator review in Obsidian; canonical notes remain human-owned."
+        proposal.backup_recovery_path = f"Remove {relative_draft_path} and restore from {backup_path} if the operator rejects the draft."
+        proposal.write_back_allowed = False
+        proposal.updated_at = now
+        await self._record_event(
+            session,
+            item,
+            "memory_proposal.ai_draft_written",
+            "Memory proposal AI draft was written to the Obsidian dashboard queue.",
+            {
+                "proposalId": proposal.proposal_id,
+                "draftPath": relative_draft_path,
+                "backupPath": backup_path.as_posix(),
+                "authorityFamily": "memory-writeback-and-source-mutation",
+                "writeBackAllowed": False,
+                "retentionClass": "metadata_only",
+                "rawPayloadRetained": False,
+                "sourceContentCopied": False,
+                "canonicalMutationAllowed": False,
             },
         )
         await session.commit()

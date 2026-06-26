@@ -642,6 +642,13 @@ class MemoryProposalUpdateRequest(BaseModel):
     writeBackAllowed: Literal[False] = False
 
 
+class MemoryProposalAiDraftWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
 class MemoryProposalV0View(BaseModel):
     proposalId: str
     packetId: str

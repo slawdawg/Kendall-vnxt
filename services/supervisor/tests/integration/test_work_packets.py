@@ -80,6 +80,42 @@ def _sqlite_has_unique_index(db_path: str, table_name: str, columns: tuple[str, 
     return False
 
 
+def _write_obsidian_memory_config(tmp_path, *, profile: str = "local-folder") -> tuple[str, object, object]:
+    vault_root = tmp_path / "obsidian-vault"
+    backup_root = tmp_path / "obsidian-backups"
+    for folder in [
+        "00 Inbox",
+        "01 Dashboard Queue/AI Drafts",
+        "02 Customers",
+        "Private",
+        "Personal",
+        "Journal",
+        "09 Archive",
+    ]:
+        (vault_root / folder).mkdir(parents=True, exist_ok=True)
+    config_path = tmp_path / "obsidian-memory.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "profile": profile,
+                "vault": {"local_path": vault_root.as_posix()},
+                "access": {
+                    "read_allowlist": ["00 Inbox", "02 Customers"],
+                    "excluded": ["01 Dashboard Queue", "Private", "Personal", "Journal", "09 Archive"],
+                },
+                "write_policy": {
+                    "draft_folder": "01 Dashboard Queue/AI Drafts",
+                    "require_dashboard_approval": True,
+                },
+                "backup": {"destination": backup_root.as_posix()},
+                "sync": {"mechanism": "local-folder-manual", "health": "manual-current", "checked_at": "2026-06-26T00:00:00Z"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path.as_posix(), vault_root, backup_root
+
+
 def _create_candidate(client: TestClient, *, title: str = "Capture cockpit packet") -> dict:
     response = client.post(
         "/candidate-work",
@@ -392,6 +428,138 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         packet_after_update = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         assert packet_after_update["memoryProposals"][0]["status"] == "approved"
         assert packet_after_update["memoryProposals"][0]["operatorAction"] == "approve"
+
+
+def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, monkeypatch) -> None:
+    config_path, vault_root, backup_root = _write_obsidian_memory_config(tmp_path)
+    monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
+    with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-ai-draft.db") as client:
+        work_item = _create_work_item(client, title="Obsidian AI draft write")
+        create_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-ai-draft",
+                "label": "Memory proposal AI draft",
+                "summary": "Metadata-only summary for the queued draft.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultPath": "01 Dashboard Queue/AI Drafts/memory-proposal-ai-draft-mp-ai-draft.md",
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Create a Kendall-authored draft for operator review.",
+                "patchSummary": "Metadata-only proposal preview; no raw source note content copied.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "decisionNeededContext": "Operator must review before any draft write-back.",
+                "backupRecoveryPath": "No mutation performed; rerun read-only proof if stale.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert create_response.status_code == 200
+        approve_response = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft",
+            json={
+                "status": "approved",
+                "operatorAction": "approve",
+                "decisionNeededContext": "Approved for a future gated draft preview only.",
+                "writeBackStatus": "approved_for_future",
+                "writeBackAllowed": False,
+            },
+        )
+        assert approve_response.status_code == 200
+
+        draft_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"actorLabel": "Operator"},
+        )
+
+        assert draft_response.status_code == 200
+        proposal = draft_response.json()["data"]
+        assert proposal["writeBackAllowed"] is False
+        assert proposal["targetVaultPath"] == "01 Dashboard Queue/AI Drafts/memory-proposal-ai-draft-mp-ai-draft.md"
+        assert "AI draft written to 01 Dashboard Queue/AI Drafts/memory-proposal-ai-draft-mp-ai-draft.md" in proposal["patchSummary"]
+        assert "canonical notes remain human-owned" in proposal["decisionNeededContext"]
+        assert "restore from" in proposal["backupRecoveryPath"]
+
+        draft_path = vault_root / "01 Dashboard Queue" / "AI Drafts" / "memory-proposal-ai-draft-mp-ai-draft.md"
+        assert draft_path.exists()
+        draft_text = draft_path.read_text(encoding="utf-8")
+        assert "proposal_id: mp-ai-draft" in draft_text
+        assert "retention_class: metadata_only" in draft_text
+        assert "raw_payload_retained: false" in draft_text
+        assert "source_content_copied: false" in draft_text
+        assert "obsidian:00 Inbox/new-customer-insight.md" in draft_text
+        assert "Create a Kendall-authored draft for operator review." in draft_text
+        assert not (vault_root / "00 Inbox" / "memory-proposal-ai-draft-mp-ai-draft.md").exists()
+        assert any(backup_root.iterdir())
+
+        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        packet_proposal = packet["memoryProposals"][0]
+        assert packet_proposal["targetVaultPath"] == proposal["targetVaultPath"]
+        assert packet_proposal["writeBackAllowed"] is False
+
+        duplicate_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft/ai-draft",
+            json={"actorLabel": "Operator"},
+        )
+        assert duplicate_response.status_code == 200
+        assert "AI draft already exists" in duplicate_response.json()["data"]["patchSummary"]
+
+
+def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-ai-draft-blocked.db") as client:
+        work_item = _create_work_item(client, title="Blocked Obsidian AI draft write")
+        create_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-ai-draft-blocked",
+                "label": "Blocked memory proposal AI draft",
+                "summary": "Metadata-only summary.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Create a Kendall-authored draft for operator review.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert create_response.status_code == 200
+
+        unapproved_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft-blocked/ai-draft",
+            json={"actorLabel": "Operator"},
+        )
+        assert unapproved_response.status_code == 400
+        assert "missing_approved_status" in unapproved_response.json()["detail"]["error"]["message"]
+
+        approve_response = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft-blocked",
+            json={
+                "status": "approved",
+                "operatorAction": "approve",
+                "writeBackStatus": "approved_for_future",
+                "writeBackAllowed": False,
+            },
+        )
+        assert approve_response.status_code == 200
+
+        missing_config_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-ai-draft-blocked/ai-draft",
+            json={"actorLabel": "Operator"},
+        )
+        assert missing_config_response.status_code == 400
+        assert "SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured" in missing_config_response.json()["detail"]["error"]["message"]
 
 
 def test_work_item_accepts_proof_derived_dashboard_proposal_payload(tmp_path, monkeypatch) -> None:
