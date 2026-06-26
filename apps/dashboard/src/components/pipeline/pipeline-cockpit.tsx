@@ -869,6 +869,23 @@ function AlphaMemorySourceStatusPanel({ packet }: { packet: PipelineFixturePacke
         <p className="text-xs font-semibold text-[var(--accent)]">Authority flags</p>
         <RefList values={authorityFlags.map(([label, allowed]) => `${label}: ${allowed ? "allowed" : "blocked"}`)} />
       </div>
+      {status.llmWikiReadiness ? (
+        <div className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
+          <p className="text-xs font-semibold text-[var(--accent)]">LLM-Wiki derived readiness</p>
+          <FieldGrid
+            fields={[
+              ["Decision", status.llmWikiReadiness.decisionState],
+              ["Canonicality", status.llmWikiReadiness.canonicality],
+              ["Retention", status.llmWikiReadiness.retentionClass],
+              ["Boundary", status.llmWikiReadiness.boundarySummary],
+              ["Allowed inputs", status.llmWikiReadiness.allowedInputs.length > 0 ? status.llmWikiReadiness.allowedInputs.join(", ") : "none"],
+              ["Blocked reasons", status.llmWikiReadiness.blockedReasons.length > 0 ? status.llmWikiReadiness.blockedReasons.join(", ") : "none"],
+              ["Next action", status.llmWikiReadiness.nextActions.join(" ")],
+              ["Durable writes", status.llmWikiReadiness.durableWriteAllowed ? "allowed" : "blocked"],
+            ]}
+          />
+        </div>
+      ) : null}
       <div className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
         <p className="text-xs font-semibold text-[var(--accent)]">Source and recovery</p>
         <RefList values={[...status.sourceRefs.map((ref) => `source ref: ${ref}`), ...status.recoveryOptions.map((option) => `recovery: ${option}`)]} />

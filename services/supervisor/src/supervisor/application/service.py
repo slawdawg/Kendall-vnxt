@@ -88,6 +88,7 @@ from supervisor.api.schemas import (
     LowRiskDeliveryPlanReportView,
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
+    LlmWikiDerivedIndexReadinessV0View,
     MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
@@ -18090,7 +18091,7 @@ class SupervisorService:
             humanGateActions=[],
             laneCards=self._work_packet_lane_cards(attempts, routing_preview),
             memoryProposals=memory_proposal_views,
-            alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs),
+            alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs, memory_proposal_views),
             reviewSummaries=self._work_packet_review_summaries(item_view, evidence_refs, artifact_refs),
             recoveryActions=self._work_packet_recovery_actions(status, evidence_refs),
         )
@@ -18356,6 +18357,7 @@ class SupervisorService:
         packet_id: str,
         source_refs: list[SourceRefV0View],
         evidence_refs: list[EvidenceRefV0View],
+        memory_proposals: list[MemoryProposalV0View],
     ) -> AlphaMemorySourceStatusV0View | None:
         alpha_source_refs = [ref for ref in source_refs if ref.sourceType not in {"candidate_work", "work_item"}]
         if not alpha_source_refs:
@@ -18402,6 +18404,74 @@ class SupervisorService:
             blockedReasons=blocked_reasons,
             recoveryOptions=recovery_options,
             evidenceRefs=[ref.refId for ref in evidence_refs],
+            llmWikiReadiness=self._llm_wiki_readiness(packet_id, alpha_source_refs, evidence_refs, memory_proposals),
+        )
+
+    def _llm_wiki_readiness(
+        self,
+        packet_id: str,
+        source_refs: list[SourceRefV0View],
+        evidence_refs: list[EvidenceRefV0View],
+        memory_proposals: list[MemoryProposalV0View],
+    ) -> LlmWikiDerivedIndexReadinessV0View:
+        blocked_reasons: list[str] = []
+        allowed_inputs: list[str] = []
+        ready_proposals: list[MemoryProposalV0View] = []
+
+        for source_ref in source_refs:
+            if source_ref.sourceType == "llm_wiki":
+                blocked_reasons.append(f"source_ref.derived_non_canonical.{source_ref.refId}")
+            if source_ref.accessState != "allowed":
+                blocked_reasons.append(f"source_ref.invalid_or_blocked.{source_ref.refId}")
+            if source_ref.freshness == "stale":
+                blocked_reasons.append(f"source_ref.stale.{source_ref.refId}")
+
+        for proposal in memory_proposals:
+            proposal_ref = f"memory_proposal:{proposal.proposalId}"
+            safe_state = (
+                proposal.status == "approved"
+                and proposal.operatorAction == "approve"
+                and proposal.writeBackStatus == "approved_for_future"
+                and proposal.writeBackAllowed is False
+                and proposal.freshness == "fresh"
+                and proposal.contradictionStatus == "none"
+                and len(proposal.sourceRefs) > 0
+                and len(proposal.evidenceRefs) > 0
+            )
+            if safe_state:
+                ready_proposals.append(proposal)
+                allowed_inputs.append(proposal_ref)
+                continue
+            if proposal.status in {"pending_human_approval", "proposed", "edit_needed", "deferred", "rejected", "blocked"}:
+                blocked_reasons.append(f"memory_proposal.not_approved.{proposal.proposalId}")
+            if proposal.freshness != "fresh":
+                blocked_reasons.append(f"memory_proposal.unsafe_freshness.{proposal.proposalId}")
+            if proposal.contradictionStatus != "none":
+                blocked_reasons.append(f"memory_proposal.unsafe_contradiction.{proposal.proposalId}")
+
+        unique_blocked_reasons = list(dict.fromkeys(blocked_reasons))
+        if not memory_proposals:
+            decision_state = "not_configured"
+            unique_blocked_reasons = ["llm_wiki.no_memory_proposal_metadata"]
+        elif ready_proposals and not unique_blocked_reasons:
+            decision_state = "ready"
+        else:
+            decision_state = "blocked"
+
+        return LlmWikiDerivedIndexReadinessV0View(
+            statusId=f"llm-wiki-readiness:{packet_id}",
+            decisionState=decision_state,
+            sourceRefs=[ref.refId for ref in source_refs if ref.sourceType != "llm_wiki"],
+            evidenceRefs=[ref.refId for ref in evidence_refs],
+            memoryProposalRefs=[proposal.proposalId for proposal in ready_proposals],
+            allowedInputs=allowed_inputs,
+            blockedReasons=unique_blocked_reasons,
+            nextActions=(
+                ["Preview derived LLM-Wiki rebuild from approved metadata only; no durable write is authorized."]
+                if decision_state == "ready"
+                else ["Approve a fresh non-contradictory Obsidian memory proposal before derived LLM-Wiki rebuild readiness."]
+            ),
+            boundarySummary="LLM-Wiki is derived, disposable, and rebuildable; it never overrides Obsidian.",
         )
 
     def _work_packet_evidence_refs(

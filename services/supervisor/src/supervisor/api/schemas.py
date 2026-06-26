@@ -674,6 +674,25 @@ class MemoryProposalV0View(BaseModel):
     writeBackAllowed: Literal[False] = False
 
 
+class LlmWikiDerivedIndexReadinessV0View(BaseModel):
+    statusId: str
+    operationMode: Literal["read_only"] = "read_only"
+    decisionState: Literal["ready", "blocked", "not_configured"]
+    canonicality: Literal["derived_disposable_rebuildable"] = "derived_disposable_rebuildable"
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    sourceRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    memoryProposalRefs: list[str] = Field(default_factory=list)
+    allowedInputs: list[str] = Field(default_factory=list)
+    blockedReasons: list[str] = Field(default_factory=list)
+    nextActions: list[str] = Field(default_factory=list)
+    boundarySummary: str
+    canonicalMutationAllowed: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    durableWriteAllowed: Literal[False] = False
+
+
 class AlphaMemorySourceStatusV0View(BaseModel):
     statusId: str
     authorityFamily: Literal["memory-writeback-and-source-mutation"] = "memory-writeback-and-source-mutation"
@@ -688,6 +707,7 @@ class AlphaMemorySourceStatusV0View(BaseModel):
     blockedReasons: list[str] = Field(default_factory=list)
     recoveryOptions: list[str] = Field(default_factory=list)
     evidenceRefs: list[str] = Field(default_factory=list)
+    llmWikiReadiness: LlmWikiDerivedIndexReadinessV0View | None = None
     canonicalMutationAllowed: Literal[False] = False
     sourceMutationAllowed: Literal[False] = False
     providerCallsAllowed: Literal[False] = False
