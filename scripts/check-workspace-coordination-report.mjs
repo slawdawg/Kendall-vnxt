@@ -143,6 +143,9 @@ for (const classification of [
   "local-only commit",
   "no-source refresh lane",
   "cleanup candidate",
+  "remote branch cleanup candidate",
+  "superseded PR",
+  "dependency security bump",
   "policy-approved low-risk delivery",
 ]) {
   assertCondition(workflow.includes(classification), `Workspace coordination workflow must define ${classification}`, failures);
@@ -157,6 +160,8 @@ for (const stopLine of [
   "Resolve a review thread that has not been addressed.",
   "Start work in a lane whose scope overlaps an active dirty lane.",
   "Create an empty PR for a verified no-source refresh lane.",
+  "Mutate an active workspace branch owned by another runner.",
+  "Delete a remote branch with no PR record, a SHA mismatch, an open PR, or an",
 ]) {
   assertCondition(workflow.includes(stopLine), `Workspace coordination workflow must preserve stop line ${stopLine}`, failures);
 }
@@ -168,6 +173,14 @@ for (const requiredText of [
   "Authority lanes owned by other sessions.",
   "GitHub branch protection and rulesets can lower merge risk",
   "Merge only the exact reviewed head SHA; do not bypass branch protection.",
+  "gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>",
+  "gh pr diff <number> --name-only",
+  "temporary detached worktree from the",
+  "read-only `$HOME/.cache/uv` error",
+  "record the inconclusive result",
+  "Remote Branch Cleanup Rules",
+  "node ./scripts/codex-workspace.mjs list --active --json",
+  "origin/<branch>` SHA exactly equals the merged",
   "Proof for low-risk delivery must come from current GitHub PR metadata",
   "Generic continuation is not standing approval.",
   "do not create an empty PR",

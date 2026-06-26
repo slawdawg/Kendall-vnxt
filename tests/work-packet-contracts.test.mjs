@@ -32,7 +32,8 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
     "ModelRequestPacketV0",
     "ModelResultPacketV0",
     "MemoryProposalV0",
-    "RecoveryActionV0"
+    "RecoveryActionV0",
+    "LlmWikiRebuildPreviewV0"
   ]) {
     assert.match(workPacketSource, new RegExp(`export (const|type|interface) ${exportedName}\\b`));
   }
@@ -81,6 +82,22 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
 
   assert.match(workPacketSource, /rawPayloadRetained:\s*false;/);
   assert.match(workPacketSource, /writeBackAllowed:\s*false;/);
+  assert.match(workPacketSource, /rebuildPreview\?:\s*LlmWikiRebuildPreviewV0 \| null;/);
+  assert.match(workPacketSource, /rebuildDryRunPlan\?:\s*LlmWikiRebuildDryRunPlanV0 \| null;/);
+  assert.match(workPacketSource, /previewId:\s*string;/);
+  assert.match(workPacketSource, /inputRefs:\s*WorkPacketRefIdV0\[\];/);
+  assert.match(workPacketSource, /memoryProposalRefs:\s*WorkPacketRefIdV0\[\];/);
+  assert.match(workPacketSource, /plannedOutputScope:\s*string;/);
+  assert.match(workPacketSource, /stopLine:\s*string;/);
+  assert.match(workPacketSource, /planId:\s*string;/);
+  assert.match(workPacketSource, /operationMode:\s*"dry_run";/);
+  assert.match(workPacketSource, /plannedDerivedSections:\s*string\[\];/);
+  assert.match(workPacketSource, /disposableTargetNamespace:\s*string;/);
+  assert.match(workPacketSource, /stopLines:\s*string\[\];/);
+  assert.match(workPacketSource, /discardRecoveryPath:\s*string;/);
+  assert.match(workPacketSource, /writePerformed:\s*false;/);
+  assert.match(workPacketSource, /backupCreated:\s*false;/);
+  assert.match(workPacketSource, /durableWriteAllowed:\s*false;/);
   assert.match(workPacketSource, /executionAttempts:\s*WorkPacketExecutionAttemptSummaryV0\[\];/);
   assert.doesNotMatch(workPacketSource, /executionAttempts:\s*ExecutionAttemptView\[\];/);
   assert.match(workPacketSource, /accessState:\s*"allowed";/);

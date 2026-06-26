@@ -634,6 +634,42 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert readiness["providerCallsAllowed"] is False
         assert readiness["durableWriteAllowed"] is False
         assert "never overrides Obsidian" in readiness["boundarySummary"]
+        preview = readiness["rebuildPreview"]
+        assert preview["previewId"] == f"llm-wiki-rebuild-preview:work_item:{work_item['id']}"
+        assert preview["operationMode"] == "read_only"
+        assert preview["retentionClass"] == "metadata_only"
+        assert preview["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
+        assert "memory_proposal:mp-llm-wiki-ready" in preview["inputRefs"]
+        assert "obsidian:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
+        assert "evidence:read-only-proof:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
+        assert "Derived LLM-Wiki index preview" in preview["plannedOutputScope"]
+        assert "do not write LLM-Wiki index" in preview["stopLine"]
+        assert preview["canonicalMutationAllowed"] is False
+        assert preview["sourceMutationAllowed"] is False
+        assert preview["providerCallsAllowed"] is False
+        assert preview["workerLaunchAllowed"] is False
+        assert preview["githubCallsAllowed"] is False
+        assert preview["networkEgressAllowed"] is False
+        assert preview["durableWriteAllowed"] is False
+        plan = readiness["rebuildDryRunPlan"]
+        assert plan["planId"] == f"llm-wiki-rebuild-dry-run-plan:work_item:{work_item['id']}"
+        assert plan["operationMode"] == "dry_run"
+        assert plan["retentionClass"] == "metadata_only"
+        assert plan["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
+        assert "memory_proposal:mp-llm-wiki-ready" in plan["inputRefs"]
+        assert "approved-memory-proposals" in plan["plannedDerivedSections"]
+        assert plan["disposableTargetNamespace"] == f"derived://llm-wiki/dry-run/work_item:{work_item['id']}"
+        assert any("do not write LLM-Wiki index" in stop_line for stop_line in plan["stopLines"])
+        assert "regenerate" in plan["discardRecoveryPath"]
+        assert plan["canonicalMutationAllowed"] is False
+        assert plan["sourceMutationAllowed"] is False
+        assert plan["providerCallsAllowed"] is False
+        assert plan["workerLaunchAllowed"] is False
+        assert plan["githubCallsAllowed"] is False
+        assert plan["networkEgressAllowed"] is False
+        assert plan["durableWriteAllowed"] is False
+        assert plan["writePerformed"] is False
+        assert plan["backupCreated"] is False
 
 
 def test_llm_wiki_readiness_blocks_unapproved_or_derived_only_sources(tmp_path, monkeypatch) -> None:
@@ -663,9 +699,12 @@ def test_llm_wiki_readiness_blocks_unapproved_or_derived_only_sources(tmp_path, 
 
         packet_without_proposals = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         not_configured = packet_without_proposals["alphaMemorySourceStatus"]["llmWikiReadiness"]
-        assert not_configured["decisionState"] == "not_configured"
+        assert not_configured["decisionState"] == "blocked"
+        assert "source_ref.derived_non_canonical.source:llm-wiki-derived" in not_configured["blockedReasons"]
         assert "llm_wiki.no_memory_proposal_metadata" in not_configured["blockedReasons"]
         assert not_configured["durableWriteAllowed"] is False
+        assert not_configured["rebuildPreview"] is None
+        assert not_configured["rebuildDryRunPlan"] is None
 
         create_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals",
@@ -696,6 +735,8 @@ def test_llm_wiki_readiness_blocks_unapproved_or_derived_only_sources(tmp_path, 
         assert "source_ref.derived_non_canonical.source:llm-wiki-derived" in blocked["blockedReasons"]
         assert "memory_proposal.not_approved.mp-llm-wiki-blocked" in blocked["blockedReasons"]
         assert blocked["canonicalMutationAllowed"] is False
+        assert blocked["rebuildPreview"] is None
+        assert blocked["rebuildDryRunPlan"] is None
 
 
 def test_work_item_accepts_proof_derived_dashboard_proposal_payload(tmp_path, monkeypatch) -> None:

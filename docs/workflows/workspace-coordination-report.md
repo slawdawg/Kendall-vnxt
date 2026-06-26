@@ -27,7 +27,7 @@ Start with these small sources:
 ```text
 AGENTS.md#codex-workspace-protocol
 docs/ai-context/index.md
-node ./scripts/codex-workspace.mjs list
+node ./scripts/codex-workspace.mjs list --active --json
 git status --short --branch
 ```
 
@@ -64,6 +64,18 @@ Workspace Coordination Report
   commit. Preserve the evidence packet and do not create an empty PR.
 - `cleanup candidate`: PR is merged, worktree is clean, and cleanup dry-run
   names only the expected worktree and local branch.
+- `remote branch cleanup candidate`: the remote branch is not owned by an
+  active workspace, no open or closed-unmerged PR uses the branch head, and the
+  current remote SHA exactly matches a merged PR `headRefOid`.
+- `superseded PR`: a PR whose intended change has been delivered by later
+  merged work or is no longer wanted. Comment with the superseding evidence,
+  close the PR, and delete its remote head only when the branch is not active
+  and the remote SHA still matches the closed PR head.
+- `dependency security bump`: a bot PR that updates a dependency for a security
+  or patch release. Treat urgency as reason to prioritize, not as automatic
+  merge authority; it still needs current PR metadata, exact-head checks,
+  thread-aware review state, changed-file review, CI, and focused local
+  verification.
 - `policy-approved low-risk delivery`: the active goal explicitly names merge
   and cleanup, the PR belongs to the current lane, the exact reviewed head SHA
   is still current, the PR targets the expected base branch, the PR is not a
@@ -106,6 +118,44 @@ low risk:
 - Add feature flags, staged rollout, or manual validation for behavior changes.
 - Record a revert path before merge.
 - Rerun verification after base updates or material review changes.
+- For dependency or bot PRs, verify in a temporary detached worktree from the
+  PR head so dirty local work does not contaminate the evidence.
+- Use supported `gh` commands for the installed CLI. Prefer
+  `gh pr diff <number> --name-only` for changed-file discovery; do not assume
+  `gh pr diff --stat` is available.
+- Use exact-head merge commands such as
+  `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
+- If direct `uv run --directory services/supervisor ...` fails in the sandbox
+  with a read-only `$HOME/.cache/uv` error, rerun the exact same read-only
+  verification command outside the sandbox rather than changing verification
+  scope.
+- If a broad verification suite hangs or becomes inconclusive, stop it cleanly,
+  record the inconclusive result, and run focused verification that covers the
+  changed surface.
+
+## Remote Branch Cleanup Rules
+
+Remote branch deletion is a separate GitHub mutation. Use it only when the
+evidence proves the branch is stale and not owned by an active lane.
+
+For managed workspaces, prefer the workspace lifecycle cleanup commands. When a
+branch exists outside an applicable workspace cleanup path, use this exact
+evidence gate before `git push origin --delete <branch>`:
+
+- Fetch and prune `origin` immediately before classification.
+- Gather all PRs for the head branch, including open, merged, and closed PRs.
+- Exclude any branch with an active workspace manifest from
+  `node ./scripts/codex-workspace.mjs list --active --json`.
+- Exclude any branch with an open PR.
+- Exclude any branch with a closed-unmerged PR unless the operator explicitly
+  approves deleting that abandoned head.
+- Delete only when the current `origin/<branch>` SHA exactly equals the merged
+  PR `headRefOid`.
+- Exclude no-PR-record branches and SHA-mismatch branches until separately
+  inspected.
+
+Preserve the exact deleted branch list and the excluded branch reasons as
+cleanup evidence.
 
 ## Stop Lines
 
@@ -119,6 +169,9 @@ Do not perform these actions from a generic continuation:
 - Resolve a review thread that has not been addressed.
 - Start work in a lane whose scope overlaps an active dirty lane.
 - Create an empty PR for a verified no-source refresh lane.
+- Mutate an active workspace branch owned by another runner.
+- Delete a remote branch with no PR record, a SHA mismatch, an open PR, or an
+  active workspace owner.
 
 Generic continuation is not standing approval. Use a narrow approval packet for
 merge, cleanup, branch deletion, or discarding local commits unless the active

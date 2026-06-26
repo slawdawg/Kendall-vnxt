@@ -89,6 +89,8 @@ from supervisor.api.schemas import (
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
     LlmWikiDerivedIndexReadinessV0View,
+    LlmWikiRebuildDryRunPlanV0View,
+    LlmWikiRebuildPreviewV0View,
     MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
@@ -18418,6 +18420,7 @@ class SupervisorService:
         allowed_inputs: list[str] = []
         ready_proposals: list[MemoryProposalV0View] = []
 
+        source_ref_by_id = {source_ref.refId: source_ref for source_ref in source_refs}
         for source_ref in source_refs:
             if source_ref.sourceType == "llm_wiki":
                 blocked_reasons.append(f"source_ref.derived_non_canonical.{source_ref.refId}")
@@ -18425,6 +18428,8 @@ class SupervisorService:
                 blocked_reasons.append(f"source_ref.invalid_or_blocked.{source_ref.refId}")
             if source_ref.freshness == "stale":
                 blocked_reasons.append(f"source_ref.stale.{source_ref.refId}")
+            elif source_ref.freshness != "fresh":
+                blocked_reasons.append(f"source_ref.unsafe_freshness.{source_ref.refId}")
 
         for proposal in memory_proposals:
             proposal_ref = f"memory_proposal:{proposal.proposalId}"
@@ -18442,21 +18447,51 @@ class SupervisorService:
                 ready_proposals.append(proposal)
                 allowed_inputs.append(proposal_ref)
                 continue
-            if proposal.status in {"pending_human_approval", "proposed", "edit_needed", "deferred", "rejected", "blocked"}:
+            if proposal.status != "approved" or proposal.operatorAction != "approve":
                 blocked_reasons.append(f"memory_proposal.not_approved.{proposal.proposalId}")
+            if proposal.writeBackStatus != "approved_for_future":
+                blocked_reasons.append(f"memory_proposal.unsafe_writeback_status.{proposal.proposalId}")
+            if proposal.writeBackAllowed is not False:
+                blocked_reasons.append(f"memory_proposal.writeback_allowed.{proposal.proposalId}")
+            if len(proposal.sourceRefs) == 0:
+                blocked_reasons.append(f"memory_proposal.missing_source_refs.{proposal.proposalId}")
+            if len(proposal.evidenceRefs) == 0:
+                blocked_reasons.append(f"memory_proposal.missing_evidence_refs.{proposal.proposalId}")
+            for proposal_source_ref in proposal.sourceRefs:
+                known_source_ref = source_ref_by_id.get(proposal_source_ref)
+                if known_source_ref and (
+                    known_source_ref.sourceType == "llm_wiki"
+                    or known_source_ref.accessState != "allowed"
+                    or known_source_ref.freshness != "fresh"
+                ):
+                    blocked_reasons.append(f"memory_proposal.unsafe_source_ref.{proposal.proposalId}.{proposal_source_ref}")
             if proposal.freshness != "fresh":
                 blocked_reasons.append(f"memory_proposal.unsafe_freshness.{proposal.proposalId}")
             if proposal.contradictionStatus != "none":
                 blocked_reasons.append(f"memory_proposal.unsafe_contradiction.{proposal.proposalId}")
 
         unique_blocked_reasons = list(dict.fromkeys(blocked_reasons))
-        if not memory_proposals:
+        if not memory_proposals and unique_blocked_reasons:
+            decision_state = "blocked"
+            unique_blocked_reasons = list(dict.fromkeys([*unique_blocked_reasons, "llm_wiki.no_memory_proposal_metadata"]))
+        elif not memory_proposals:
             decision_state = "not_configured"
             unique_blocked_reasons = ["llm_wiki.no_memory_proposal_metadata"]
         elif ready_proposals and not unique_blocked_reasons:
             decision_state = "ready"
         else:
             decision_state = "blocked"
+
+        rebuild_preview = (
+            self._llm_wiki_rebuild_preview(packet_id, source_refs, evidence_refs, ready_proposals, allowed_inputs)
+            if decision_state == "ready"
+            else None
+        )
+        rebuild_dry_run_plan = (
+            self._llm_wiki_rebuild_dry_run_plan(packet_id, rebuild_preview)
+            if decision_state == "ready" and rebuild_preview is not None
+            else None
+        )
 
         return LlmWikiDerivedIndexReadinessV0View(
             statusId=f"llm-wiki-readiness:{packet_id}",
@@ -18472,6 +18507,65 @@ class SupervisorService:
                 else ["Approve a fresh non-contradictory Obsidian memory proposal before derived LLM-Wiki rebuild readiness."]
             ),
             boundarySummary="LLM-Wiki is derived, disposable, and rebuildable; it never overrides Obsidian.",
+            rebuildPreview=rebuild_preview,
+            rebuildDryRunPlan=rebuild_dry_run_plan,
+        )
+
+    def _llm_wiki_rebuild_preview(
+        self,
+        packet_id: str,
+        source_refs: list[SourceRefV0View],
+        evidence_refs: list[EvidenceRefV0View],
+        ready_proposals: list[MemoryProposalV0View],
+        allowed_inputs: list[str],
+    ) -> LlmWikiRebuildPreviewV0View:
+        proposal_source_ref_ids = [ref_id for proposal in ready_proposals for ref_id in proposal.sourceRefs]
+        proposal_evidence_ref_ids = [ref_id for proposal in ready_proposals for ref_id in proposal.evidenceRefs]
+        proposal_ref_ids = [proposal.proposalId for proposal in ready_proposals]
+        input_refs = list(dict.fromkeys([*proposal_source_ref_ids, *proposal_evidence_ref_ids, *allowed_inputs]))
+        return LlmWikiRebuildPreviewV0View(
+            previewId=f"llm-wiki-rebuild-preview:{packet_id}",
+            inputRefs=input_refs,
+            memoryProposalRefs=proposal_ref_ids,
+            plannedOutputScope=(
+                "Derived LLM-Wiki index preview from approved memory proposal metadata; "
+                "no durable index path is allocated."
+            ),
+            stopLine=(
+                "Preview only; do not write LLM-Wiki index, mutate Obsidian, call providers, "
+                "launch workers, call GitHub, use network egress, or retain source content."
+            ),
+            auditEventSummary=(
+                "LLM-Wiki rebuild preview is supervisor-owned metadata only; no file, source, "
+                "provider, worker, GitHub, or network operation is authorized."
+            ),
+        )
+
+    def _llm_wiki_rebuild_dry_run_plan(
+        self,
+        packet_id: str,
+        rebuild_preview: LlmWikiRebuildPreviewV0View,
+    ) -> LlmWikiRebuildDryRunPlanV0View:
+        return LlmWikiRebuildDryRunPlanV0View(
+            planId=f"llm-wiki-rebuild-dry-run-plan:{packet_id}",
+            inputRefs=rebuild_preview.inputRefs,
+            memoryProposalRefs=rebuild_preview.memoryProposalRefs,
+            plannedDerivedSections=[
+                "approved-memory-proposals",
+                "source-evidence-crosswalk",
+                "operator-review-index",
+            ],
+            disposableTargetNamespace=f"derived://llm-wiki/dry-run/{packet_id}",
+            stopLines=[
+                "Dry-run only; do not write LLM-Wiki index files.",
+                "Do not mutate Obsidian, source refs, or canonical memory.",
+                "Do not call providers, launch workers, call GitHub, use network egress, or retain source content.",
+            ],
+            discardRecoveryPath="Discard this metadata-only plan and regenerate it from approved Obsidian memory proposal refs.",
+            auditEventSummary=(
+                "LLM-Wiki rebuild dry-run plan is supervisor-owned metadata only; no file, source, "
+                "provider, worker, GitHub, network, backup, or durable write operation is authorized."
+            ),
         )
 
     def _work_packet_evidence_refs(
