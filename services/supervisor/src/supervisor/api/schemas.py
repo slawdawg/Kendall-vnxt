@@ -584,14 +584,86 @@ class WorkPacketLaneCardV0View(BaseModel):
     artifactRefs: list[str] = Field(default_factory=list)
 
 
-class MemoryProposalV0View(BaseModel):
+MemoryProposalStatusV0 = Literal[
+    "not_applicable",
+    "proposed",
+    "pending_human_approval",
+    "approved",
+    "rejected",
+    "deferred",
+    "edit_needed",
+    "blocked",
+    "stale",
+    "contradictory",
+]
+MemoryProposalTypeV0 = Literal["new_note", "append_note", "link_notes", "tag_update", "decision_record", "error_book_entry"]
+MemoryProposalSensitivityV0 = Literal["low", "medium", "high"]
+MemoryProposalFreshnessV0 = Literal["fresh", "stale", "conflicting", "unknown"]
+MemoryProposalContradictionStatusV0 = Literal["none", "possible", "confirmed"]
+MemoryProposalConfidenceV0 = Literal["low", "medium", "high"]
+MemoryProposalOperatorActionV0 = Literal["approve", "edit", "reject", "defer", "blocked"]
+MemoryProposalWriteBackStatusV0 = Literal["not_started", "blocked", "review_gated", "approved_for_future", "deferred"]
+
+
+class MemoryProposalCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     proposalId: str
     label: str
-    status: Literal["not_applicable", "proposed", "pending_human_approval", "approved", "rejected", "blocked", "stale"]
+    status: MemoryProposalStatusV0 = "pending_human_approval"
+    summary: str
+    sourceRefs: list[str] = Field(min_length=1)
+    evidenceRefs: list[str] = Field(min_length=1)
+    targetRef: SourceRefV0View | None = None
+    targetVaultPath: str | None = None
+    targetVaultFolder: str
+    proposalType: MemoryProposalTypeV0
+    suggestedContentSummary: str
+    patchSummary: str | None = None
+    sensitivity: MemoryProposalSensitivityV0
+    freshness: MemoryProposalFreshnessV0
+    contradictionStatus: MemoryProposalContradictionStatusV0
+    confidence: MemoryProposalConfidenceV0
+    operatorAction: MemoryProposalOperatorActionV0
+    decisionNeededContext: str | None = None
+    backupRecoveryPath: str
+    writeBackStatus: MemoryProposalWriteBackStatusV0
+    writeBackAllowed: Literal[False] = False
+
+
+class MemoryProposalUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: MemoryProposalStatusV0 | None = None
+    operatorAction: MemoryProposalOperatorActionV0 | None = None
+    decisionNeededContext: str | None = None
+    writeBackStatus: MemoryProposalWriteBackStatusV0 | None = None
+    patchSummary: str | None = None
+    writeBackAllowed: Literal[False] = False
+
+
+class MemoryProposalV0View(BaseModel):
+    proposalId: str
+    packetId: str
+    label: str
+    status: MemoryProposalStatusV0
     summary: str
     targetRef: SourceRefV0View | None = None
-    sourceRefs: list[str] = Field(default_factory=list)
-    evidenceRefs: list[str] = Field(default_factory=list)
+    sourceRefs: list[str] = Field(min_length=1)
+    evidenceRefs: list[str] = Field(min_length=1)
+    targetVaultPath: str | None = None
+    targetVaultFolder: str
+    proposalType: MemoryProposalTypeV0
+    suggestedContentSummary: str
+    patchSummary: str | None = None
+    sensitivity: MemoryProposalSensitivityV0
+    freshness: MemoryProposalFreshnessV0
+    contradictionStatus: MemoryProposalContradictionStatusV0
+    confidence: MemoryProposalConfidenceV0
+    operatorAction: MemoryProposalOperatorActionV0
+    decisionNeededContext: str | None = None
+    backupRecoveryPath: str
+    writeBackStatus: MemoryProposalWriteBackStatusV0
     writeBackAllowed: Literal[False] = False
 
 

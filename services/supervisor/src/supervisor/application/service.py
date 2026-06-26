@@ -88,6 +88,9 @@ from supervisor.api.schemas import (
     LowRiskDeliveryPlanReportView,
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
+    MemoryProposalCreateRequest,
+    MemoryProposalUpdateRequest,
+    MemoryProposalV0View,
     LocalWorktreePlanView,
     ManagedRecipePolicyReportView,
     MaintenanceActionPlanReportView,
@@ -211,7 +214,7 @@ from supervisor.domain.subscription_launch import (
 from supervisor.domain.types import AuditMode, BmadLane, CandidateWorkStatus, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
-from supervisor.infrastructure.db.models import AuditEvent, CandidateWork, ExecutionAttempt, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
+from supervisor.infrastructure.db.models import AuditEvent, CandidateWork, ExecutionAttempt, MemoryProposal, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
 from supervisor.infrastructure.streaming.bus import EventBus
 
 
@@ -432,6 +435,137 @@ class SupervisorService:
 
     async def list_work_items(self, session: AsyncSession) -> list[WorkItem]:
         result = await session.execute(select(WorkItem).order_by(WorkItem.created_at.desc()))
+        return list(result.scalars())
+
+    async def create_memory_proposal(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: MemoryProposalCreateRequest,
+    ) -> MemoryProposal | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        existing_result = await session.execute(
+            select(MemoryProposal).where(
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.proposal_id == payload.proposalId,
+            )
+        )
+        if existing_result.scalar_one_or_none():
+            raise ValueError(f"Memory proposal already exists for this Work Item: {payload.proposalId}")
+        proposal = MemoryProposal(
+            work_item_id=work_item_id,
+            proposal_id=payload.proposalId,
+            label=payload.label,
+            status=payload.status,
+            summary=payload.summary,
+            source_refs_json=list(payload.sourceRefs),
+            evidence_refs_json=list(payload.evidenceRefs),
+            target_ref_json=payload.targetRef.model_dump() if payload.targetRef else None,
+            target_vault_path=payload.targetVaultPath,
+            target_vault_folder=payload.targetVaultFolder,
+            proposal_type=payload.proposalType,
+            suggested_content_summary=payload.suggestedContentSummary,
+            patch_summary=payload.patchSummary,
+            sensitivity=payload.sensitivity,
+            freshness=payload.freshness,
+            contradiction_status=payload.contradictionStatus,
+            confidence=payload.confidence,
+            operator_action=payload.operatorAction,
+            decision_needed_context=payload.decisionNeededContext,
+            backup_recovery_path=payload.backupRecoveryPath,
+            write_back_status=payload.writeBackStatus,
+            write_back_allowed=False,
+        )
+        session.add(proposal)
+        await session.flush()
+        await self._record_event(
+            session,
+            item,
+            "memory_proposal.created",
+            "Memory proposal was captured for review without write-back.",
+            {
+                "proposalId": proposal.proposal_id,
+                "sourceRefs": proposal.source_refs_json,
+                "evidenceRefs": proposal.evidence_refs_json,
+                "writeBackAllowed": False,
+                "retentionClass": "metadata_only",
+            },
+        )
+        await session.commit()
+        await session.refresh(proposal)
+        await self._publish_item(item)
+        return proposal
+
+    async def update_memory_proposal(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        proposal_id: str,
+        payload: MemoryProposalUpdateRequest,
+    ) -> MemoryProposal | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        result = await session.execute(
+            select(MemoryProposal).where(
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.proposal_id == proposal_id,
+            )
+        )
+        proposal = result.scalar_one_or_none()
+        if not proposal:
+            return None
+
+        next_status = payload.status if payload.status is not None else proposal.status
+        next_operator_action = payload.operatorAction if payload.operatorAction is not None else proposal.operator_action
+        next_write_back_status = payload.writeBackStatus if payload.writeBackStatus is not None else proposal.write_back_status
+        if (
+            next_status == "approved"
+            and next_operator_action == "approve"
+            and next_write_back_status == "approved_for_future"
+            and (proposal.freshness != "fresh" or proposal.contradiction_status != "none")
+        ):
+            raise ValueError("Unsafe memory proposal cannot be approved for future write-back.")
+
+        if payload.status is not None:
+            proposal.status = payload.status
+        if payload.operatorAction is not None:
+            proposal.operator_action = payload.operatorAction
+        if payload.decisionNeededContext is not None:
+            proposal.decision_needed_context = payload.decisionNeededContext
+        if payload.writeBackStatus is not None:
+            proposal.write_back_status = payload.writeBackStatus
+        if payload.patchSummary is not None:
+            proposal.patch_summary = payload.patchSummary
+        proposal.write_back_allowed = False
+        proposal.updated_at = datetime.now(timezone.utc)
+        await self._record_event(
+            session,
+            item,
+            "memory_proposal.review_updated",
+            "Memory proposal review state was updated without write-back.",
+            {
+                "proposalId": proposal.proposal_id,
+                "status": proposal.status,
+                "operatorAction": proposal.operator_action,
+                "writeBackStatus": proposal.write_back_status,
+                "writeBackAllowed": False,
+                "retentionClass": "metadata_only",
+            },
+        )
+        await session.commit()
+        await session.refresh(proposal)
+        await self._publish_item(item)
+        return proposal
+
+    async def list_memory_proposals(self, session: AsyncSession, work_item_id: str) -> list[MemoryProposal]:
+        result = await session.execute(
+            select(MemoryProposal)
+            .where(MemoryProposal.work_item_id == work_item_id)
+            .order_by(MemoryProposal.created_at.asc())
+        )
         return list(result.scalars())
 
     async def create_candidate_work(self, session: AsyncSession, payload: CandidateWorkCreate) -> CandidateWork:
@@ -822,6 +956,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-branch-protection-readiness",
+                label="Branch protection readiness packet drift",
+                command="pnpm run check:branch-protection-readiness",
+                status="required",
+                requiredFor=["branch protection readiness packet changes", "GitHub branch-protection authority boundary changes", "verification command changes"],
+                evidence=[
+                    "Validates the branch protection readiness packet, future approval fields, stop lines, workspace coordination reference, story index reference, and README command reference stay aligned.",
+                    "Runs as part of the static and full local verification commands without approving GitHub branch protection mutation.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-adaptive-scoring",
                 label="Adaptive scoring decision-prep drift",
                 command="pnpm run check:adaptive-scoring",
@@ -1086,6 +1231,28 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-tmux-orientation-report",
+                label="Tmux orientation report tests",
+                command="pnpm run test:tmux-orientation-report",
+                status="required",
+                requiredFor=["tmux orientation report changes", "workspace lane orientation changes", "verification command changes"],
+                evidence=[
+                    "Validates metadata-only tmux pane/workspace mapping, owner stop lines, malformed metadata handling, and no pane capture or tmux mutation.",
+                    "Runs as part of the static and full local verification commands without approving tmux mutation.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-tmux-orientation-report",
+                label="Tmux orientation report drift",
+                command="pnpm run check:tmux-orientation-report",
+                status="required",
+                requiredFor=["tmux orientation report changes", "workspace lane orientation changes", "verification command changes"],
+                evidence=[
+                    "Validates tmux orientation report script, test, runbook, aggregate wiring, and safety text stay aligned.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-mise-workflow",
                 label="Mise workflow readiness drift",
                 command="pnpm run check:mise-workflow",
@@ -1215,6 +1382,17 @@ class SupervisorService:
                 evidence=[
                     "Validates the fixture-backed /pipeline cockpit, visible Human Gate metadata, no-live-call guards, and dashboard fixture wiring.",
                     "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-dashboard-memory-proposals",
+                label="Dashboard memory proposal review tests",
+                command="pnpm run test:dashboard-memory-proposals",
+                status="required",
+                requiredFor=["memory proposal dashboard changes", "Obsidian memory review UI changes", "work packet memory proposal API changes"],
+                evidence=[
+                    "Validates the dashboard memory proposal review panel, review state labels, provenance display, stop lines, and disabled write-back action.",
+                    "Runs as part of the static and full local verification commands.",
                 ],
             ),
             VerificationCommandView(
@@ -1541,6 +1719,7 @@ class SupervisorService:
                     "test-live-memory-source-enforcement",
                     "test-bounded-live-memory-source",
                     "check-authority-readiness",
+                    "check-branch-protection-readiness",
                     "check-adaptive-scoring",
                     "check-premium-execution",
                     "check-worker-launch",
@@ -1565,6 +1744,8 @@ class SupervisorService:
                     "check-maintenance-readiness",
                     "check-token-economy",
                     "check-workspace-coordination",
+                    "test-tmux-orientation-report",
+                    "check-tmux-orientation-report",
                     "check-mise-workflow",
                     "check-linux-install-lane",
                     "check-bmad-work-products",
@@ -1576,6 +1757,7 @@ class SupervisorService:
                     "test-work-packet-fixtures",
                     "test-pipeline-state-matrix",
                     "test-dashboard-pipeline-fixtures",
+                    "test-dashboard-memory-proposals",
                     "check-clean-install-boundary",
                     "test-codex-workspace",
                     "test-codex-workspace-state",
@@ -1835,15 +2017,16 @@ class SupervisorService:
                 familyId="adaptive-scoring",
                 label="Adaptive scoring",
                 status="blocked_pending_explicit_approval",
-                summary="Adaptive scoring remains disabled until a scoring policy names approved inputs, outputs, retention, operator review, rollback, and stop lines.",
+                summary="Adaptive scoring remains disabled until a scoring policy names intended use, affected decision surfaces, approved inputs, outputs, retention, operator review, measurement, management response ownership, appeal handling, rollback, and stop lines.",
                 blockedStories=[],
                 requiredApprovals=[
-                    "Explicit operator approval naming the scoring authority, score inputs, output use, review path, and rollback plan.",
-                    "Approved scoring policy before scores can influence priority, launch, delivery, cleanup, or authority decisions.",
+                    "Explicit operator approval naming the scoring authority, intended use, affected decision surfaces, lifecycle actors, score inputs, output display/use, review path, appeal path, and rollback plan.",
+                    "Approved scoring policy with fairness, transparency, explainability, monitoring, drift response, and operator override handling before scores can be displayed or influence priority, launch, delivery, cleanup, or authority decisions.",
                 ],
                 requiredEvidence=[
                     "Current readiness and backlog reports remain read-only evidence surfaces.",
                     "No score is allowed to promote, execute, merge, clean up, or bypass a failed check.",
+                    "Future scoring evidence must define a measurement plan, calibration method, failure thresholds, monitoring cadence, drift response, continual improvement action path, management response owner, and appeal escalation owner before any score output is displayed or used.",
                     "Future scoring evidence must preserve metadata only and avoid raw prompts, completions, provider payloads, secrets, or unbounded source copies.",
                 ],
                 relatedReports=[
@@ -1982,6 +2165,45 @@ class SupervisorService:
                 ],
                 rollbackPath="Stop before remote mutation when PR state, CI, review, approval-ledger, or branch evidence is stale; preserve delivery evidence and return to dry-run planning.",
                 nextAction="Use the current delivery packet and GitHub state to drive human/connector-backed PR work only.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="github-branch-protection",
+                label="GitHub branch protection",
+                status="readiness_only_no_authority_granted",
+                summary="Branch protection readiness evidence is prepared for dev, staging, main, and prod, but applying branch protection or repository rulesets requires a fresh exact approval packet.",
+                blockedStories=[],
+                requiredApprovals=[
+                    "Exact branch protection approval naming repository, target branch or pattern, implementation surface, operation, required checks, review settings, admin bypass, rollback path, stop lines, retained evidence and redaction policy, operator, timestamp, and expiry.",
+                    "Authenticated GitHub read-back approval evidence for the target branch or ruleset immediately before and after any approved setting change.",
+                ],
+                requiredEvidence=[
+                    "docs/workflows/branch-protection-readiness-packet.md records 2026-06-25 read-only GitHub and local branch foundation evidence.",
+                    "Current evidence says the repository default branch is main, auto-merge is enabled, repository rulesets are empty, main is protected with no enforced required checks, and dev/staging/prod are unprotected.",
+                    "The future approval packet must retain metadata-only GitHub read-back evidence, exact check-context evidence, rollback proof, and the redaction policy without raw credentials or unnecessary source copies.",
+                    "pnpm run check:branch-protection-readiness must pass before the packet can be used as approval-request evidence.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/authority-readiness-matrix-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/delivery-readiness-policy-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/branch-protection-readiness-packet.md",
+                    "docs/workflows/execution-authority-boundary.md#branch-protection-readiness-contract",
+                    "docs/github-connector-workflow.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#authority-readiness-matrix-report",
+                    "/controls#github-workflow-policy-report",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                stopLines=[
+                    "Do not apply branch protection or repository rulesets from the readiness packet alone.",
+                    "Do not change default branch, required checks, merge methods, merge queue, review rules, signed-commit rules, linear-history rules, admin bypass, branch refs, or GitHub Actions workflows from the readiness packet alone.",
+                    "Do not treat repository admin permission, CI success, live evidence, or branch protection readiness as approval.",
+                ],
+                rollbackPath="Stop before GitHub settings mutation when target branch, ruleset, check context, review setting, retained evidence, rollback, approval, or read-back evidence is stale or ambiguous.",
+                nextAction="Use docs/workflows/branch-protection-readiness-packet.md and pnpm run check:branch-protection-readiness to prepare an exact approval request; do not apply settings from readiness alone.",
             ),
             AuthorityReadinessFamilyView(
                 familyId="cleanup-automation",
@@ -17571,11 +17793,14 @@ class SupervisorService:
             else None
         )
         task_packet = self._task_packet_from_preview(item, routing_preview) if item and routing_preview else None
+        memory_proposals = await self.list_memory_proposals(session, item.id) if item else []
+        memory_proposal_views = [self.to_memory_proposal_view(proposal, packet_id=f"work_item:{item.id}") for proposal in memory_proposals] if item else []
         stage, owner, status, mapping_reason_codes = self._map_work_packet_state(
             candidate=candidate_view,
             item=item_view,
             routing_preview=routing_preview,
             attempts=attempts,
+            memory_proposals=memory_proposal_views,
         )
         evidence_refs = self._work_packet_evidence_refs(item_view, routing_preview, attempts)
         artifact_refs = self._work_packet_artifact_refs(candidate_view, item_view, task_packet, attempts)
@@ -17609,7 +17834,7 @@ class SupervisorService:
             artifactRefs=artifact_refs,
             humanGateActions=[],
             laneCards=self._work_packet_lane_cards(attempts, routing_preview),
-            memoryProposals=[],
+            memoryProposals=memory_proposal_views,
             alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs),
             reviewSummaries=self._work_packet_review_summaries(item_view, evidence_refs, artifact_refs),
             recoveryActions=self._work_packet_recovery_actions(status, evidence_refs),
@@ -17666,6 +17891,7 @@ class SupervisorService:
         item: WorkItemView | None,
         routing_preview: RoutingPreviewView | None,
         attempts: list[ExecutionAttemptView],
+        memory_proposals: list[MemoryProposalV0View] | None = None,
     ) -> tuple[str, str, str, list[str]]:
         if attempts:
             latest = attempts[0]
@@ -17686,6 +17912,11 @@ class SupervisorService:
                         latest.lane,
                         f"execution_attempt.{latest.status.value}",
                     )
+
+        if memory_proposals:
+            active_proposals = [proposal for proposal in memory_proposals if proposal.status not in {"not_applicable", "rejected", "deferred"}]
+            if active_proposals:
+                return "learn", "memory_review", "waiting", ["memory_proposal.review_required"]
 
         if item:
             delivery_ready = item.deliveryReadiness.readyForApproval if item.deliveryReadiness else False
@@ -18265,6 +18496,37 @@ class SupervisorService:
             approvedAt=self._normalize_timestamp(candidate.approved_at) if candidate.approved_at else None,
             promotedWorkItemId=candidate.promoted_work_item_id,
             importMetadata=candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {},
+        )
+
+    def to_memory_proposal_view(self, proposal: MemoryProposal, *, packet_id: str) -> MemoryProposalV0View:
+        target_ref = None
+        if isinstance(proposal.target_ref_json, dict):
+            target_ref = SourceRefV0View(**proposal.target_ref_json)
+        source_refs = [str(ref) for ref in proposal.source_refs_json] if isinstance(proposal.source_refs_json, list) else []
+        evidence_refs = [str(ref) for ref in proposal.evidence_refs_json] if isinstance(proposal.evidence_refs_json, list) else []
+        return MemoryProposalV0View(
+            proposalId=proposal.proposal_id,
+            packetId=packet_id,
+            label=proposal.label,
+            status=proposal.status,
+            summary=proposal.summary,
+            targetRef=target_ref,
+            sourceRefs=source_refs,
+            evidenceRefs=evidence_refs,
+            targetVaultPath=proposal.target_vault_path,
+            targetVaultFolder=proposal.target_vault_folder,
+            proposalType=proposal.proposal_type,
+            suggestedContentSummary=proposal.suggested_content_summary,
+            patchSummary=proposal.patch_summary,
+            sensitivity=proposal.sensitivity,
+            freshness=proposal.freshness,
+            contradictionStatus=proposal.contradiction_status,
+            confidence=proposal.confidence,
+            operatorAction=proposal.operator_action,
+            decisionNeededContext=proposal.decision_needed_context,
+            backupRecoveryPath=proposal.backup_recovery_path,
+            writeBackStatus=proposal.write_back_status,
+            writeBackAllowed=False,
         )
 
     def to_work_item_view(self, item: WorkItem) -> WorkItemView:

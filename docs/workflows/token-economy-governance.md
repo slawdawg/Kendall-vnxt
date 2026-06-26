@@ -19,12 +19,12 @@ clearer first reads, better entrypoints, and preserved safety signals.
 
 | Candidate | Current fit | Allowed now | Adoption gate |
 | --- | --- | --- | --- |
-| `ccusage` | Local usage visibility candidate | Evaluate and document only | Proves useful local Codex/Claude visibility without credential/session exposure |
+| `ccusage` | Local usage visibility candidate with experimental Codex support | Fixture-first read-only evaluation only | Proves useful local Codex/Claude visibility from sanitized logs without credential/session exposure |
 | Headroom | Context/tool-output compression candidate | Spike plan only | Controlled before/after evidence proves meaning, safety, and citations survive compression |
 | Concise prompting | Policy influence | Professional quiet-operator guidance only | Guidance improves clarity without hiding progress or decisions |
 | Defluffer-style cleanup | Prompt/review linting candidate | Lint/recommendation only | Never automatically mutates safety docs, acceptance criteria, authority packets, or evidence |
 | Provider prompt caching | Repo-owned LLM-call design candidate | Design note only | Repo owns stable prompt prefixes and can verify cache behavior and cost impact |
-| Redis LangCache or another semantic cache | Later app-level cache candidate | Defer | Repeated app-level LLM calls exist and a cache boundary is approved |
+| Redis LangCache or another semantic cache | Preview app-level response cache candidate | Defer | Repeated app-level LLM calls exist and a cache boundary is approved |
 
 ## Baseline Measurement Plan
 
@@ -38,8 +38,10 @@ Before optimization claims, collect comparable examples:
    - PR delivery or review-comment resolution.
 2. Record the rough task shape, duration, major tool calls, and verification
    outcome.
-3. If `ccusage` is evaluated, confirm what local sources it reads and whether
-   Codex support is mature enough for the project.
+3. If `ccusage` is evaluated, start with copied and sanitized Codex JSONL
+   fixtures before reading a live `CODEX_HOME`, confirm what local sources it
+   reads, and treat Codex support as experimental until current logs prove stable
+   enough for the project.
 4. Compare before/after only against similar workflow types.
 5. Report savings as directional unless exact token accounting is available.
 
@@ -72,6 +74,21 @@ Allowed now:
 - Tool-call counts summarized from the session by the agent.
 - External usage tools only as read-only evaluation candidates after their data
   source and credential/session boundaries are understood.
+
+For `ccusage` Codex evaluation, use fixture-first evidence:
+
+- Prefer copied and sanitized Codex JSONL or sanitized saved
+  `codex exec --json` output.
+- Do not point tools at an unrestricted live `CODEX_HOME` until a source review
+  is recorded in the lane evidence or local tool-trial packet. The review must
+  confirm the paths read, fields parsed, excluded prompt/completion/session
+  fields, credential boundaries, and whether the command runs offline.
+- Retain only aggregate measurement fields such as date, anonymized session
+  label, model, input tokens, cached input tokens, output tokens, reasoning
+  tokens, cost estimate, confidence, and known gaps.
+- Treat cost and model attribution as estimates when pricing, speed tier, model
+  aliases, or missing metadata require fallback behavior. Record the pricing
+  source, snapshot date, currency, speed-tier assumption, and fallback reason.
 
 Not allowed without a later story and explicit approval:
 
@@ -134,11 +151,24 @@ prompt layout. Put stable system, tool, policy, and examples first; put
 task-specific inputs later. Do not restructure third-party CLI agent prompts
 unless a future story owns that integration.
 
+Provider prompt-cache evidence must include the provider, model,
+cache-retention mode and TTL or duration, cache-read/write token fields when
+available, privacy or retention constraints, and a before/after comparison
+against a similar workflow. If cache-read/write fields or retention duration are
+not exposed, record the provider documentation or billing evidence used as a
+fallback and mark measurement confidence low. Unknown retention duration blocks
+adoption. Automatic provider caching is still a measurement input, not
+permission to add new provider calls, paid usage, or prompt retention.
+
 ## Deferred Semantic Cache Criteria
 
 Redis LangCache or another semantic cache belongs later, when Kendall_Nxt has
 repeated app-level LLM calls with clear cache boundaries, invalidation rules,
-data classification, retention policy, and operator visibility.
+data classification, retention policy, operator visibility, and evidence that a
+similar-response cache will not replay stale or unsafe answers. Required
+semantic-cache evidence must cover stale-answer invalidation, unsafe-answer
+rejection, user or tenant boundary isolation, cache-hit inspection, cache-miss
+fallback, and rollback or disablement.
 
 ## Adoption Gates
 
