@@ -31,6 +31,15 @@ function sectionBetween(markdown, heading, nextHeading = "\n## ") {
   return markdown.slice(start, next === -1 ? undefined : next);
 }
 
+function sectionBetweenText(markdown, startText, endText) {
+  const start = markdown.indexOf(startText);
+  if (start === -1) {
+    return "";
+  }
+  const next = markdown.indexOf(endText, start + startText.length);
+  return markdown.slice(start, next === -1 ? undefined : next);
+}
+
 const failures = [];
 
 const packageJsonSource = readRequiredWorkspaceFile("package.json", failures);
@@ -45,6 +54,16 @@ const story21_2 = readRequiredWorkspaceFile("docs/workflows/implementation-evide
 const story21_3 = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
 const rcaNonGoals = sectionBetween(rcaWorkflow, "## Non-Goals");
 const story21_4 = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
+const ccusageCodexSection = sectionBetweenText(
+  tokenEconomyGovernance,
+  "For `ccusage` Codex evaluation",
+  "Not allowed without a later story and explicit approval",
+);
+const normalizedCcusageCodexSection = ccusageCodexSection.replace(/\s+/g, " ");
+const providerPromptCachingSection = sectionBetween(tokenEconomyGovernance, "## Provider Prompt Caching Criteria");
+const normalizedProviderPromptCachingSection = providerPromptCachingSection.replace(/\s+/g, " ");
+const semanticCacheSection = sectionBetween(tokenEconomyGovernance, "## Deferred Semantic Cache Criteria");
+const normalizedSemanticCacheSection = semanticCacheSection.replace(/\s+/g, " ");
 
 assertCondition(
   packageJson.scripts?.["check:token-economy"] === "node ./scripts/check-token-economy.mjs",
@@ -194,8 +213,11 @@ for (const heading of exampleHeadings) {
 
 for (const evaluationText of [
   "Treat external tools as candidates until a later story approves adoption.",
+  "experimental Codex support",
+  "Fixture-first read-only evaluation only",
   "Headroom spike may proceed only in a later story or explicitly approved task.",
   "Defluffer-style cleanup can be useful as a reviewer, not an editor.",
+  "Preview app-level response cache candidate",
   "Redis LangCache or another semantic cache belongs later",
 ]) {
   assertCondition(tokenEconomyGovernance.includes(evaluationText), `Token economy governance must preserve ${evaluationText}`, failures);
@@ -267,6 +289,57 @@ for (const workflowSample of [
   assertCondition(
     tokenEconomyGovernance.includes(workflowSample),
     `Token economy governance must include workflow sample ${workflowSample}`,
+    failures,
+  );
+}
+
+for (const ccusageBoundary of [
+  "copied and sanitized Codex JSONL",
+  "sanitized saved",
+  "Do not point tools at an unrestricted live `CODEX_HOME`",
+  "recorded in the lane evidence or local tool-trial packet",
+  "excluded prompt/completion/session fields",
+  "anonymized session label",
+  "Retain only aggregate measurement fields",
+  "Treat cost and model attribution as estimates",
+  "pricing source, snapshot date, currency, speed-tier assumption, and fallback reason",
+]) {
+  assertCondition(
+    normalizedCcusageCodexSection.includes(ccusageBoundary),
+    `Token economy governance must preserve ccusage boundary ${ccusageBoundary}`,
+    failures,
+  );
+}
+
+for (const providerCacheBoundary of [
+  "Provider prompt-cache evidence must include",
+  "cache-retention mode and TTL or duration",
+  "cache-read/write token fields when available",
+  "provider documentation or billing evidence used as a fallback",
+  "mark measurement confidence low",
+  "Unknown retention duration blocks adoption",
+  "Automatic provider caching is still a measurement input",
+  "not permission to add new provider calls, paid usage, or prompt retention",
+]) {
+  assertCondition(
+    normalizedProviderPromptCachingSection.includes(providerCacheBoundary),
+    `Token economy governance must preserve provider cache boundary ${providerCacheBoundary}`,
+    failures,
+  );
+}
+
+for (const semanticCacheBoundary of [
+  "similar-response cache will not replay stale or unsafe answers",
+  "stale-answer invalidation",
+  "unsafe-answer rejection",
+  "user or tenant boundary isolation",
+  "cache-hit inspection",
+  "cache-miss fallback",
+  "rollback or disablement",
+]) {
+  assertCondition(
+    normalizedSemanticCacheSection.includes(semanticCacheBoundary),
+    `Token economy governance must preserve semantic cache boundary ${semanticCacheBoundary}`,
     failures,
   );
 }
