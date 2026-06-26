@@ -22,6 +22,7 @@ from supervisor.api.schemas import (
     WorkItemCreate,
     WorkItemDeliveryReadinessRequest,
     DeliveryExecutionEvidencePayload,
+    LlmWikiArtifactSearchResultView,
     LlmWikiDisposableRebuildWriteRequest,
     MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
@@ -271,6 +272,25 @@ async def create_work_item_llm_wiki_rebuild(
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
+
+
+@app.get("/work-items/{work_item_id}/memory-proposals/{proposal_id}/llm-wiki-artifact", response_model=ApiEnvelope)
+async def get_work_item_llm_wiki_artifact(
+    work_item_id: str,
+    proposal_id: str,
+    query: str = "",
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        result = await service.search_llm_wiki_artifact(session, work_item_id, proposal_id, query)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "llm_wiki_artifact_read_blocked").model_dump()) from exc
+    if not result:
+        raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
+    return ApiEnvelope(data=result)
 
 
 @app.get("/work-items/{work_item_id}/execution-attempts", response_model=ApiEnvelope)

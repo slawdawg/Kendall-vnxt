@@ -9,6 +9,19 @@ import { getSupervisorBaseUrl } from "../lib/supervisor";
 
 type ReviewAction = "approve_future_draft" | "edit_needed" | "reject" | "defer";
 
+type LlmWikiArtifactSearchResult = {
+  targetVaultPath: string;
+  query: string;
+  matched: boolean;
+  excerpts: string[];
+  metadata: Record<string, string>;
+  retentionClass: "metadata_only";
+  rawPayloadRetained: false;
+  sourceContentCopied: false;
+  canonicalMutationAllowed: false;
+  sourceMutationAllowed: false;
+};
+
 const reviewActions: Array<{
   action: ReviewAction;
   label: string;
@@ -85,6 +98,10 @@ function canCreateAiDraft(proposal: MemoryProposalV0): boolean {
   );
 }
 
+function hasLlmWikiArtifact(proposal: MemoryProposalV0): boolean {
+  return (proposal.targetVaultPath ?? "").includes("01 Dashboard Queue/LLM Wiki Derived/");
+}
+
 export function MemoryProposalReviewPanel({
   packet,
   workItemId,
@@ -96,6 +113,8 @@ export function MemoryProposalReviewPanel({
   const { profile } = useOperatorProfile();
   const [pendingProposalId, setPendingProposalId] = useState<string | null>(null);
   const [message, setMessage] = useState("Review proposals without writing back to Obsidian.");
+  const [llmWikiQuery, setLlmWikiQuery] = useState("metadata");
+  const [llmWikiResults, setLlmWikiResults] = useState<Record<string, LlmWikiArtifactSearchResult>>({});
   const [pending, startTransition] = useTransition();
   const proposals = packet.memoryProposals;
   const llmWikiReadiness = packet.alphaMemorySourceStatus?.llmWikiReadiness;
@@ -131,6 +150,33 @@ export function MemoryProposalReviewPanel({
       setMessage(`${proposal.proposalId} updated. Obsidian write-back remains disabled.`);
       setPendingProposalId(null);
       router.refresh();
+    });
+  }
+
+  function searchLlmWikiArtifact(proposal: MemoryProposalV0) {
+    startTransition(async () => {
+      setPendingProposalId(proposal.proposalId);
+      setMessage(`Searching derived LLM-Wiki artifact for ${proposal.proposalId}...`);
+      const response = await fetch(
+        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/llm-wiki-artifact?query=${encodeURIComponent(llmWikiQuery)}`,
+        { method: "GET" },
+      );
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { detail?: { error?: { message?: string } } }
+          | null;
+        setMessage(payload?.detail?.error?.message ?? "The supervisor blocked the LLM-Wiki artifact read.");
+        setPendingProposalId(null);
+        return;
+      }
+
+      const payload = (await response.json()) as { data?: LlmWikiArtifactSearchResult };
+      if (payload.data) {
+        setLlmWikiResults((current) => ({ ...current, [proposal.proposalId]: payload.data as LlmWikiArtifactSearchResult }));
+      }
+      setMessage(`${proposal.proposalId} LLM-Wiki search returned ${payload.data?.excerpts.length ?? 0} snippet${payload.data?.excerpts.length === 1 ? "" : "s"}.`);
+      setPendingProposalId(null);
     });
   }
 
@@ -305,6 +351,58 @@ export function MemoryProposalReviewPanel({
                 <p className="mt-4 rounded-[1rem] border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] p-3 text-sm text-[var(--warn)]">
                   {proposal.decisionNeededContext}
                 </p>
+              ) : null}
+
+              {hasLlmWikiArtifact(proposal) ? (
+                <div className="mt-4 rounded-[1rem] border bg-[var(--panel)] p-3">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-end">
+                    <label className="flex-1 text-sm font-semibold">
+                      LLM-Wiki search
+                      <input
+                        type="search"
+                        value={llmWikiQuery}
+                        onChange={(event) => setLlmWikiQuery(event.target.value)}
+                        className="mt-2 w-full rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-sm font-normal outline-none focus:border-[var(--accent)]"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => searchLlmWikiArtifact(proposal)}
+                      className="rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:border-[var(--border)] disabled:bg-[var(--surface)] disabled:text-[var(--muted)] disabled:opacity-50"
+                    >
+                      {pending && pendingProposalId === proposal.proposalId ? "Searching..." : "Search artifact"}
+                    </button>
+                  </div>
+                  {llmWikiResults[proposal.proposalId] ? (
+                    <div className="mt-3 space-y-3">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {[
+                          ["Target", llmWikiResults[proposal.proposalId].targetVaultPath],
+                          ["Retention", llmWikiResults[proposal.proposalId].retentionClass],
+                          ["Raw payload retained", llmWikiResults[proposal.proposalId].rawPayloadRetained ? "yes" : "no"],
+                          ["Source content copied", llmWikiResults[proposal.proposalId].sourceContentCopied ? "yes" : "no"],
+                        ].map(([label, value]) => (
+                          <div key={label} className="rounded-[0.75rem] border bg-[var(--surface)] p-3">
+                            <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">{label}</p>
+                            <p className="mt-1 break-words text-sm">{value}</p>
+                          </div>
+                        ))}
+                      </div>
+                      {llmWikiResults[proposal.proposalId].excerpts.length > 0 ? (
+                        <ul className="space-y-2">
+                          {llmWikiResults[proposal.proposalId].excerpts.map((excerpt, index) => (
+                            <li key={`${proposal.proposalId}-llm-wiki-${index}`} className="rounded-[0.75rem] border bg-[var(--surface)] p-3 text-sm leading-6">
+                              {excerpt}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="rounded-[0.75rem] border bg-[var(--surface)] p-3 text-sm text-[var(--muted)]">No matching snippets.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
 
               <div className="mt-4 flex flex-wrap gap-2">
