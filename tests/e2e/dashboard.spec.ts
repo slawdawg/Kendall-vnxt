@@ -845,6 +845,26 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gatePacketDetail.getByText("audit:", { exact: false }).first()).toBeVisible();
     await gatePacketDetail.getByRole("link", { name: "Back to pipeline", exact: true }).click();
     await expect(page).toHaveURL(/\/pipeline$/);
+    await page.goto("/pipeline/packets/fixture:learn-memory");
+    const memoryPacketDetail = page.getByRole("main", { name: "Packet detail" });
+    await expect(memoryPacketDetail).toBeVisible();
+    await expect(memoryPacketDetail.getByText("proposal type:", { exact: false }).first()).toBeVisible();
+    await expect(memoryPacketDetail.getByText("sensitivity:", { exact: false }).first()).toBeVisible();
+    await expect(memoryPacketDetail.getByText("contradiction:", { exact: false }).first()).toBeVisible();
+    await expect(memoryPacketDetail.getByText("write-back allowed: false", { exact: false }).first()).toBeVisible();
+    await expect(memoryPacketDetail.getByText("write-back status:", { exact: false }).first()).toBeVisible();
+    await page.goto("/pipeline/packets/fixture:failed-stage");
+    const recoveryPacketDetail = page.getByRole("main", { name: "Packet detail" });
+    await expect(recoveryPacketDetail).toBeVisible();
+    await expect(recoveryPacketDetail.getByText("guard classification:", { exact: false }).first()).toBeVisible();
+    await expect(recoveryPacketDetail.getByText("expected binding:", { exact: false }).first()).toBeVisible();
+    await expect(recoveryPacketDetail.getByText("actual binding:", { exact: false }).first()).toBeVisible();
+    await expect(recoveryPacketDetail.getByText("primary risk:", { exact: false }).first()).toBeVisible();
+    await expect(recoveryPacketDetail.getByText("stop line:", { exact: false }).first()).toBeVisible();
+    await expect(recoveryPacketDetail.getByText("safe next option:", { exact: false }).first()).toBeVisible();
+    await expect(recoveryPacketDetail.getByText("fixture event:", { exact: false }).first()).toBeVisible();
+    await recoveryPacketDetail.getByRole("link", { name: "Back to pipeline", exact: true }).click();
+    await expect(page).toHaveURL(/\/pipeline$/);
     await expect(pipelineBoard).toBeVisible();
     await expect(cockpit.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
     for (const viewport of [pipelineViewportForProject(testInfo.project.name)] as const) {

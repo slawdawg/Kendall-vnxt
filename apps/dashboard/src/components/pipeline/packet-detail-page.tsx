@@ -87,8 +87,8 @@ export function PacketDetailPage({
               ].join("; ")
             )}
           />
-          <RefList title="Memory proposals" values={packet.memoryProposals.map((proposal) => `${proposal.label}: ${proposal.status}; ${proposal.targetVaultPath ?? proposal.targetVaultFolder}`)} empty="No memory proposal for this packet." />
-          <RefList title="Recovery actions" values={packet.recoveryActions.map((action) => `${action.label}: ${action.availability}; ${action.resultingStage}`)} empty="No recovery action for this packet." />
+          <RefList title="Memory proposals" values={packet.memoryProposals.map(formatMemoryProposal)} empty="No memory proposal for this packet." />
+          <RefList title="Recovery actions" values={packet.recoveryActions.map((action) => formatRecoveryAction(packet, action.actionId))} empty="No recovery action for this packet." />
         </DetailSection>
       </section>
 
@@ -205,4 +205,41 @@ function RefList({ empty = "None.", title, values }: { empty?: string; title: st
       )}
     </div>
   );
+}
+
+function formatMemoryProposal(proposal: PipelineFixturePacket["memoryProposals"][number]) {
+  return [
+    `${proposal.label}: ${proposal.status}; ${proposal.targetVaultPath ?? proposal.targetVaultFolder}`,
+    `proposal type: ${proposal.proposalType}`,
+    `sensitivity: ${proposal.sensitivity}`,
+    `contradiction: ${proposal.contradictionStatus}`,
+    `write-back allowed: ${String(proposal.writeBackAllowed)}`,
+    `write-back status: ${proposal.writeBackStatus}`,
+    `operator action: ${proposal.operatorAction}`,
+    `backup: ${proposal.backupRecoveryPath}`,
+  ].join("; ");
+}
+
+function formatRecoveryAction(packet: PipelineFixturePacket, actionId: string) {
+  const action = packet.recoveryActions.find((candidate) => candidate.actionId === actionId);
+  if (!action) {
+    return `Unknown recovery action: ${actionId}`;
+  }
+  const guard = packet.actionGuardFixtures.find(
+    (candidate) => candidate.actionSurface === "recovery" && (candidate.actionId === action.actionId || candidate.expectedActionId === action.actionId || candidate.actualActionId === action.actionId)
+  );
+  const event = packet.recoveryFixtureEvents.find((candidate) => candidate.actionId === action.actionId);
+  return [
+    `${action.label}: ${action.availability}; ${action.resultingStage}`,
+    `action type: ${action.actionType}`,
+    `consequence: ${action.consequence}`,
+    `evidence refs: ${action.evidenceRefs.join(", ") || "none"}`,
+    `guard classification: ${guard?.classification ?? "none"}`,
+    `expected binding: ${guard ? `${guard.expectedPacketId} / ${guard.expectedActionId} / ${guard.expectedState}` : "none"}`,
+    `actual binding: ${guard ? `${guard.actualPacketId} / ${guard.actualActionId} / ${guard.actualState}` : "none"}`,
+    `primary risk: ${guard?.primaryRisk ?? "none"}`,
+    `stop line: ${guard?.stopLine ?? "none"}`,
+    `safe next option: ${guard?.safeNextOption ?? "none"}`,
+    `fixture event: ${event?.eventId ?? "none"}`,
+  ].join("; ");
 }

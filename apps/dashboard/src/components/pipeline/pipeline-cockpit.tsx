@@ -975,7 +975,7 @@ function plainStatusLabel(packet: PipelineFixturePacket) {
 
 function findTopBlockedPacket(packets: PipelineFixturePacket[]) {
   return packets
-    .filter((packet) => packet.status === "blocked" || packet.currentStage === "human_gate")
+    .filter((packet) => packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate")
     .sort((left, right) => priorityRank[right.priority] - priorityRank[left.priority])[0];
 }
 

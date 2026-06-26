@@ -10,7 +10,7 @@ mkdirSync(browserPath, { recursive: true });
 
 const playwrightBin = join(rootDir, "node_modules", ".bin", "playwright");
 
-const result = spawnSync(playwrightBin, ["install", "chromium"], {
+const result = spawnSync(playwrightBin, ["install", "chromium", "webkit"], {
   cwd: rootDir,
   env: {
     ...process.env,

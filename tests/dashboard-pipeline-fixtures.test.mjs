@@ -22,11 +22,13 @@ const shellPath = new URL("../apps/dashboard/src/components/shell.tsx", import.m
 const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-graph-background.tsx", import.meta.url);
 const realtimeRefreshPath = new URL("../apps/dashboard/src/components/realtime-refresh.tsx", import.meta.url);
 const navPath = new URL("../apps/dashboard/src/components/operational-nav.tsx", import.meta.url);
+const setupE2ePath = new URL("../scripts/setup-e2e.mjs", import.meta.url);
 
 test("dashboard pipeline fixture test is wired into package checks", async () => {
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   const nextConfigSource = await readFile(nextConfigPath, "utf8");
   const globalsSource = await readFile(globalsPath, "utf8");
+  const setupE2eSource = await readFile(setupE2ePath, "utf8");
 
   assert.equal(packageJson.scripts["test:dashboard-pipeline-fixtures"], "node --test tests/dashboard-pipeline-fixtures.test.mjs");
   assert.equal(packageJson.scripts["test:e2e:dashboard"], "playwright test");
@@ -37,6 +39,7 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:ipad"], /--project ipad-pro-gen-2-safari-ios-26/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:iphone"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:iphone"], /--project iphone-15-pro-max-safari-ios-27/);
+  assert.match(setupE2eSource, /\["install", "chromium", "webkit"\]/);
   assert.match(packageJson.scripts["check:static"], /pnpm run test:dashboard-pipeline-fixtures/);
   assert.match(packageJson.scripts.check, /pnpm run test:dashboard-pipeline-fixtures/);
   assert.match(nextConfigSource, /devIndicators:\s*false/);
@@ -478,6 +481,18 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(packetDetailSource, /stop lines:/);
   assert.match(packetDetailSource, /rollback:/);
   assert.match(packetDetailSource, /audit:/);
+  assert.match(packetDetailSource, /proposal type:/);
+  assert.match(packetDetailSource, /sensitivity:/);
+  assert.match(packetDetailSource, /contradiction:/);
+  assert.match(packetDetailSource, /write-back allowed:/);
+  assert.match(packetDetailSource, /write-back status:/);
+  assert.match(packetDetailSource, /guard classification:/);
+  assert.match(packetDetailSource, /expected binding:/);
+  assert.match(packetDetailSource, /actual binding:/);
+  assert.match(packetDetailSource, /primary risk:/);
+  assert.match(packetDetailSource, /stop line:/);
+  assert.match(packetDetailSource, /safe next option:/);
+  assert.match(packetDetailSource, /fixture event:/);
   assert.match(packetDetailSource, /Packet source boundaries/);
   assert.doesNotMatch(cockpitSource, /FixtureScenarioSelector|GoldenPathLifecycle|ActivePacketDrawer|RecoveryDrawerPanel|ActionGuardPanel|EvidenceDetailList|evaluateFixtureActionDecision/);
   assert.match(fixtureSource, /routeFork/);
@@ -486,6 +501,7 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(fixtureSource, /pipelineDensityFixturePackets/);
   assert.match(fixtureSource, /pipelineCockpitPackets/);
   assert.match(fixtureSource, /Array\.from\(\{ length: 15 \}/);
+  assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
   assert.match(fixtureSource, /Density \$\{ordinal\}:/);
   assert.match(routeSource, /pipelineCockpitPackets/);
   const fixturePacketCount = (fixtureSource.match(/packetFixture\(\{/g) ?? []).length;
@@ -841,7 +857,8 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
   const allPipelineSource = `${routeSource}\n${fixtureSource}\n${pipelineComponentSource}\n${packetDetailSource}`;
 
   assert.match(packetDetailSource, /Memory proposals/);
-  assert.match(packetDetailSource, /packet\.memoryProposals\.map\(\(proposal\)/);
+  assert.match(packetDetailSource, /packet\.memoryProposals\.map\(formatMemoryProposal\)/);
+  assert.match(packetDetailSource, /function formatMemoryProposal/);
 
   for (const visibleLabel of [
     "Packet id",
