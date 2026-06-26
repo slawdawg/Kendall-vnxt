@@ -88,6 +88,7 @@ from supervisor.api.schemas import (
     LowRiskDeliveryPlanReportView,
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
+    LlmWikiArtifactSearchResultView,
     LlmWikiDerivedIndexReadinessV0View,
     LlmWikiDisposableRebuildWriteRequest,
     LlmWikiRebuildDryRunPlanV0View,
@@ -1042,6 +1043,88 @@ class SupervisorService:
         await session.refresh(proposal)
         await self._publish_item(item)
         return proposal
+
+
+    async def search_llm_wiki_artifact(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        proposal_id: str,
+        query: str,
+    ) -> LlmWikiArtifactSearchResultView | None:
+        result = await session.execute(
+            select(MemoryProposal).where(
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.proposal_id == proposal_id,
+            )
+        )
+        proposal = result.scalar_one_or_none()
+        if not proposal:
+            return None
+
+        config = self._load_obsidian_memory_draft_config()
+        vault_root = Path(config["vault_root"]).resolve()
+        llm_wiki_folder = str(config["llm_wiki_folder"])
+        target_path_value = (proposal.target_vault_path or "").strip().strip("/")
+        if not target_path_value:
+            raise ValueError("LLM-Wiki artifact read blocked: proposal has no derived artifact target.")
+        if Path(target_path_value).is_absolute() or ".." in Path(target_path_value).parts:
+            raise ValueError("LLM-Wiki artifact read blocked: target path must be a safe relative vault path.")
+        if not target_path_value.startswith(f"{llm_wiki_folder}/"):
+            raise ValueError("LLM-Wiki artifact read blocked: target path is outside the derived LLM-Wiki queue.")
+
+        artifact_path = (vault_root / target_path_value).resolve()
+        try:
+            artifact_path.relative_to((vault_root / llm_wiki_folder).resolve())
+        except ValueError as exc:
+            raise ValueError("LLM-Wiki artifact read blocked: target path is outside the derived LLM-Wiki queue.") from exc
+        if not artifact_path.exists() or not artifact_path.is_file():
+            raise ValueError("LLM-Wiki artifact read blocked: derived artifact was not found.")
+
+        text = artifact_path.read_text(encoding="utf-8", errors="replace")[:200_000]
+        metadata, body_lines = self._parse_llm_wiki_artifact(text)
+        normalized_query = query.strip()[:120]
+        excerpts = self._llm_wiki_artifact_excerpts(body_lines, normalized_query)
+        return LlmWikiArtifactSearchResultView(
+            targetVaultPath=target_path_value,
+            query=normalized_query,
+            matched=bool(excerpts),
+            excerpts=excerpts,
+            metadata=metadata,
+        )
+
+    def _parse_llm_wiki_artifact(self, text: str) -> tuple[dict[str, str], list[str]]:
+        lines = text.splitlines()
+        metadata: dict[str, str] = {}
+        body_start = 0
+        if lines[:1] == ["---"]:
+            for index, line in enumerate(lines[1:], start=1):
+                if line == "---":
+                    body_start = index + 1
+                    break
+                if ":" in line and not line.startswith("  - "):
+                    key, value = line.split(":", 1)
+                    metadata[key.strip()] = value.strip().strip('"')
+        return metadata, lines[body_start:]
+
+    def _llm_wiki_artifact_excerpts(self, lines: list[str], query: str) -> list[str]:
+        normalized_query = query.lower()
+        candidates: list[str] = []
+        if normalized_query:
+            for index, line in enumerate(lines):
+                if normalized_query in line.lower():
+                    window = " ".join(part.strip() for part in lines[max(0, index - 1): index + 2] if part.strip())
+                    candidates.append(window)
+        else:
+            candidates = [line.strip() for line in lines if line.strip() and not line.startswith("#")][:5]
+        bounded: list[str] = []
+        for candidate in candidates:
+            collapsed = re.sub(r"\s+", " ", candidate).strip()
+            if collapsed and collapsed not in bounded:
+                bounded.append(collapsed[:320])
+            if len(bounded) >= 5:
+                break
+        return bounded
 
     async def list_memory_proposals(self, session: AsyncSession, work_item_id: str) -> list[MemoryProposal]:
         result = await session.execute(

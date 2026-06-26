@@ -837,6 +837,23 @@ def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, 
         assert duplicate_response.status_code == 200
         assert "already exists" in duplicate_response.json()["data"]["patchSummary"]
 
+        search_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-artifact",
+            params={"query": "derived index"},
+        )
+        assert search_response.status_code == 200
+        search_result = search_response.json()["data"]
+        assert search_result["targetVaultPath"] == proposal["targetVaultPath"]
+        assert search_result["query"] == "derived index"
+        assert search_result["matched"] is True
+        assert search_result["retentionClass"] == "metadata_only"
+        assert search_result["rawPayloadRetained"] is False
+        assert search_result["sourceContentCopied"] is False
+        assert search_result["canonicalMutationAllowed"] is False
+        assert search_result["sourceMutationAllowed"] is False
+        assert search_result["metadata"]["status"] == "llm-wiki-derived"
+        assert any("Derived Index" in excerpt or "derived index" in excerpt.lower() for excerpt in search_result["excerpts"])
+
 
 def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-rebuild-write-blocked.db") as client:
@@ -891,6 +908,13 @@ def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness
         )
         assert missing_approval_response.status_code == 400
         assert "explicit operator approval ref" in missing_approval_response.json()["detail"]["error"]["message"]
+
+        missing_target_read_response = client.get(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-artifact",
+            params={"query": "metadata"},
+        )
+        assert missing_target_read_response.status_code == 400
+        assert "SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured" in missing_target_read_response.json()["detail"]["error"]["message"]
 
         unapproved_response = client.post(
             f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",

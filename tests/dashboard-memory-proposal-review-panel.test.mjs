@@ -30,10 +30,14 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(panelSource, /rebuildDryRunPlan/);
   assert.match(panelSource, /Metadata-only rebuild preview/);
   assert.match(panelSource, /No-write rebuild dry-run plan/);
+  assert.match(panelSource, /llm-wiki-artifact/);
+  assert.match(panelSource, /Search artifact/);
+  assert.match(panelSource, /LLM-Wiki search/);
   assert.match(panelSource, /Planned sections/);
   assert.match(panelSource, /Discard path/);
   assert.match(panelSource, /Input refs/);
   assert.doesNotMatch(panelSource, /Rebuild LLM-Wiki/);
+  assert.doesNotMatch(panelSource, /llm-wiki-rebuild/);
   assert.match(panelSource, /Needs edit/);
   assert.match(panelSource, /Reject/);
   assert.match(panelSource, /Defer/);

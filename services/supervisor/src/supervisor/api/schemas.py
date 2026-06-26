@@ -657,6 +657,19 @@ class LlmWikiDisposableRebuildWriteRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class LlmWikiArtifactSearchResultView(BaseModel):
+    targetVaultPath: str
+    query: str
+    matched: bool
+    excerpts: list[str] = Field(default_factory=list)
+    metadata: dict[str, str] = Field(default_factory=dict)
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    rawPayloadRetained: Literal[False] = False
+    sourceContentCopied: Literal[False] = False
+    canonicalMutationAllowed: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+
+
 class MemoryProposalV0View(BaseModel):
     proposalId: str
     packetId: str
