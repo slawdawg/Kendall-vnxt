@@ -217,6 +217,52 @@ Stop lines:
   provider payloads, or raw source copies as scoring input.
 - Do not treat this decision-prep package as approval.
 
+## Branch Protection Readiness Contract
+
+Status: readiness_only_no_authority_granted, non-mutating packet
+
+Authority family: `github-branch-protection`
+
+Operation candidate: readiness preparation for a future exact GitHub branch
+protection or repository ruleset approval packet
+
+This contract supports review of whether branch protection should be applied to
+the established `dev`, `staging`, `main`, and `prod` branch foundation. It does
+not change GitHub settings, create repository rulesets, apply required checks,
+change the default branch, push refs, mutate pull requests, resolve review
+threads, merge, deploy, delete branches, delete worktrees, or run cleanup.
+
+Source package:
+
+- `docs/workflows/branch-protection-readiness-packet.md`
+- `pnpm run check:branch-protection-readiness`
+
+Required future approval fields include:
+
+- Repository and target branch or pattern.
+- Branch protection rule or repository ruleset implementation surface.
+- Required status checks by exact visible check name.
+- Pull request review, conversation resolution, signed commit, linear history,
+  merge queue, force-push, deletion, and admin-bypass settings.
+- Current authenticated GitHub evidence and expected post-change evidence.
+- Retained GitHub read-back evidence, exact check-context evidence, rollback
+  proof, and redaction policy.
+- Verification or authenticated read-back command.
+- Rollback path.
+- Stop lines.
+- Expiry or review point.
+
+Stop lines:
+
+- Do not apply branch protection or repository rulesets from this packet alone.
+- Do not change default branch, branch refs, required checks, merge methods,
+  merge queue, review rules, signed-commit rules, linear-history rules, admin
+  bypass, or GitHub Actions workflows from this packet alone.
+- Do not push, create or update PRs, wait CI, merge, deploy, delete branches,
+  delete worktrees, clean residue, or mutate review threads from this packet.
+- Do not treat repository admin permission, CI success, live evidence, or this
+  readiness packet as approval.
+
 ## Next-Lane Authority Decision Contract
 
 Contract id: `epic-11-next-lane-authority-decision-contract`
@@ -239,6 +285,7 @@ Candidate authority families:
 - `subscription-agent-launch`
 - `premium-execution`
 - `adaptive-scoring`
+- `github-branch-protection`
 - `github-delivery`
 - `cleanup-automation`
 
