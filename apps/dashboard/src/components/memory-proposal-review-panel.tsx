@@ -198,6 +198,7 @@ export function MemoryProposalReviewPanel({
               ["Allowed inputs", llmWikiReadiness.allowedInputs.length > 0 ? llmWikiReadiness.allowedInputs.join(", ") : "none"],
               ["Blocked reasons", llmWikiReadiness.blockedReasons.length > 0 ? llmWikiReadiness.blockedReasons.join(", ") : "none"],
               ["Next action", llmWikiReadiness.nextActions.join(" ")],
+              ["Rebuild preview", llmWikiReadiness.rebuildPreview ? llmWikiReadiness.rebuildPreview.previewId : "not available"],
               ["Durable writes", llmWikiReadiness.durableWriteAllowed ? "allowed" : "blocked"],
             ].map(([label, value]) => (
               <div key={label} className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
@@ -206,6 +207,25 @@ export function MemoryProposalReviewPanel({
               </div>
             ))}
           </div>
+          {llmWikiReadiness.rebuildPreview ? (
+            <div className="mt-3 rounded-[0.75rem] border bg-[var(--panel)] p-3">
+              <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Metadata-only rebuild preview</p>
+              <p className="mt-2 text-sm leading-6">{llmWikiReadiness.rebuildPreview.plannedOutputScope}</p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {[
+                  ["Input refs", llmWikiReadiness.rebuildPreview.inputRefs.join(", ")],
+                  ["Memory proposals", llmWikiReadiness.rebuildPreview.memoryProposalRefs.join(", ")],
+                  ["Retention", llmWikiReadiness.rebuildPreview.retentionClass],
+                  ["Stop line", llmWikiReadiness.rebuildPreview.stopLine],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-[0.75rem] border bg-[var(--surface)] p-3">
+                    <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">{label}</p>
+                    <p className="mt-1 break-words text-sm">{value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

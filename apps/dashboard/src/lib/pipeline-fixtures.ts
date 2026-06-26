@@ -870,6 +870,26 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
     sourceTrustStates: ["excluded", "derived-only"],
     sourceTrustSummary: "Obsidian is excluded from automatic writes and LLM-Wiki remains derived-only.",
   }),
+  packetFixture({
+    packetId: "fixture:llm-wiki-rebuild-preview",
+    title: "Preview LLM-Wiki rebuild",
+    requestedOutcome: "Show the metadata-only rebuild preview from approved Obsidian memory.",
+    currentStage: "learn",
+    currentOwner: "memory_review",
+    status: "waiting",
+    riskLevel: "medium",
+    priority: "high",
+    fixtureId: "happy_path_work_packet",
+    matrixRowIds: ["memory.pending_human_approval", "memory.obsidian_proposal_pending_human_approval"],
+    fixtureKind: "synthetic",
+    summary: "Learn fixture shows a ready metadata-only LLM-Wiki rebuild preview without execution.",
+    nextAction: "Preview rebuild metadata",
+    confidenceLabel: "Human review",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    sourceTrustSummary: "Approved Obsidian metadata can feed a derived LLM-Wiki preview; no durable write is authorized.",
+  }),
 ];
 
 export const pipelineDensityFixturePackets: PipelineFixturePacket[] = Array.from({ length: 15 }, (_, index) =>
@@ -1123,6 +1143,16 @@ function packetFixture(input: {
       }
     );
   }
+  if (input.packetId === "fixture:llm-wiki-rebuild-preview") {
+    sourceRefs.push({
+      refId: `${input.packetId}:source:obsidian-approved`,
+      sourceType: "obsidian",
+      label: "Approved Obsidian memory metadata",
+      freshness: "fresh",
+      accessState: "allowed",
+      summaryOnly: true,
+    });
+  }
   const evidenceRefs: WorkPacketV0View["evidenceRefs"] = [
     {
       refId: `${input.packetId}:evidence:fixture`,
@@ -1186,7 +1216,14 @@ function packetFixture(input: {
   const recoveryActions = buildRecoveryActions(input, rows, fixture);
   const recoveryFixtureEvents = buildRecoveryFixtureEvents(input, recoveryActions, humanGateActions);
   const actionGuardFixtures = buildActionGuardFixtures(input, humanGateActions, humanGateFixtureEvents, recoveryActions, recoveryFixtureEvents);
-  const alphaMemorySourceStatus = buildAlphaMemorySourceStatus(input.packetId, sourceRefs, evidenceRefs);
+  const memoryProposals = input.fixtureId === "obsidian_proposal_pending_approval"
+    ? buildMemoryProposalFixtures(input.packetId, sourceRefs.map((ref) => ref.refId), `${input.packetId}:evidence:fixture`)
+    : input.packetId === "fixture:llm-wiki-rebuild-preview"
+      ? [llmWikiRebuildReadyMemoryProposal(input.packetId, sourceRefs.map((ref) => ref.refId), `${input.packetId}:evidence:fixture`)]
+      : input.fixtureId === "corrupted_incomplete_aggregate"
+        ? [memoryProposalFixture("blocked", input.packetId, sourceRefs.map((ref) => ref.refId), `${input.packetId}:evidence:fixture`)]
+        : [];
+  const alphaMemorySourceStatus = buildAlphaMemorySourceStatus(input.packetId, sourceRefs, evidenceRefs, memoryProposals);
 
   return {
     packetId: input.packetId,
@@ -1276,11 +1313,7 @@ function packetFixture(input: {
         },
       ] : []),
     ],
-    memoryProposals: input.fixtureId === "obsidian_proposal_pending_approval"
-      ? buildMemoryProposalFixtures(input.packetId, sourceRefs.map((ref) => ref.refId), `${input.packetId}:evidence:fixture`)
-      : input.fixtureId === "corrupted_incomplete_aggregate"
-        ? [memoryProposalFixture("blocked", input.packetId, sourceRefs.map((ref) => ref.refId), `${input.packetId}:evidence:fixture`)]
-        : [],
+    memoryProposals,
     alphaMemorySourceStatus,
     reviewSummaries: claudeReview ? [
       {
@@ -1330,26 +1363,74 @@ function packetFixture(input: {
 function buildAlphaMemorySourceStatus(
   packetId: string,
   sourceRefs: SourceRefV0[],
-  evidenceRefs: WorkPacketV0View["evidenceRefs"]
+  evidenceRefs: WorkPacketV0View["evidenceRefs"],
+  memoryProposals: MemoryProposalV0[]
 ): AlphaMemorySourceStatusV0 | null {
   const alphaSourceRefs = sourceRefs.filter((ref) => ref.sourceType !== "candidate_work" && ref.sourceType !== "work_item");
   if (alphaSourceRefs.length === 0) {
     return null;
   }
-  const blockedReasons = [
-    "approval_metadata.missing",
-    ...alphaSourceRefs.flatMap((ref) => [
+  const sourceBlockedReasons = alphaSourceRefs.flatMap((ref) => [
     ...(ref.accessState !== "allowed" ? [`source_ref.invalid_or_blocked.${ref.refId}`] : []),
     ...(ref.freshness === "stale" ? [`source_ref.stale.${ref.refId}`] : []),
+    ...(ref.freshness !== "fresh" && ref.freshness !== "stale" ? [`source_ref.unsafe_freshness.${ref.refId}`] : []),
     ...(ref.sourceType === "llm_wiki" ? [`source_ref.derived_non_canonical.${ref.refId}`] : []),
-    ]),
-  ];
-  const uniqueBlockedReasons = Array.from(new Set(blockedReasons));
+  ]);
+  const alphaBlockedReasons = ["approval_metadata.missing", ...sourceBlockedReasons];
+  const sourceRefById = new Map(alphaSourceRefs.map((ref) => [ref.refId, ref]));
+  const unsafeProposalReasons = memoryProposals.flatMap((proposal) => [
+    ...(proposal.status !== "approved" || proposal.operatorAction !== "approve" ? [`memory_proposal.not_approved.${proposal.proposalId}`] : []),
+    ...(proposal.writeBackStatus !== "approved_for_future" ? [`memory_proposal.unsafe_writeback_status.${proposal.proposalId}`] : []),
+    ...(proposal.writeBackAllowed !== false ? [`memory_proposal.writeback_allowed.${proposal.proposalId}`] : []),
+    ...(proposal.sourceRefs.length === 0 ? [`memory_proposal.missing_source_refs.${proposal.proposalId}`] : []),
+    ...(proposal.evidenceRefs.length === 0 ? [`memory_proposal.missing_evidence_refs.${proposal.proposalId}`] : []),
+    ...proposal.sourceRefs.flatMap((sourceRefId) => {
+      const sourceRef = sourceRefById.get(sourceRefId);
+      return sourceRef && (sourceRef.sourceType === "llm_wiki" || sourceRef.accessState !== "allowed" || sourceRef.freshness !== "fresh")
+        ? [`memory_proposal.unsafe_source_ref.${proposal.proposalId}.${sourceRefId}`]
+        : [];
+    }),
+    ...(proposal.freshness !== "fresh" ? [`memory_proposal.unsafe_freshness.${proposal.proposalId}`] : []),
+    ...(proposal.contradictionStatus !== "none" ? [`memory_proposal.unsafe_contradiction.${proposal.proposalId}`] : []),
+  ]);
+  const readyProposals = memoryProposals.filter(
+    (proposal) => proposal.status === "approved" && proposal.operatorAction === "approve" && proposal.writeBackStatus === "approved_for_future" && proposal.freshness === "fresh" && proposal.contradictionStatus === "none" && proposal.writeBackAllowed === false
+  );
+  const uniqueBlockedReasons = Array.from(new Set([...sourceBlockedReasons, ...unsafeProposalReasons]));
+  const llmWikiDecisionState = memoryProposals.length === 0 && uniqueBlockedReasons.length === 0
+    ? "not_configured"
+    : readyProposals.length > 0 && uniqueBlockedReasons.length === 0
+      ? "ready"
+      : "blocked";
+  const allowedInputs = readyProposals.map((proposal) => `memory_proposal:${proposal.proposalId}`);
+  const rebuildPreview = llmWikiDecisionState === "ready"
+    ? {
+        previewId: `llm-wiki-rebuild-preview:${packetId}`,
+        operationMode: "read_only" as const,
+        inputRefs: Array.from(new Set([
+          ...readyProposals.flatMap((proposal) => proposal.sourceRefs),
+          ...readyProposals.flatMap((proposal) => proposal.evidenceRefs),
+          ...allowedInputs,
+        ])),
+        memoryProposalRefs: readyProposals.map((proposal) => proposal.proposalId),
+        plannedOutputScope: "Derived LLM-Wiki index preview from approved memory proposal metadata; no durable index path is allocated.",
+        retentionClass: "metadata_only" as const,
+        stopLine: "Preview only; do not write LLM-Wiki index, mutate Obsidian, call providers, launch workers, call GitHub, use network egress, or retain source content.",
+        auditEventSummary: "LLM-Wiki rebuild preview is fixture-backed metadata only; no file, source, provider, worker, GitHub, or network operation is authorized.",
+        canonicalMutationAllowed: false as const,
+        sourceMutationAllowed: false as const,
+        providerCallsAllowed: false as const,
+        workerLaunchAllowed: false as const,
+        githubCallsAllowed: false as const,
+        networkEgressAllowed: false as const,
+        durableWriteAllowed: false as const,
+      }
+    : null;
   return {
     statusId: `alpha-memory-source:${packetId}`,
     authorityFamily: "memory-writeback-and-source-mutation",
     operationMode: "dry_run",
-    decisionState: uniqueBlockedReasons.length > 0 ? "blocked" : "ready",
+    decisionState: alphaBlockedReasons.length > 0 ? "blocked" : "ready",
     retentionClass: "metadata_only",
     sourceRefs: alphaSourceRefs.map((ref) => ref.refId),
     targetMetadata: {
@@ -1361,26 +1442,27 @@ function buildAlphaMemorySourceStatus(
     rollbackPath: "no_mutation_performed",
     auditEventSummary:
       "Alpha memory/source dry-run status is fixture-backed metadata. No canonical memory, source, provider, worker, GitHub, or network mutation is authorized.",
-    blockedReasons: uniqueBlockedReasons,
-    recoveryOptions: uniqueBlockedReasons.length > 0
+    blockedReasons: Array.from(new Set(alphaBlockedReasons)),
+    recoveryOptions: alphaBlockedReasons.length > 0
       ? ["Review blocked source refs", "Provide explicit approval metadata", "Refresh source refs or send back to Research", "Keep Obsidian canonical; do not promote LLM-Wiki"]
       : ["Run dry-run preview with explicit approval metadata"],
     evidenceRefs: evidenceRefs.map((ref) => ref.refId),
     llmWikiReadiness: {
       statusId: `llm-wiki-readiness:${packetId}`,
       operationMode: "read_only",
-      decisionState: uniqueBlockedReasons.some((reason) => reason.includes("derived_non_canonical") || reason.includes("invalid_or_blocked") || reason.includes("stale"))
-        ? "blocked"
-        : "not_configured",
+      decisionState: llmWikiDecisionState,
       canonicality: "derived_disposable_rebuildable",
       retentionClass: "metadata_only",
       sourceRefs: alphaSourceRefs.filter((ref) => ref.sourceType !== "llm_wiki").map((ref) => ref.refId),
       evidenceRefs: evidenceRefs.map((ref) => ref.refId),
-      memoryProposalRefs: [],
-      allowedInputs: [],
-      blockedReasons: uniqueBlockedReasons.length > 0 ? uniqueBlockedReasons : ["llm_wiki.no_memory_proposal_metadata"],
-      nextActions: ["Approve a fresh non-contradictory Obsidian memory proposal before derived LLM-Wiki rebuild readiness."],
+      memoryProposalRefs: readyProposals.map((proposal) => proposal.proposalId),
+      allowedInputs,
+      blockedReasons: memoryProposals.length === 0 ? Array.from(new Set([...uniqueBlockedReasons, "llm_wiki.no_memory_proposal_metadata"])) : uniqueBlockedReasons,
+      nextActions: llmWikiDecisionState === "ready"
+        ? ["Preview derived LLM-Wiki rebuild from approved metadata only; no durable write is authorized."]
+        : ["Approve a fresh non-contradictory Obsidian memory proposal before derived LLM-Wiki rebuild readiness."],
       boundarySummary: "LLM-Wiki is derived, disposable, and rebuildable; it never overrides Obsidian.",
+      rebuildPreview,
       canonicalMutationAllowed: false,
       sourceMutationAllowed: false,
       providerCallsAllowed: false,
@@ -1484,6 +1566,33 @@ function buildMemoryProposalFixtures(packetId: string, sourceRefs: string[], evi
   return memoryProposalStates.map((status) => memoryProposalFixture(status, packetId, sourceRefs, evidenceRef));
 }
 
+function llmWikiRebuildReadyMemoryProposal(packetId: string, sourceRefs: string[], evidenceRef: string): MemoryProposalV0 {
+  const approvedSourceRef = sourceRefs.find((ref) => ref.endsWith(":source:obsidian-approved")) ?? sourceRefs[0] ?? `${packetId}:source:obsidian-approved`;
+  return {
+    proposalId: `${packetId}:memory:proposal:llm-wiki-ready`,
+    packetId,
+    label: "LLM-Wiki rebuild preview approved memory",
+    status: "approved",
+    summary: "Approved metadata-only memory proposal for derived LLM-Wiki rebuild preview.",
+    sourceRefs: [approvedSourceRef],
+    evidenceRefs: [evidenceRef],
+    targetRef: null,
+    targetVaultPath: null,
+    targetVaultFolder: "01 Dashboard Queue/AI Drafts",
+    proposalType: "new_note",
+    suggestedContentSummary: "Use approved Obsidian memory metadata as rebuild-preview input refs only.",
+    patchSummary: "Metadata-only rebuild preview; no LLM-Wiki index or Obsidian note is written.",
+    sensitivity: "low",
+    freshness: "fresh",
+    contradictionStatus: "none",
+    confidence: "high",
+    operatorAction: "approve",
+    decisionNeededContext: null,
+    backupRecoveryPath: "No mutation performed; discard preview metadata if rejected.",
+    writeBackStatus: "approved_for_future",
+    writeBackAllowed: false,
+  };
+}
 function memoryProposalFixture(
   status: MemoryProposalV0["status"],
   packetId: string,

@@ -880,14 +880,19 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
     assert.ok(proposal.sourceRefs.every((refId) => packetSourceRefIds.has(refId)), `${packet.packetId} proposal source refs should resolve to packet source refs`);
     assert.ok(proposal.evidenceRefs.every((refId) => packetEvidenceRefIds.has(refId)), `${packet.packetId} proposal evidence refs should resolve to packet evidence refs`);
     assert.ok(proposal.targetVaultPath || proposal.targetVaultFolder, `${packet.packetId} proposal should name a target path or folder`);
-    assert.ok(proposal.sourceRefs.some((ref) => ref.includes("obsidian-human-owned")), `${packet.packetId} proposal should cite the Obsidian human-owned boundary`);
-    assert.ok(proposal.sourceRefs.some((ref) => ref.includes("llm-wiki-derived-only")), `${packet.packetId} proposal should cite the LLM-Wiki derived-only boundary`);
+    if (packet.fixtureId === "obsidian_proposal_pending_approval") {
+      assert.ok(proposal.sourceRefs.some((ref) => ref.includes("obsidian-human-owned")), `${packet.packetId} proposal should cite the Obsidian human-owned boundary`);
+      assert.ok(proposal.sourceRefs.some((ref) => ref.includes("llm-wiki-derived-only")), `${packet.packetId} proposal should cite the LLM-Wiki derived-only boundary`);
+    }
     assert.ok(proposal.suggestedContentSummary.length > 0, `${packet.packetId} proposal should summarize suggested content`);
     assert.ok(proposal.backupRecoveryPath.length > 0, `${packet.packetId} proposal should describe backup/recovery`);
     assert.equal(proposal.writeBackAllowed, false, `${packet.packetId} proposal should not allow direct write-back`);
     assert.match(proposal.writeBackStatus, /blocked|review_gated|approved_for_future|deferred/);
-    if (proposal.status === "approved") {
+    if (proposal.status === "approved" && packet.packetId !== "fixture:llm-wiki-rebuild-preview") {
       assert.equal(proposal.writeBackStatus, "review_gated", `${packet.packetId} approved proposal should still require a later review-gated workflow`);
+    }
+    if (packet.packetId === "fixture:llm-wiki-rebuild-preview") {
+      assert.equal(proposal.writeBackStatus, "approved_for_future", `${packet.packetId} ready preview proposal should be approved for future workflow metadata`);
     }
     if (proposal.contradictionStatus === "confirmed") {
       assert.match(proposal.status, /^(contradictory|blocked|edit_needed|deferred)$/, `${packet.packetId} confirmed contradiction should not render as approved`);
@@ -904,8 +909,20 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
 
   for (const packet of pipelineCockpitPackets.filter((candidate) => candidate.memoryProposals.length > 0)) {
     assert.ok(packet.memoryProposals.every((proposal) => proposal.proposalId.includes(packet.packetId)), `${packet.packetId} memory proposal refs should be packet-local`);
+    if (packet.packetId === "fixture:llm-wiki-rebuild-preview") {
+      const preview = packet.alphaMemorySourceStatus?.llmWikiReadiness?.rebuildPreview;
+      assert.ok(preview, `${packet.packetId} ready fixture should expose a rebuild preview`);
+      assert.equal(preview.durableWriteAllowed, false);
+      assert.ok(preview.inputRefs.some((ref) => ref.includes("obsidian-approved")), `${packet.packetId} preview should include approved Obsidian input ref`);
+    } else {
+      assert.equal(packet.alphaMemorySourceStatus?.llmWikiReadiness?.rebuildPreview ?? null, null, `${packet.packetId} blocked fixture proposals should not expose a rebuild preview`);
+    }
   }
 
+  assert.match(fixtureSource, /fixture:llm-wiki-rebuild-preview/);
+  assert.match(fixtureSource, /rebuildPreview/);
+  assert.match(fixtureSource, /llm-wiki-rebuild-preview/);
+  assert.match(fixtureSource, /do not write LLM-Wiki index/);
   assert.doesNotMatch(fixtureSource, /writeBackAllowed:\s*true/);
   assert.doesNotMatch(
     allPipelineSource,
