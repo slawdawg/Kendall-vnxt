@@ -1173,6 +1173,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("docs/workflows/linux-primary-development-runbook.md", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:docs", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:governed-worker-execution-dry-run", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:pipeline-implementation-readiness", { exact: true })).toBeVisible();

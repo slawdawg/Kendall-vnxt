@@ -42,6 +42,7 @@ through the runner assignment status report before another runner continues or
 asks for takeover.
 
 `pnpm run check` includes `pnpm run check:docs`,
+`pnpm run check:governed-worker-execution-dry-run`,
 `pnpm run check:documentation-authority`,
 `pnpm run check:verification-readiness`,
 `pnpm run check:pipeline-implementation-readiness`,
