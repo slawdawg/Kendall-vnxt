@@ -153,8 +153,6 @@ export function readWorkspaceManifests(options = {}, context = {}) {
       const manifest = JSON.parse(readFileSync(path, "utf8"));
       if (manifest?.worktree_path && typeof manifest.worktree_path !== "string") {
         manifestErrors.push({ path, error: "manifest worktree_path must be a string" });
-      } else if (manifest?.worktree_path && !isInsideOrSame(safeRealpath(manifest.worktree_path), safeRealpath(state.worktreesDir))) {
-        manifestErrors.push({ path, error: "manifest worktree_path is outside managed worktrees directory" });
       } else if (manifest?.worktree_path) {
         manifests.push({ path, manifest });
       }
@@ -229,12 +227,12 @@ export function renderHumanReport(report) {
   const lines = [
     "Tmux Orientation Report",
     `Generated: ${report.generatedAt}`,
-    `State root: ${report.stateRoot || "unknown"}`,
-    `Current owner: ${report.currentOwner || "unknown"}`,
+    `State root: ${sanitizeDisplay(report.stateRoot || "unknown")}`,
+    `Current owner: ${sanitizeDisplay(report.currentOwner || "unknown")}`,
   ];
 
   if (!report.tmux.available) {
-    lines.push(`Tmux unavailable: ${report.tmux.error}`);
+    lines.push(`Tmux unavailable: ${sanitizeDisplay(report.tmux.error)}`);
   }
 
   lines.push(
@@ -270,7 +268,7 @@ export function renderHumanReport(report) {
       lines.push(`  worktree: ${sanitizeDisplay(row.worktreePath || "unknown")} exists=${row.worktreeExists ? "yes" : "no"}`);
     }
     if (row.stopLine) {
-      lines.push(`  stop: ${row.stopLine}`);
+      lines.push(`  stop: ${sanitizeDisplay(row.stopLine)}`);
     }
   }
 

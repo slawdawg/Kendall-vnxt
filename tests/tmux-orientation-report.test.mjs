@@ -195,6 +195,52 @@ test("maps tmux deleted-cwd suffix back to the stale workspace manifest", () => 
   assert.equal(report.panes[0].classification, "takeover-required");
 });
 
+test("readWorkspaceManifests keeps supported custom worktree paths outside state worktrees", async () => {
+  const { readWorkspaceManifests } = await import("../scripts/tmux-orientation-report.mjs");
+  const root = mkdtempSync(join(tmpdir(), "tmux-orientation-state-"));
+  const customWorktree = mkdtempSync(join(tmpdir(), "tmux-orientation-custom-worktree-"));
+  try {
+    const tasksDir = join(root, "tasks");
+    const worktreesDir = join(root, "worktrees");
+    mkdirSync(tasksDir, { recursive: true });
+    mkdirSync(worktreesDir, { recursive: true });
+    writeFileSync(
+      join(tasksDir, "custom-worktree.json"),
+      JSON.stringify({ task_id: "custom-worktree", branch: "codex/custom-worktree", owner: "runner-a", worktree_path: customWorktree }),
+    );
+
+    const result = readWorkspaceManifests({ stateRoot: root }, { repoRoot: process.cwd(), cwd: process.cwd(), env: process.env });
+    assert.equal(result.manifestErrors.length, 0);
+    assert.equal(result.manifests.length, 1);
+    assert.equal(result.manifests[0].manifest.task_id, "custom-worktree");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(customWorktree, { recursive: true, force: true });
+  }
+});
+
+test("human report sanitizes generated stop lines", () => {
+  const report = buildOrientationReport({
+    panes: [paneFixture({ currentPath: "/tmp/worktree" })],
+    currentOwner: "runner-new\u001b[31m",
+    workspaceRecords: [
+      {
+        path: "/tmp/state/tasks/owned-by-other.json",
+        manifest: {
+          task_id: "owned-by-other",
+          branch: "codex/owned-by-other",
+          owner: "runner-old\u001b[0m",
+          status: "active",
+          worktree_path: "/tmp/worktree",
+        },
+      },
+    ],
+    dirtyStateReader: () => ({ status: "missing", dirty: false, lines: [] }),
+  });
+
+  assert.doesNotMatch(renderHumanReport(report), /\u001b/);
+});
+
 test("returns non-zero for missing tmux unless caller explicitly allows it", () => {
   const tmuxResult = {
     ok: false,

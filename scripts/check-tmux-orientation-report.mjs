@@ -39,6 +39,18 @@ assertCondition(
   "package.json must define check:tmux-orientation-report",
   failures,
 );
+for (const aggregateScript of ["check:static", "check"]) {
+  assertCondition(
+    packageJson.scripts?.[aggregateScript]?.includes("pnpm run test:tmux-orientation-report"),
+    `package.json ${aggregateScript} must include pnpm run test:tmux-orientation-report`,
+    failures,
+  );
+  assertCondition(
+    packageJson.scripts?.[aggregateScript]?.includes("pnpm run check:tmux-orientation-report"),
+    `package.json ${aggregateScript} must include pnpm run check:tmux-orientation-report`,
+    failures,
+  );
+}
 
 if (existsSync(join(rootDir, scriptPath))) {
   const script = readWorkspaceFile(scriptPath);

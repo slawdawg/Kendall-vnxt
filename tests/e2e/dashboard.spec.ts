@@ -1205,6 +1205,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:maintenance-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:token-economy", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:workspace-coordination", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:tmux-orientation-report", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:tmux-orientation-report", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:mise-workflow", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:linux-install-lane", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:bmad-work-products", { exact: true })).toBeVisible();
