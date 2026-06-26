@@ -125,6 +125,7 @@ embed them in bootstrap scripts.
 - `pnpm run test:bounded-live-memory-source` verifies bounded dry-run memory/source write plans, read-only approved source metadata inspection, and approval-gated draft-preview artifact creation
 - `pnpm run check:authority-readiness` verifies authority readiness matrix contract/schema/service/dashboard/story alignment
 - `pnpm run check:adaptive-scoring` verifies the adaptive scoring decision-prep package and runtime tripwires without enabling scoring
+- `pnpm run check:branch-protection-readiness` verifies the standalone branch protection readiness packet without applying GitHub branch protection or repository rulesets
 - `pnpm run check:premium-execution` verifies premium execution approval-packet boundaries without enabling paid provider execution
 - `pnpm run check:worker-launch` verifies real CLI worker-launch approval-packet boundaries without enabling process launch
 - `pnpm run check:e2e-report` verifies dashboard e2e runner/report/browser/story alignment

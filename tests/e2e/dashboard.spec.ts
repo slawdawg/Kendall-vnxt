@@ -1180,6 +1180,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run test:live-memory-source-enforcement", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:bounded-live-memory-source", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:authority-readiness", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:branch-protection-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:adaptive-scoring", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:premium-execution", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:worker-launch", { exact: true })).toBeVisible();
@@ -1265,6 +1266,9 @@ test.describe("dashboard workflow coverage", () => {
     await expect(authorityMatrixPanel.getByText("worker-command-source-network-credentials", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("remote-delivery-automation", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("github-delivery", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("github-branch-protection", { exact: true })).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("readiness_only_no_authority_granted")).toBeVisible();
+    await expect(authorityMatrixPanel.getByText("docs/workflows/branch-protection-readiness-packet.md", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.getByText("cleanup-automation", { exact: true })).toBeVisible();
     await expect(authorityMatrixPanel.locator('[data-family-id="local-provider-execution"][data-status-kind="blocked"]')).toBeVisible();
     await expect(authorityMatrixPanel.locator('[data-family-id="github-delivery"][data-status-kind="blocked"]')).toBeVisible();
