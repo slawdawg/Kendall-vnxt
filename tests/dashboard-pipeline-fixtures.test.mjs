@@ -75,6 +75,7 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(shellSource, /relative isolate min-h-screen overflow-hidden/);
   assert.match(shellSource, /relative z-10 mx-auto/);
   assert.match(shellSource, /box-border flex w-auto/);
+  assert.match(shellSource, /\.\.\.\(wide \? \{ maxWidth: "min\(96rem, calc\(100vw - 3rem\)\)" \} : \{\}\)/);
   assert.doesNotMatch(shellSource, /EventSource|WebSocket|XMLHttpRequest|sendBeacon|fetch\s*\(/);
   assert.match(graphBackgroundSource, /aria-hidden="true"/);
   assert.match(graphBackgroundSource, /kendall-graph-background/);
@@ -391,7 +392,8 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(cockpitSource, /PacketMiniCard/);
   assert.match(cockpitSource, /PacketInspection/);
   assert.match(cockpitSource, /sortPacketsForMap/);
-  assert.match(cockpitSource, /selected \? sortedPackets : sortedPackets\.slice\(0, visibleLimit\)/);
+  assert.match(cockpitSource, /selectedPacketInStage/);
+  assert.match(cockpitSource, /expanded \? sortedPackets : sortedPackets\.slice\(0, visibleLimit\)/);
   assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
   assert.match(cockpitSource, /return packet\.nextAction/);
   assert.match(cockpitSource, /plainStageLabel/);
@@ -501,6 +503,7 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(fixtureSource, /pipelineDensityFixturePackets/);
   assert.match(fixtureSource, /pipelineCockpitPackets/);
   assert.match(fixtureSource, /Array\.from\(\{ length: 15 \}/);
+  assert.match(cockpitSource, /findTopAttentionPacket/);
   assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
   assert.match(fixtureSource, /Density \$\{ordinal\}:/);
   assert.match(routeSource, /pipelineCockpitPackets/);

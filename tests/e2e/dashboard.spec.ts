@@ -1,9 +1,18 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 const supervisorUrl = process.env.PLAYWRIGHT_SUPERVISOR_URL ?? "http://127.0.0.1:8100";
+
+async function openCompactDashboardNav(page: Page) {
+  const menu = page.locator(".dashboard-page-menu");
+  const menuSummary = page.locator(".dashboard-page-menu-summary");
+  await expect(menuSummary).toBeVisible();
+  if (!(await menu.evaluate((element) => (element as HTMLDetailsElement).open))) {
+    await menuSummary.click();
+  }
+}
 
 type WorkItemCreatePayload = {
   title: string;
@@ -718,6 +727,11 @@ test.describe("dashboard workflow coverage", () => {
     await executeOverflow.click();
     await expect(executeStation.locator(".pipeline-more-packets")).toHaveCount(0);
     expect(await executeStation.locator("button[aria-label^=\"Inspect packet:\"]").count()).toBeGreaterThan(4);
+    const lastExecutePacket = executeStation.locator("button[aria-label^=\"Inspect packet:\"]").last();
+    await lastExecutePacket.click();
+    await expect(lastExecutePacket).toHaveAttribute("aria-pressed", "true");
+    await expect(executeStation.locator(".pipeline-more-packets")).toHaveCount(0);
+    expect(await executeStation.locator("button[aria-label^=\"Inspect packet:\"]").count()).toBeGreaterThan(4);
     await expect(routeMap.getByRole("button", { name: "Needs approval", exact: true })).toBeVisible();
     await expect(routeMap.locator(".pipeline-stage-info-icon")).toHaveCount(10);
     const captureStage = routeMap.getByRole("button", { name: "Capture", exact: true });
@@ -1183,6 +1197,7 @@ test.describe("dashboard workflow coverage", () => {
     await waitForState(request, workItemId, "implementing");
 
     await page.goto("/");
+    await openCompactDashboardNav(page);
     const activeNavLink = page.locator("nav a[href=\"/active-work\"]");
     await expect(activeNavLink).toBeVisible();
     await expect(activeNavLink).toContainText("Active Work");
@@ -1203,6 +1218,7 @@ test.describe("dashboard workflow coverage", () => {
     await applyAction(request, approvalWorkItemId, "validation_passed", "Checks look clean.");
 
     await page.goto("/");
+    await openCompactDashboardNav(page);
 
     await expect(page.getByRole("heading", { name: "Monitoring", exact: true })).toBeVisible();
     await expect(page.getByText("Mission Control")).toBeVisible();
@@ -1285,6 +1301,7 @@ test.describe("dashboard workflow coverage", () => {
       priority: "normal",
     });
     await page.goto("/proposed-work");
+    await openCompactDashboardNav(page);
     const proposedNavLink = page.locator("nav a[href=\"/proposed-work\"]");
     await expect(proposedNavLink).toHaveAttribute("aria-current", "page");
     await expect(proposedNavLink).toContainText(/\d+/);

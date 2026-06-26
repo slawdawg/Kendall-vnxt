@@ -80,7 +80,8 @@ export function PipelineCockpit({
     : null;
   const blockedGateCount = packets.filter((packet) => packet.currentStage === "human_gate").length;
   const topBlockedPacket = findTopBlockedPacket(packets);
-  const attentionPacket = topBlockedPacket ?? packets.find((packet) => packet.status === "active") ?? selectedPacket;
+  const topAttentionPacket = findTopAttentionPacket(packets);
+  const attentionPacket = topAttentionPacket ?? packets.find((packet) => packet.status === "active") ?? selectedPacket;
   const stagePacketLimit = compactRouteMap ? 3 : 4;
   const handleSearchChange = useCallback(
     (value: string) => {
@@ -546,8 +547,10 @@ function RouteStation({
 }) {
   const sortedPackets = sortPacketsForMap(packets);
   const selected = selectedItem?.type === "stage" && selectedItem.id === stage;
-  const visiblePackets = selected ? sortedPackets : sortedPackets.slice(0, visibleLimit);
-  const hiddenPacketSummary = selected ? null : overflowSummary(sortedPackets.slice(visibleLimit));
+  const selectedPacketInStage = selectedItem?.type === "packet" && sortedPackets.some((packet) => packet.packetId === selectedItem.id);
+  const expanded = selected || selectedPacketInStage;
+  const visiblePackets = expanded ? sortedPackets : sortedPackets.slice(0, visibleLimit);
+  const hiddenPacketSummary = expanded ? null : overflowSummary(sortedPackets.slice(visibleLimit));
   const stageTone = stageToneForPackets(sortedPackets);
   const stagePurposeId = `pipeline-stage-purpose-${stage}`;
 
@@ -974,6 +977,12 @@ function plainStatusLabel(packet: PipelineFixturePacket) {
 }
 
 function findTopBlockedPacket(packets: PipelineFixturePacket[]) {
+  return packets
+    .filter((packet) => packet.status === "blocked" || packet.currentStage === "human_gate")
+    .sort((left, right) => priorityRank[right.priority] - priorityRank[left.priority])[0];
+}
+
+function findTopAttentionPacket(packets: PipelineFixturePacket[]) {
   return packets
     .filter((packet) => packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate")
     .sort((left, right) => priorityRank[right.priority] - priorityRank[left.priority])[0];
