@@ -84,6 +84,17 @@ for (const text of [
   "pnpm run doctor:github -- --remote",
   "git push origin <branch>",
   "Keep `gh auth status` warnings non-blocking unless the workflow explicitly requires `gh`.",
+  "## PR Resolution Flow",
+  "gh pr diff <number> --name-only",
+  "temporary detached worktree from the PR head",
+  "rerun the exact same",
+  "read-only verification command outside the sandbox",
+  "inconclusive, stop the run cleanly",
+  "gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>",
+  "For Dependabot security bumps, treat the security release note as urgency, not",
+  "## Stale PR And Branch Cleanup",
+  "node ./scripts/codex-workspace.mjs list --active --json",
+  "exactly matches a merged PR `headRefOid`",
   "If both Git credentials and the connector are unavailable, stop remote",
 ]) {
   assertIncludes(connectorWorkflow, text, "docs/github-connector-workflow.md", failures);

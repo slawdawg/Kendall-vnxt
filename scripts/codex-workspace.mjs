@@ -126,6 +126,7 @@ list options:
   --active                  Show only non-closed workspaces.
   --owned                   Show only workspaces owned by the current runner.
   --owner <id>              Show only workspaces owned by the given owner.
+  --json                    Print matching workspaces as JSON for automation.
 
 assignment-report options:
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
@@ -321,6 +322,29 @@ function listWorkspaces(argv) {
     }
     return true;
   });
+  const listRows = manifests.map(({ manifest, path }) => ({
+    taskId: manifest.task_id,
+    status: manifest.status,
+    branch: manifest.branch,
+    baseBranch: manifest.base_branch || null,
+    prUrl: manifest.pr_url || null,
+    prNumber: manifest.pr_number || prNumberFromUrl(manifest.pr_url || "") || null,
+    owner: manifest.owner || null,
+    worktreePath: manifest.worktree_path,
+    manifestPath: path,
+    updatedAt: manifest.updated_at || null,
+    cleanup: {
+      startedAt: manifest.cleanup_started_at || null,
+      completedAt: manifest.cleanup_completed_at || null,
+      expectedHeadSha: manifest.cleanup_expected_head_sha || null,
+      error: manifest.cleanup_error || null,
+    },
+  }));
+
+  if (options.json) {
+    console.log(JSON.stringify(listRows, null, 2));
+    return;
+  }
 
   if (manifests.length === 0) {
     console.log(`No Codex workspaces found or matched under ${state.tasksDir}`);

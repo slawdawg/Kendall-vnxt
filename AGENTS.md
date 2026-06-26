@@ -244,6 +244,15 @@ durable, milestone-driven workflow rather than a single unbounded task.
   verification command output for repo-specific checks; and a reviewed diff
   file list for excluded high-blast-radius surfaces. If a source is unavailable
   or ambiguous, the criterion is not proven.
+- For dependency or bot PRs, including Dependabot security bumps, verify in a
+  temporary detached worktree from the PR head when the current checkout is
+  dirty or unrelated. Use supported installed `gh` commands such as
+  `gh pr diff <number> --name-only`, collect the exact `headRefOid`, run focused
+  package verification, and merge only with exact-head protection such as
+  `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
+  If a broad verification suite hangs or becomes inconclusive, record that
+  result and run focused verification for the changed surface rather than
+  treating the broad run as passed.
 - If GitHub reports a merge state such as `BLOCKED`, `UNKNOWN`, or otherwise
   refuses a merge while checks appear green, inspect thread-aware review state
   before any other hypothesis. Use the `github:gh-address-comments` workflow or
@@ -350,7 +359,9 @@ surface is `node ./scripts/codex-workspace.mjs`.
   `node ./scripts/codex-workspace.mjs start "<task description>"`.
   Use `--mode experiment` for scratch work that should not become a PR yet.
 - When the operator says "list workspaces" or asks what Codex tasks are active, run
-  `node ./scripts/codex-workspace.mjs list`.
+  `node ./scripts/codex-workspace.mjs list`. Use
+  `node ./scripts/codex-workspace.mjs list --active --json` when automation
+  needs to correlate workspaces with GitHub PRs or remote branches.
 - When the operator says "resume <task>", run
   `node ./scripts/codex-workspace.mjs resume "<task>"`, then use the reported
   worktree path for follow-up commands. If the manifest owner belongs to another
@@ -392,6 +403,13 @@ surface is `node ./scripts/codex-workspace.mjs`.
   worktree. Preserve the dry-run output, selected base ref, skipped active
   worktrees, and final deletion summary as cleanup evidence. Re-run with
   `--apply` only when the dry-run output is correct.
+- For stale remote branches outside a managed workspace cleanup path, first
+  fetch and prune, then build an exact deletion set from current GitHub PR
+  metadata and `node ./scripts/codex-workspace.mjs list --active --json`.
+  Delete only branches whose current `origin/<branch>` SHA exactly matches a
+  merged PR `headRefOid`, with no open PR, no closed-unmerged PR, and no active
+  workspace owner. Preserve no-PR-record, SHA-mismatch, and active-workspace
+  branches until separate inspection or explicit operator approval.
 - When the operator says "recover workspace state" or manifests appear stale, run
   `node ./scripts/codex-workspace.mjs rebuild-index --dry-run` before applying
   any rebuilt local manifests.
