@@ -22,6 +22,7 @@ from supervisor.api.schemas import (
     WorkItemCreate,
     WorkItemDeliveryReadinessRequest,
     DeliveryExecutionEvidencePayload,
+    MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
     MemoryProposalUpdateRequest,
     WorkItemExecutionAttemptCreateRequest,
@@ -228,6 +229,25 @@ async def update_work_item_memory_proposal(
         proposal = await service.update_memory_proposal(session, work_item_id, proposal_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=error_response(str(exc), "memory_proposal_review_rejected").model_dump()) from exc
+    if not proposal:
+        raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
+    return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))
+
+
+@app.post("/work-items/{work_item_id}/memory-proposals/{proposal_id}/ai-draft", response_model=ApiEnvelope)
+async def create_work_item_memory_proposal_ai_draft(
+    work_item_id: str,
+    proposal_id: str,
+    payload: MemoryProposalAiDraftWriteRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    work_item = await session.get(WorkItem, work_item_id)
+    if not work_item:
+        raise HTTPException(status_code=404, detail=error_response("Work item not found.", "work_item_not_found").model_dump())
+    try:
+        proposal = await service.create_memory_proposal_ai_draft(session, work_item_id, proposal_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=error_response(str(exc), "memory_proposal_ai_draft_blocked").model_dump()) from exc
     if not proposal:
         raise HTTPException(status_code=404, detail=error_response("Memory proposal not found.", "memory_proposal_not_found").model_dump())
     return ApiEnvelope(data=service.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}"))

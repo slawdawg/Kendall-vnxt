@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     allow_worker_source_mutation: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_SOURCE_MUTATION")
     allow_worker_network: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_NETWORK")
     allow_worker_credentials: bool = Field(default=False, alias="SUPERVISOR_ALLOW_WORKER_CREDENTIALS")
+    obsidian_memory_config_path: str | None = Field(default=None, alias="SUPERVISOR_OBSIDIAN_MEMORY_CONFIG")
     lease_ttl_seconds: int = 30
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

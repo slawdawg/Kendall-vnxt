@@ -69,6 +69,22 @@ function canApproveFutureDraft(proposal: MemoryProposalV0): boolean {
   return proposal.freshness === "fresh" && proposal.contradictionStatus === "none" && !["blocked", "stale", "contradictory", "rejected"].includes(proposal.status);
 }
 
+function aiDraftQueued(proposal: MemoryProposalV0): boolean {
+  return /AI draft (written|already exists)/.test(proposal.patchSummary ?? "");
+}
+
+function canCreateAiDraft(proposal: MemoryProposalV0): boolean {
+  return (
+    proposal.status === "approved" &&
+    proposal.operatorAction === "approve" &&
+    proposal.writeBackStatus === "approved_for_future" &&
+    proposal.writeBackAllowed === false &&
+    proposal.freshness === "fresh" &&
+    proposal.contradictionStatus === "none" &&
+    !aiDraftQueued(proposal)
+  );
+}
+
 export function MemoryProposalReviewPanel({
   packet,
   workItemId,
@@ -112,6 +128,38 @@ export function MemoryProposalReviewPanel({
       }
 
       setMessage(`${proposal.proposalId} updated. Obsidian write-back remains disabled.`);
+      setPendingProposalId(null);
+      router.refresh();
+    });
+  }
+
+  function createAiDraft(proposal: MemoryProposalV0) {
+    startTransition(async () => {
+      setPendingProposalId(proposal.proposalId);
+      setMessage(`Creating AI draft for ${proposal.proposalId}...`);
+      const response = await fetch(
+        `${getSupervisorBaseUrl()}/work-items/${workItemId}/memory-proposals/${encodeURIComponent(proposal.proposalId)}/ai-draft`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            actorId: profile.actorId,
+            actorLabel: profile.actorLabel,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { detail?: { error?: { message?: string } } }
+          | null;
+        setMessage(payload?.detail?.error?.message ?? "The supervisor blocked the AI draft write-back.");
+        setPendingProposalId(null);
+        return;
+      }
+
+      const payload = (await response.json()) as { data?: MemoryProposalV0 };
+      setMessage(`${proposal.proposalId} queued as an Obsidian AI draft at ${payload.data?.targetVaultPath ?? "01 Dashboard Queue/AI Drafts"}.`);
       setPendingProposalId(null);
       router.refresh();
     });
@@ -204,6 +252,19 @@ export function MemoryProposalReviewPanel({
                     </button>
                   );
                 })}
+                <button
+                  type="button"
+                  disabled={pending || !canCreateAiDraft(proposal)}
+                  title={
+                    aiDraftQueued(proposal)
+                      ? "This proposal already has an AI draft queued."
+                      : "Requires an approved, fresh, non-contradictory proposal before writing to the AI Drafts queue."
+                  }
+                  onClick={() => createAiDraft(proposal)}
+                  className="rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:border-[var(--border)] disabled:bg-[var(--panel)] disabled:text-[var(--muted)] disabled:opacity-50"
+                >
+                  {pending && pendingProposalId === proposal.proposalId ? "Creating..." : "Create AI draft"}
+                </button>
               </div>
             </article>
           ))}
