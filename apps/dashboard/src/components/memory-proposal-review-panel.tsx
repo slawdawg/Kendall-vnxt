@@ -199,6 +199,7 @@ export function MemoryProposalReviewPanel({
               ["Blocked reasons", llmWikiReadiness.blockedReasons.length > 0 ? llmWikiReadiness.blockedReasons.join(", ") : "none"],
               ["Next action", llmWikiReadiness.nextActions.join(" ")],
               ["Rebuild preview", llmWikiReadiness.rebuildPreview ? llmWikiReadiness.rebuildPreview.previewId : "not available"],
+              ["Dry-run plan", llmWikiReadiness.rebuildDryRunPlan ? llmWikiReadiness.rebuildDryRunPlan.planId : "not available"],
               ["Durable writes", llmWikiReadiness.durableWriteAllowed ? "allowed" : "blocked"],
             ].map(([label, value]) => (
               <div key={label} className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
@@ -217,6 +218,27 @@ export function MemoryProposalReviewPanel({
                   ["Memory proposals", llmWikiReadiness.rebuildPreview.memoryProposalRefs.join(", ")],
                   ["Retention", llmWikiReadiness.rebuildPreview.retentionClass],
                   ["Stop line", llmWikiReadiness.rebuildPreview.stopLine],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-[0.75rem] border bg-[var(--surface)] p-3">
+                    <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">{label}</p>
+                    <p className="mt-1 break-words text-sm">{value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {llmWikiReadiness.rebuildDryRunPlan ? (
+            <div className="mt-3 rounded-[0.75rem] border bg-[var(--panel)] p-3">
+              <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">No-write rebuild dry-run plan</p>
+              <p className="mt-2 text-sm leading-6">{llmWikiReadiness.rebuildDryRunPlan.disposableTargetNamespace}</p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {[
+                  ["Plan id", llmWikiReadiness.rebuildDryRunPlan.planId],
+                  ["Input refs", llmWikiReadiness.rebuildDryRunPlan.inputRefs.join(", ")],
+                  ["Planned sections", llmWikiReadiness.rebuildDryRunPlan.plannedDerivedSections.join(", ")],
+                  ["Stop lines", llmWikiReadiness.rebuildDryRunPlan.stopLines.join(" ")],
+                  ["Discard path", llmWikiReadiness.rebuildDryRunPlan.discardRecoveryPath],
+                  ["Write performed", llmWikiReadiness.rebuildDryRunPlan.writePerformed ? "yes" : "no"],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-[0.75rem] border bg-[var(--surface)] p-3">
                     <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">{label}</p>

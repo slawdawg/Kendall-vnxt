@@ -521,6 +521,28 @@ export interface LlmWikiRebuildPreviewV0 {
   durableWriteAllowed: false;
 }
 
+export interface LlmWikiRebuildDryRunPlanV0 {
+  planId: string;
+  operationMode: "dry_run";
+  inputRefs: WorkPacketRefIdV0[];
+  memoryProposalRefs: WorkPacketRefIdV0[];
+  plannedDerivedSections: string[];
+  disposableTargetNamespace: string;
+  retentionClass: "metadata_only";
+  stopLines: string[];
+  discardRecoveryPath: string;
+  auditEventSummary: string;
+  canonicalMutationAllowed: false;
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  workerLaunchAllowed: false;
+  githubCallsAllowed: false;
+  networkEgressAllowed: false;
+  durableWriteAllowed: false;
+  writePerformed: false;
+  backupCreated: false;
+}
+
 export interface LlmWikiDerivedIndexReadinessV0 {
   statusId: string;
   operationMode: "read_only";
@@ -535,6 +557,7 @@ export interface LlmWikiDerivedIndexReadinessV0 {
   nextActions: string[];
   boundarySummary: string;
   rebuildPreview?: LlmWikiRebuildPreviewV0 | null;
+  rebuildDryRunPlan?: LlmWikiRebuildDryRunPlanV0 | null;
   canonicalMutationAllowed: false;
   sourceMutationAllowed: false;
   providerCallsAllowed: false;

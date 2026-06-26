@@ -1426,6 +1426,33 @@ function buildAlphaMemorySourceStatus(
         durableWriteAllowed: false as const,
       }
     : null;
+  const rebuildDryRunPlan = rebuildPreview
+    ? {
+        planId: `llm-wiki-rebuild-dry-run-plan:${packetId}`,
+        operationMode: "dry_run" as const,
+        inputRefs: rebuildPreview.inputRefs,
+        memoryProposalRefs: rebuildPreview.memoryProposalRefs,
+        plannedDerivedSections: ["approved-memory-proposals", "source-evidence-crosswalk", "operator-review-index"],
+        disposableTargetNamespace: `derived://llm-wiki/dry-run/${packetId}`,
+        retentionClass: "metadata_only" as const,
+        stopLines: [
+          "Dry-run only; do not write LLM-Wiki index files.",
+          "Do not mutate Obsidian, source refs, or canonical memory.",
+          "Do not call providers, launch workers, call GitHub, use network egress, or retain source content.",
+        ],
+        discardRecoveryPath: "Discard this metadata-only plan and regenerate it from approved Obsidian memory proposal refs.",
+        auditEventSummary: "LLM-Wiki rebuild dry-run plan is fixture-backed metadata only; no file, source, provider, worker, GitHub, network, backup, or durable write operation is authorized.",
+        canonicalMutationAllowed: false as const,
+        sourceMutationAllowed: false as const,
+        providerCallsAllowed: false as const,
+        workerLaunchAllowed: false as const,
+        githubCallsAllowed: false as const,
+        networkEgressAllowed: false as const,
+        durableWriteAllowed: false as const,
+        writePerformed: false as const,
+        backupCreated: false as const,
+      }
+    : null;
   return {
     statusId: `alpha-memory-source:${packetId}`,
     authorityFamily: "memory-writeback-and-source-mutation",
@@ -1463,6 +1490,7 @@ function buildAlphaMemorySourceStatus(
         : ["Approve a fresh non-contradictory Obsidian memory proposal before derived LLM-Wiki rebuild readiness."],
       boundarySummary: "LLM-Wiki is derived, disposable, and rebuildable; it never overrides Obsidian.",
       rebuildPreview,
+      rebuildDryRunPlan,
       canonicalMutationAllowed: false,
       sourceMutationAllowed: false,
       providerCallsAllowed: false,
