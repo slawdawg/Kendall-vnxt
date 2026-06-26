@@ -2104,6 +2104,31 @@ try {
     assert(result.stderr.includes("--takeover-reason must explain"), result.stderr || result.stdout);
   });
 
+  test("finish-pr reconciles a clean resumed branch with existing commits", () => {
+    const fixture = createFinishPrExistingCommitFixture();
+    try {
+      const expectedHead = runGit(fixture.worktree, ["rev-parse", "--short", "HEAD"]).stdout;
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("PR: https://example.test/pull/456"), result.stdout || result.stderr);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.status === "pr_open", `manifest status is ${manifest.status}`);
+      assert(manifest.last_commit === expectedHead, `manifest last_commit is ${manifest.last_commit}`);
+      assert(manifest.pr_url === "https://example.test/pull/456", `manifest pr_url is ${manifest.pr_url}`);
+      assert(
+        manifest.events.some((event) => event.type === "commit_reconciled"),
+        "manifest missing commit_reconciled event",
+      );
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("cleanup-merged can apply from inside the target worktree and delete remote branch", () => {
     const fixture = createMergedCleanupFixture();
     try {
@@ -2274,6 +2299,100 @@ function taskSnapshot(tasksDir) {
     .sort()
     .map((name) => `${name}\n${readFileSync(join(tasksDir, name), "utf8")}`)
     .join("\n---\n");
+}
+
+function createFinishPrExistingCommitFixture() {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-finish-existing-commit-"));
+  const remoteRoot = `${fixtureRoot}-remote.git`;
+  const stateRootFixture = join(fixtureRoot, "state");
+  const fakeBin = join(fixtureRoot, "bin");
+  const branch = "codex/resumed-task";
+  const worktree = join(stateRootFixture, "worktrees", "resumed-task");
+  const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ""}` };
+
+  copyWorkspaceScriptFixture(fixtureRoot);
+  mkdirSync(fakeBin, { recursive: true });
+  runGit(fixtureRoot, ["init", "-q"]);
+  runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
+  runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
+  writeFileSync(join(fixtureRoot, "base.txt"), "base\n");
+  runGit(fixtureRoot, ["add", "base.txt", "scripts"]);
+  runGit(fixtureRoot, ["commit", "-q", "-m", "base"]);
+  runGit(fixtureRoot, ["branch", "-M", "main"]);
+  mkdirSync(remoteRoot, { recursive: true });
+  runGit(remoteRoot, ["init", "--bare", "-q"]);
+  runGit(fixtureRoot, ["remote", "add", "origin", remoteRoot]);
+  runGit(fixtureRoot, ["push", "-q", "-u", "origin", "main"]);
+  runGit(fixtureRoot, ["branch", branch, "main"]);
+  mkdirSync(join(stateRootFixture, "worktrees"), { recursive: true });
+  runGit(fixtureRoot, ["worktree", "add", "-q", worktree, branch]);
+  runGit(worktree, ["config", "user.email", "codex-workspace-test@example.com"]);
+  runGit(worktree, ["config", "user.name", "Codex Workspace Test"]);
+  commitFile(worktree, "feature.txt", "feature\n", "feature");
+  runGit(worktree, ["push", "-q", "-u", "origin", branch]);
+
+  const fakeGh = join(fakeBin, "gh");
+  writeFileSync(
+    fakeGh,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
+      "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
+      "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
+      "console.error(`unexpected gh args: ${args.join(' ')}`);",
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeGh, 0o755);
+
+  mkdirSync(join(stateRootFixture, "tasks"), { recursive: true });
+  writeFileSync(
+    join(stateRootFixture, "tasks", "resumed-task.json"),
+    `${JSON.stringify({
+      schema_version: 1,
+      task_id: "resumed-task",
+      title: "Resumed task",
+      description: "resumed task",
+      repo_name: "fixture",
+      repo_root: fixtureRoot,
+      state_root: stateRootFixture,
+      base_branch: "main",
+      base_ref: "origin/main",
+      branch,
+      worktree_path: worktree,
+      status: "active",
+      mode: "pr",
+      owner: "runner-a",
+      events: [],
+    }, null, 2)}\n`,
+  );
+
+  return {
+    root: fixtureRoot,
+    remoteRoot,
+    stateRoot: stateRootFixture,
+    fakeBin,
+    branch,
+    worktree,
+    script: join(fixtureRoot, "scripts", "codex-workspace.mjs"),
+    env,
+  };
+}
+
+function cleanupFinishPrExistingCommitFixture(fixture) {
+  if (!fixture) {
+    return;
+  }
+  spawnSync("git", ["worktree", "remove", "--force", fixture.worktree], {
+    cwd: fixture.root,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  rmSync(fixture.worktree, { recursive: true, force: true });
+  rmSync(fixture.remoteRoot, { recursive: true, force: true });
+  rmSync(fixture.root, { recursive: true, force: true });
 }
 
 function createMergedCleanupFixture() {

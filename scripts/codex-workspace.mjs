@@ -688,6 +688,7 @@ function finishPr(argv) {
   reconcileManifest(manifest, { refreshPr: true });
 
   let worktreeStatus = parseStatus(manifest.worktree_path);
+  const preflightReconciledCommit = reconcileExistingTaskCommit(manifest, worktreeStatus);
   const commitMessage = String(options.message || manifest.title || manifest.description);
   const prTitle = String(options.title || manifest.title || manifest.description);
   const prBody = String(
@@ -746,6 +747,18 @@ function finishPr(argv) {
       manifest.last_verification_command = verifyCommand.join(" ");
       appendTaskEvent(manifest, "verified", verifyCommand.join(" "));
       worktreeStatus = parseStatus(manifest.worktree_path);
+    }
+    const reconciledCommit =
+      reconcileExistingTaskCommit(manifest, worktreeStatus) ||
+      (preflightReconciledCommit && manifest.last_commit === preflightReconciledCommit.short
+        ? preflightReconciledCommit
+        : null);
+    if (reconciledCommit) {
+      appendTaskEvent(
+        manifest,
+        "commit_reconciled",
+        `${reconciledCommit.short} inferred from clean branch ahead of ${reconciledCommit.baseRef}`,
+      );
     }
 
     const antiChurn = runAntiChurnFinalization(manifest, state, { worktreeStatus, pr: existingPr });
@@ -3760,6 +3773,37 @@ function parseStatus(cwd) {
     unstaged,
     lines,
   };
+}
+
+function reconcileExistingTaskCommit(manifest, worktreeStatus) {
+  if (manifest.last_commit || worktreeStatus.any) {
+    return null;
+  }
+
+  const baseRef = String(manifest.base_ref || manifest.base_branch || "").trim();
+  if (!baseRef) {
+    return null;
+  }
+
+  const base = git(["rev-parse", "--verify", "--quiet", baseRef], { cwd: manifest.worktree_path });
+  if (base.code !== 0 || !base.stdout.trim()) {
+    return null;
+  }
+
+  const ahead = git(["rev-list", "--count", `${baseRef}..HEAD`], { cwd: manifest.worktree_path });
+  const commitsAhead = Number.parseInt(ahead.stdout.trim(), 10);
+  if (ahead.code !== 0 || !Number.isFinite(commitsAhead) || commitsAhead <= 0) {
+    return null;
+  }
+
+  const shortHead = git(["rev-parse", "--short", "HEAD"], { cwd: manifest.worktree_path });
+  if (shortHead.code !== 0 || !shortHead.stdout.trim()) {
+    return null;
+  }
+
+  const short = shortHead.stdout.trim();
+  manifest.last_commit = short;
+  return { short, baseRef, commitsAhead };
 }
 
 function localCodexBranches() {
