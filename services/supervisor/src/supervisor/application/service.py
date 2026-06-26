@@ -1097,6 +1097,28 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-tmux-orientation-report",
+                label="Tmux orientation report tests",
+                command="pnpm run test:tmux-orientation-report",
+                status="required",
+                requiredFor=["tmux orientation report changes", "workspace lane orientation changes", "verification command changes"],
+                evidence=[
+                    "Validates metadata-only tmux pane/workspace mapping, owner stop lines, malformed metadata handling, and no pane capture or tmux mutation.",
+                    "Runs as part of the static and full local verification commands without approving tmux mutation.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-tmux-orientation-report",
+                label="Tmux orientation report drift",
+                command="pnpm run check:tmux-orientation-report",
+                status="required",
+                requiredFor=["tmux orientation report changes", "workspace lane orientation changes", "verification command changes"],
+                evidence=[
+                    "Validates tmux orientation report script, test, runbook, aggregate wiring, and safety text stay aligned.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-mise-workflow",
                 label="Mise workflow readiness drift",
                 command="pnpm run check:mise-workflow",
@@ -1577,6 +1599,8 @@ class SupervisorService:
                     "check-maintenance-readiness",
                     "check-token-economy",
                     "check-workspace-coordination",
+                    "test-tmux-orientation-report",
+                    "check-tmux-orientation-report",
                     "check-mise-workflow",
                     "check-linux-install-lane",
                     "check-bmad-work-products",

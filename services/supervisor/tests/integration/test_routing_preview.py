@@ -1598,6 +1598,8 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-maintenance-readiness",
         "check-token-economy",
         "check-workspace-coordination",
+        "test-tmux-orientation-report",
+        "check-tmux-orientation-report",
         "check-mise-workflow",
         "check-linux-install-lane",
         "check-bmad-work-products",
@@ -1658,6 +1660,8 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "check-runner-assignment-status" in static_group["commandIds"]
     assert "test-runner-handoff-audit-json-validation" in static_group["commandIds"]
     assert "check-token-economy" in static_group["commandIds"]
+    assert "test-tmux-orientation-report" in static_group["commandIds"]
+    assert "check-tmux-orientation-report" in static_group["commandIds"]
     assert "check-knx-obsidian-memory" in static_group["commandIds"]
     assert "test-clean-install-boundary" in static_group["commandIds"]
     assert "test-knx-obsidian-memory" in static_group["commandIds"]
