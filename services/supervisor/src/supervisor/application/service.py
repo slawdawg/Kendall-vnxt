@@ -89,6 +89,7 @@ from supervisor.api.schemas import (
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
     LlmWikiDerivedIndexReadinessV0View,
+    LlmWikiDisposableRebuildWriteRequest,
     LlmWikiRebuildDryRunPlanV0View,
     LlmWikiRebuildPreviewV0View,
     MemoryProposalAiDraftWriteRequest,
@@ -649,6 +650,8 @@ class SupervisorService:
             "vault_root": vault_root,
             "backup_root": backup_root,
             "draft_folder": draft_folder,
+            "proposal_queue_folder": proposal_queue_folder,
+            "llm_wiki_folder": f"{proposal_queue_folder}/LLM Wiki Derived",
         }
 
     async def create_memory_proposal_ai_draft(
@@ -811,6 +814,228 @@ class SupervisorService:
                 "rawPayloadRetained": False,
                 "sourceContentCopied": False,
                 "canonicalMutationAllowed": False,
+            },
+        )
+        await session.commit()
+        await session.refresh(proposal)
+        await self._publish_item(item)
+        return proposal
+
+
+    async def create_llm_wiki_disposable_rebuild(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        proposal_id: str,
+        payload: LlmWikiDisposableRebuildWriteRequest,
+    ) -> MemoryProposal | None:
+        approval_ref = payload.approvalRef.strip()
+        if not approval_ref or "placeholder" in approval_ref.lower() or "your_" in approval_ref.lower():
+            raise ValueError("LLM-Wiki rebuild blocked: explicit operator approval ref is required.")
+
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        result = await session.execute(
+            select(MemoryProposal).where(
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.proposal_id == proposal_id,
+            )
+        )
+        proposal = result.scalar_one_or_none()
+        if not proposal:
+            return None
+
+        blockers = []
+        if proposal.status != "approved":
+            blockers.append("missing_approved_status")
+        if proposal.operator_action != "approve":
+            blockers.append("missing_operator_approve_action")
+        if proposal.write_back_status != "approved_for_future":
+            blockers.append("missing_approved_write_back_status")
+        if proposal.write_back_allowed is not False:
+            blockers.append("canonical_write_authority_not_allowed")
+        if proposal.freshness != "fresh":
+            blockers.append("unsafe_source_freshness")
+        if proposal.contradiction_status != "none":
+            blockers.append("unsafe_source_contradiction")
+        if not proposal.source_refs_json:
+            blockers.append("missing_source_refs")
+        if not proposal.evidence_refs_json:
+            blockers.append("missing_evidence_refs")
+        if blockers:
+            raise ValueError(f"LLM-Wiki rebuild blocked: {', '.join(blockers)}")
+
+        item_view = self.to_work_item_view(item)
+        source_refs = [
+            ref
+            for ref in self._work_packet_source_refs(None, item_view)
+            if ref.sourceType not in {"candidate_work", "work_item"}
+        ]
+        proposal_view = self.to_memory_proposal_view(proposal, packet_id=f"work_item:{work_item_id}")
+        evidence_refs = [
+            EvidenceRefV0View(
+                refId=str(ref),
+                evidenceType="memory",
+                label="Approved memory proposal evidence",
+                retentionClass="metadata_only",
+            )
+            for ref in proposal_view.evidenceRefs
+        ]
+        readiness = self._llm_wiki_readiness(f"work_item:{work_item_id}", source_refs, evidence_refs, [proposal_view])
+        if readiness.decisionState != "ready" or readiness.rebuildDryRunPlan is None:
+            blocked = ", ".join(readiness.blockedReasons or ["llm_wiki.rebuild_plan_not_ready"])
+            raise ValueError(f"LLM-Wiki rebuild blocked: {blocked}")
+
+        config = self._load_obsidian_memory_draft_config()
+        vault_root = Path(config["vault_root"]).resolve()
+        backup_root = Path(config["backup_root"])
+        llm_wiki_folder = str(config["llm_wiki_folder"])
+        queue_folder = str(config["proposal_queue_folder"])
+        if not llm_wiki_folder.startswith(f"{queue_folder}/"):
+            raise ValueError("LLM-Wiki rebuild blocked: derived target must remain inside the dashboard queue.")
+
+        safe_id = _safe_memory_proposal_id(proposal.proposal_id)
+        target_dir = vault_root / llm_wiki_folder
+        if target_dir.parent.exists():
+            try:
+                target_dir.parent.resolve().relative_to(vault_root)
+            except ValueError as exc:
+                raise ValueError("LLM-Wiki rebuild blocked: derived queue path must remain inside the vault.") from exc
+        if target_dir.exists():
+            try:
+                target_dir.resolve().relative_to(vault_root)
+            except ValueError as exc:
+                raise ValueError("LLM-Wiki rebuild blocked: derived queue path must remain inside the vault.") from exc
+        target_path = (target_dir / f"llm-wiki-derived-{_slugify_memory_draft(proposal.label)}-{safe_id}.md").resolve()
+        try:
+            target_path.relative_to(target_dir.resolve())
+        except ValueError as exc:
+            raise ValueError("LLM-Wiki rebuild blocked: target path must remain inside the derived LLM-Wiki queue.") from exc
+
+        relative_target_path = target_path.relative_to(vault_root).as_posix()
+        if target_path.exists():
+            existing_text = target_path.read_text(encoding="utf-8", errors="replace")
+            if f"proposal_id: {safe_id}" not in existing_text or "status: llm-wiki-derived" not in existing_text:
+                raise ValueError("LLM-Wiki rebuild blocked: target artifact already exists but does not match this proposal.")
+            proposal.target_vault_path = relative_target_path
+            proposal.target_vault_folder = llm_wiki_folder
+            proposal.patch_summary = f"LLM-Wiki derived artifact already exists at {relative_target_path}; no duplicate rebuild artifact was written."
+            proposal.decision_needed_context = "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned."
+            proposal.write_back_allowed = False
+            proposal.updated_at = datetime.now(timezone.utc)
+            await self._record_event(
+                session,
+                item,
+                "llm_wiki.rebuild_artifact_exists",
+                "Disposable LLM-Wiki rebuild artifact already existed in the dashboard queue.",
+                {
+                    "proposalId": proposal.proposal_id,
+                    "targetPath": relative_target_path,
+                    "approvalRef": approval_ref,
+                    "authorityFamily": "memory-writeback-and-source-mutation",
+                    "writeBackAllowed": False,
+                    "retentionClass": "metadata_only",
+                    "rawPayloadRetained": False,
+                    "sourceContentCopied": False,
+                    "canonicalMutationAllowed": False,
+                },
+            )
+            await session.commit()
+            await session.refresh(proposal)
+            await self._publish_item(item)
+            return proposal
+
+        now = datetime.now(timezone.utc)
+        backup_id = f"llm-wiki-backup-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
+        backup_root.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_root / backup_id
+        shutil.copytree(vault_root, backup_path, symlinks=True)
+
+        actor_label = payload.actorLabel or payload.actorId or "Operator"
+        source_refs_text = "\n".join(f'  - "{_yaml_string(ref)}"' for ref in proposal_view.sourceRefs)
+        evidence_refs_text = "\n".join(f'  - "{_yaml_string(ref)}"' for ref in proposal_view.evidenceRefs)
+        proposal_refs_text = "\n".join(f'  - "{_yaml_string(ref)}"' for ref in readiness.rebuildDryRunPlan.memoryProposalRefs)
+        planned_sections_text = "\n".join(f'  - "{_yaml_string(section)}"' for section in readiness.rebuildDryRunPlan.plannedDerivedSections)
+        body = "\n".join(
+            [
+                "---",
+                "author: Kendall",
+                "status: llm-wiki-derived",
+                f"proposal_id: {safe_id}",
+                f'approval_ref: "{_yaml_string(approval_ref)}"',
+                f'approved_by: "{_yaml_string(actor_label)}"',
+                "canonicality: derived_disposable_rebuildable",
+                "retention_class: metadata_only",
+                "raw_payload_retained: false",
+                "source_content_copied: false",
+                "canonical_mutation_allowed: false",
+                "source_mutation_allowed: false",
+                "provider_calls_allowed: false",
+                "worker_launch_allowed: false",
+                "github_calls_allowed: false",
+                "network_egress_allowed: false",
+                "write_back_allowed: false",
+                f'dry_run_plan_id: "{_yaml_string(readiness.rebuildDryRunPlan.planId)}"',
+                f'disposable_target_namespace: "{_yaml_string(readiness.rebuildDryRunPlan.disposableTargetNamespace)}"',
+                "source_refs:",
+                source_refs_text,
+                "evidence_refs:",
+                evidence_refs_text,
+                "memory_proposal_refs:",
+                proposal_refs_text,
+                "planned_sections:",
+                planned_sections_text,
+                "---",
+                "",
+                f"# LLM-Wiki Derived Index: {proposal.label}",
+                "",
+                proposal.summary,
+                "",
+                "## Derived Sections",
+                "",
+                "\n".join(f"- {section}" for section in readiness.rebuildDryRunPlan.plannedDerivedSections),
+                "",
+                "## Suggested Content Summary",
+                "",
+                proposal.suggested_content_summary,
+                "",
+                "## Stop Lines",
+                "",
+                "\n".join(f"- {stop_line}" for stop_line in readiness.rebuildDryRunPlan.stopLines),
+                "",
+                "## Recovery",
+                "",
+                readiness.rebuildDryRunPlan.discardRecoveryPath,
+            ]
+        )
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(body, encoding="utf-8")
+
+        proposal.target_vault_path = relative_target_path
+        proposal.target_vault_folder = llm_wiki_folder
+        proposal.patch_summary = f"LLM-Wiki derived artifact written to {relative_target_path}; backup created at {backup_path}. Metadata-only; no raw source note content copied."
+        proposal.decision_needed_context = "Derived LLM-Wiki artifact is ready for dashboard read/search; Obsidian remains canonical and human-owned."
+        proposal.backup_recovery_path = f"Remove {relative_target_path} and restore from {backup_path} if the operator rejects the derived artifact."
+        proposal.write_back_allowed = False
+        proposal.updated_at = now
+        await self._record_event(
+            session,
+            item,
+            "llm_wiki.rebuild_artifact_written",
+            "Disposable LLM-Wiki rebuild artifact was written to the dashboard queue.",
+            {
+                "proposalId": proposal.proposal_id,
+                "targetPath": relative_target_path,
+                "backupPath": backup_path.as_posix(),
+                "approvalRef": approval_ref,
+                "authorityFamily": "memory-writeback-and-source-mutation",
+                "writeBackAllowed": False,
+                "retentionClass": "metadata_only",
+                "rawPayloadRetained": False,
+                "sourceContentCopied": False,
+                "canonicalMutationAllowed": False,
+                "sourceMutationAllowed": False,
             },
         )
         await session.commit()
