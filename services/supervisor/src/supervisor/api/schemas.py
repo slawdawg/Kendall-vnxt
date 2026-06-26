@@ -674,6 +674,24 @@ class MemoryProposalV0View(BaseModel):
     writeBackAllowed: Literal[False] = False
 
 
+class LlmWikiRebuildPreviewV0View(BaseModel):
+    previewId: str
+    operationMode: Literal["read_only"] = "read_only"
+    inputRefs: list[str] = Field(default_factory=list)
+    memoryProposalRefs: list[str] = Field(default_factory=list)
+    plannedOutputScope: str
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    stopLine: str
+    auditEventSummary: str
+    canonicalMutationAllowed: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    workerLaunchAllowed: Literal[False] = False
+    githubCallsAllowed: Literal[False] = False
+    networkEgressAllowed: Literal[False] = False
+    durableWriteAllowed: Literal[False] = False
+
+
 class LlmWikiDerivedIndexReadinessV0View(BaseModel):
     statusId: str
     operationMode: Literal["read_only"] = "read_only"
@@ -687,6 +705,7 @@ class LlmWikiDerivedIndexReadinessV0View(BaseModel):
     blockedReasons: list[str] = Field(default_factory=list)
     nextActions: list[str] = Field(default_factory=list)
     boundarySummary: str
+    rebuildPreview: LlmWikiRebuildPreviewV0View | None = None
     canonicalMutationAllowed: Literal[False] = False
     sourceMutationAllowed: Literal[False] = False
     providerCallsAllowed: Literal[False] = False

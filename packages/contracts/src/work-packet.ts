@@ -503,6 +503,24 @@ export interface AlphaMemorySourceStatusV0 {
   networkEgressAllowed: false;
 }
 
+export interface LlmWikiRebuildPreviewV0 {
+  previewId: string;
+  operationMode: "read_only";
+  inputRefs: WorkPacketRefIdV0[];
+  memoryProposalRefs: WorkPacketRefIdV0[];
+  plannedOutputScope: string;
+  retentionClass: "metadata_only";
+  stopLine: string;
+  auditEventSummary: string;
+  canonicalMutationAllowed: false;
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  workerLaunchAllowed: false;
+  githubCallsAllowed: false;
+  networkEgressAllowed: false;
+  durableWriteAllowed: false;
+}
+
 export interface LlmWikiDerivedIndexReadinessV0 {
   statusId: string;
   operationMode: "read_only";
@@ -516,6 +534,7 @@ export interface LlmWikiDerivedIndexReadinessV0 {
   blockedReasons: string[];
   nextActions: string[];
   boundarySummary: string;
+  rebuildPreview?: LlmWikiRebuildPreviewV0 | null;
   canonicalMutationAllowed: false;
   sourceMutationAllowed: false;
   providerCallsAllowed: false;
