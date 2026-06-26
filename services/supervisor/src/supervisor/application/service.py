@@ -1385,6 +1385,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-dashboard-memory-proposals",
+                label="Dashboard memory proposal review tests",
+                command="pnpm run test:dashboard-memory-proposals",
+                status="required",
+                requiredFor=["memory proposal dashboard changes", "Obsidian memory review UI changes", "work packet memory proposal API changes"],
+                evidence=[
+                    "Validates the dashboard memory proposal review panel, review state labels, provenance display, stop lines, and disabled write-back action.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="test-codex-workspace",
                 label="Codex workspace protocol tests",
                 command="pnpm run test:codex-workspace",
@@ -1746,6 +1757,7 @@ class SupervisorService:
                     "test-work-packet-fixtures",
                     "test-pipeline-state-matrix",
                     "test-dashboard-pipeline-fixtures",
+                    "test-dashboard-memory-proposals",
                     "check-clean-install-boundary",
                     "test-codex-workspace",
                     "test-codex-workspace-state",
