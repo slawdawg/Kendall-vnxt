@@ -29,14 +29,19 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   const globalsSource = await readFile(globalsPath, "utf8");
 
   assert.equal(packageJson.scripts["test:dashboard-pipeline-fixtures"], "node --test tests/dashboard-pipeline-fixtures.test.mjs");
+  assert.equal(packageJson.scripts["test:e2e:dashboard"], "playwright test");
+  assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /opens fixture-backed pipeline cockpit without live execution framing/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:windows"], /--project windows-11-chromium/);
+  assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:ipad"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:ipad"], /--project ipad-pro-gen-2-safari-ios-26/);
+  assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:iphone"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:iphone"], /--project iphone-15-pro-max-safari-ios-27/);
   assert.match(packageJson.scripts["check:static"], /pnpm run test:dashboard-pipeline-fixtures/);
   assert.match(packageJson.scripts.check, /pnpm run test:dashboard-pipeline-fixtures/);
   assert.match(nextConfigSource, /devIndicators:\s*false/);
   assert.doesNotMatch(globalsSource, /nextjs-portal[\s\S]*display: none !important/);
+  assert.match(nextConfigSource + (await readFile(new URL("../playwright.config.ts", import.meta.url), "utf8")), /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS/);
 });
 
 test("/pipeline route uses fixture-only cockpit frame without supervisor calls", async () => {
@@ -419,8 +424,12 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.doesNotMatch(cockpitSource, /min-h-\[34rem\]/);
   assert.match(globalsSource, /\.kendall-info-tip/);
   assert.match(globalsSource, /\.dashboard-page-menu-nav[\s\S]*position: fixed/);
+  assert.match(globalsSource, /\.dashboard-page-menu-nav[\s\S]*right: 1rem/);
   assert.match(globalsSource, /max-width: 720px[\s\S]*\.dashboard-page-menu-nav[\s\S]*bottom: 1rem/);
+  assert.match(globalsSource, /max-width: 720px[\s\S]*\.dashboard-page-menu-nav[\s\S]*right: auto/);
   assert.match(globalsSource, /\.dashboard-page-menu/);
+  assert.match(globalsSource, /\.dashboard-page-menu-links[\s\S]*right: 0/);
+  assert.match(globalsSource, /max-width: 720px[\s\S]*\.dashboard-page-menu-links[\s\S]*left: 0[\s\S]*right: auto/);
   assert.match(globalsSource, /\.dashboard-page-menu-summary[\s\S]*list-style: none/);
   assert.match(globalsSource, /\.dashboard-page-menu-summary::marker[\s\S]*display: none/);
   assert.match(globalsSource, /\.pipeline-stage-info-icon/);

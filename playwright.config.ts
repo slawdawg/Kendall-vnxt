@@ -10,6 +10,7 @@ const uvCacheDir = process.env.UV_CACHE_DIR ?? path.join(localDataDir, "uv-cache
 const tempDir = process.env.TEMP ?? path.join(localDataDir, "tmp");
 const browserPath = process.env.PLAYWRIGHT_BROWSERS_PATH ?? path.join(localDataDir, "ms-playwright");
 process.env.PLAYWRIGHT_BROWSERS_PATH = browserPath;
+const enableWebKitProjects = process.env.PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS === "true";
 const supervisorCommand = `uv run --directory services/supervisor uvicorn supervisor.api.main:app --host 127.0.0.1 --port ${supervisorPort}`;
 const dashboardCommand = `pnpm --filter @kendall/dashboard exec next dev --hostname 127.0.0.1 --port ${dashboardPort}`;
 const dbPath = (
@@ -17,6 +18,40 @@ const dbPath = (
 ).replaceAll("\\", "/");
 const dbUrl = `sqlite+aiosqlite:///${dbPath}`;
 process.env.PLAYWRIGHT_E2E_DB_PATH = dbPath;
+
+const chromiumProject = {
+  name: "windows-11-chromium",
+  use: {
+    ...devices["Desktop Chrome"],
+    viewport: { width: 1440, height: 960 },
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+  },
+};
+
+const webKitProjects = [
+  {
+    name: "ipad-pro-gen-2-safari-ios-26",
+    use: {
+      browserName: "webkit" as const,
+      viewport: { width: 1024, height: 1366 },
+      deviceScaleFactor: 2,
+      hasTouch: true,
+      isMobile: true,
+      userAgent:
+        "Mozilla/5.0 (iPad; CPU OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
+    },
+  },
+  {
+    name: "iphone-15-pro-max-safari-ios-27",
+    use: {
+      ...devices["iPhone 15 Pro Max"],
+      browserName: "webkit" as const,
+      userAgent:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1",
+    },
+  },
+];
 
 export default defineConfig({
   testDir: path.join(__dirname, "tests", "e2e"),
@@ -62,36 +97,5 @@ export default defineConfig({
           },
         },
       ],
-  projects: [
-    {
-      name: "windows-11-chromium",
-      use: {
-        ...devices["Desktop Chrome"],
-        viewport: { width: 1440, height: 960 },
-        userAgent:
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
-      },
-    },
-    {
-      name: "ipad-pro-gen-2-safari-ios-26",
-      use: {
-        browserName: "webkit",
-        viewport: { width: 1024, height: 1366 },
-        deviceScaleFactor: 2,
-        hasTouch: true,
-        isMobile: true,
-        userAgent:
-          "Mozilla/5.0 (iPad; CPU OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
-      },
-    },
-    {
-      name: "iphone-15-pro-max-safari-ios-27",
-      use: {
-        ...devices["iPhone 15 Pro Max"],
-        browserName: "webkit",
-        userAgent:
-          "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1",
-      },
-    },
-  ],
+  projects: enableWebKitProjects ? [chromiumProject, ...webKitProjects] : [chromiumProject],
 });

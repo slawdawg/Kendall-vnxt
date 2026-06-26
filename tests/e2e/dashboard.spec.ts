@@ -599,11 +599,24 @@ test.describe("dashboard workflow coverage", () => {
     await expect(pageMenu.locator(".dashboard-page-menu-icon span")).toHaveCount(3);
     const compactHeaderEvidence = await page.evaluate(() => {
       const menu = document.querySelector(".dashboard-page-menu-summary");
+      const shellHeading = Array.from(document.querySelectorAll("h1")).find((heading) =>
+        heading.textContent?.includes("Kendall Supervisor")
+      );
       const menuRect = menu?.getBoundingClientRect();
+      const headingRect = shellHeading?.getBoundingClientRect();
+      const overlapsHeading = Boolean(
+        menuRect &&
+        headingRect &&
+        menuRect.left < headingRect.right &&
+        menuRect.right > headingRect.left &&
+        menuRect.top < headingRect.bottom &&
+        menuRect.bottom > headingRect.top
+      );
       return {
         menuIsIconOnly: menu?.textContent?.trim() === "",
         menuIsBottomLeft: Boolean(menuRect && menuRect.left <= 24 && menuRect.bottom >= window.innerHeight - 24),
-        menuIsTopLeft: Boolean(menuRect && menuRect.left <= 24 && menuRect.top <= 24),
+        menuIsTopRight: Boolean(menuRect && menuRect.right >= window.innerWidth - 24 && menuRect.top <= 24),
+        overlapsHeading,
         viewportWidth: window.innerWidth,
       };
     });
@@ -611,7 +624,8 @@ test.describe("dashboard workflow coverage", () => {
     if (compactHeaderEvidence.viewportWidth <= 720) {
       expect(compactHeaderEvidence.menuIsBottomLeft).toBe(true);
     } else {
-      expect(compactHeaderEvidence.menuIsTopLeft).toBe(true);
+      expect(compactHeaderEvidence.menuIsTopRight).toBe(true);
+      expect(compactHeaderEvidence.overlapsHeading).toBe(false);
     }
     await pageMenu.click();
     await expect(page.locator("nav a[href=\"/settings\"]")).toBeVisible();
