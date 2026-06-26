@@ -91,8 +91,10 @@ const ROUTES = [
       "missing tool or path",
       "permission denied",
       "stale state",
+      "module resolution failure",
       "repeated environment failure",
       "repeated tool-resolution failure",
+      "equivalent repeated failure",
       "rca-classified environment failure",
       "rca-classified tool-resolution failure",
     ]),
@@ -564,9 +566,9 @@ function classifyRequiredAuthority(event) {
     return [explicit.trim()];
   }
 
-  const text = `${event.failureClass || ""}\n${event.signature || ""}\n${event.nextSafeAction || ""}\n${event.evidenceSummary || ""}`.toLowerCase();
+  const text = `${event.signature || ""}\n${event.nextSafeAction || ""}\n${event.evidenceSummary || ""}`.toLowerCase();
   return HIGHER_AUTHORITY_TERMS
-    .filter((term) => text.includes(term))
+    .filter((term) => containsAuthorityTerm(text, term))
     .map((term) => term.replace(/\s+/g, "-"));
 }
 
@@ -705,6 +707,11 @@ function buildCandidateId(event, durableTarget) {
 
 function includesAny(value, needles) {
   return needles.some((needle) => value.includes(needle));
+}
+
+function containsAuthorityTerm(text, term) {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll("\\ ", "\\s+");
+  return new RegExp(`(^|[^a-z0-9-])${escaped}($|[^a-z0-9-])`, "i").test(text);
 }
 
 function copyAuthority(authority) {

@@ -17,6 +17,8 @@ Enter Tool Churn RCA when any of these happen:
 - A sandbox runner timeout happens before process output.
 - A shell quoting, parser, wildcard, or scriptblock error repeats.
 - A tool, executable, path, venv, package manager, or resolver is missing.
+- A different wrapper command fails for the same unresolved dependency,
+  import, path, permission, sandbox, or verification condition.
 - A permission, sandbox, safe-directory, credential, or ownership denial blocks progress.
 - A verification command fails because of environment setup rather than story behavior.
 - The agent is about to retry the same failed command shape after repo guidance says to simplify it.
@@ -68,6 +70,9 @@ Stop retrying and write the RCA packet when:
 
 - Two attempts fail with the same command/tool path.
 - The second attempt only changes superficial quoting or formatting.
+- The command string changes but the stable failing condition is unchanged,
+  such as the same missing module, dependency, permission boundary, sandbox
+  boundary, path, resolver, or assertion environment.
 - A runner timeout happens before output twice.
 - The retry would require new authority, network, credentials, destructive cleanup, or paid usage.
 - The failure class is still `unknown` after one simple diagnostic command.
@@ -81,6 +86,9 @@ Choose one narrow action that can actually reduce uncertainty:
 - Verify direct tool availability, for example `node --version`, `pnpm --version`, `uv --version`, or the project venv Python path.
 - Replace a complex shell shape with a simpler direct shell command.
 - Read the existing script or docs before invoking package-manager indirection.
+- For repeated module, package, or import resolution failures, inspect existing
+  project imports, package manifests, and supported scripts before changing
+  command wrappers again.
 - Request approval for the exact read-only verification command when sandbox behavior is the blocker.
 - For Node workspace tests that fail with a read-only `.git/worktrees` write
   while creating temporary worktree metadata, request approval for the exact

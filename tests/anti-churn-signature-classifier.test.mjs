@@ -129,6 +129,42 @@ test("repeated retry-loop signatures route to Tool Churn RCA", () => {
   }
 });
 
+test("repeated module resolution errors stop wrapper churn", () => {
+  const result = classifyChurnFailure(baseObservation({
+    command: "pnpm exec node -e \"require('tool-package')\"",
+    attemptCount: 2,
+    failureKind: "",
+    error: [
+      "node:internal/modules/cjs/loader:1386",
+      "Error: Cannot find module 'tool-package'",
+      "code: 'MODULE_NOT_FOUND'",
+    ].join("\n"),
+  }));
+
+  assert.equal(result.status, "record-event");
+  assert.equal(result.event.failureClass, "dependency");
+  assert.equal(result.event.signature, "module resolution failure");
+  assert.match(result.event.wrongRetryPattern, /changing command wrappers/);
+  assert.match(result.event.nextSafeAction, /inspect existing project imports/);
+});
+
+test("equivalent repeated failures are classified even when command strings differ", () => {
+  const result = classifyChurnFailure(baseObservation({
+    command: "tool-wrapper run focused-check",
+    attemptCount: 2,
+    failureKind: "dependency",
+    failureFingerprint: "same unresolved runtime dependency",
+    repeatedEquivalentFailure: true,
+    error: "focused-check failed for the same unresolved runtime dependency",
+  }));
+
+  assert.equal(result.status, "record-event");
+  assert.equal(result.event.failureClass, "dependency");
+  assert.equal(result.event.signature, "equivalent repeated failure: same unresolved runtime dependency");
+  assert.match(result.event.wrongRetryPattern, /without changing the failing dependency/);
+  assert.match(result.event.nextSafeAction, /name the stable failing condition/);
+});
+
 test("product assertion failures and one-off failures do not become churn events", () => {
   const productFailure = classifyChurnFailure(baseObservation({
     attemptCount: 4,

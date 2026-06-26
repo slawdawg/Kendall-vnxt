@@ -7,6 +7,7 @@ import test from "node:test";
 import { runAntiChurnGuidanceHookCli } from "../scripts/anti-churn-guidance-hook.mjs";
 import { recordChurnEvent } from "../scripts/lib/anti-churn-event-writer.mjs";
 import {
+  classifyGuidanceCandidates,
   dedupeGuidanceCandidates,
   resolveGuidanceVerificationRoute,
 } from "../scripts/lib/anti-churn-guidance-candidate-classifier.mjs";
@@ -38,6 +39,32 @@ test("static verification routing maps lane guidance and existing drift checks",
   assert.match(lane.expectedEvidence, /lane-runner/);
   assert.equal(drift.status, "mapped");
   assert.equal(drift.command, "node ./scripts/check-token-economy.mjs");
+});
+
+test("generic equivalent and module-resolution churn route to Tool Churn RCA guidance", () => {
+  for (const signature of [
+    "module resolution failure",
+    "equivalent repeated failure: same unresolved condition",
+  ]) {
+    const result = classifyGuidanceCandidates({
+      status: "success",
+      lane: "lane-123",
+      events: [
+        event({
+          eventId: `churn-${signature.replaceAll(/\W+/g, "-")}`,
+          lane: "lane-123",
+          signature,
+          failureClass: "dependency",
+          durableUpdate: null,
+        }),
+      ],
+    });
+
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidates[0].targetGuidance, "tool-churn-rca");
+    assert.equal(result.candidates[0].durableTarget, "docs/workflows/tool-churn-rca.md");
+    assert.equal(result.candidates[0].verificationPlan.command, "pnpm run check:token-economy");
+  }
 });
 
 test("unmapped targets downgrade to proposal-only unsupported verification route", () => {

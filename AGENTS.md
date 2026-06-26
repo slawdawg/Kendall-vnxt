@@ -42,6 +42,41 @@
   first, then broaden only when the touched code crosses package, API, or
   workflow boundaries.
 
+## Dashboard Dev Server Ports
+
+- Treat port `3000` as the main cockpit/dashboard port. Main should always run
+  there. Do not start an alternate `3001`, `3002`, or similar server when the
+  operator expects the main cockpit to update on port `3000`.
+- If main cockpit/dashboard code needs to refresh and port `3000` is already
+  occupied by the existing main server, restart that server instead of starting
+  a second server on a nearby port. The operator has granted standing authority
+  to restart the Kendall web server for this purpose.
+- For feature branches or managed worktree dev verification, do not use port
+  `3000`. Use a stable explicit dev port outside the main cockpit port, such as
+  `3102` for the current UI worktree, and keep reusing/restarting that same
+  port for the lane instead of incrementing ports after conflicts.
+- Feature/worktree dashboard dev servers may bind to `0.0.0.0` on their
+  explicit non-3000 dev port so the operator can reach them from the host
+  machine. State the bound address, port, and worktree in the update, and keep
+  the server scoped to development verification.
+- Before starting a dashboard dev server, identify whether the target is main
+  cockpit (`3000`) or a feature/worktree lane (explicit non-3000 port). If the
+  intended port is occupied, determine whether it is the matching server and
+  restart it when appropriate rather than silently choosing a new port.
+
+## Dashboard Browser Targets
+
+- For dashboard UI verification, use the operator target matrix when the change
+  touches layout, navigation, interaction, responsive behavior, or screenshots:
+  Windows 11 desktop using Chromium, iPad Pro 2nd gen using Safari/WebKit iOS
+  26, and iPhone 15 Pro Max using Safari/WebKit iOS 27.
+- On Linux, approximate Safari targets with Playwright WebKit and the matching
+  device viewport/user agent. Be explicit that this is a WebKit approximation,
+  not a real iOS device run.
+- If WebKit is unavailable because host libraries are missing, record the
+  blocker and the install command needed for the operator to run rather than
+  silently falling back to Chromium-only coverage.
+
 ## Token Economy and Progress Visibility
 
 Use a quiet competent operator posture by default. Routine updates should be
@@ -68,8 +103,10 @@ If command or tool churn appears, stop blind retries and route to
 `docs/workflows/tool-churn-rca.md`. Trigger that workflow when the same
 command/tool path fails twice, when a sandbox runner timeout happens before
 command output, when shell quoting/parser errors repeat, when a missing
-tool/path or permission denial blocks progress, or when guidance already
-identifies the attempted command shape as known-bad. Use
+tool/path or permission denial blocks progress, when a different wrapper command
+fails for the same unresolved dependency, import, path, permission, sandbox, or
+verification condition, or when guidance already identifies the attempted
+command shape as known-bad. Use
 `docs/workflows/tool-churn-rca-examples.md` when a concrete packet example would
 prevent another vague retry.
 

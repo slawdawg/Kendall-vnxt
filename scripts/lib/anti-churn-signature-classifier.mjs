@@ -70,8 +70,22 @@ function classifyRepeatedFailure(observation) {
   const text = observationText(observation);
   const kind = observation.failureKind;
 
+  if (observation.repeatedEquivalentFailure) {
+    return buildRepeatedEquivalentEvent(observation);
+  }
+
   if (kind === "quoting" || /unexpected eof|syntax error|parser error|unterminated|bad substitution/.test(text)) {
     return buildRepeatedEvent(observation, "tool-resolution", "shell quoting/parser error", "retrying the same quoting or parser-error command shape");
+  }
+
+  if (kind === "module-resolution" || isModuleResolutionFailure(text)) {
+    return buildEvent(observation, {
+      failureClass: "dependency",
+      signature: "module resolution failure",
+      evidenceSummary: `Module/package resolution failed repeatedly for command: ${observation.command}.`,
+      wrongRetryPattern: "changing command wrappers while the unresolved module, import, package, or entry point stays the same",
+      nextSafeAction: "stop wrapper churn; inspect existing project imports, package manifests, and supported scripts, then retry once with the project-owned entry point or route through docs/workflows/tool-churn-rca.md",
+    });
   }
 
   if (kind === "missing-tool" || /command not found|no such file or directory|not found/.test(text)) {
@@ -125,6 +139,20 @@ function buildRepeatedEvent(observation, failureClass, signature, wrongRetryPatt
   });
 }
 
+function buildRepeatedEquivalentEvent(observation) {
+  const failureClass = observation.failureKind || "tool-resolution";
+  const signature = observation.failureFingerprint
+    ? `equivalent repeated failure: ${observation.failureFingerprint}`
+    : "equivalent repeated failure";
+  return buildEvent(observation, {
+    failureClass,
+    signature,
+    evidenceSummary: `Equivalent failure repeated across command shapes for command: ${observation.command}.`,
+    wrongRetryPattern: "changing command shape without changing the failing dependency, permission, path, resolver, sandbox, or verification condition",
+    nextSafeAction: "stop retrying wrappers; name the stable failing condition, inspect the smallest project-owned source of truth for that condition, then choose one new action that would prove something different",
+  });
+}
+
 function buildEvent(observation, fields) {
   return {
     laneId: observation.laneId,
@@ -153,6 +181,8 @@ function normalizeObservation(observation) {
     output: observation.output || "",
     error: observation.error || "",
     failureKind: observation.failureKind || "",
+    failureFingerprint: observation.failureFingerprint || "",
+    repeatedEquivalentFailure: Boolean(observation.repeatedEquivalentFailure),
     rcaClassified: Boolean(observation.rcaClassified),
     readOnlyVerification: Boolean(observation.readOnlyVerification),
     timedOutBeforeOutput: Boolean(observation.timedOutBeforeOutput),
@@ -189,4 +219,8 @@ function observationText(observation) {
 
 function isReadOnlyBoundary(text) {
   return /read-only file system|erofs/.test(text);
+}
+
+function isModuleResolutionFailure(text) {
+  return /cannot find module|module_not_found|err_module_not_found|cannot resolve package|could not resolve|failed to resolve import|module resolution/.test(text);
 }
