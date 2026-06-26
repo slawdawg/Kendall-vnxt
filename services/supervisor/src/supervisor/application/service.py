@@ -89,6 +89,7 @@ from supervisor.api.schemas import (
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
     LlmWikiDerivedIndexReadinessV0View,
+    LlmWikiRebuildDryRunPlanV0View,
     LlmWikiRebuildPreviewV0View,
     MemoryProposalAiDraftWriteRequest,
     MemoryProposalCreateRequest,
@@ -18486,6 +18487,11 @@ class SupervisorService:
             if decision_state == "ready"
             else None
         )
+        rebuild_dry_run_plan = (
+            self._llm_wiki_rebuild_dry_run_plan(packet_id, rebuild_preview)
+            if decision_state == "ready" and rebuild_preview is not None
+            else None
+        )
 
         return LlmWikiDerivedIndexReadinessV0View(
             statusId=f"llm-wiki-readiness:{packet_id}",
@@ -18502,6 +18508,7 @@ class SupervisorService:
             ),
             boundarySummary="LLM-Wiki is derived, disposable, and rebuildable; it never overrides Obsidian.",
             rebuildPreview=rebuild_preview,
+            rebuildDryRunPlan=rebuild_dry_run_plan,
         )
 
     def _llm_wiki_rebuild_preview(
@@ -18531,6 +18538,33 @@ class SupervisorService:
             auditEventSummary=(
                 "LLM-Wiki rebuild preview is supervisor-owned metadata only; no file, source, "
                 "provider, worker, GitHub, or network operation is authorized."
+            ),
+        )
+
+    def _llm_wiki_rebuild_dry_run_plan(
+        self,
+        packet_id: str,
+        rebuild_preview: LlmWikiRebuildPreviewV0View,
+    ) -> LlmWikiRebuildDryRunPlanV0View:
+        return LlmWikiRebuildDryRunPlanV0View(
+            planId=f"llm-wiki-rebuild-dry-run-plan:{packet_id}",
+            inputRefs=rebuild_preview.inputRefs,
+            memoryProposalRefs=rebuild_preview.memoryProposalRefs,
+            plannedDerivedSections=[
+                "approved-memory-proposals",
+                "source-evidence-crosswalk",
+                "operator-review-index",
+            ],
+            disposableTargetNamespace=f"derived://llm-wiki/dry-run/{packet_id}",
+            stopLines=[
+                "Dry-run only; do not write LLM-Wiki index files.",
+                "Do not mutate Obsidian, source refs, or canonical memory.",
+                "Do not call providers, launch workers, call GitHub, use network egress, or retain source content.",
+            ],
+            discardRecoveryPath="Discard this metadata-only plan and regenerate it from approved Obsidian memory proposal refs.",
+            auditEventSummary=(
+                "LLM-Wiki rebuild dry-run plan is supervisor-owned metadata only; no file, source, "
+                "provider, worker, GitHub, network, backup, or durable write operation is authorized."
             ),
         )
 

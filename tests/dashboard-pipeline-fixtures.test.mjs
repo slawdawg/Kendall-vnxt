@@ -914,14 +914,25 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
       assert.ok(preview, `${packet.packetId} ready fixture should expose a rebuild preview`);
       assert.equal(preview.durableWriteAllowed, false);
       assert.ok(preview.inputRefs.some((ref) => ref.includes("obsidian-approved")), `${packet.packetId} preview should include approved Obsidian input ref`);
+      const plan = packet.alphaMemorySourceStatus?.llmWikiReadiness?.rebuildDryRunPlan;
+      assert.ok(plan, `${packet.packetId} ready fixture should expose a rebuild dry-run plan`);
+      assert.equal(plan.operationMode, "dry_run");
+      assert.equal(plan.writePerformed, false);
+      assert.equal(plan.backupCreated, false);
+      assert.ok(plan.plannedDerivedSections.includes("approved-memory-proposals"));
+      assert.match(plan.disposableTargetNamespace, /^derived:\/\/llm-wiki\/dry-run\//);
+      assert.ok(plan.stopLines.some((stopLine) => stopLine.includes("do not write LLM-Wiki index")));
     } else {
       assert.equal(packet.alphaMemorySourceStatus?.llmWikiReadiness?.rebuildPreview ?? null, null, `${packet.packetId} blocked fixture proposals should not expose a rebuild preview`);
+      assert.equal(packet.alphaMemorySourceStatus?.llmWikiReadiness?.rebuildDryRunPlan ?? null, null, `${packet.packetId} blocked fixture proposals should not expose a rebuild dry-run plan`);
     }
   }
 
   assert.match(fixtureSource, /fixture:llm-wiki-rebuild-preview/);
   assert.match(fixtureSource, /rebuildPreview/);
+  assert.match(fixtureSource, /rebuildDryRunPlan/);
   assert.match(fixtureSource, /llm-wiki-rebuild-preview/);
+  assert.match(fixtureSource, /llm-wiki-rebuild-dry-run-plan/);
   assert.match(fixtureSource, /do not write LLM-Wiki index/);
   assert.doesNotMatch(fixtureSource, /writeBackAllowed:\s*true/);
   assert.doesNotMatch(

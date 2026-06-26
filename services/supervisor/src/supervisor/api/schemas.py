@@ -692,6 +692,28 @@ class LlmWikiRebuildPreviewV0View(BaseModel):
     durableWriteAllowed: Literal[False] = False
 
 
+class LlmWikiRebuildDryRunPlanV0View(BaseModel):
+    planId: str
+    operationMode: Literal["dry_run"] = "dry_run"
+    inputRefs: list[str] = Field(default_factory=list)
+    memoryProposalRefs: list[str] = Field(default_factory=list)
+    plannedDerivedSections: list[str] = Field(default_factory=list)
+    disposableTargetNamespace: str
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    stopLines: list[str] = Field(default_factory=list)
+    discardRecoveryPath: str
+    auditEventSummary: str
+    canonicalMutationAllowed: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    workerLaunchAllowed: Literal[False] = False
+    githubCallsAllowed: Literal[False] = False
+    networkEgressAllowed: Literal[False] = False
+    durableWriteAllowed: Literal[False] = False
+    writePerformed: Literal[False] = False
+    backupCreated: Literal[False] = False
+
+
 class LlmWikiDerivedIndexReadinessV0View(BaseModel):
     statusId: str
     operationMode: Literal["read_only"] = "read_only"
@@ -706,6 +728,7 @@ class LlmWikiDerivedIndexReadinessV0View(BaseModel):
     nextActions: list[str] = Field(default_factory=list)
     boundarySummary: str
     rebuildPreview: LlmWikiRebuildPreviewV0View | None = None
+    rebuildDryRunPlan: LlmWikiRebuildDryRunPlanV0View | None = None
     canonicalMutationAllowed: Literal[False] = False
     sourceMutationAllowed: Literal[False] = False
     providerCallsAllowed: Literal[False] = False

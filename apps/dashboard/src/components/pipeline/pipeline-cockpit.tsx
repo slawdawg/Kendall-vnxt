@@ -881,6 +881,10 @@ function AlphaMemorySourceStatusPanel({ packet }: { packet: PipelineFixturePacke
               ["Allowed inputs", status.llmWikiReadiness.allowedInputs.length > 0 ? status.llmWikiReadiness.allowedInputs.join(", ") : "none"],
               ["Blocked reasons", status.llmWikiReadiness.blockedReasons.length > 0 ? status.llmWikiReadiness.blockedReasons.join(", ") : "none"],
               ["Next action", status.llmWikiReadiness.nextActions.join(" ")],
+              ["Dry-run plan", status.llmWikiReadiness.rebuildDryRunPlan ? status.llmWikiReadiness.rebuildDryRunPlan.planId : "not available"],
+              ["Planned sections", status.llmWikiReadiness.rebuildDryRunPlan ? status.llmWikiReadiness.rebuildDryRunPlan.plannedDerivedSections.join(", ") : "none"],
+              ["Disposable target", status.llmWikiReadiness.rebuildDryRunPlan ? status.llmWikiReadiness.rebuildDryRunPlan.disposableTargetNamespace : "not allocated"],
+              ["Stop lines", status.llmWikiReadiness.rebuildDryRunPlan ? status.llmWikiReadiness.rebuildDryRunPlan.stopLines.join(" ") : "none"],
               ["Durable writes", status.llmWikiReadiness.durableWriteAllowed ? "allowed" : "blocked"],
             ]}
           />
