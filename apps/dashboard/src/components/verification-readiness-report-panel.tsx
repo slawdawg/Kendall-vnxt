@@ -6,7 +6,7 @@ function formatTimestamp(value: string): string {
 
 function CommandCard({ command }: { command: VerificationCommandView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{command.status}</p>
@@ -16,7 +16,7 @@ function CommandCard({ command }: { command: VerificationCommandView }) {
           {command.commandId}
         </span>
       </div>
-      <p className="mt-3 break-all rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+      <p className="mt-3 break-all rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
         {command.command}
       </p>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{command.requiredFor.join(" | ")}</p>
@@ -31,7 +31,7 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
   );
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Verification readiness</p>
@@ -49,18 +49,18 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
           ["Optional checks", String(report.optionalCommands.length)],
           ["Authority", report.executionAuthorityApproved ? "approved" : "not approved"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
         ))}
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <h4 className="text-base font-semibold">Execution plan</h4>
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
           {report.commandGroups.map((group) => (
-            <article key={group.groupId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+            <article key={group.groupId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{group.status}</p>
@@ -71,7 +71,7 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
                 </span>
               </div>
               <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{group.summary}</p>
-              <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+              <p className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
                 {group.requiredBefore}
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -87,14 +87,14 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
         </div>
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <h4 className="text-base font-semibold">Handoff checkpoints</h4>
         <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
           Runbook-backed gates for local delivery, dashboard changes, fresh-VM setup, and authority boundaries.
         </p>
         <div className="mt-3 grid gap-3 xl:grid-cols-2">
           {report.handoffCheckpoints.map((checkpoint) => (
-            <article key={checkpoint.checkpointId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+            <article key={checkpoint.checkpointId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{checkpoint.status}</p>
@@ -114,7 +114,7 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {checkpoint.relatedRunbooks.map((runbook) => (
-                  <span key={runbook} className="break-all rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+                  <span key={runbook} className="break-all rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
                     {runbook}
                   </span>
                 ))}
@@ -126,7 +126,7 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Required commands</h4>
           <div className="mt-3 space-y-3">
             {report.requiredCommands.map((command) => (
@@ -136,7 +136,7 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Optional commands</h4>
             <div className="mt-3 space-y-3">
               {report.optionalCommands.map((command) => (
@@ -145,7 +145,7 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Authority stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (

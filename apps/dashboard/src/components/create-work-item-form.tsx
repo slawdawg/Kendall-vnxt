@@ -286,7 +286,7 @@ export function CreateWorkItemForm({ executionRecipes }: { executionRecipes: Wor
 
   return (
     <section
-      className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm"
+      className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm"
       onFocusCapture={pauseRealtimeRefresh}
       onPointerDownCapture={pauseRealtimeRefresh}
     >

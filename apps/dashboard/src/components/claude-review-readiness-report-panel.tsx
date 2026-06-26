@@ -16,7 +16,7 @@ function statusClass(status: string): string {
 
 function CheckCard({ check }: { check: ClaudeReadinessCheckView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{check.checkId}</p>
@@ -29,7 +29,7 @@ function CheckCard({ check }: { check: ClaudeReadinessCheckView }) {
         {check.evidence.map((evidence, evidenceIndex) => (
           <p
             key={`${check.checkId}:evidence:${evidence}:${evidenceIndex}`}
-            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
+            className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
           >
             {evidence}
           </p>
@@ -41,7 +41,7 @@ function CheckCard({ check }: { check: ClaudeReadinessCheckView }) {
 
 function ListPanel({ title, items, warn = false }: { title: string; items: string[]; warn?: boolean }) {
   return (
-    <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+    <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
       <h4 className="text-base font-semibold">{title}</h4>
       <div className="mt-3 space-y-2">
         {items.map((item, index) => (
@@ -56,7 +56,7 @@ function ListPanel({ title, items, warn = false }: { title: string; items: strin
 
 export function ClaudeReviewReadinessReportPanel({ report }: { report: ClaudeReviewReadinessReportView }) {
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Claude review</p>
@@ -75,7 +75,7 @@ export function ClaudeReviewReadinessReportPanel({ report }: { report: ClaudeRev
           ["Review task", report.reviewTaskExecutionApproved ? "approved" : "blocked"],
           ["Scarce use", report.scarceUseApproved ? "approved" : "blocked"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 break-words text-sm font-semibold">{value}</p>
           </div>
@@ -83,7 +83,7 @@ export function ClaudeReviewReadinessReportPanel({ report }: { report: ClaudeRev
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Review posture</h4>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             {report.reviewPolicy.map((check) => (
@@ -91,7 +91,7 @@ export function ClaudeReviewReadinessReportPanel({ report }: { report: ClaudeRev
             ))}
           </div>
         </div>
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Scarce-use policy</h4>
           <div className="mt-3 grid gap-3">
             {report.scarcityPolicy.map((check) => (

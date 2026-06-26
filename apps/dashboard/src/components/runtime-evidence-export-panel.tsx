@@ -42,7 +42,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
   ];
 
   return (
-    <section id="runtime-evidence-export" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="runtime-evidence-export" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Runtime export</p>
@@ -63,14 +63,14 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
           ["Events", String(exportView.workflowEvents.length)],
           ["Export only", exportView.safety.exportOnly ? "Yes" : "No"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
         ))}
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <h4 className="text-base font-semibold">Safety flags</h4>
         <div className="mt-3 flex flex-wrap gap-2">
           {safetyEntries.map(([label, allowed]) => (
@@ -86,7 +86,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
         </div>
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <h4 className="text-base font-semibold">Subscription launch evidence</h4>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {[
@@ -104,7 +104,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
         <div className="mt-3 grid gap-3 xl:grid-cols-3">
           <div className="space-y-2">
             {Object.entries(exportView.subscriptionLaunch.safetyFlags).map(([label, value]) => (
-              <p key={label} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+              <p key={label} className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
                 {label}: {value ? "true" : "false"}
               </p>
             ))}
@@ -112,12 +112,12 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
           <div className="space-y-2">
             {exportView.subscriptionLaunch.outputArtifactReferences.length > 0 ? (
               exportView.subscriptionLaunch.outputArtifactReferences.map((artifact, index) => (
-                <p key={`${formatUnknown(artifact.artifactId, "artifact")}-${index}`} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+                <p key={`${formatUnknown(artifact.artifactId, "artifact")}-${index}`} className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
                   {formatUnknown(artifact.artifactKind, "artifact_reference")}
                 </p>
               ))
             ) : (
-              <p className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">No subscription launch artifacts recorded.</p>
+              <p className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">No subscription launch artifacts recorded.</p>
             )}
           </div>
           <div className="space-y-2">
@@ -126,7 +126,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
               ["rollbackPolicy", exportView.subscriptionLaunch.cancellationTimeoutRollbackEvidence.rollbackPolicy],
               ["idempotentCleanupPolicy", exportView.subscriptionLaunch.cancellationTimeoutRollbackEvidence.idempotentCleanupPolicy],
             ] as Array<[string, unknown]>).map(([label, value]) => (
-              <p key={label} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+              <p key={label} className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
                 {label}: {formatUnknown(value)}
               </p>
             ))}
@@ -144,7 +144,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
                 ["recoveryPath", exportView.subscriptionLaunch.verificationEvidence.recoveryPath],
                 ["nextSafeAction", exportView.subscriptionLaunch.verificationEvidence.nextSafeAction],
               ] as Array<[string, unknown]>).map(([label, value]) => (
-                <p key={label} className="break-words rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+                <p key={label} className="break-words rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
                   {label}: {formatUnknown(value)}
                 </p>
               ))}
@@ -153,11 +153,11 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
         ) : null}
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <h4 className="text-base font-semibold">Review navigator</h4>
         <div className="mt-3 grid gap-3 lg:grid-cols-3">
           {exportView.reviewNavigator.map((item) => (
-            <article key={item.itemId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+            <article key={item.itemId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{item.priority}</p>
@@ -168,20 +168,20 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
                 </span>
               </div>
               <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{item.summary}</p>
-              <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+              <p className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
                 {item.target}
               </p>
               <div className="mt-3 space-y-2">
                 {item.evidence.map((evidence, evidenceIndex) => (
                   <p
                     key={`${item.itemId}:evidence:${evidence}:${evidenceIndex}`}
-                    className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]"
+                    className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]"
                   >
                     {evidence}
                   </p>
                 ))}
               </div>
-              <p className="mt-3 break-words rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+              <p className="mt-3 break-words rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
                 {item.relatedReports.join(" | ")}
               </p>
               <div className="mt-3 space-y-2">
@@ -189,7 +189,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
                   <a
                     key={`${item.itemId}:${crossCheck.label}:${crossCheck.report}`}
                     href={reportShortcutHref(crossCheck.report)}
-                    className="block rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                    className="block rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
                   >
                     <p className="text-xs font-semibold">{crossCheck.label}</p>
                     <p className="mt-1 break-all font-mono text-[11px] text-[var(--muted)]">{crossCheck.dashboardAnchor}</p>
@@ -201,7 +201,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
               {item.stopLines.length > 0 ? (
                 <div className="mt-3 space-y-2">
                   {item.stopLines.map((stopLine) => (
-                    <p key={stopLine} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+                    <p key={stopLine} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
                       {stopLine}
                     </p>
                   ))}
@@ -213,25 +213,25 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Related reports</h4>
           <div className="mt-3 space-y-2">
             {exportView.boundary.relatedSupervisorReports.map((report) => (
               <a
                 key={report}
                 href={reportShortcutHref(report)}
-                className="block rounded-[1rem] border bg-[var(--panel)] p-3 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                className="block rounded-[0.5rem] border bg-[var(--panel)] p-3 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
               >
                 {report}
               </a>
             ))}
           </div>
         </div>
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Boundary evidence</h4>
           <div className="mt-3 space-y-2">
             {exportView.boundary.gitBackedEvidence.slice(0, 6).map((path) => (
-              <p key={path} className="rounded-[1rem] border bg-[var(--panel)] p-3 font-mono text-xs text-[var(--muted)]">
+              <p key={path} className="rounded-[0.5rem] border bg-[var(--panel)] p-3 font-mono text-xs text-[var(--muted)]">
                 {path}
               </p>
             ))}
@@ -240,7 +240,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Review manifest</h4>
           <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{exportView.reviewManifest.summary}</p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -254,7 +254,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
           <p className="mt-3 break-all font-mono text-xs text-[var(--muted)]">{exportView.reviewManifest.manifestId}</p>
         </div>
 
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Review checklist</h4>
           <div className="mt-3 space-y-2">
             {exportView.reviewManifest.reviewChecklist.map((item) => (
@@ -267,7 +267,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Retention notes</h4>
           <div className="mt-3 space-y-2">
             {exportView.reviewManifest.retentionNotes.map((note) => (
@@ -278,7 +278,7 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
           </div>
         </div>
 
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Manifest stop lines</h4>
           <div className="mt-3 space-y-2">
             {exportView.reviewManifest.stopLines.map((stopLine) => (

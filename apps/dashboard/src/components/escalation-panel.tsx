@@ -58,13 +58,13 @@ export function EscalationPanel({
   }
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-2">
         <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Escalation</p>
         <h3 className="text-xl font-semibold">Attention and escalation</h3>
       </div>
       {attentionReason ? (
-        <div className="mt-4 rounded-[1.25rem] border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] p-4 text-sm text-[var(--warn)]">
+        <div className="mt-4 rounded-[0.5rem] border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] p-4 text-sm text-[var(--warn)]">
           {attentionReason}
         </div>
       ) : null}

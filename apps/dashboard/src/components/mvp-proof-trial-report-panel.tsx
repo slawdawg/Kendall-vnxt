@@ -21,7 +21,7 @@ function StatusChip({ value }: { value: string }) {
 
 function ListPanel({ title, items, warn = false }: { title: string; items: string[]; warn?: boolean }) {
   return (
-    <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+    <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
       <h4 className="text-base font-semibold">{title}</h4>
       <div className="mt-3 space-y-2">
         {items.map((item, index) => (
@@ -36,7 +36,7 @@ function ListPanel({ title, items, warn = false }: { title: string; items: strin
 
 export function MvpProofTrialReportPanel({ report }: { report: MvpProofTrialReportView }) {
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">MVP proof</p>
@@ -49,11 +49,11 @@ export function MvpProofTrialReportPanel({ report }: { report: MvpProofTrialRepo
       </div>
 
       <div className="mt-5 grid gap-3 md:grid-cols-2">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Selected story</p>
           <p className="mt-2 text-sm font-semibold leading-6">{report.selectedStory}</p>
         </div>
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Trial status</p>
           <div className="mt-2">
             <StatusChip value={report.trialStatus} />
@@ -63,7 +63,7 @@ export function MvpProofTrialReportPanel({ report }: { report: MvpProofTrialRepo
 
       <div className="mt-5 grid gap-3 xl:grid-cols-2">
         {report.steps.map((step) => (
-          <article key={step.stepId} className="rounded-[1rem] border bg-[var(--surface)] p-4">
+          <article key={step.stepId} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{step.stepId}</p>

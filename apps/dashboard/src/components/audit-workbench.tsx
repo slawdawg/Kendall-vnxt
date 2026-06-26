@@ -50,16 +50,16 @@ export function AuditWorkbench({
           ["Advisory", String(awaitingAudit.filter((item) => item.auditMode === "advisory").length)],
           ["Audited done", String(completedWithAudit.length)],
         ].map(([label, value]) => (
-          <article key={label} className="rounded-[1.25rem] border bg-[var(--panel)] p-5 shadow-sm">
+          <article key={label} className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
-            <p className="mt-2 text-3xl font-semibold">{value}</p>
+            <p className="mt-1 text-2xl font-semibold">{value}</p>
           </article>
         ))}
       </section>
 
       {browser.controls}
 
-      <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+      <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
         <div className="flex flex-col gap-2">
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Audit lane</p>
           <h2 className="text-2xl font-semibold">Items waiting on audit review</h2>
@@ -74,7 +74,7 @@ export function AuditWorkbench({
             browser.filtered.map((item) => {
               const latestAudit = audits.find((audit) => audit.workItemId === item.id);
               return (
-                <article key={item.id} className="rounded-[1.25rem] border bg-[var(--surface)] p-5">
+                <article key={item.id} className="rounded-[0.5rem] border bg-[var(--surface)] p-5">
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                     <div className="max-w-3xl">
                       <div className="flex flex-wrap items-center gap-2">
@@ -118,7 +118,7 @@ export function AuditWorkbench({
                         </div>
                       </div>
                     </div>
-                    <div className="w-full max-w-xl xl:min-w-[24rem] rounded-[1.25rem] border bg-[var(--panel)] p-4">
+                    <div className="w-full max-w-xl xl:min-w-[24rem] rounded-[0.5rem] border bg-[var(--panel)] p-4">
                       <WorkItemActions workItemId={item.id} state={item.state} requiresAudit={item.requiresAudit} />
                     </div>
                   </div>

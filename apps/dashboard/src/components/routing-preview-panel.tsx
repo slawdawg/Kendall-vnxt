@@ -47,14 +47,14 @@ export function RoutingPreviewPanel({ preview }: { preview: RoutingPreviewView }
   const executionAffected = !["record_only", "advisory"].includes(decision.authorityMode);
 
   return (
-    <section id="routing-decision" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="routing-decision" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Routing</p>
           <h3 className="mt-2 text-xl font-semibold">Why This Route?</h3>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">{decision.humanExplanation}</p>
         </div>
-        <div className="flex w-full flex-col gap-2 rounded-[1.25rem] border bg-[var(--surface)] p-4 sm:w-64">
+        <div className="flex w-full flex-col gap-2 rounded-[0.5rem] border bg-[var(--surface)] p-4 sm:w-64">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Selected lane</p>
           <p className="text-lg font-semibold">{laneLabel(decision.selectedLane)}</p>
           <div className="flex flex-wrap gap-2 text-xs">
@@ -73,20 +73,20 @@ export function RoutingPreviewPanel({ preview }: { preview: RoutingPreviewView }
           ["Authority", titleCase(decision.authorityMode)],
           ["Execution affected", executionAffected ? "Yes" : "No"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
         ))}
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Permission summary</p>
         <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{decision.permissionSummary}</p>
       </div>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Reason codes</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {decision.reasonCodes.map((code) => (
@@ -94,7 +94,7 @@ export function RoutingPreviewPanel({ preview }: { preview: RoutingPreviewView }
             ))}
           </div>
         </div>
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Escalation path</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {decision.escalationPath.length > 0 ? (
@@ -110,11 +110,11 @@ export function RoutingPreviewPanel({ preview }: { preview: RoutingPreviewView }
         </div>
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Rejected lanes</p>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           {decision.rejectedLanes.map((rejected) => (
-            <div key={rejected.lane} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+            <div key={rejected.lane} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
               <p className="text-sm font-semibold">{laneLabel(rejected.lane)}</p>
               <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{rejected.explanation}</p>
               <div className="mt-2 flex flex-wrap gap-2">

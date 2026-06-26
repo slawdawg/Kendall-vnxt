@@ -11,7 +11,7 @@ function formatTimestamp(value: string): string {
 
 function AuthorityListSection({ title, items, scope }: { title: string; items: string[]; scope: string }) {
   return (
-    <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+    <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
       <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{title}</p>
       <div className="mt-2 space-y-1">
         {items.length > 0 ? (
@@ -49,7 +49,7 @@ function AuthorityFamilyCard({ family }: { family: AuthorityReadinessFamilyView 
     <article
       data-family-id={family.familyId}
       data-status-kind={statusKind}
-      className={`rounded-[1rem] border bg-[var(--panel)] p-3 ${isApprovalRequired ? "border-[var(--warn)]/40" : "border-[var(--accent)]/40"}`}
+      className={`rounded-[0.5rem] border bg-[var(--panel)] p-3 ${isApprovalRequired ? "border-[var(--warn)]/40" : "border-[var(--accent)]/40"}`}
     >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -71,7 +71,7 @@ function AuthorityFamilyCard({ family }: { family: AuthorityReadinessFamilyView 
       </div>
 
       {family.blockedStories.length > 0 ? (
-        <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Blocked stories</p>
           <div className="mt-2 space-y-1">
             {family.blockedStories.map((story, index) => (
@@ -98,13 +98,13 @@ function AuthorityFamilyCard({ family }: { family: AuthorityReadinessFamilyView 
 
       <div className="mt-3 space-y-2">
         {family.stopLines.map((stopLine, index) => (
-          <p key={`${family.familyId}:stop-line:${stopLine}:${index}`} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+          <p key={`${family.familyId}:stop-line:${stopLine}:${index}`} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
             {stopLine}
           </p>
         ))}
       </div>
 
-      <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+      <p className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
         <span className="font-semibold text-[var(--foreground)]">Rollback path:</span> {family.rollbackPath}
       </p>
       <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{family.nextAction}</p>
@@ -120,7 +120,7 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
   const executionBlocked = nextLaneDecisionPacket.approvalRequired || nextLaneDecisionPacket.noAuthorityGranted;
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Authority readiness</p>
@@ -138,7 +138,7 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
           ["Blocked", String(blockedFamilies)],
           ["Stories", String(blockedStories)],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -146,11 +146,11 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Current-state reconciliation</h4>
           <div className="mt-3 grid gap-3">
             {currentStateFindings.map((finding) => (
-              <article key={finding.findingId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+              <article key={finding.findingId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{finding.status}</p>
@@ -171,26 +171,26 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
           </div>
         </div>
 
-        <div className="rounded-[1.25rem] border border-[var(--warn)]/40 bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border border-[var(--warn)]/40 bg-[var(--surface)] p-4">
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--warn)]">
             {nextLaneDecisionPacket.status}
           </p>
           <h4 className="mt-1 text-base font-semibold">Next-lane authority packet</h4>
           <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{nextLaneDecisionPacket.recommendation}</p>
-          <p className="mt-3 break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+          <p className="mt-3 break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
             {nextLaneDecisionPacket.packetPath}
           </p>
           <div className="mt-3 grid gap-2 md:grid-cols-2">
-            <div className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+            <div className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
               <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Approval required</p>
               <p className="mt-2 font-mono text-xs text-[var(--warn)]">{String(nextLaneDecisionPacket.approvalRequired)}</p>
             </div>
-            <div className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+            <div className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
               <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Execution blocked</p>
               <p className="mt-2 font-mono text-xs text-[var(--warn)]">{String(executionBlocked)}</p>
             </div>
           </div>
-          <p className="mt-3 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+          <p className="mt-3 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
             <span className="font-semibold text-[var(--foreground)]">Freshness:</span> {nextLaneDecisionPacket.requiredFreshnessCheck}
           </p>
           <div className="mt-3 grid gap-2 md:grid-cols-2">
@@ -202,7 +202,7 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Authority families</h4>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             {report.families.map((family) => (
@@ -212,11 +212,11 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Readiness ladder</h4>
             <div className="mt-3 space-y-3">
               {report.readinessLadder.map((step) => (
-                <article key={step.stepId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                <article key={step.stepId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{step.status}</p>
@@ -232,7 +232,7 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -243,7 +243,7 @@ export function AuthorityReadinessMatrixReportPanel({ report }: { report: Author
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (

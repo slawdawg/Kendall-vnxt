@@ -20,7 +20,7 @@ function BoundaryBadge({ label, allowed }: { label: string; allowed: boolean }) 
 
 export function LocalWorktreePlanPanel({ plan }: { plan: LocalWorktreePlanView }) {
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Worktree plan</p>
@@ -39,22 +39,22 @@ export function LocalWorktreePlanPanel({ plan }: { plan: LocalWorktreePlanView }
       </div>
 
       <div className="mt-5 grid gap-3 md:grid-cols-2">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Execution branch</p>
           <p className="mt-2 break-words font-mono text-sm">{plan.executionBranch}</p>
         </div>
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Base</p>
           <p className="mt-2 break-words font-mono text-sm">{plan.baseBranch}</p>
         </div>
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4 md:col-span-2">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4 md:col-span-2">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Planned folder</p>
           <p className="mt-2 break-all font-mono text-sm">{plan.worktreePath}</p>
         </div>
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Planned commands</h4>
           <div className="mt-3 space-y-2">
             <p className="rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
@@ -66,7 +66,7 @@ export function LocalWorktreePlanPanel({ plan }: { plan: LocalWorktreePlanView }
           </div>
         </div>
 
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Blocked by</h4>
           <div className="mt-3 flex flex-wrap gap-2">
             {plan.blockedBy.map((reason) => (
@@ -79,7 +79,7 @@ export function LocalWorktreePlanPanel({ plan }: { plan: LocalWorktreePlanView }
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Safety checks</h4>
           <div className="mt-3 space-y-2">
             {plan.safetyChecks.map((check) => (
@@ -90,7 +90,7 @@ export function LocalWorktreePlanPanel({ plan }: { plan: LocalWorktreePlanView }
           </div>
         </div>
 
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Evidence</h4>
           <div className="mt-3 space-y-2">
             {plan.evidence.map((item) => (

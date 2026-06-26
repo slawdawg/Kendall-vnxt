@@ -165,7 +165,8 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     sourceFiles: ["apps/dashboard/src/app/pipeline/page.tsx", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "apps/dashboard/src/app/pipeline/page.tsx", tokens: ["PipelineCockpit", "realtimeRefresh={false}"] },
-      { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline board", "Active packet drawer"] },
+      { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline workflow strip", "Pipeline operational strip", "Mission control focus strip", "Pipeline board"] },
+      { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Packet detail", "Packet 5 Whys", "Gate, memory, recovery"] },
       { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["fixture-only cockpit frame without supervisor calls", "fetch\\s*\\("] },
     ],
     summary: "The dashboard exposes a static fixture-only cockpit route without supervisor/provider/worker calls.",
@@ -230,8 +231,8 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     requiredCommands: ["pnpm run test:dashboard-pipeline-fixtures"],
     sourceFiles: ["apps/dashboard/src/lib/pipeline-fixtures.ts", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
-      { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["HermesJobPacketV0", "real worker launch"] },
-      { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Hermes Worker Card", "Mocked worker containment"] },
+      { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["HermesJobPacketV0", "real worker launch", "Hermes Worker Mock", "Mocked Hermes containment"] },
+      { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Workers and review", "Hermes:"] },
     ],
     summary: "Hermes remains mocked and blocked from worker launch, Docker execution, source mutation, and network egress.",
   },
@@ -246,8 +247,8 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     requiredCommands: ["pnpm run test:dashboard-pipeline-fixtures"],
     sourceFiles: ["apps/dashboard/src/lib/pipeline-fixtures.ts", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
-      { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["ClaudeReviewPacketV0", "codex_worker", "claude_reviewer"] },
-      { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Codex Worker Card", "Claude Reviewer Card"] },
+      { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["ClaudeReviewPacketV0", "codex_worker", "claude_reviewer", "Codex Worker Card", "Claude Reviewer Card"] },
+      { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Workers and review", "Codex:", "Claude:"] },
       { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["claude implementation", "Codex Worker Card"] },
     ],
     summary: "Codex is implementation-worker state and Claude is scarce independent review state; neither is launched by the dashboard.",
@@ -264,7 +265,8 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     sourceFiles: ["packages/contracts/src/work-packet.ts", "apps/dashboard/src/lib/pipeline-fixtures.ts", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "packages/contracts/src/work-packet.ts", tokens: ["MemoryProposalV0", "writeBackAllowed"] },
-      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["writeBackAllowed", "review_gated", "Memory Proposal Card"] },
+      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["writeBackAllowed", "review_gated", "memory proposals should cover every review state"] },
+      { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Gate, memory, recovery", "Memory proposals"] },
     ],
     summary: "Memory proposals are review-gated metadata and never automatic canonical Obsidian writes.",
   },
@@ -348,24 +350,38 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
       "test-results/pipeline-refined-390.png",
     ],
     browserProofCommand: "pnpm exec playwright test tests/e2e/dashboard.spec.ts --grep \"opens fixture-backed pipeline cockpit without live execution framing\"",
-    proofSummary: "Story 6.1 adds refined first-frame hierarchy, browser visual-integrity checks, no-overlap checks, screenshots, and same-origin no-live-call instrumentation.",
+    proofSummary: "Story 6.1 adds a refined flow-only /pipeline surface, packet detail drill-down, browser visual-integrity checks, no-overlap checks, screenshots, and same-origin no-live-call instrumentation.",
     requiredCommands: ["pnpm run test:dashboard-pipeline-fixtures", "pnpm run test:dashboard-e2e-runner", "pnpm run test:e2e:dashboard"],
-    sourceFiles: ["apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs", "tests/e2e/dashboard.spec.ts"],
+    sourceFiles: [
+      "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
+      "apps/dashboard/src/components/pipeline/packet-detail-page.tsx",
+      "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx",
+      "tests/dashboard-pipeline-fixtures.test.mjs",
+      "tests/e2e/dashboard.spec.ts",
+    ],
     requiredTokens: [
       {
         file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
-        tokens: ["Refined pipeline cockpit frame", "Cockpit first-frame hierarchy", "Worker review memory recovery rail", "Evidence runway"],
+        tokens: ["Refined pipeline cockpit frame", "Cockpit first-frame hierarchy", "Pipeline command strip", "Pipeline workflow strip", "Pipeline operational strip", "Pipeline route map", "Pipeline inspection panel"],
+      },
+      {
+        file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx",
+        tokens: ["Packet detail:", "Packet 5 Whys", "Source Boundary Checklist", "Gate, memory, recovery"],
+      },
+      {
+        file: "apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx",
+        tokens: ["generateStaticParams", "decodeURIComponent(packetId)", "PacketDetailPage"],
       },
       {
         file: "tests/dashboard-pipeline-fixtures.test.mjs",
-        tokens: ["Refined pipeline cockpit frame", "grid-rows-\\[auto_minmax\\(0,1fr\\)\\]", "Worker review memory recovery rail"],
+        tokens: ["Pipeline route map", "No packet is selected by default", "Packet detail", "doesNotMatch(cockpitSource"],
       },
       {
         file: "tests/e2e/dashboard.spec.ts",
-        tokens: ["sameOriginRuntimeRequests", "visualIntegrityEvidence", "pipeline-refined-1440.png"],
+        tokens: ["sameOriginRuntimeRequests", "visualIntegrityEvidence", "Inspect packet: Resolve stale research source before routing", "Packet detail"],
       },
     ],
-    summary: "Refined cockpit UI has source-owned browser proof requirements for hierarchy, density, screenshots, no-overlap, responsiveness, keyboard preservation, and no-live-call boundaries.",
+    summary: "Refined cockpit UI has source-owned browser proof requirements for flow-only hierarchy, packet drill-down, screenshots, no-overlap, responsiveness, keyboard preservation, and no-live-call boundaries.",
   },
   {
     id: "epic5.runtime-enforcement-boundary",

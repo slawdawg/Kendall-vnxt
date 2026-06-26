@@ -6,7 +6,7 @@ function formatTimestamp(value: string): string {
 
 function PolicyItemCard({ item }: { item: GitHubWorkflowPolicyItemView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{item.itemId}</p>
@@ -21,7 +21,7 @@ function PolicyItemCard({ item }: { item: GitHubWorkflowPolicyItemView }) {
         {item.evidence.map((evidence, evidenceIndex) => (
           <p
             key={`${item.itemId}:evidence:${evidence}:${evidenceIndex}`}
-            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
+            className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
           >
             {evidence}
           </p>
@@ -33,7 +33,7 @@ function PolicyItemCard({ item }: { item: GitHubWorkflowPolicyItemView }) {
 
 export function GitHubWorkflowPolicyReportPanel({ report }: { report: GitHubWorkflowPolicyReportView }) {
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">GitHub workflow</p>
@@ -51,7 +51,7 @@ export function GitHubWorkflowPolicyReportPanel({ report }: { report: GitHubWork
           ["Required checks", String(report.requiredChecks.length)],
           ["Plaintext tokens", report.plaintextTokenStorageApproved ? "approved" : "blocked"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -60,7 +60,7 @@ export function GitHubWorkflowPolicyReportPanel({ report }: { report: GitHubWork
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Auth model</h4>
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
               {report.authModel.map((item) => (
@@ -69,7 +69,7 @@ export function GitHubWorkflowPolicyReportPanel({ report }: { report: GitHubWork
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Required checks</h4>
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
               {report.requiredChecks.map((item) => (
@@ -80,7 +80,7 @@ export function GitHubWorkflowPolicyReportPanel({ report }: { report: GitHubWork
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -91,7 +91,7 @@ export function GitHubWorkflowPolicyReportPanel({ report }: { report: GitHubWork
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (

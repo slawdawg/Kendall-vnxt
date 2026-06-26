@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { usePathname } from "next/navigation";
 import type { NavStats } from "../lib/nav-stats";
 
@@ -32,8 +33,11 @@ const linkGroups: { label: string; intent: string; links: ShellLink[] }[] = [
   },
   {
     label: "Deliberate",
-    intent: "Open controls",
-    links: [{ href: "/controls", label: "Controls" }],
+    intent: "Control setup",
+    links: [
+      { href: "/controls", label: "Controls" },
+      { href: "/settings", label: "Settings" },
+    ],
   },
 ];
 
@@ -42,6 +46,10 @@ function isCurrentPath(pathname: string, href: string) {
     return pathname === "/";
   }
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function currentPageLabel(pathname: string) {
+  return linkGroups.flatMap((group) => group.links).find((link) => isCurrentPath(pathname, link.href))?.label ?? "Pages";
 }
 
 function NavBadge({ link, navStats }: { link: ShellLink; navStats?: NavStats }) {
@@ -65,8 +73,48 @@ function NavBadge({ link, navStats }: { link: ShellLink; navStats?: NavStats }) 
   );
 }
 
-export function OperationalNav({ navStats }: { navStats?: NavStats }) {
+export function OperationalNav({ compact = false, navStats }: { compact?: boolean; navStats?: NavStats }) {
   const pathname = usePathname();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  if (compact) {
+    return (
+      <nav aria-label="Dashboard sections" className="dashboard-page-menu-nav">
+        <details className="dashboard-page-menu" onToggle={(e) => setMenuOpen((e.currentTarget as HTMLDetailsElement).open)}>
+          <summary aria-label={`${menuOpen ? "Close" : "Open"} navigation menu. Current page: ${currentPageLabel(pathname)}`} className="dashboard-page-menu-summary">
+            <span aria-hidden="true" className="dashboard-page-menu-icon">
+              <span />
+              <span />
+              <span />
+            </span>
+          </summary>
+          <div className="dashboard-page-menu-links">
+            {linkGroups.flatMap((group) =>
+              group.links.map((link) => {
+                const current = isCurrentPath(pathname, link.href);
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    aria-current={current ? "page" : undefined}
+                    className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-[0.375rem] border px-2.5 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)] ${
+                      current
+                        ? "border-[var(--accent)] bg-[var(--panel-strong)] text-[var(--foreground)]"
+                        : "bg-[var(--background-elevated)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                    }`}
+                  >
+                    <span className="sr-only">{group.label}: </span>
+                    {link.label}
+                    <NavBadge link={link} navStats={navStats} />
+                  </Link>
+                );
+              })
+            )}
+          </div>
+        </details>
+      </nav>
+    );
+  }
 
   return (
     <nav aria-label="Dashboard sections" className="grid w-full max-w-full gap-3 xl:min-w-0 xl:grid-cols-[1fr_1fr_auto]">

@@ -8,7 +8,7 @@ function formatTimestamp(value: string | null): string {
 
 function WorkItemReviewCard({ item }: { item: RuntimeEvidenceReviewWorkItemView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{item.reviewPriority}</p>
@@ -25,7 +25,7 @@ function WorkItemReviewCard({ item }: { item: RuntimeEvidenceReviewWorkItemView 
           ["Events", String(item.eventCount)],
           ["Reports", String(item.relatedReportCount)],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
             <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-1 text-sm font-semibold">{value}</p>
           </div>
@@ -34,27 +34,27 @@ function WorkItemReviewCard({ item }: { item: RuntimeEvidenceReviewWorkItemView 
       <p className="mt-3 font-mono text-[11px] text-[var(--muted)]">{formatTimestamp(item.latestEventAt)}</p>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{item.recommendedAction}</p>
       <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
           <div className="mt-2 grid gap-2">
             {item.relatedReports.map((report, reportIndex) => (
               <Link
                 key={`${item.workItemId}:report:${report}:${reportIndex}`}
                 href={reportShortcutHref(report)}
-                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
               >
                 {report}
               </Link>
             ))}
           </div>
         </div>
-        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
           <div className="mt-2 grid gap-2">
             {item.relatedDocs.map((doc, docIndex) => (
               <span
                 key={`${item.workItemId}:doc:${doc}:${docIndex}`}
-                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+                className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
               >
                 {doc}
               </span>
@@ -85,7 +85,7 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
   const eventCount = report.workItems.reduce((total, item) => total + item.eventCount, 0);
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Runtime evidence review</p>
@@ -104,7 +104,7 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
           ["Attempts", String(attemptCount)],
           ["Events", String(eventCount)],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -112,7 +112,7 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Review queue</h4>
           <div className="mt-3 grid gap-3">
             {report.reviewQueue.map((item) => (
@@ -122,7 +122,7 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Cross-check path</h4>
             <div className="mt-3 space-y-2">
               {report.crossChecks.map((crossCheck) => (
@@ -144,7 +144,7 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Related reports</h4>
             <div className="mt-3 space-y-2">
               {report.relatedReports.map((reportEndpoint) => (
@@ -159,7 +159,7 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Related docs</h4>
             <div className="mt-3 space-y-2">
               {report.relatedDocs.map((doc, docIndex) => (
@@ -173,7 +173,7 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Dashboard anchors</h4>
             <div className="mt-3 flex flex-wrap gap-2">
               {report.dashboardAnchors.map((anchor, anchorIndex) => (
@@ -184,7 +184,7 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -195,7 +195,7 @@ export function RuntimeEvidenceReviewReportPanel({ report }: { report: RuntimeEv
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (

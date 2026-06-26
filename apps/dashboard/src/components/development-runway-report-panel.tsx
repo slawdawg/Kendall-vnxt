@@ -12,14 +12,14 @@ function NextLanePanel({ nextLane }: { nextLane?: NextLaneRecommendationView | n
   }
 
   return (
-    <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+    <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
       <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Next lane handoff</p>
       <p className="mt-2 text-sm font-semibold">{nextLane.laneTitle}</p>
       <div className="mt-2 grid gap-2">
-        <p className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+        <p className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
           branch: {nextLane.branchName}
         </p>
-        <p className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+        <p className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
           start: {nextLane.startCommand}
         </p>
       </div>
@@ -47,7 +47,7 @@ function NextLanePanel({ nextLane }: { nextLane?: NextLaneRecommendationView | n
       </div>
       <div className="mt-3 space-y-2">
         {nextLane.stopLines.map((stopLine) => (
-          <p key={stopLine} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+          <p key={stopLine} className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
             {stopLine}
           </p>
         ))}
@@ -58,7 +58,7 @@ function NextLanePanel({ nextLane }: { nextLane?: NextLaneRecommendationView | n
 
 function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{slice.status}</p>
@@ -69,12 +69,12 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
         </span>
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{slice.summary}</p>
-      <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+      <p className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
         {slice.recommendedPrScope}
       </p>
 
       <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Backlog</p>
           <div className="mt-2 flex flex-wrap gap-2">
             {slice.includedBacklogItems.map((item, itemIndex) => (
@@ -84,7 +84,7 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
             ))}
           </div>
         </div>
-        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Action steps</p>
           <div className="mt-2 flex flex-wrap gap-2">
             {slice.includedActionSteps.map((step, stepIndex) => (
@@ -96,7 +96,7 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
         </div>
       </div>
 
-      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+      <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Required verification</p>
         <div className="mt-2 flex flex-wrap gap-2">
           {slice.requiredVerification.map((command, commandIndex) => (
@@ -107,11 +107,11 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
         </div>
       </div>
 
-      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+      <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Readiness checks</p>
         <div className="mt-2 grid gap-2">
           {slice.readinessChecks.map((check) => (
-            <div key={check.checkId} className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
+            <div key={check.checkId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{check.status}</p>
@@ -130,27 +130,27 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
                 ))}
               </div>
               <div className="mt-3 grid gap-2 md:grid-cols-2">
-                <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+                <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
                   <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
                   <div className="mt-2 grid gap-2">
                     {check.relatedReports.map((report, reportIndex) => (
                       <Link
                         key={`${check.checkId}:report:${report}:${reportIndex}`}
                         href={reportShortcutHref(report)}
-                        className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                        className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
                       >
                         {report}
                       </Link>
                     ))}
                   </div>
                 </div>
-                <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+                <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
                   <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
                   <div className="mt-2 grid gap-2">
                     {check.relatedDocs.map((doc, docIndex) => (
                       <span
                         key={`${check.checkId}:doc:${doc}:${docIndex}`}
-                        className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+                        className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
                       >
                         {doc}
                       </span>
@@ -172,27 +172,27 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
       </div>
 
       <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
           <div className="mt-2 grid gap-2">
             {slice.relatedReports.map((report, reportIndex) => (
               <Link
                 key={`${slice.sliceId}:report:${report}:${reportIndex}`}
                 href={reportShortcutHref(report)}
-                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
               >
                 {report}
               </Link>
             ))}
           </div>
         </div>
-        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
           <div className="mt-2 grid gap-2">
             {slice.relatedDocs.map((doc, docIndex) => (
               <span
                 key={`${slice.sliceId}:doc:${doc}:${docIndex}`}
-                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+                className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
               >
                 {doc}
               </span>
@@ -204,7 +204,7 @@ function SliceCard({ slice }: { slice: DevelopmentRunwaySliceView }) {
       {slice.blockedBy.length > 0 ? (
         <div className="mt-3 space-y-2">
           {slice.blockedBy.map((blocker) => (
-            <p key={blocker} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+            <p key={blocker} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
               {blocker}
             </p>
           ))}
@@ -231,7 +231,7 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
   const blockedSlices = report.slices.filter((slice) => slice.status.includes("blocked")).length;
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Development runway</p>
@@ -250,7 +250,7 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
           ["Blocked", String(blockedSlices)],
           ["Authority", report.executionAuthorityApproved ? "approved" : "not approved"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -258,7 +258,7 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Runway slices</h4>
           <div className="mt-3 grid gap-3">
             {report.slices.map((slice) => (
@@ -268,7 +268,7 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">PR scope rule</h4>
             <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{report.planningRule}</p>
             <p className="mt-3 rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
@@ -276,7 +276,7 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
             </p>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Batching policy</h4>
             <div className="mt-3 space-y-2">
               {report.batchingPolicy.map((policy) => (
@@ -287,7 +287,7 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">PR batching checklist</h4>
             <div className="mt-3 space-y-2">
               {report.prBatchingChecklist.map((item, itemIndex) => (
@@ -298,7 +298,7 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Verification chain</h4>
             <div className="mt-3 flex flex-wrap gap-2">
               {report.verificationChain.map((command) => (
@@ -309,7 +309,7 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -320,7 +320,7 @@ export function DevelopmentRunwayReportPanel({ report }: { report: DevelopmentRu
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (

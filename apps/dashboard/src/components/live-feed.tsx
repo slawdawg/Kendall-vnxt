@@ -71,7 +71,7 @@ export function LiveFeed() {
   }, []);
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--surface)] p-6 text-[var(--foreground)] shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--surface)] p-6 text-[var(--foreground)] shadow-sm">
       <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Live activity</p>
       <div className="mt-4 space-y-3 font-mono text-xs leading-5">
         {lines.map((line) => (

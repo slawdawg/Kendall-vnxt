@@ -72,7 +72,7 @@ function ValueList({ items, emptyText }: { items: string[]; emptyText: string })
 
 function PlanCell({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[1rem] border bg-[var(--surface)] p-3">
+    <div className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
       <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">{label}</p>
       <p className="mt-2 break-words font-mono text-xs">{value}</p>
     </div>
@@ -113,7 +113,7 @@ function missingAction(actionId: "pr" | "merge" | "cleanup"): LowRiskDeliveryPla
 
 function DeliveryActionCard({ action }: { action: LowRiskDeliveryPlanActionView }) {
   return (
-    <article className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+    <article className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{action.actionId}</p>
@@ -182,7 +182,7 @@ export function DeliveryCleanupPlanPanel({
   const orderedActions = [prAction, mergeAction, cleanupAction];
 
   return (
-    <section id="delivery-cleanup-plan" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="delivery-cleanup-plan" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Delivery plans</p>
@@ -212,7 +212,7 @@ export function DeliveryCleanupPlanPanel({
         ))}
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Cleanup readiness</p>
@@ -262,7 +262,7 @@ export function DeliveryCleanupPlanPanel({
           </div>
         </div>
 
-        <div className="mt-5 rounded-[1rem] border bg-[var(--panel)] px-4">
+        <div className="mt-5 rounded-[0.5rem] border bg-[var(--panel)] px-4">
           <div className="grid gap-2 py-3 md:grid-cols-[8rem_minmax(0,1fr)_10rem]">
             <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Residue</p>
             <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Path</p>

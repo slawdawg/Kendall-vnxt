@@ -42,7 +42,7 @@ export function BranchPreparationPanel({
   }
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-2">
         <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Branch preparation</p>
         <h3 className="text-xl font-semibold">Prepare execution branch</h3>
@@ -52,15 +52,15 @@ export function BranchPreparationPanel({
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-3">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Execution branch</p>
           <p className="mt-2 break-words font-mono text-sm">{executionBranch ?? "Not recorded yet"}</p>
         </div>
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Base branch</p>
           <p className="mt-2 break-words font-mono text-sm">{baseBranch ?? "Not recorded yet"}</p>
         </div>
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Base revision</p>
           <p className="mt-2 break-words font-mono text-sm">{baseRevision ?? "Not recorded yet"}</p>
         </div>

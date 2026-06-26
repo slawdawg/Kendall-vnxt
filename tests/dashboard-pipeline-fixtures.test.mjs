@@ -7,94 +7,147 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 const packageJsonPath = new URL("../package.json", import.meta.url);
+const nextConfigPath = new URL("../apps/dashboard/next.config.ts", import.meta.url);
 const routePath = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta.url);
+const packetDetailRoutePath = new URL("../apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx", import.meta.url);
+const settingsRoutePath = new URL("../apps/dashboard/src/app/settings/page.tsx", import.meta.url);
+const settingsUsageVisibilityPath = new URL("../apps/dashboard/src/components/settings/usage-visibility-settings.tsx", import.meta.url);
+const layoutPath = new URL("../apps/dashboard/src/app/layout.tsx", import.meta.url);
 const pipelineComponentsPath = new URL("../apps/dashboard/src/components/pipeline/", import.meta.url);
 const cockpitPath = new URL("pipeline-cockpit.tsx", pipelineComponentsPath);
+const packetDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPath);
 const fixturesPath = new URL("../apps/dashboard/src/lib/pipeline-fixtures.ts", import.meta.url);
+const globalsPath = new URL("../apps/dashboard/src/app/globals.css", import.meta.url);
 const shellPath = new URL("../apps/dashboard/src/components/shell.tsx", import.meta.url);
+const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-graph-background.tsx", import.meta.url);
 const realtimeRefreshPath = new URL("../apps/dashboard/src/components/realtime-refresh.tsx", import.meta.url);
 const navPath = new URL("../apps/dashboard/src/components/operational-nav.tsx", import.meta.url);
 
 test("dashboard pipeline fixture test is wired into package checks", async () => {
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
+  const nextConfigSource = await readFile(nextConfigPath, "utf8");
+  const globalsSource = await readFile(globalsPath, "utf8");
 
   assert.equal(packageJson.scripts["test:dashboard-pipeline-fixtures"], "node --test tests/dashboard-pipeline-fixtures.test.mjs");
+  assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /opens fixture-backed pipeline cockpit without live execution framing/);
+  assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:windows"], /--project windows-11-chromium/);
+  assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:ipad"], /--project ipad-pro-gen-2-safari-ios-26/);
+  assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:iphone"], /--project iphone-15-pro-max-safari-ios-27/);
   assert.match(packageJson.scripts["check:static"], /pnpm run test:dashboard-pipeline-fixtures/);
   assert.match(packageJson.scripts.check, /pnpm run test:dashboard-pipeline-fixtures/);
+  assert.match(nextConfigSource, /devIndicators:\s*false/);
+  assert.doesNotMatch(globalsSource, /nextjs-portal[\s\S]*display: none !important/);
 });
 
 test("/pipeline route uses fixture-only cockpit frame without supervisor calls", async () => {
   const routeSource = await readFile(routePath, "utf8");
+  const packetDetailRouteSource = await readFile(packetDetailRoutePath, "utf8");
+  const settingsRouteSource = await readFile(settingsRoutePath, "utf8");
+  const settingsUsageVisibilitySource = await readFile(settingsUsageVisibilityPath, "utf8");
+  const layoutSource = await readFile(layoutPath, "utf8");
+  const packetDetailSource = await readFile(packetDetailPath, "utf8");
   const cockpitSource = await readFile(cockpitPath, "utf8");
   const fixtureSource = await readFile(fixturesPath, "utf8");
+  const globalsSource = await readFile(globalsPath, "utf8");
   const shellSource = await readFile(shellPath, "utf8");
+  const graphBackgroundSource = await readFile(graphBackgroundPath, "utf8");
   const realtimeRefreshSource = await readFile(realtimeRefreshPath, "utf8");
   const navSource = await readFile(navPath, "utf8");
   const componentFiles = (await readdir(pipelineComponentsPath)).filter((file) => file.endsWith(".tsx"));
   const pipelineComponentSource = (
     await Promise.all(componentFiles.map((file) => readFile(new URL(file, pipelineComponentsPath), "utf8")))
   ).join("\n");
-  const allPipelineSource = `${routeSource}\n${fixtureSource}\n${pipelineComponentSource}`;
+  const allPipelineSource = `${routeSource}\n${packetDetailRouteSource}\n${fixtureSource}\n${pipelineComponentSource}`;
 
   assert.match(routeSource, /<Shell\b/);
   assert.match(routeSource, /<Shell\b[^>]*realtimeRefresh=\{false\}[^>]*wide/);
   assert.match(shellSource, /realtimeRefresh = true/);
   assert.match(shellSource, /\{realtimeRefresh \? <RealtimeRefresh \/> : null\}/);
+  assert.match(shellSource, /DashboardGraphBackground/);
+  assert.match(shellSource, /relative isolate min-h-screen overflow-hidden/);
+  assert.match(shellSource, /relative z-10 mx-auto/);
+  assert.match(shellSource, /box-border flex w-auto/);
   assert.doesNotMatch(shellSource, /EventSource|WebSocket|XMLHttpRequest|sendBeacon|fetch\s*\(/);
+  assert.match(graphBackgroundSource, /aria-hidden="true"/);
+  assert.match(graphBackgroundSource, /kendall-graph-background/);
+  assert.match(graphBackgroundSource, /animateMotion/);
+  assert.match(globalsSource, /\.kendall-graph-background/);
+  assert.match(globalsSource, /position: fixed/);
+  assert.match(globalsSource, /kendall-graph-drift/);
+  assert.match(globalsSource, /\.kendall-graph-background__pulses[\s\S]*display: none/);
   assert.match(realtimeRefreshSource, /EventSource/);
+  assert.match(layoutSource, /data-scroll-behavior="smooth"/);
   assert.match(routeSource, /PipelineCockpit/);
   assert.doesNotMatch(routeSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
+  assert.match(packetDetailRouteSource, /PacketDetailPage/);
+  assert.match(packetDetailRouteSource, /<Shell\b[^>]*compactHeader[^>]*realtimeRefresh=\{false\}[^>]*wide/);
+  assert.match(packetDetailRouteSource, /realtimeRefresh=\{false\}/);
+  assert.match(packetDetailRouteSource, /generateStaticParams/);
+  assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
 
   for (const regionName of [
     "Refined pipeline cockpit frame",
     "Cockpit first-frame hierarchy",
     "Pipeline command strip",
     "Operator command center",
-    "Pipeline source rail collapsed",
-    "Pipeline source rail",
     "Pipeline board",
-    "Active packet drawer",
-    "Worker review memory recovery rail",
-    "Pipeline evidence strip"
+    "Pipeline operational strip",
+    "Mission control focus strip",
+    "Pipeline status key",
+    "Pipeline capacity strip",
+    "Pipeline route map",
+    "Packet inspection panel",
+    "Packet plain-language summary",
+    "Packet detail",
+    "Packet 5 Whys",
+    "Packet source boundaries"
   ]) {
-    assert.match(cockpitSource, new RegExp(`aria-label=["']${regionName}["']`));
+    assert.match(cockpitSource + packetDetailSource, new RegExp(`aria-label=["']${regionName}["']`));
   }
+  assert.doesNotMatch(cockpitSource, /Pipeline workflow strip|Pipeline mobile workflow strip|Idea captured|Review ready|Promote candidate/);
+  assert.match(cockpitSource, /InfoTooltip/);
+  assert.match(cockpitSource, /Each stage shows packets currently sitting there/);
+  assert.match(cockpitSource, /stagePurpose/);
+  assert.match(cockpitSource, /New ideas and requests land here before Kendall decides what they are/);
+  assert.match(cockpitSource, /currentItem\?\.type === "packet" && currentItem\.id === packetId/);
+  assert.match(navSource, /href:\s*"\/settings"/);
+  assert.match(settingsRouteSource, /Dashboard settings/);
+  assert.match(settingsRouteSource, /Usage source settings/);
+  assert.match(settingsRouteSource, /Codex and Claude limits/);
+  assert.match(settingsRouteSource, /UsageVisibilitySettings/);
+  assert.match(settingsUsageVisibilitySource, /kendall\.dashboard\.usage\.codex\.visible/);
+  assert.match(settingsUsageVisibilitySource, /kendall\.dashboard\.usage\.claude\.visible/);
+  assert.match(settingsUsageVisibilitySource, /Usage graph visibility settings/);
+  assert.match(settingsRouteSource, /ccusage local summary/);
+  assert.doesNotMatch(settingsRouteSource + settingsUsageVisibilitySource, /fetch\s*\(|EventSource|WebSocket|XMLHttpRequest|sendBeacon|api\.openai|api\.anthropic|claude\.ai/);
 
   for (const visibleLabel of [
-    "Chief-of-Staff cockpit",
-    "Refined first frame",
-    "Decision queue",
-    "Source intelligence",
-    "Stage board",
-    "Active packet",
-    "Worker / review / memory / recovery",
-    "Evidence runway",
+    "Pipeline",
+    "Pipeline operational strip",
+    "Mission control focus strip",
+    "Most urgent",
+    "Route map",
+    "Pipeline status key",
+    "Needs approval",
+    "Blocked",
+    "Complete",
+    "Pipeline route map",
+    "Codex",
+    "Claude",
+    "5h",
+    "Weekly",
+    "Open full packet",
+    "Where",
+    "Came from",
+    "Got here",
+    "Next",
+    "Blocked by",
+    "Back to pipeline",
+    "Packet detail:",
+    "Packet 5 Whys",
+    "What this packet cannot do",
     "Fixture mode",
-    "Current mode",
-    "Active packets",
-    "Blocked gates",
-    "Provider approval",
     "Top blocked packet",
-    "Global recovery",
-    "Fixture scenario selector",
-    "Static fixture selector",
-    "Failure and prototype scenarios",
-    "Read-only static import mode",
-    "prototype-only",
-    "bounded states",
-    "Selected packet",
-    "Current owner",
-    "Blocked reason",
-    "Next operator option",
-    "Stop-line",
-    "Rollback path",
-    "Golden path lifecycle",
-    "Read-only golden path",
-    "Packet lifecycle snapshots",
-    "Local fixture selection only",
-    "Decision consequence",
-    "Why here",
-    "Needs operator",
     "What happens next",
     "fixture-only",
     "mocked",
@@ -103,79 +156,39 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
     "Pipeline board",
     "Source:",
     "Source trust",
-    "Packet drawer tabs",
-    "Intent",
     "Sources",
     "Route",
     "Stage",
-    "Gates",
     "Evidence",
     "Worker",
     "Memory",
     "Recovery",
     "Local GPU Card",
     "Local GPU health",
-    "Local model readiness",
     "Configured endpoint",
     "Approved endpoint",
-    "Endpoint approval",
     "Configured model",
     "Approved model",
-    "Model approval",
-    "Reachability",
-    "Busy state",
-    "Allowed caller",
     "Latency",
-    "Last failure",
     "Call authority",
-    "Retention policy",
-    "Fallback path",
-    "Hermes Worker Card",
-    "Mocked worker containment",
+    "Hermes Worker Mock",
+    "Mocked Hermes containment",
     "Codex Worker Card",
-    "Implementation worker lane",
+    "implementation_worker",
     "Attempt refs",
-    "Implementation role",
-    "Reviewer boundary",
     "Claude Reviewer Card",
-    "Reviewer / second opinion",
-    "Review purpose",
-    "Allowed context",
-    "Excluded context",
-    "Expected findings schema",
-    "Independence marker",
-    "Cost/scarcity",
+    "independent_review",
     "Approval requirement",
-    "Review status",
-    "Worker profile",
-    "Input refs",
-    "Allowed mounts",
-    "Writable output dir",
     "Network policy",
-    "Credential policy",
-    "Source mutation policy",
-    "Expected output schema",
     "Cleanup policy",
-    "Kill switch",
-    "Execution mode",
-    "Route Fork Panel",
     "Selected route",
     "Rejected routes",
     "Source context",
     "Reason codes",
-    "Low-confidence route actions",
     "Clarify",
     "Downgrade to reference",
     "Send back to Research",
-    "Last event",
-    "Next allowed actions",
-    "Risk flags",
-    "Recovery availability",
     "Typed action",
-    "Action family",
-    "Authority level",
-    "Authority family",
-    "Audit event",
     "Rollback",
     "approve_execution",
     "approve_provider_exception",
@@ -186,30 +199,14 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
     "Pause",
     "Mark Resolved",
     "disabled reason",
-    "What exists",
-    "Why it matters",
-    "Where it came from",
     "Retention",
-    "Evidence state",
-    "missing or unavailable evidence",
-    "known stage",
-    "Memory Proposal Card",
     "Memory proposal blocked",
-    "Proposal id",
     "Packet id",
-    "Target path",
-    "Target folder",
-    "Proposal type",
     "Patch summary",
     "Sensitivity",
     "Freshness",
     "Contradiction",
     "Confidence",
-    "Operator action",
-    "Decision context",
-    "Backup / recovery",
-    "Write-back status",
-    "Proposal-only boundary",
     "Source Boundary Checklist",
     "Canonicality",
     "Allowed reads",
@@ -232,6 +229,25 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
     "derived-only"
   ]) {
     assert.match(pipelineComponentSource + fixtureSource, new RegExp(visibleLabel, "i"));
+  }
+
+  for (const cssContract of [
+    ".pipeline-nohype-shell",
+    ".pipeline-map-layout",
+    ".pipeline-route-map",
+    ".pipeline-route-row",
+    ".pipeline-route-station",
+    ".pipeline-stage-station",
+    ".pipeline-mini-packet",
+    ".pipeline-mini-packet-label",
+    ".pipeline-inspection-panel",
+    ".pipeline-usage-meter",
+    ".pipeline-usage-meter-fill",
+    ".pipeline-status-key",
+    "@keyframes pipeline-route-flow",
+    "prefers-reduced-motion: reduce",
+  ]) {
+    assert.match(globalsSource, new RegExp(cssContract.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 
   for (const { label, state, packetId } of [
@@ -326,8 +342,6 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(fixtureSource, /metadata_only/);
   assert.match(fixtureSource, /fixture_or_wrapper_state_only/);
   assert.match(fixtureSource, /Dashboard does not probe the Windows Ollama endpoint/);
-  assert.match(pipelineComponentSource, /primaryLocalModelHealth/);
-  assert.match(pipelineComponentSource, /localModelStatusLabel/);
   assert.match(fixtureSource, /real_hermes_launch/);
   assert.match(fixtureSource, /obsidian_mutation/);
   assert.match(fixtureSource, /model_gateway_replacement/);
@@ -339,7 +353,6 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(fixtureSource, /matrixRecoveryActions/);
   assert.match(fixtureSource, /catalogRecoveryActions/);
   assert.match(fixtureSource, /execution_attempt\.review_rejected/);
-  assert.match(pipelineComponentSource, /No matrix-backed recovery actions are relevant/);
   assert.match(fixtureSource, /eventType: "work_packet\.recovery_selected\.fixture_preview"/);
   assert.match(fixtureSource, /requiresHumanGate: metadata\.requiresHumanGate/);
   assert.doesNotMatch(fixtureSource, /action\.availability !== "available" && humanGateAction !== null/);
@@ -360,116 +373,94 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   ]) {
     assert.match(fixtureSource, new RegExp(`currentStage: "${stage}"`));
   }
-  for (const cardField of [
-    "Source:",
-    "Source trust:",
-    "Owner",
-    "Confidence",
-    "Risk",
-    "Evidence",
-    "Freshness",
-    "Next:"
-  ]) {
-    assert.match(pipelineComponentSource, new RegExp(cardField));
-  }
-  assert.match(pipelineComponentSource, /w-\[15rem\]/);
-  assert.match(pipelineComponentSource, /Health/);
-  assert.match(pipelineComponentSource, /summarizeStatuses/);
   assert.doesNotMatch(pipelineComponentSource, /Fixture packet stage\./);
-  assert.match(pipelineComponentSource, /No fixture packets in this lane/);
   assert.match(pipelineComponentSource, /useState/);
-  assert.match(pipelineComponentSource, /setSelectedPacketId/);
-  assert.match(pipelineComponentSource, /role="tablist"/);
-  assert.match(pipelineComponentSource, /role="tab"/);
-  assert.match(pipelineComponentSource, /role="tabpanel"/);
-  assert.match(pipelineComponentSource, /aria-pressed=\{selected\}/);
-  assert.match(pipelineComponentSource, /aria-disabled="true"/);
+  assert.match(cockpitSource, /SelectedMapItem/);
+  assert.match(cockpitSource, /setSelectedItem/);
+  assert.doesNotMatch(cockpitSource, /pipelineStageRows/);
+  assert.match(cockpitSource, /pipelineStages\.map/);
+  assert.match(cockpitSource, /RouteStation/);
+  assert.match(cockpitSource, /PacketMiniCard/);
+  assert.match(cockpitSource, /PacketInspection/);
+  assert.match(cockpitSource, /sortPacketsForMap/);
+  assert.match(cockpitSource, /plainStageLabel/);
+  assert.match(cockpitSource, /onSelectStage/);
+  assert.match(cockpitSource, /aria-label=\{`Inspect packet: \$\{packet\.title\}`\}/);
+  assert.match(pipelineComponentSource, /\/pipeline\/packets\/\$\{encodeURIComponent\(packet\.packetId\)\}/);
+  assert.match(packetDetailRouteSource, /decodeURIComponent\(packetId\)/);
   assert.match(pipelineComponentSource, /onSelectPacket/);
   assert.match(pipelineComponentSource, /Packet search/);
   assert.match(pipelineComponentSource, /searchInputRef/);
   assert.match(pipelineComponentSource, /event\.key === "\/"/);
-  assert.match(pipelineComponentSource, /movePacketFocus/);
-  assert.match(pipelineComponentSource, /ArrowLeft|ArrowRight|ArrowUp|ArrowDown/);
-  assert.match(pipelineComponentSource, /onReturnFocus/);
-  assert.match(pipelineComponentSource, /onEscape/);
-  assert.match(pipelineComponentSource, /registerPacketCard/);
+  assert.doesNotMatch(cockpitSource, /movePacketFocus/);
+  assert.match(cockpitSource, /ArrowLeft|ArrowRight|ArrowUp|ArrowDown/);
+  assert.match(cockpitSource, /handleRouteMapKeyDown/);
+  assert.match(cockpitSource, /event\.key === "Escape"/);
+  assert.doesNotMatch(cockpitSource, /registerPacketCard/);
+  assert.doesNotMatch(cockpitSource, /StageLane/);
   assert.match(pipelineComponentSource, /searchablePacketText/);
-  assert.match(pipelineComponentSource, /visibleSelectedPacketId/);
-  assert.match(pipelineComponentSource, /moveDrawerTab/);
-  assert.match(pipelineComponentSource, /Home/);
-  assert.match(pipelineComponentSource, /End/);
-  assert.match(pipelineComponentSource, /disabled/);
-  assert.match(pipelineComponentSource, /aria-describedby/);
   assert.match(pipelineComponentSource, /sr-only/);
-  assert.match(pipelineComponentSource, /max-sm:hidden/);
   assert.match(pipelineComponentSource, /tabIndex=\{0\}/);
-  assert.match(pipelineComponentSource, /tabIndex=\{selected \? 0 : -1\}/);
-  assert.match(pipelineComponentSource, /overflow-x-auto/);
-  assert.match(pipelineComponentSource, /snap-x/);
-  assert.match(pipelineComponentSource, /snap-start/);
-  assert.match(pipelineComponentSource, /grid-rows-\[auto_minmax\(0,1fr\)\]/);
-  assert.match(pipelineComponentSource, /min-h-\[34rem\]/);
+  assert.doesNotMatch(cockpitSource, /overflow-x-auto/);
+  assert.doesNotMatch(cockpitSource, /pipelineStageRows/);
+  assert.match(cockpitSource, /pipelineStages\.map/);
+  assert.match(globalsSource, /\.pipeline-route-map[\s\S]*overflow: visible/);
+  assert.match(globalsSource, /\.pipeline-nohype-shell[\s\S]*overflow: visible/);
+  assert.match(cockpitSource, /pipeline-route-connectors/);
+  assert.match(cockpitSource, /pipeline-route-connector-line/);
+  assert.match(cockpitSource, /pipeline-route-connector-pulse/);
+  assert.match(cockpitSource, /Math\.abs\(currentRect\.top - nextRect\.top\) < 24/);
+  assert.doesNotMatch(cockpitSource, /Math\.abs\(start\.y - end\.y\) < 24/);
+  assert.match(cockpitSource, /currentRect\.height \* 0\.76/);
+  assert.match(cockpitSource, /nextRect\.height \* 0\.24/);
+  assert.match(globalsSource, /@keyframes pipeline-route-flow[\s\S]*stroke-dashoffset/);
+  assert.match(globalsSource, /\.pipeline-route-row[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(min\(12\.5rem, 100%\), 1fr\)\)/);
+  assert.match(globalsSource, /max-width: 720px[\s\S]*\.pipeline-route-row[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(min\(12\.5rem, 100%\), 1fr\)\)/);
+  assert.doesNotMatch(cockpitSource, /min-h-\[34rem\]/);
+  assert.match(globalsSource, /\.kendall-info-tip/);
+  assert.match(globalsSource, /\.dashboard-page-menu-nav[\s\S]*position: fixed/);
+  assert.match(globalsSource, /max-width: 720px[\s\S]*\.dashboard-page-menu-nav[\s\S]*bottom: 1rem/);
+  assert.match(globalsSource, /\.dashboard-page-menu/);
+  assert.match(globalsSource, /\.dashboard-page-menu-summary[\s\S]*list-style: none/);
+  assert.match(globalsSource, /\.dashboard-page-menu-summary::marker[\s\S]*display: none/);
+  assert.match(globalsSource, /\.pipeline-stage-info-icon/);
+  assert.match(globalsSource, /\.pipeline-stage-info-bubble/);
+  assert.match(globalsSource, /\.pipeline-stage-station:hover \.pipeline-stage-info-bubble/);
+  assert.match(globalsSource, /\.pipeline-stage-label/);
+  assert.match(cockpitSource, /Pipeline operational strip/);
+  assert.match(cockpitSource, /Mission control focus strip/);
+  assert.match(cockpitSource, /stageToneForPackets/);
+  assert.match(cockpitSource, /stageCode/);
+  assert.match(cockpitSource, /globalUsageItems/);
+  assert.match(cockpitSource, /providerKey:\s*"codex"/);
+  assert.match(cockpitSource, /providerKey:\s*"claude"/);
+  assert.match(cockpitSource, /pipeline-usage-warning-icon/);
+  assert.doesNotMatch(cockpitSource, /Codex 5h remaining|Codex weekly|Claude 5h remaining|Claude weekly|Connect read-only usage source/);
+  assert.doesNotMatch(cockpitSource, /codexActiveCount|claudePendingCount|codexFiveHourRemaining|claudeFiveHourRemaining/);
+  assert.doesNotMatch(cockpitSource + globalsSource, /pipeline-stage-dot/);
+  assert.match(cockpitSource, /Packet plain-language summary/);
+  assert.match(cockpitSource, /overflowSummary/);
+  assert.doesNotMatch(cockpitSource, /More packets inside|No packets here/);
+  assert.doesNotMatch(cockpitSource, /Pipeline inspection panel|Stage inspection panel|Stage plain-language facts|Choose a packet or stage|No packet is selected by default/);
+  assert.doesNotMatch(cockpitSource, /From idea to shipped|dev branch|no live calls|Active packets|Blocked gates|Provider approval|Global recovery/);
+  assert.doesNotMatch(cockpitSource, /Mission route map|map view|manual/);
   assert.match(pipelineComponentSource, /Refined pipeline cockpit frame/);
   assert.match(pipelineComponentSource, /Cockpit first-frame hierarchy/);
-  assert.match(pipelineComponentSource, /Worker review memory recovery rail/);
-  assert.match(pipelineComponentSource, /Evidence runway/);
-  assert.match(pipelineComponentSource, /xl:grid-cols-\[13\.75rem_minmax\(0,1fr\)_22\.5rem\]/);
-  assert.match(pipelineComponentSource, /lg:grid-cols-\[13\.75rem_minmax\(0,1fr\)\]/);
-  assert.match(pipelineComponentSource, /break-words/);
+  assert.doesNotMatch(cockpitSource, /Pipeline orientation summary/);
+  assert.doesNotMatch(cockpitSource, /This page shows flow, stage, ownership, blockage, and next motion/);
+  assert.doesNotMatch(cockpitSource, /Packet internals live behind the packet click/);
+  assert.doesNotMatch(cockpitSource, /Stage flow/);
+  assert.doesNotMatch(cockpitSource, /pipeline-board-flow/);
+  assert.match(cockpitSource, /shadow-\[0_0_1rem_color-mix\(in_srgb,var\(--info\)_10%,transparent\)\]/);
+  assert.match(cockpitSource, /pipeline-mini-packet-label/);
+  assert.match(globalsSource, /\.pipeline-mini-packet-label[\s\S]*white-space: nowrap/);
   assert.doesNotMatch(cockpitSource, /import\s+\{\s*pipelineStages\s+\}\s+from\s+"..\/..\/lib\/pipeline-fixtures"/);
-  assert.match(pipelineComponentSource, /EvidenceDetailList/);
-  assert.match(pipelineComponentSource, /selectedGateActionId/);
-  assert.match(pipelineComponentSource, /selectedGateFixtureEventId/);
-  assert.match(pipelineComponentSource, /setSelectedGateActionId/);
-  assert.match(pipelineComponentSource, /setSelectedGateFixtureEventId/);
-  assert.match(pipelineComponentSource, /expandedGateActionId/);
-  assert.match(pipelineComponentSource, /Consequence preview/);
-  assert.match(pipelineComponentSource, /Fixture event/);
-  assert.match(pipelineComponentSource, /canActivateHumanGateAction/);
-  assert.match(pipelineComponentSource, /authorityLevelLabel/);
-  assert.match(pipelineComponentSource, /humanGateFixtureEvents\.find\(\(event\) => event\.actionId === action\.actionId\)/);
-  assert.match(pipelineComponentSource, /action\.requiredEvidenceRefs\.length > 0/);
-  assert.match(pipelineComponentSource, /action\.payload\.packetId === packet\.packetId/);
-  assert.match(pipelineComponentSource, /action\.payload\.actionId === action\.actionId/);
-  assert.match(pipelineComponentSource, /fixtureEvent !== undefined/);
-  assert.match(pipelineComponentSource, /fixtureEvent\.toStage === action\.resultingStage/);
-  assert.match(pipelineComponentSource, /fixtureEvent\.toOwner === action\.resultingOwner/);
-  assert.match(pipelineComponentSource, /fixtureEvent\.evidenceRefs\.every/);
-  assert.match(pipelineComponentSource, /Preview fixture event/);
-  assert.match(pipelineComponentSource, /aria-expanded/);
-  assert.match(pipelineComponentSource, /onToggle/);
-  assert.match(pipelineComponentSource, /sourceRefImportance/);
-  assert.match(pipelineComponentSource, /evidenceRefImportance/);
-  assert.match(pipelineComponentSource, /artifactRefImportance/);
-  assert.match(pipelineComponentSource, /gateEvidenceReason/);
-  assert.match(pipelineComponentSource, /recoveryEvidenceReason/);
-  assert.match(pipelineComponentSource, /RecoveryDrawerPanel/);
-  assert.match(pipelineComponentSource, /ActionGuardPanel/);
-  assert.match(pipelineComponentSource, /ActionGuardSummary/);
-  assert.match(pipelineComponentSource, /evaluateFixtureActionDecision/);
-  assert.match(pipelineComponentSource, /blockingActionGuard/);
-  assert.match(pipelineComponentSource, /Stale or unsafe action guard/);
-  assert.match(pipelineComponentSource, /Deterministic guard cases/);
-  assert.match(pipelineComponentSource, /State changed/);
-  assert.match(pipelineComponentSource, /Action binding/);
-  assert.match(pipelineComponentSource, /Primary risk prevented/);
-  assert.match(pipelineComponentSource, /Safe next option/);
-  assert.match(pipelineComponentSource, /evaluateFixtureActionDecision\(packet, action\.actionId, "human_gate"\)\.submitCapable/);
-  assert.match(pipelineComponentSource, /recoveryRequiresHumanGate\(fixtureEvent\)/);
-  assert.match(pipelineComponentSource, /Human Gate reference/);
-  assert.match(pipelineComponentSource, /selectedRecoveryActionId/);
-  assert.match(pipelineComponentSource, /selectedRecoveryFixtureEventId/);
-  assert.match(pipelineComponentSource, /expandedRecoveryActionId/);
-  assert.match(pipelineComponentSource, /Recovery consequence/);
-  assert.match(pipelineComponentSource, /Recovery fixture event/);
-  assert.match(pipelineComponentSource, /Preview recovery event/);
-  assert.match(pipelineComponentSource, /canSelectRecoveryAction/);
-  assert.match(pipelineComponentSource, /recoveryRequiresHumanGate/);
-  assert.match(pipelineComponentSource, /humanGateActions\.find/);
-  assert.match(pipelineComponentSource, /recoveryFixtureEvents\.find\(\(event\) => event\.actionId === action\.actionId\)/);
-  assert.match(pipelineComponentSource, /fixtureEvent !== undefined/);
-  assert.match(pipelineComponentSource, /fixtureEvent\.toStage === action\.resultingStage/);
-  assert.match(pipelineComponentSource, /fixtureEvent\.toOwner === action\.resultingOwner/);
+  assert.match(packetDetailSource, /Packet 5 Whys/);
+  assert.match(packetDetailSource, /Evidence and artifacts/);
+  assert.match(packetDetailSource, /Workers and review/);
+  assert.match(packetDetailSource, /Gate, memory, recovery/);
+  assert.match(packetDetailSource, /Packet source boundaries/);
+  assert.doesNotMatch(cockpitSource, /FixtureScenarioSelector|GoldenPathLifecycle|ActivePacketDrawer|RecoveryDrawerPanel|ActionGuardPanel|EvidenceDetailList|evaluateFixtureActionDecision/);
   assert.match(fixtureSource, /routeFork/);
   assert.match(fixtureSource, /pipelineFixtureScenarios/);
   assert.match(fixtureSource, /pipelineGoldenPathSnapshots/);
@@ -715,16 +706,18 @@ test("pipeline Hermes worker fixtures render mocked containment without runtime 
 test("pipeline Codex and Claude lane fixtures stay distinct and metadata-only", async () => {
   const { pipelineClaudeReviewFixtures, pipelineCockpitPackets, pipelineCodexWorkerFixtures, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
 
-  const pipelineComponentSource = await readPipelineComponentSource();
+  const packetDetailSource = await readFile(packetDetailPath, "utf8");
+  const fixtureSource = await readFile(fixturesPath, "utf8");
 
   assert.ok(Array.isArray(pipelineCodexWorkerFixtures), "Codex worker fixtures should be exported");
   assert.ok(Array.isArray(pipelineClaudeReviewFixtures), "Claude review fixtures should be exported");
   assert.ok(pipelineCodexWorkerFixtures.length > 0, "Codex worker fixtures should cover active/readiness state");
   assert.ok(pipelineClaudeReviewFixtures.length > 0, "Claude review fixtures should cover skipped or blocked review state");
-  assert.match(pipelineComponentSource, /packet\.codexWorker \? <CodexWorkerCard worker=\{packet\.codexWorker\} \/> : null/);
-  assert.match(pipelineComponentSource, /packet\.claudeReview \? <ClaudeReviewerCard review=\{packet\.claudeReview\} \/> : null/);
-  assert.match(pipelineComponentSource, /Implementation worker lane/);
-  assert.match(pipelineComponentSource, /Reviewer \/ second opinion/);
+  assert.match(packetDetailSource, /Workers and review/);
+  assert.match(packetDetailSource, /Codex:/);
+  assert.match(packetDetailSource, /Claude:/);
+  assert.match(fixtureSource, /implementation_worker/);
+  assert.match(fixtureSource, /independent_review/);
 
   for (const fixture of pipelineCodexWorkerFixtures) {
     assert.equal(fixture.role, "implementation_worker");
@@ -823,31 +816,21 @@ test("pipeline Codex and Claude lane fixtures stay distinct and metadata-only", 
 test("pipeline memory proposal fixtures stay review-gated and proposal-only", async () => {
   const { pipelineCockpitPackets, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
   const pipelineComponentSource = await readPipelineComponentSource();
+  const packetDetailSource = await readFile(packetDetailPath, "utf8");
   const fixtureSource = await readFile(fixturesPath, "utf8");
   const routeSource = await readFile(routePath, "utf8");
-  const allPipelineSource = `${routeSource}\n${fixtureSource}\n${pipelineComponentSource}`;
+  const allPipelineSource = `${routeSource}\n${fixtureSource}\n${pipelineComponentSource}\n${packetDetailSource}`;
 
-  assert.match(pipelineComponentSource, /MemoryProposalCard/);
-  assert.match(pipelineComponentSource, /packet\.memoryProposals\.map\(\(proposal\) => <MemoryProposalCard/);
+  assert.match(packetDetailSource, /Memory proposals/);
+  assert.match(packetDetailSource, /packet\.memoryProposals\.map\(\(proposal\)/);
 
   for (const visibleLabel of [
-    "Memory Proposal Card",
-    "Proposal id",
     "Packet id",
-    "Target path",
-    "Target folder",
-    "Proposal type",
     "Patch summary",
     "Sensitivity",
     "Freshness",
     "Contradiction",
     "Confidence",
-    "Operator action",
-    "Decision context",
-    "Backup / recovery",
-    "Write-back status",
-    "Source boundary labels",
-    "Proposal-only boundary",
     "Obsidian is canonical and human-owned",
     "LLM-Wiki is derived, disposable, and rebuildable",
   ]) {

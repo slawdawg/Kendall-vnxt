@@ -337,7 +337,7 @@ function Row({ row, source }: { row: RunnerAssignmentStatusRowView; source: Excl
   }
 
   return (
-    <article className="rounded-[0.75rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{labelFor(row.classification)}</p>
@@ -349,20 +349,20 @@ function Row({ row, source }: { row: RunnerAssignmentStatusRowView; source: Excl
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{row.reason}</p>
       <div className="mt-3 grid gap-2 md:grid-cols-3">
-        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">source: {sourceLabel(source)}</span>
-        <span className="break-all rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">owner: {row.owner ?? "none"}</span>
-        <span className="break-all rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">branch: {row.branch ?? "none"}</span>
-        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">phase: {row.phase ?? "none"}</span>
-        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">heartbeat: {row.heartbeatAgeSeconds ?? "missing"}</span>
-        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">worktree: {row.worktreeState}</span>
-        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">delivery: {row.deliveryState}</span>
-        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">handoff: {row.handoffStatus}</span>
-        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">lifecycle: {row.handoffLifecycleState}</span>
-        <span className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">recovery: {row.handoffRecoveryAction}</span>
+        <span className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">source: {sourceLabel(source)}</span>
+        <span className="break-all rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">owner: {row.owner ?? "none"}</span>
+        <span className="break-all rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">branch: {row.branch ?? "none"}</span>
+        <span className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">phase: {row.phase ?? "none"}</span>
+        <span className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">heartbeat: {row.heartbeatAgeSeconds ?? "missing"}</span>
+        <span className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">worktree: {row.worktreeState}</span>
+        <span className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">delivery: {row.deliveryState}</span>
+        <span className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">handoff: {row.handoffStatus}</span>
+        <span className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">lifecycle: {row.handoffLifecycleState}</span>
+        <span className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)]">recovery: {row.handoffRecoveryAction}</span>
       </div>
-      <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--accent)]">{row.nextSafeAction}</p>
+      <p className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--accent)]">{row.nextSafeAction}</p>
       {row.sourceCompletionEvidence ? (
-        <div data-testid="source-completion-evidence" className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        <div data-testid="source-completion-evidence" className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
           <p className="font-semibold text-[var(--foreground)]">Source completion evidence</p>
           <p>Kind: {row.sourceCompletionEvidence.evidenceKind}</p>
           <p className="break-all">Record: {row.sourceCompletionEvidence.recordId}</p>
@@ -375,14 +375,14 @@ function Row({ row, source }: { row: RunnerAssignmentStatusRowView; source: Excl
         </div>
       ) : null}
       {row.handoffRecoveryAction !== "no-action" ? (
-        <p className="mt-2 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        <p className="mt-2 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
           Recovery: {row.handoffRecoverySummary}
         </p>
       ) : null}
       {row.currentCommand ? <p className="mt-2 text-xs leading-5 text-[var(--muted)]">Current command: {row.currentCommand}</p> : null}
       {row.lastResult ? <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Last result: {row.lastResult}</p> : null}
       {hasAvailableHandoff ? (
-        <div data-testid="resume-packet" className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        <div data-testid="resume-packet" className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
           <p className="font-semibold text-[var(--foreground)]">Resume packet</p>
           <p className="break-all">Owner: {row.owner ?? "none"}</p>
           <p className="break-all">Branch: {row.branch ?? "none"}</p>
@@ -421,7 +421,7 @@ function Row({ row, source }: { row: RunnerAssignmentStatusRowView; source: Excl
         </div>
       ) : null}
       {auditEntries.length > 0 ? (
-        <div data-testid="handoff-audit-trail" className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+        <div data-testid="handoff-audit-trail" className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <p className="font-semibold text-[var(--foreground)]">Handoff audit trail</p>
@@ -667,7 +667,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
   );
   const closedAssignmentEvidenceRows = [...report.workspaceAssignments, ...report.laneAssignments].filter((row) => row.classification === "closed");
   return (
-    <section className="rounded-[1rem] border bg-[var(--surface)] p-4 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--surface)] p-4 shadow-sm">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Runner Assignment Status</p>
@@ -682,21 +682,21 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
       </div>
 
       {report.reportStatus === "error" ? (
-        <p className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--warn)]">
+        <p className="mt-4 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--warn)]">
           Assignment status could not be inspected. {report.errorMessage ?? "No assignment action."}
         </p>
       ) : null}
 
       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {Object.entries(report.summary).map(([label, value]) => (
-          <div key={label} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
             <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-1 text-lg font-semibold">{value}</p>
           </div>
         ))}
       </div>
 
-      <div data-testid="source-completion-rollup" className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+      <div data-testid="source-completion-rollup" className="mt-4 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Source completion rollup</p>
         <div className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)] sm:grid-cols-2">
           <p>Total: {report.sourceCompletionRollup.total}</p>
@@ -706,7 +706,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
         </div>
       </div>
 
-      <div className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+      <div className="mt-4 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Dispatcher continuity snapshot</p>
         <p className="mt-1 text-sm font-semibold">{report.dispatcherContinuity.snapshotId}</p>
         <div className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)] sm:grid-cols-2">
@@ -736,7 +736,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
       </div>
 
       {closedAssignmentEvidenceRows.length > 0 ? (
-        <div data-testid="closed-assignment-evidence" className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+        <div data-testid="closed-assignment-evidence" className="mt-4 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Closed assignment evidence</p>
           <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
             {closedAssignmentEvidenceRows.length} closed assignment evidence {closedAssignmentEvidenceRows.length === 1 ? "row" : "rows"} retained as
@@ -752,7 +752,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
         </div>
       ) : null}
 
-      <div data-testid="assignment-row-filters" className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+      <div data-testid="assignment-row-filters" className="mt-4 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Assignment row filters</p>
@@ -857,7 +857,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
       </div>
 
       {filteredRows.length === 0 ? (
-        <div className="mt-4 flex flex-col gap-3 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-4 flex flex-col gap-3 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 text-sm text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between">
           <p>No assignment rows match the current filters. {emptyStateGuidance}</p>
           <div className="grid gap-2">
             <div className="flex flex-wrap gap-2">
@@ -921,7 +921,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
       )}
 
       {report.degradedInputs.length > 0 ? (
-        <details className="mt-4 rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2">
+        <details className="mt-4 rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2">
           <summary className="cursor-pointer text-sm font-semibold">Degraded evidence</summary>
           <div className="mt-2 grid gap-2">
             {report.degradedInputs.map((input, index) => (

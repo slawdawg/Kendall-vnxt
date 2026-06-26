@@ -41,7 +41,7 @@ export function WorkItemFilterPanel({
   pendingSave: boolean;
 }) {
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Filters</p>
@@ -189,7 +189,7 @@ export function WorkItemFilterPanel({
             savedViews.map((view) => (
               <div
                 key={view.id}
-                className="flex flex-col gap-3 rounded-[1.25rem] border bg-[var(--surface)] p-4 lg:flex-row lg:items-center lg:justify-between"
+                className="flex flex-col gap-3 rounded-[0.5rem] border bg-[var(--surface)] p-4 lg:flex-row lg:items-center lg:justify-between"
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">

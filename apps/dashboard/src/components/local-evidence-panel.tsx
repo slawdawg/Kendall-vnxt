@@ -58,7 +58,7 @@ export function LocalEvidencePanel({ workItemId }: { workItemId: string }) {
   const provider = explanation ? providerStatus(explanation) : null;
 
   return (
-    <section id="local-check" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="local-check" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Local check</p>
@@ -83,14 +83,14 @@ export function LocalEvidencePanel({ workItemId }: { workItemId: string }) {
       </div>
 
       {error ? (
-        <div className="mt-5 rounded-[1.25rem] border border-[var(--warn)]/30 bg-[var(--warn)]/8 p-4 text-sm leading-6 text-[var(--warn)]">
+        <div className="mt-5 rounded-[0.5rem] border border-[var(--warn)]/30 bg-[var(--warn)]/8 p-4 text-sm leading-6 text-[var(--warn)]">
           {error}
         </div>
       ) : null}
 
       {explanation ? (
         <div className="mt-5 grid gap-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Result</p>
@@ -103,7 +103,7 @@ export function LocalEvidencePanel({ workItemId }: { workItemId: string }) {
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Model use</p>
               {provider ? (
                 <>
@@ -120,7 +120,7 @@ export function LocalEvidencePanel({ workItemId }: { workItemId: string }) {
               ) : null}
             </div>
 
-            <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Next safe moves</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {explanation.nextStepSuggestions.map((suggestion) => (
@@ -132,12 +132,12 @@ export function LocalEvidencePanel({ workItemId }: { workItemId: string }) {
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Recent evidence</p>
             <div className="mt-3 grid gap-3">
               {explanation.evidence.length > 0 ? (
                 explanation.evidence.map((item) => (
-                  <div key={`${item.eventType}-${item.createdAt}`} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                  <div key={`${item.eventType}-${item.createdAt}`} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                     <p className="text-sm font-semibold">{item.summary}</p>
                     <p className="mt-1 text-xs text-[var(--muted)]">{item.eventType}</p>
                   </div>
@@ -148,7 +148,7 @@ export function LocalEvidencePanel({ workItemId }: { workItemId: string }) {
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Safety boundaries</p>
             <div className="mt-3 grid gap-2">
               {explanation.boundaries.map((boundary) => (

@@ -18,7 +18,7 @@ export function RouteBrief({
   action?: RouteBriefAction;
 }) {
   return (
-    <section className="rounded-[0.75rem] border bg-[var(--panel)] p-4 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--info)]">{eyebrow}</p>

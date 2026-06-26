@@ -35,6 +35,26 @@ Performance preference:
 2. Ollama is used to conserve Codex usage by handling preparation, classification, summaries, and cheap validation.
 3. Claude is reserved for independent critique rather than routine generation.
 
+## Claude Read-Only Review Policy
+
+Claude Code CLI may be used as a durable read-only review lane when the operator
+asks for Claude review or an active end-to-end lane explicitly calls for
+independent Claude critique.
+
+The approved default command shape is non-interactive and bounded:
+
+- `claude -p`
+- read/search tools only
+- no edit, shell, GitHub mutation, browser, credential, cleanup, or filesystem
+  mutation tools
+- bounded prompt scope naming files, a diff, or an artifact packet
+- `--max-budget-usd 1` unless the operator approves more
+- retained evidence limited to summarized findings, paths, line references,
+  command metadata, budget cap, and follow-up decisions
+
+This is a repo-level authority contract. It does not override system, tenant,
+provider, or sandbox policy if a higher layer vetoes external review.
+
 ## Architectural Decision
 
 Kendall_vNxt should prioritize a task orchestrator over a classic LLM routing gateway.
@@ -94,7 +114,7 @@ It should not retain raw prompts, raw completions, reasoning traces, provider pa
 ## Open Questions
 
 - Verify exact non-interactive command behavior for Codex CLI worker execution.
-- Verify exact non-interactive command behavior for Claude Code CLI review execution.
-- Decide whether Claude Code review workers are allowed to edit files or must run review-only.
+- Verify exact non-interactive command behavior for Claude Code CLI review execution in each runtime environment.
+- Claude Code review workers are read-only by default; edit mode requires a separate explicit approval and authority contract.
 - Decide whether GitHub Issues or local workspace manifests are the canonical task queue.
 - Evaluate GitHub Models only as a future low-volume API lane after account quotas and access are verified.

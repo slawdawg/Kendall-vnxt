@@ -64,9 +64,33 @@ export default defineConfig({
       ],
   projects: [
     {
-      name: "chromium",
+      name: "windows-11-chromium",
       use: {
         ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 960 },
+        userAgent:
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+      },
+    },
+    {
+      name: "ipad-pro-gen-2-safari-ios-26",
+      use: {
+        browserName: "webkit",
+        viewport: { width: 1024, height: 1366 },
+        deviceScaleFactor: 2,
+        hasTouch: true,
+        isMobile: true,
+        userAgent:
+          "Mozilla/5.0 (iPad; CPU OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
+      },
+    },
+    {
+      name: "iphone-15-pro-max-safari-ios-27",
+      use: {
+        ...devices["iPhone 15 Pro Max"],
+        browserName: "webkit",
+        userAgent:
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1",
       },
     },
   ],

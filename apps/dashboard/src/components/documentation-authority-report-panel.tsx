@@ -8,7 +8,7 @@ export function DocumentationAuthorityReportPanel({ report }: { report: Document
   const missingCount = [...report.indexes, report.approvalCheckpoint].filter((document) => document.status !== "present").length;
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Documentation authority</p>
@@ -26,7 +26,7 @@ export function DocumentationAuthorityReportPanel({ report }: { report: Document
           ["Blocked stories", `${report.blockedStories.length} pending approval`],
           ["Missing docs", String(missingCount)],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -34,11 +34,11 @@ export function DocumentationAuthorityReportPanel({ report }: { report: Document
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Current indexes</h4>
           <div className="mt-3 space-y-3">
             {[...report.indexes, report.approvalCheckpoint].map((document, documentIndex) => (
-              <article key={`authority-document:${document.path}:${documentIndex}`} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+              <article key={`authority-document:${document.path}:${documentIndex}`} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{document.status}</p>
@@ -55,11 +55,11 @@ export function DocumentationAuthorityReportPanel({ report }: { report: Document
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Blocked authority stories</h4>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               {report.blockedStories.map((story, storyIndex) => (
-                <article key={`blocked-story:${story.path}:${storyIndex}`} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                <article key={`blocked-story:${story.path}:${storyIndex}`} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                   <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">Story {story.storyId}</p>
                   <h5 className="mt-1 text-sm font-semibold">{story.authorityFamily}</h5>
                   <p className="mt-2 break-all text-xs leading-5 text-[var(--muted)]">{story.path}</p>
@@ -69,11 +69,11 @@ export function DocumentationAuthorityReportPanel({ report }: { report: Document
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Drift checks</h4>
             <div className="mt-3 space-y-3">
               {report.driftChecks.map((check) => (
-                <article key={check.stepId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                <article key={check.stepId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{check.status}</p>

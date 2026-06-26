@@ -35,14 +35,14 @@ export default async function AuditPage() {
         savedViews={savedViews}
       />
 
-      <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
-        <h2 className="text-2xl font-semibold">Audit history</h2>
-        <div className="mt-6 space-y-4">
+      <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
+        <h2 className="text-xl font-semibold">Audit history</h2>
+        <div className="mt-4 space-y-3">
           {audits.length === 0 ? (
             <p className="text-sm text-[var(--muted)]">No audit events have been recorded yet.</p>
           ) : (
             audits.map((audit) => (
-              <article key={audit.id} className="rounded-[1.25rem] border bg-[var(--surface)] p-5">
+              <article key={audit.id} className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="font-mono text-xs uppercase tracking-[0.2em] text-[var(--accent)]">{audit.mode}</p>

@@ -66,7 +66,7 @@ export function DeliveryReadinessPanel({
   }
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-2">
         <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Delivery gate</p>
         <h3 className="text-xl font-semibold">Review readiness</h3>
@@ -79,7 +79,7 @@ export function DeliveryReadinessPanel({
           ["CI", deliveryReadiness.ciStatus],
           ["Merge", deliveryReadiness.mergeStatus],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-base font-semibold capitalize">{labelFor(value)}</p>
           </div>

@@ -12,14 +12,14 @@ function NextLanePanel({ nextLane }: { nextLane?: NextLaneRecommendationView | n
   }
 
   return (
-    <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+    <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
       <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Next lane handoff</p>
       <p className="mt-2 text-sm font-semibold">{nextLane.laneTitle}</p>
       <div className="mt-2 grid gap-2">
-        <p className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+        <p className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
           branch: {nextLane.branchName}
         </p>
-        <p className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
+        <p className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]">
           start: {nextLane.startCommand}
         </p>
       </div>
@@ -47,7 +47,7 @@ function NextLanePanel({ nextLane }: { nextLane?: NextLaneRecommendationView | n
       </div>
       <div className="mt-3 space-y-2">
         {nextLane.stopLines.map((stopLine) => (
-          <p key={stopLine} className="rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+          <p key={stopLine} className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
             {stopLine}
           </p>
         ))}
@@ -61,7 +61,7 @@ function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
   const relatedDocs = item.relatedDocs ?? [];
 
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{item.priority}</p>
@@ -72,27 +72,27 @@ function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
         </span>
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{item.summary}</p>
-      <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+      <p className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
         slice: {item.recommendedSliceSize}
       </p>
       <div className="mt-3 space-y-2">
         {item.evidence.map((evidence, evidenceIndex) => (
           <p
             key={`${item.itemId}:evidence:${evidence}:${evidenceIndex}`}
-            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]"
+            className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]"
           >
             {evidence}
           </p>
         ))}
       </div>
       {sourceEvidenceLabels.length > 0 ? (
-        <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Source evidence labels</p>
           <div className="mt-2 grid gap-2">
             {sourceEvidenceLabels.map((label, index) => (
               <p
                 key={`${item.itemId}:source-evidence:${label}:${index}`}
-                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+                className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
               >
                 {label}
               </p>
@@ -103,20 +103,20 @@ function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
       {item.blockedBy.length > 0 ? (
         <div className="mt-3 space-y-2">
           {item.blockedBy.map((blocker) => (
-            <p key={blocker} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+            <p key={blocker} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
               {blocker}
             </p>
           ))}
         </div>
       ) : null}
-      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+      <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related report links</p>
         <div className="mt-2 grid gap-2">
           {item.relatedReports.map((report) => (
             <Link
               key={report}
               href={reportShortcutHref(report)}
-              className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+              className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
               {report}
             </Link>
@@ -124,13 +124,13 @@ function BacklogItemCard({ item }: { item: SafeDevelopmentBacklogItemView }) {
         </div>
       </div>
       {relatedDocs.length > 0 ? (
-        <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
           <div className="mt-2 grid gap-2">
             {relatedDocs.map((doc, index) => (
               <p
                 key={`${item.itemId}:related-doc:${doc}:${index}`}
-                className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+                className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
               >
                 {doc}
               </p>
@@ -156,7 +156,7 @@ export function SafeDevelopmentBacklogPanel({ report }: { report: SafeDevelopmen
   const blockedItems = report.items.filter((item) => item.status.includes("blocked")).length;
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Safe backlog</p>
@@ -174,7 +174,7 @@ export function SafeDevelopmentBacklogPanel({ report }: { report: SafeDevelopmen
           ["Ready", String(readyItems)],
           ["Blocked", String(blockedItems)],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -182,7 +182,7 @@ export function SafeDevelopmentBacklogPanel({ report }: { report: SafeDevelopmen
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Backlog items</h4>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             {report.items.map((item) => (
@@ -192,7 +192,7 @@ export function SafeDevelopmentBacklogPanel({ report }: { report: SafeDevelopmen
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -203,7 +203,7 @@ export function SafeDevelopmentBacklogPanel({ report }: { report: SafeDevelopmen
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (

@@ -24,6 +24,21 @@ type CandidateWorkCreatePayload = {
   priority?: "low" | "normal" | "high" | "urgent";
 };
 
+type PipelineViewportTarget = {
+  width: number;
+  height: number;
+};
+
+function pipelineViewportForProject(projectName: string): PipelineViewportTarget {
+  if (projectName === "ipad-pro-gen-2-safari-ios-26") {
+    return { width: 1024, height: 1366 };
+  }
+  if (projectName === "iphone-15-pro-max-safari-ios-27") {
+    return { width: 430, height: 932 };
+  }
+  return { width: 1440, height: 960 };
+}
+
 async function createCandidateWork(request: APIRequestContext, payload: CandidateWorkCreatePayload) {
   const response = await request.post(`${supervisorUrl}/candidate-work`, { data: payload });
   expect(response.ok()).toBeTruthy();
@@ -541,7 +556,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(intake.getByText(/pnpm run test:e2e:dashboard/)).toBeVisible();
   });
 
-  test("opens fixture-backed pipeline cockpit without live execution framing", async ({ page, baseURL }) => {
+  test("opens fixture-backed pipeline cockpit without live execution framing", async ({ page, baseURL }, testInfo) => {
+    testInfo.setTimeout(60_000);
     const dashboardOrigin = new URL(baseURL ?? "http://127.0.0.1:3100").origin;
     const supervisorOrigin = new URL(supervisorUrl).origin;
     const liveSupervisorRequests: string[] = [];
@@ -578,74 +594,140 @@ test.describe("dashboard workflow coverage", () => {
     await page.goto("/pipeline");
 
     await expect(page.getByRole("navigation", { name: "Dashboard sections" })).toBeVisible();
+    const pageMenu = page.locator(".dashboard-page-menu-summary");
+    await expect(pageMenu).toBeVisible();
+    await expect(pageMenu.locator(".dashboard-page-menu-icon span")).toHaveCount(3);
+    const compactHeaderEvidence = await page.evaluate(() => {
+      const menu = document.querySelector(".dashboard-page-menu-summary");
+      const menuRect = menu?.getBoundingClientRect();
+      return {
+        menuIsIconOnly: menu?.textContent?.trim() === "",
+        menuIsBottomLeft: Boolean(menuRect && menuRect.left <= 24 && menuRect.bottom >= window.innerHeight - 24),
+        menuIsTopLeft: Boolean(menuRect && menuRect.left <= 24 && menuRect.top <= 24),
+        viewportWidth: window.innerWidth,
+      };
+    });
+    expect(compactHeaderEvidence.menuIsIconOnly).toBe(true);
+    if (compactHeaderEvidence.viewportWidth <= 720) {
+      expect(compactHeaderEvidence.menuIsBottomLeft).toBe(true);
+    } else {
+      expect(compactHeaderEvidence.menuIsTopLeft).toBe(true);
+    }
+    await pageMenu.click();
+    await expect(page.locator("nav a[href=\"/settings\"]")).toBeVisible();
     await expect(page.locator("nav a[href=\"/pipeline\"]")).toHaveAttribute("aria-current", "page");
+    await pageMenu.click();
     const cockpit = page.getByRole("main", { name: "Pipeline cockpit" });
     await expect(cockpit).toBeVisible();
     const refinedFrame = page.getByLabel("Refined pipeline cockpit frame");
     await expect(refinedFrame).toBeVisible();
     const firstFrame = page.getByLabel("Cockpit first-frame hierarchy");
     await expect(firstFrame).toBeVisible();
-    await expect(firstFrame.getByText("Chief-of-Staff cockpit", { exact: true })).toBeVisible();
-    await expect(firstFrame.getByText("Refined first frame", { exact: true })).toBeVisible();
+    await expect(firstFrame.getByRole("heading", { name: "Pipeline", exact: true })).toBeVisible();
+    await expect(firstFrame.getByText("manual", { exact: true })).toHaveCount(0);
+    await expect(firstFrame.getByText("Mission route map", { exact: true })).toHaveCount(0);
+    await expect(firstFrame.getByText("From idea to shipped", { exact: true })).toHaveCount(0);
+    await expect(firstFrame.getByText("dev branch", { exact: true })).toHaveCount(0);
+    await expect(firstFrame.getByText("no live calls", { exact: true })).toHaveCount(0);
     const commandStrip = page.getByLabel("Pipeline command strip");
     await expect(commandStrip).toBeVisible();
     await expect(page.getByLabel("Operator command center")).toBeVisible();
-    await expect(commandStrip.getByText("Current mode", { exact: true })).toBeVisible();
-    await expect(commandStrip.getByText("Fixture mode", { exact: true })).toBeVisible();
-    await expect(commandStrip.getByLabel("Active packets: 10", { exact: true })).toBeVisible();
-    await expect(commandStrip.getByLabel("Blocked gates: 4", { exact: true })).toBeVisible();
-    await expect(commandStrip.getByLabel("Provider approval: disabled", { exact: true })).toBeVisible();
+    await expect(commandStrip.getByLabel(/Active packets:/)).toHaveCount(0);
+    await expect(commandStrip.getByLabel(/Blocked gates:/)).toHaveCount(0);
+    await expect(commandStrip.getByLabel("Provider approval: disabled", { exact: true })).toHaveCount(0);
     await expect(commandStrip.getByLabel("Top blocked packet: Approve bounded cockpit fixture plan", { exact: true })).toBeVisible();
-    await expect(commandStrip.getByLabel("Global recovery: 49 fixture-only", { exact: true })).toBeVisible();
+    await expect(commandStrip.getByLabel(/Global recovery:/)).toHaveCount(0);
+    await expect(page.getByLabel("Pipeline workflow strip")).toHaveCount(0);
+    await expect(page.getByLabel("Pipeline mobile workflow strip")).toHaveCount(0);
+    await expect(page.getByText("Idea captured", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Review ready", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Promote candidate", { exact: true })).toHaveCount(0);
     const packetSearch = commandStrip.getByLabel("Packet search", { exact: true });
     await expect(packetSearch).toBeVisible();
-    const fixtureScenarioSelector = page.getByLabel("Fixture scenario selector");
-    await expect(fixtureScenarioSelector).toBeVisible();
-    await expect(fixtureScenarioSelector.getByText("Read-only static import mode", { exact: false })).toBeVisible();
-    for (const scenarioLabel of [
-      "happy path",
-      "model unavailable",
-      "local GPU busy",
-      "low-confidence route",
-      "source excluded",
-      "stale memory",
-      "contradiction detected",
-      "Hermes timeout",
-      "Claude skipped",
-      "rejected Claude finding",
-      "blocked Obsidian write-back",
-      "provider approval required",
-      "recovery action available",
-      "no-packets",
-    ]) {
-      await expect(fixtureScenarioSelector.getByRole("heading", { name: scenarioLabel, exact: true })).toBeVisible();
-    }
-    await expect(fixtureScenarioSelector.getByText("Current owner", { exact: true }).first()).toBeVisible();
-    await expect(fixtureScenarioSelector.getByText("Blocked reason", { exact: true }).first()).toBeVisible();
-    await expect(fixtureScenarioSelector.getByText("Next operator option", { exact: true }).first()).toBeVisible();
-    await expect(fixtureScenarioSelector.getByText("Stop-line", { exact: true }).first()).toBeVisible();
-    await expect(fixtureScenarioSelector.getByText("Rollback path", { exact: true }).first()).toBeVisible();
-    const goldenPathLifecycle = page.getByLabel("Golden path lifecycle");
-    await expect(goldenPathLifecycle).toBeVisible();
-    await expect(goldenPathLifecycle.getByText("Local fixture selection only", { exact: false })).toBeVisible();
-    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Capture", exact: true })).toBeVisible();
-    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Classify", exact: true })).toBeVisible();
-    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Route", exact: true })).toBeVisible();
-    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Shape", exact: true })).toBeVisible();
-    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Human Gate", exact: true })).toBeVisible();
-    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Execute", exact: true })).toBeVisible();
-    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Review", exact: true })).toBeVisible();
-    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Deliver", exact: true })).toBeVisible();
-    await expect(goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Learn", exact: true })).toBeVisible();
-    await expect(goldenPathLifecycle.getByText(/Decision consequence:/).first()).toBeVisible();
-    await expect(goldenPathLifecycle.getByText(/Why here:/).first()).toBeVisible();
-    await expect(goldenPathLifecycle.getByText(/Needs operator:/).first()).toBeVisible();
-    await expect(goldenPathLifecycle.getByText(/What happens next:/).first()).toBeVisible();
-    const sourceRail = page.getByLabel("Pipeline source rail", { exact: true });
-    await expect(sourceRail).toBeVisible();
+    await expect(page.getByLabel("Fixture scenario selector")).toHaveCount(0);
+    await expect(page.getByLabel("Golden path lifecycle")).toHaveCount(0);
+    await expect(page.getByLabel("Pipeline source rail", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Active packet drawer")).toHaveCount(0);
+    await expect(page.getByLabel("Pipeline evidence strip")).toHaveCount(0);
+    await expect(page.getByLabel("Pipeline orientation summary")).toHaveCount(0);
     const pipelineBoard = page.getByLabel("Pipeline board");
     await expect(pipelineBoard).toBeVisible();
-    await expect(pipelineBoard.locator("article")).toHaveCount(35);
+    await expect(page.getByLabel("NohypeAI inspired workflow map")).toHaveCount(0);
+    await expect(page.getByLabel("Deep Review and artifact stack")).toHaveCount(0);
+    await expect(pipelineBoard.getByText("Route map", { exact: true })).toBeVisible();
+    await expect(pipelineBoard.locator(".kendall-info-tip")).toHaveCount(1);
+    await expect(pipelineBoard.locator(".kendall-info-tip-icon").first()).toHaveText("i");
+    await expect(pipelineBoard.locator(".kendall-info-tip-bubble").first()).toHaveText("Each stage shows packets currently sitting there. Color marks state; order puts urgent work first.");
+    await expect(pipelineBoard.getByText("map view", { exact: true })).toHaveCount(0);
+    const statusKey = page.getByLabel("Pipeline status key");
+    await expect(statusKey).toBeVisible();
+    for (const statusLabel of ["Active", "Waiting", "Needs approval", "Blocked", "Complete"]) {
+      await expect(statusKey.getByText(statusLabel, { exact: true })).toBeVisible();
+    }
+    const operationalStrip = page.getByLabel("Pipeline operational strip");
+    await expect(operationalStrip).toBeVisible();
+    const capacityStrip = page.getByLabel("Pipeline capacity strip");
+    await expect(capacityStrip).toBeVisible();
+    await expect(capacityStrip.getByText("Codex", { exact: true })).toBeVisible();
+    await expect(capacityStrip.getByText("Claude", { exact: true })).toBeVisible();
+    await expect(capacityStrip.getByText("5h", { exact: true })).toHaveCount(2);
+    await expect(capacityStrip.getByText("Weekly", { exact: true })).toHaveCount(2);
+    await expect(capacityStrip.getByText("not connected", { exact: true })).toHaveCount(0);
+    await expect(capacityStrip.getByText("Connect read-only usage source", { exact: true })).toHaveCount(0);
+    await expect(capacityStrip.locator(".pipeline-usage-warning-icon")).toHaveCount(2);
+    await expect(capacityStrip.locator(".pipeline-usage-meter-fill")).toHaveCount(4);
+    const missionStrip = page.getByLabel("Mission control focus strip");
+    await expect(missionStrip).toBeVisible();
+    await expect(missionStrip.getByText("Most urgent", { exact: true })).toBeVisible();
+    await expect(missionStrip.getByText("State", { exact: true })).toBeVisible();
+    await expect(missionStrip.getByText("Gate", { exact: true })).toBeVisible();
+    const routeMap = page.getByLabel("Pipeline route map");
+    await expect(routeMap).toBeVisible();
+    await expect(routeMap.locator(".pipeline-route-station")).toHaveCount(10);
+    await expect(routeMap.locator(".pipeline-route-connectors")).toBeVisible();
+    await expect(routeMap.locator(".pipeline-route-connector-line")).toHaveCount(9);
+    await expect(routeMap.locator(".pipeline-route-connector-pulse")).toHaveCount(9);
+    await expect(page.getByLabel("Pipeline inspection panel")).toHaveCount(0);
+    await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
+    await expect(page.getByLabel("Stage inspection panel")).toHaveCount(0);
+    const compactPacketCount = await routeMap.locator("button[aria-label^=\"Inspect packet:\"]").count();
+    expect(compactPacketCount).toBeGreaterThan(0);
+    expect(compactPacketCount).toBeLessThanOrEqual(40);
+    await expect(routeMap.getByRole("button", { name: "Needs approval", exact: true })).toBeVisible();
+    await expect(routeMap.locator(".pipeline-stage-info-icon")).toHaveCount(10);
+    const captureStage = routeMap.getByRole("button", { name: "Capture", exact: true });
+    await captureStage.hover();
+    await captureStage.focus();
+    await captureStage.click();
+    const captureStageBubble = captureStage.locator(".pipeline-stage-info-bubble");
+    await expect(captureStageBubble).toHaveText("New ideas and requests land here before Kendall decides what they are.");
+    await expect(captureStageBubble).toBeVisible();
+    const captureTooltipEvidence = await captureStageBubble.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const clippingAncestors = [];
+      let parent = element.parentElement;
+      while (parent) {
+        const parentStyle = window.getComputedStyle(parent);
+        const clipsX = parentStyle.overflowX === "hidden" || parentStyle.overflowX === "clip";
+        const clipsY = parentStyle.overflowY === "hidden" || parentStyle.overflowY === "clip";
+        if (clipsX || clipsY) {
+          const parentRect = parent.getBoundingClientRect();
+          clippingAncestors.push({
+            clipped:
+              (clipsX && (rect.left < parentRect.left - 1 || rect.right > parentRect.right + 1)) ||
+              (clipsY && (rect.top < parentRect.top - 1 || rect.bottom > parentRect.bottom + 1)),
+            overflowX: parentStyle.overflowX,
+            overflowY: parentStyle.overflowY,
+          });
+        }
+        parent = parent.parentElement;
+      }
+      return {
+        unclippedByContainers: clippingAncestors.every((ancestor) => !ancestor.clipped),
+      };
+    });
+    expect(captureTooltipEvidence).toMatchObject({ unclippedByContainers: true });
+    await expect(routeMap.getByText(/needs approval|blocked|stale source|waiting|low-risk packet/).first()).toBeVisible();
     await pipelineBoard.focus();
     await page.keyboard.press("Slash");
     if (!(await packetSearch.evaluate((element) => element === document.activeElement))) {
@@ -653,210 +735,132 @@ test.describe("dashboard workflow coverage", () => {
     }
     await expect(packetSearch).toBeFocused();
     await packetSearch.fill("stale");
-    await expect(pipelineBoard.getByRole("button", { name: /Select packet: Resolve stale research source before routing/ })).toBeVisible();
+    const stalePacketButton = routeMap.getByRole("button", { name: /Inspect packet: Resolve stale research source before routing/ });
+    await expect(stalePacketButton).toBeVisible();
     await packetSearch.fill("");
-    for (const stage of [
-      "capture",
-      "classify",
-      "route",
-      "shape",
-      "human_gate",
-      "execute",
-      "review",
-      "promote",
-      "deliver",
-      "learn",
-    ]) {
-      const lane = pipelineBoard.locator(`section[aria-label="${stage} stage lane"]`);
-      await expect(lane).toHaveCount(1);
-      await lane.scrollIntoViewIfNeeded();
-      await expect(lane).toBeVisible();
-      await expect(lane.getByRole("heading", { level: 2 })).toBeVisible();
-      await expect(lane.getByText(/^Health:/)).toBeVisible();
-      await expect(lane.locator("article").first()).toBeVisible();
-      const laneCard = lane.locator("article").first();
-      await expect(laneCard.getByText(/Source: Matrix rows:/)).toBeVisible();
-      await expect(laneCard.getByText("Owner", { exact: true })).toBeVisible();
-      await expect(laneCard.getByText("Confidence", { exact: true })).toBeVisible();
-      await expect(laneCard.getByText(/Risk:/)).toBeVisible();
-      await expect(laneCard.getByText("Evidence", { exact: true })).toBeVisible();
-      await expect(laneCard.getByText("Freshness", { exact: true })).toBeVisible();
-      await expect(laneCard.getByText(/Next:/)).toBeVisible();
+    for (const stage of ["Capture", "Classify", "Route", "Shape", "Needs approval", "Execute", "Review", "Promote", "Deliver", "Learn"]) {
+      await expect(routeMap.getByRole("button", { name: stage, exact: true })).toHaveCount(1);
     }
-    const representativeCard = pipelineBoard.getByRole("button", { name: "Select packet: Resolve stale research source before routing", exact: true });
-    await expect(representativeCard.getByText(/Source: Matrix rows:/)).toBeVisible();
-    await expect(representativeCard.getByText("Owner", { exact: true })).toBeVisible();
-    await expect(representativeCard.getByText("Confidence", { exact: true })).toBeVisible();
-    await expect(representativeCard.getByText(/Risk:/)).toBeVisible();
-    await expect(representativeCard.getByText("Evidence", { exact: true })).toBeVisible();
-    await expect(representativeCard.getByText("Freshness", { exact: true })).toBeVisible();
-    await expect(representativeCard.getByText(/Next:/)).toBeVisible();
-    const activeDrawer = page.getByLabel("Active packet drawer");
-    await expect(activeDrawer).toBeVisible();
-    await expect(page.getByLabel("Worker review memory recovery rail")).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "5 Whys", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "Sources", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "Route", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "Status", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "Decision", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "Proof", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "Workers", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "Memory", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "Safety", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("tab", { name: "Recovery", exact: true })).toBeVisible();
-    const intentDrawerTab = activeDrawer.getByRole("tab", { name: "5 Whys", exact: true });
-    const recoveryDrawerTab = activeDrawer.getByRole("tab", { name: "Recovery", exact: true });
-    await recoveryDrawerTab.click();
-    await expect(recoveryDrawerTab).toHaveAttribute("aria-selected", "true");
-    await intentDrawerTab.click();
-    await expect(intentDrawerTab).toHaveAttribute("aria-selected", "true");
-    const routeCard = pipelineBoard.getByRole("button", { name: "Select packet: Shape cockpit route from Work Packet matrix", exact: true });
-    const densityRouteCard = pipelineBoard.getByRole("button", { name: "Select packet: Density 1: Shape cockpit route from Work Packet matrix", exact: true });
-    await routeCard.focus();
-    await page.keyboard.press("ArrowRight");
-    await expect(densityRouteCard).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(activeDrawer.getByRole("heading", { name: "Density 1: Shape cockpit route from Work Packet matrix" })).toBeVisible();
-    await goldenPathLifecycle.getByRole("button", { name: "Golden path snapshot: Shape", exact: true }).click();
-    await expect(activeDrawer.getByRole("heading", { name: "Shape execution recipe preview" })).toBeVisible();
-    const stalePacketCard = pipelineBoard.getByRole("button", { name: "Select packet: Resolve stale research source before routing", exact: true });
-    await stalePacketCard.scrollIntoViewIfNeeded();
-    await stalePacketCard.click();
-    await expect(activeDrawer.getByRole("heading", { name: "Resolve stale research source before routing" })).toBeVisible();
-    await expect(activeDrawer.getByRole("heading", { name: "5 Whys" })).toBeVisible();
-    await expect(activeDrawer.getByLabel("Packet at a glance")).toBeVisible();
+    await routeMap.getByRole("button", { name: "Needs approval", exact: true }).click();
+    await expect(page.getByLabel("Stage inspection panel")).toHaveCount(0);
+    await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
+    await routeMap.getByRole("button", { name: "Route", exact: true }).click();
+    await expect(page.getByLabel("Stage inspection panel")).toHaveCount(0);
+    await packetSearch.fill("stale");
+    await stalePacketButton.scrollIntoViewIfNeeded();
+    await stalePacketButton.click();
+    const packetInspection = page.getByLabel("Packet inspection panel");
+    await expect(packetInspection).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const routeRect = document.querySelector('[aria-label="Pipeline route map"]')?.getBoundingClientRect();
+          const drawerRect = document.querySelector('[aria-label="Packet inspection panel"]')?.getBoundingClientRect();
+          return Boolean(routeRect && drawerRect && drawerRect.top >= routeRect.bottom - 1);
+        })
+      )
+      .toBeTruthy();
+    await stalePacketButton.click();
+    await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
+    await stalePacketButton.click();
+    await expect(packetInspection).toBeVisible();
+    await expect(packetInspection.getByRole("heading", { name: "Resolve stale research source before routing", exact: true })).toBeVisible();
+    await expect(packetInspection.getByLabel("Packet plain-language summary")).toBeVisible();
+    for (const inspectionLabel of ["Where", "Came from", "Got here", "Next", "Blocked by"]) {
+      await expect(packetInspection.getByText(inspectionLabel, { exact: true })).toBeVisible();
+    }
+    await expect(packetInspection.getByText("Captured intake", { exact: true })).toBeVisible();
+    await expect(packetInspection.getByText("Being sorted", { exact: true })).toBeVisible();
+    await expect(packetInspection.getByText("Research or source review", { exact: true })).toBeVisible();
+    await expect(packetInspection.getByText("Source freshness needs review", { exact: true })).toBeVisible();
+    await packetInspection.getByRole("link", { name: "Open full packet", exact: true }).click();
+    await expect(page).toHaveURL(/\/pipeline\/packets\/fixture%3Astale-source|\/pipeline\/packets\/fixture:stale-source/);
+    const packetDetail = page.getByRole("main", { name: "Packet detail" });
+    await expect(packetDetail).toBeVisible();
+    await expect(packetDetail.getByRole("heading", { name: "Packet detail: Resolve stale research source before routing" })).toBeVisible();
+    await expect(packetDetail.getByLabel("Packet 5 Whys")).toBeVisible();
     for (const fiveWhyLabel of [
       "What is this?",
       "Why is it here?",
-      "Why does it matter?",
-      "Why does it need me?",
+      "Where is it?",
+      "What proof exists?",
       "What happens next?",
     ]) {
-      await expect(activeDrawer.getByText(fiveWhyLabel, { exact: true })).toBeVisible();
+      await expect(packetDetail.getByText(fiveWhyLabel, { exact: true })).toBeVisible();
     }
-    await expect(activeDrawer.getByLabel("Packet at a glance").getByText("Resolve stale or contradictory source context.", { exact: true })).toBeVisible();
-    await activeDrawer.getByText("Technical details", { exact: true }).click();
-    await expect(activeDrawer.getByText("Last event", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByText("Next allowed actions", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByText("Risk flags", { exact: true })).toBeVisible();
-    const routeDrawerTab = activeDrawer.getByRole("tab", { name: "Route", exact: true });
-    await routeDrawerTab.focus();
-    await expect(routeDrawerTab).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(activeDrawer.getByRole("heading", { name: "Route Fork Panel" })).toBeVisible();
-    await expect(activeDrawer.getByText("Selected route", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByText("Rejected routes", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByText("Source context", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByText("Reason codes", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("button", { name: "Clarify", exact: true })).toBeDisabled();
-    await expect(activeDrawer.getByRole("button", { name: "Downgrade to reference", exact: true })).toBeDisabled();
-    await expect(activeDrawer.getByRole("button", { name: "Send back to Research", exact: true })).toBeDisabled();
-    await activeDrawer.getByRole("tab", { name: "Proof", exact: true }).click();
-    await expect(activeDrawer.getByRole("heading", { name: "Evidence links" })).toBeVisible();
-    await expect(activeDrawer.getByText("What exists", { exact: true }).first()).toBeVisible();
-    await expect(activeDrawer.getByText("Why it matters", { exact: true }).first()).toBeVisible();
-    await expect(activeDrawer.getByText("Where it came from", { exact: true }).first()).toBeVisible();
-    await expect(activeDrawer.getByText("Retention", { exact: true }).first()).toBeVisible();
-    await expect(activeDrawer.getByText("Evidence state", { exact: true }).first()).toBeVisible();
-    await expect(activeDrawer.getByText(/summary-only source ref/).first()).toBeVisible();
-    await expect(activeDrawer.getByText(/fixture evidence ref/).first()).toBeVisible();
-    await activeDrawer.getByRole("tab", { name: "Decision", exact: true }).click();
-    await expect(activeDrawer.getByText(/blocked source boundary prevents authority escalation/)).toBeVisible();
-    await expect(activeDrawer.getByText(/known stage: capture/).first()).toBeVisible();
-    await activeDrawer.getByRole("tab", { name: "Memory", exact: true }).click();
-    await expect(activeDrawer.getByRole("heading", { name: "Resolve stale research source before routing" })).toBeVisible();
-    await expect(activeDrawer.getByText(/Memory proposal blocked/).first()).toBeVisible();
-    await activeDrawer.getByRole("tab", { name: "Safety", exact: true }).click();
-    await expect(activeDrawer.getByRole("heading", { name: "Alpha action status", exact: true })).toBeVisible();
-    await expect(activeDrawer.getByText("Supervisor-owned alpha status", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByText("memory-writeback-and-source-mutation", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByText(/source_ref.stale/)).toBeVisible();
-    await expect(activeDrawer.getByText(/Review blocked source refs/)).toBeVisible();
-    await expect(activeDrawer.getByText("Canonical mutation: blocked", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByText("Provider calls: blocked", { exact: true })).toBeVisible();
-    await expect(activeDrawer.getByRole("button", { name: "Preview dry-run evidence", exact: true })).toBeDisabled();
-    await packetSearch.fill("review obsidian memory proposal");
-    const learnPacketCard = pipelineBoard.getByRole("button", { name: "Select packet: Review Obsidian memory proposal", exact: true });
-    await expect(learnPacketCard).toBeVisible();
-    await expect(activeDrawer.getByRole("heading", { name: "Review Obsidian memory proposal" })).toBeVisible();
-    await activeDrawer.getByRole("tab", { name: "Memory", exact: true }).click();
-    await expect(activeDrawer.getByText(/Memory proposal blocked/).first()).toBeVisible();
-    await activeDrawer.getByRole("tab", { name: "Memory", exact: true }).focus();
-    await page.keyboard.press("Escape");
-    await expect(learnPacketCard).toBeFocused();
-    await packetSearch.fill("");
-    await stalePacketCard.click();
-    await activeDrawer.getByRole("tab", { name: "Recovery", exact: true }).click();
-    await expect(activeDrawer.getByRole("heading", { name: "Resolve stale research source before routing" })).toBeVisible();
-    await expect(activeDrawer.getByText("Recovery availability", { exact: true })).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(stalePacketCard).toBeFocused();
-    await expect(page.getByLabel("Pipeline evidence strip")).toBeVisible();
-    await expect(page.getByText(/No provider, worker, GitHub, or Obsidian calls/)).toBeVisible();
-    await expect(page.getByText(/fixture-only:/).first()).toBeVisible();
-    await expect(page.getByText(/mocked:/).first()).toBeVisible();
-    await expect(page.getByText("Hermes Worker Mock", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText(/Source: Matrix rows:/).first()).toBeVisible();
-    await expect(sourceRail.getByText("Candidate Work", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("Obsidian inbox", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("BMAD artifacts", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("research/video", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("GitHub", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("manual capture", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("included", { exact: true }).first()).toBeVisible();
-    await expect(sourceRail.getByText("excluded", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("stale", { exact: true }).first()).toBeVisible();
-    await expect(sourceRail.getByText("contradictory", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("unavailable", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("derived-only", { exact: true })).toBeVisible();
-    await expect(stalePacketCard.getByText("Source trust: excluded, stale, contradictory, derived-only", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("LLM-Wiki digest", { exact: true })).toBeVisible();
-    await expect(sourceRail.getByText("derived, non-canonical", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Memory proposal blocked/).first()).toBeVisible();
+    await expect(packetDetail.getByRole("heading", { name: "Route", exact: true })).toBeVisible();
+    await expect(packetDetail.getByText("Selected route", { exact: true })).toBeVisible();
+    await expect(packetDetail.getByText("Rejected routes", { exact: true })).toBeVisible();
+    await expect(packetDetail.getByRole("heading", { name: "Evidence and artifacts", exact: true })).toBeVisible();
+    await expect(packetDetail.getByRole("heading", { name: "Workers and review", exact: true })).toBeVisible();
+    await expect(packetDetail.getByRole("heading", { name: "Gate, memory, recovery", exact: true })).toBeVisible();
+    await expect(packetDetail.getByLabel("Packet source boundaries")).toBeVisible();
+    await expect(packetDetail.getByText("Source Boundary Checklist", { exact: true })).toBeVisible();
+    await expect(packetDetail.getByText("Obsidian is canonical and human-owned", { exact: false }).first()).toBeVisible();
+    await packetDetail.getByRole("link", { name: "Back to pipeline", exact: true }).click();
+    await expect(page).toHaveURL(/\/pipeline$/);
+    await expect(pipelineBoard).toBeVisible();
     await expect(cockpit.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
-    const refinedScreenshotPaths = [
-      "test-results/pipeline-refined-1440.png",
-      "test-results/pipeline-refined-900.png",
-      "test-results/pipeline-refined-390.png",
-    ];
-    for (const viewport of [
-      { width: 1440, height: 960, collapsedRail: false, visiblePackets: 35 },
-      { width: 900, height: 960, collapsedRail: true, visiblePackets: 35 },
-      { width: 390, height: 900, collapsedRail: true, visiblePackets: 1 },
-    ] as const) {
+    for (const viewport of [pipelineViewportForProject(testInfo.project.name)] as const) {
       await page.setViewportSize(viewport);
       await expect(commandStrip).toBeVisible();
-      if (viewport.collapsedRail) {
-        await expect(page.getByLabel("Pipeline source rail collapsed", { exact: true })).toBeVisible();
-        await expect(page.getByLabel("Pipeline source rail", { exact: true })).toBeHidden();
-      } else {
-        await expect(page.getByLabel("Pipeline source rail", { exact: true })).toBeVisible();
-        await expect(page.getByLabel("Pipeline source rail collapsed", { exact: true })).toBeHidden();
-      }
       await expect(pipelineBoard).toBeVisible();
-      await expect(pipelineBoard.locator("article:visible")).toHaveCount(viewport.visiblePackets);
-      await expect(activeDrawer).toBeVisible();
-      await expect(page.getByLabel("Pipeline evidence strip")).toBeVisible();
-      for (const drawerTab of [
-        { name: "Decision", heading: "Human Gate context" },
-        { name: "Proof", heading: "Evidence links" },
-        { name: "Workers", heading: "Worker activity" },
-        { name: "Memory", heading: "Memory proposal" },
-        { name: "Safety", heading: "Alpha action status" },
-        { name: "Recovery", heading: "Recovery availability" },
-      ]) {
-        await activeDrawer.getByRole("tab", { name: drawerTab.name, exact: true }).click();
-        await expect(activeDrawer.getByRole("tab", { name: drawerTab.name, exact: true })).toHaveAttribute("aria-selected", "true");
-        await expect(activeDrawer.getByRole("heading", { name: drawerTab.heading, exact: true })).toBeVisible();
+      await expect(routeMap).toBeVisible();
+      await expect(page.getByLabel(/inspection panel/i)).toHaveCount(0);
+      const visiblePacketCount = await routeMap.locator("button[aria-label^=\"Inspect packet:\"]:visible").count();
+      expect(visiblePacketCount, JSON.stringify({ viewport, visiblePacketCount })).toBeGreaterThan(0);
+      expect(visiblePacketCount, JSON.stringify({ viewport, visiblePacketCount })).toBeLessThanOrEqual(40);
+      const mobileRouteEvidence = await page.evaluate(() => {
+        const routeMap = document.querySelector('[aria-label="Pipeline route map"]');
+        const routeMapStyle = routeMap ? window.getComputedStyle(routeMap) : null;
+        const maxVisiblePacketsPerStage = Math.max(
+          0,
+          ...Array.from(document.querySelectorAll(".pipeline-route-station")).map((station) =>
+            Array.from(station.querySelectorAll(".pipeline-mini-packet")).filter((packet) => {
+              const style = window.getComputedStyle(packet);
+              return style.display !== "none" && style.visibility !== "hidden";
+            }).length
+          )
+        );
+        return {
+          miniPacketLabelsSingleLine: Array.from(document.querySelectorAll(".pipeline-mini-packet-label")).every((label) => {
+            const style = window.getComputedStyle(label);
+            const lineHeight = Number.parseFloat(style.lineHeight);
+            const maxSingleLineHeight = Number.isFinite(lineHeight) ? lineHeight * 1.35 : 24;
+            return style.whiteSpace === "nowrap" && label.getBoundingClientRect().height <= maxSingleLineHeight;
+          }),
+          stageLabelsUntruncated: Array.from(document.querySelectorAll(".pipeline-stage-label")).every((label) => {
+            const htmlLabel = label as HTMLElement;
+            return htmlLabel.scrollWidth <= htmlLabel.clientWidth + 1;
+          }),
+          routeMapHasHorizontalScroll: routeMap && routeMapStyle?.overflowX !== "visible" ? routeMap.scrollWidth > routeMap.clientWidth + 8 : false,
+          maxVisiblePacketsPerStage,
+          stageCardsHaveVisibleFrames: Array.from(document.querySelectorAll(".pipeline-route-station")).every((station) => {
+            const style = window.getComputedStyle(station);
+            return style.borderStyle !== "none" && style.backgroundImage !== "none";
+          }),
+        };
+      });
+      if (viewport.width <= 720) {
+        expect(mobileRouteEvidence, JSON.stringify({ viewport, mobileRouteEvidence })).toMatchObject({
+          routeMapHasHorizontalScroll: false,
+        });
+        expect(mobileRouteEvidence.maxVisiblePacketsPerStage, JSON.stringify({ viewport, mobileRouteEvidence })).toBeLessThanOrEqual(3);
+      } else {
+        expect(mobileRouteEvidence.routeMapHasHorizontalScroll, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(false);
+        expect(mobileRouteEvidence.maxVisiblePacketsPerStage, JSON.stringify({ viewport, mobileRouteEvidence })).toBeLessThanOrEqual(4);
       }
+      expect(mobileRouteEvidence.miniPacketLabelsSingleLine, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
+      expect(mobileRouteEvidence.stageLabelsUntruncated, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
+      expect(mobileRouteEvidence.stageCardsHaveVisibleFrames, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
       const visualIntegrityEvidence = await page.evaluate(() => {
         const checkSelectors = [
           '[aria-label="Pipeline command strip"]',
-          '[aria-label="Pipeline source rail"], [aria-label="Pipeline source rail collapsed"]',
+          '[aria-label="Pipeline operational strip"]',
+          '[aria-label="Mission control focus strip"]',
           '[aria-label="Pipeline board"]',
-          '[aria-label="Active packet drawer"]',
-          '[aria-label="Worker review memory recovery rail"]',
-          '[aria-label="Pipeline evidence strip"]',
+          '[aria-label="Pipeline route map"]',
+          '[aria-label$="inspection panel"]',
         ];
         const boxes = checkSelectors.flatMap((selector) =>
           Array.from(document.querySelectorAll(selector))
@@ -876,6 +880,8 @@ test.describe("dashboard workflow coverage", () => {
         const crampedBoxes = boxes.filter((box) => box.width < 120 || box.height < 24);
         const overflowingText = Array.from(document.querySelectorAll("button, span, p, h1, h2, h3, h4, dd, dt"))
           .filter((element) => !element.classList.contains("sr-only"))
+          .filter((element) => !element.classList.contains("pipeline-mini-packet-label"))
+          .filter((element) => !element.classList.contains("kendall-info-tip"))
           .map((element) => {
             const htmlElement = element as HTMLElement;
             const rect = htmlElement.getBoundingClientRect();
@@ -903,10 +909,17 @@ test.describe("dashboard workflow coverage", () => {
         const documentWidth = document.documentElement.scrollWidth;
         const offenders = Array.from(document.querySelectorAll("body *"))
           .filter((element) => {
+            if (element.closest(".kendall-graph-background")) {
+              return false;
+            }
             let current = element.parentElement;
             while (current !== null) {
               const style = window.getComputedStyle(current);
-              if ((style.overflowX === "auto" || style.overflowX === "scroll") && current.scrollWidth > current.clientWidth + 8) {
+              if (
+                (current.getAttribute("aria-label") === "Pipeline route map" || current.getAttribute("aria-label") === "Dashboard sections")
+                && (style.overflowX === "auto" || style.overflowX === "scroll")
+                && current.scrollWidth > current.clientWidth + 8
+              ) {
                 return false;
               }
               current = current.parentElement;
@@ -933,9 +946,94 @@ test.describe("dashboard workflow coverage", () => {
         };
       });
       expect(overflowEvidence, JSON.stringify({ viewport, overflowEvidence })).toMatchObject({ hasPageOverflow: false });
+      const motionContract = await page.evaluate(() => {
+        const graphBackground = document.querySelector(".kendall-graph-background");
+        const graphLink = document.querySelector(".kendall-graph-background__links path");
+        const graphMap = document.querySelector(".kendall-graph-background__map");
+        const graphNode = document.querySelector(".kendall-graph-background__nodes circle");
+        const shell = document.querySelector(".pipeline-nohype-shell");
+        const routeMap = document.querySelector(".pipeline-route-map");
+        const routeRow = document.querySelector(".pipeline-route-row");
+        const routeConnector = document.querySelector(".pipeline-route-connector-line");
+        const routeConnectorPulse = document.querySelector(".pipeline-route-connector-pulse");
+        const missionStrip = document.querySelector(".pipeline-mission-strip");
+        const stageCode = document.querySelector(".pipeline-stage-code");
+        const miniPacket = document.querySelector(".pipeline-mini-packet");
+        const inspectionPanel = document.querySelector(".pipeline-inspection-panel");
+        const connectorStyle = routeConnector ? window.getComputedStyle(routeConnector) : null;
+        const connectorPulseStyle = routeConnectorPulse ? window.getComputedStyle(routeConnectorPulse) : null;
+        const graphBackgroundStyle = graphBackground ? window.getComputedStyle(graphBackground) : null;
+        const graphLinkStyle = graphLink ? window.getComputedStyle(graphLink) : null;
+        const graphMapStyle = graphMap ? window.getComputedStyle(graphMap) : null;
+        const graphNodeStyle = graphNode ? window.getComputedStyle(graphNode) : null;
+        const shellSignalStyle = shell ? window.getComputedStyle(shell, "::before") : null;
+        const slowestAnimationSeconds = (animationDuration: string | undefined) => {
+          const durations = String(animationDuration ?? "")
+              .split(",")
+              .map((value) => value.trim())
+              .filter(Boolean)
+              .map((value) => value.endsWith("ms") ? Number.parseFloat(value) / 1000 : Number.parseFloat(value))
+              .filter((value) => Number.isFinite(value) && value > 0);
+          return durations.length === 0 ? 0 : Math.min(...durations);
+        };
+        return {
+          hasGraphBackground: graphBackground !== null,
+          graphBackgroundFixed: graphBackgroundStyle?.position === "fixed",
+          graphBackgroundBehindContent: graphBackgroundStyle?.zIndex === "0",
+          graphLinkAnimated: graphLinkStyle?.animationName === "kendall-link-flow",
+          graphLinkSlow: slowestAnimationSeconds(graphLinkStyle?.animationDuration) >= 30,
+          graphMapAnimated: graphMapStyle?.animationName === "kendall-graph-drift",
+          graphMapSlow: slowestAnimationSeconds(graphMapStyle?.animationDuration) >= 72,
+          graphNodeAnimated: graphNodeStyle?.animationName === "kendall-node-pulse",
+          graphNodeSlow: slowestAnimationSeconds(graphNodeStyle?.animationDuration) >= 15,
+          hasShell: shell !== null,
+          hasRouteMap: routeMap !== null,
+          routeMapClipsMotion: routeMap ? window.getComputedStyle(routeMap).overflow === "hidden" : false,
+          routeMapUnframed: routeMap ? window.getComputedStyle(routeMap).borderWidth === "0px" : false,
+          hasRouteRow: routeRow !== null,
+          hasMissionStrip: missionStrip !== null,
+          hasStageCodes: stageCode !== null,
+          hasMiniPacket: miniPacket !== null,
+          hidesInspectionPanelUntilPacketSelect: inspectionPanel === null,
+          hasRouteConnector: connectorStyle !== null && routeConnector?.getAttribute("d")?.startsWith("M ") === true,
+          routeConnectorAnimated: connectorPulseStyle?.animationName === "pipeline-route-flow",
+          routeConnectorSlow: slowestAnimationSeconds(connectorPulseStyle?.animationDuration) >= 9,
+          routeConnectorMoves: connectorPulseStyle?.strokeDasharray !== "none",
+          shellSignalAnimated: shellSignalStyle?.animationName === "pipeline-shell-drift",
+          shellSignalSlow: slowestAnimationSeconds(shellSignalStyle?.animationDuration) >= 60,
+          shellOverflow: shell ? window.getComputedStyle(shell).overflow : null,
+        };
+      });
+      expect(motionContract).toMatchObject({
+        hasGraphBackground: true,
+        graphBackgroundFixed: true,
+        graphBackgroundBehindContent: true,
+        graphLinkAnimated: true,
+        graphLinkSlow: true,
+        graphMapAnimated: true,
+        graphMapSlow: true,
+        graphNodeAnimated: true,
+        graphNodeSlow: true,
+        hasShell: true,
+        hasRouteMap: true,
+        routeMapClipsMotion: false,
+        routeMapUnframed: true,
+        hasRouteRow: true,
+        hasMissionStrip: true,
+        hasStageCodes: true,
+        hasMiniPacket: true,
+        hidesInspectionPanelUntilPacketSelect: true,
+        hasRouteConnector: true,
+        routeConnectorAnimated: true,
+        routeConnectorSlow: true,
+        routeConnectorMoves: true,
+        shellSignalAnimated: true,
+        shellSignalSlow: true,
+        shellOverflow: "visible",
+      });
       await page.screenshot({
         fullPage: true,
-        path: refinedScreenshotPaths.find((path) => path.includes(String(viewport.width))) ?? `test-results/pipeline-refined-${viewport.width}.png`,
+        path: `test-results/pipeline-refined-${testInfo.project.name}.png`,
       });
     }
     await page.waitForLoadState("networkidle");
@@ -947,17 +1045,54 @@ test.describe("dashboard workflow coverage", () => {
     expect(forbiddenExternalRequests).toEqual([]);
   });
 
+  test("opens settings with usage source configuration placeholders", async ({ page }) => {
+    await page.goto("/settings");
+
+    await expect(page.getByRole("navigation", { name: "Dashboard sections" })).toBeVisible();
+    const settingsMenu = page.locator(".dashboard-page-menu-summary");
+    await settingsMenu.click();
+    await expect(page.locator("nav a[href=\"/settings\"]")).toHaveAttribute("aria-current", "page");
+    await settingsMenu.click();
+    await expect(page.getByRole("heading", { name: "Configuration", exact: true })).toBeVisible();
+    const settings = page.getByRole("main", { name: "Dashboard settings" });
+    await expect(settings).toBeVisible();
+    await expect(settings.getByLabel("Usage source settings")).toBeVisible();
+    await expect(settings.getByText("Codex and Claude limits", { exact: true })).toBeVisible();
+    await expect(settings.getByText("Codex", { exact: true })).toBeVisible();
+    await expect(settings.getByText("Claude", { exact: true })).toBeVisible();
+    await expect(settings.getByText("No read-only source selected", { exact: true })).toHaveCount(2);
+    await expect(settings.getByText("ccusage local summary", { exact: true })).toHaveCount(2);
+    await expect(settings.getByLabel("Usage graph visibility settings")).toBeVisible();
+    await expect(settings.getByLabel("Codex usage")).toBeChecked();
+    await expect(settings.getByLabel("Claude usage")).toBeChecked();
+    await settings.getByLabel("Claude usage").uncheck();
+    await expect(settings.getByLabel("Claude usage")).not.toBeChecked();
+    await expect(settings.getByText("Do not store provider credentials in dashboard settings", { exact: true })).toBeVisible();
+    await expect(settings.getByText("Show unknown usage as not connected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /connect|save|authorize|login/i })).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("main", { name: "Dashboard settings" }).getByLabel("Claude usage")).not.toBeChecked();
+    await page.goto("/pipeline");
+    const persistedCapacityStrip = page.getByLabel("Pipeline capacity strip");
+    await expect(persistedCapacityStrip.getByText("Codex", { exact: true })).toBeVisible();
+    await expect(persistedCapacityStrip.getByText("Claude", { exact: true })).toHaveCount(0);
+  });
+
   test("opens to a monitoring-first home without authority-gated action controls", async ({ page, request }) => {
     await page.goto("/");
     await expect(page.getByRole("navigation", { name: "Dashboard sections" })).toBeVisible();
+    const homeMenu = page.locator(".dashboard-page-menu-summary");
+    await homeMenu.click();
     await expect(page.getByText("Monitor", { exact: true })).toBeVisible();
     await expect(page.getByText("Watch state", { exact: true })).toBeVisible();
     await expect(page.getByText("Evidence", { exact: true })).toBeVisible();
     await expect(page.getByText("Inspect records", { exact: true })).toBeVisible();
     await expect(page.getByText("Deliberate", { exact: true })).toBeVisible();
-    await expect(page.getByText("Open controls", { exact: true })).toBeVisible();
+    await expect(page.getByText("Control setup", { exact: true })).toBeVisible();
     await expect(page.locator("nav a[href=\"/\"]")).toHaveAttribute("aria-current", "page");
     await expect(page.locator("nav a[href=\"/controls\"]")).toBeVisible();
+    await expect(page.locator("nav a[href=\"/settings\"]")).toBeVisible();
+    await homeMenu.click();
     await expect(page.getByRole("button", { name: /approve|retry|cleanup|launch|execute|start work|fix a problem/i })).toHaveCount(0);
     await expect(page.getByText("Operations Brief")).toBeVisible();
     const operationsBrief = page.locator("section").filter({ hasText: "Operations Brief" }).first();

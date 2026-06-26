@@ -18,7 +18,7 @@ export function OperatorProfilePanel() {
   }
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-2">
         <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Operator identity</p>
         <h3 className="text-xl font-semibold">Attribution profile</h3>

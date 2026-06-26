@@ -95,7 +95,7 @@ export function EvidenceOverviewPanel({
   const crossChecks = uniqueCrossChecks(reviewShortcuts.flatMap((item) => item.crossChecks ?? [])).slice(0, 4);
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Evidence overview</p>
@@ -113,7 +113,7 @@ export function EvidenceOverviewPanel({
           <a
             key={card.href}
             href={card.href}
-            className="rounded-[1.25rem] border bg-[var(--surface)] p-4 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            className="rounded-[0.5rem] border bg-[var(--surface)] p-4 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
           >
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{card.label}</p>
             <p className="mt-2 text-base font-semibold">{card.value}</p>
@@ -121,7 +121,7 @@ export function EvidenceOverviewPanel({
           </a>
         ))}
       </div>
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 className="text-base font-semibold">Review queue position</h4>
@@ -172,7 +172,7 @@ export function EvidenceOverviewPanel({
           Review queue shortcuts are not execution-authority approvals.
         </p>
       </div>
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 className="text-base font-semibold">Report shortcuts</h4>
@@ -199,7 +199,7 @@ export function EvidenceOverviewPanel({
           ))}
         </div>
       </div>
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 className="text-base font-semibold">Cross-check path</h4>
@@ -226,7 +226,7 @@ export function EvidenceOverviewPanel({
           ))}
         </div>
       </div>
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 className="text-base font-semibold">Review shortcuts</h4>
@@ -243,7 +243,7 @@ export function EvidenceOverviewPanel({
             <a
               key={item.itemId}
               href={item.target.startsWith("#") ? item.target : "#runtime-evidence-export"}
-              className="rounded-[1rem] border bg-[var(--panel)] p-3 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+              className="rounded-[0.5rem] border bg-[var(--panel)] p-3 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
