@@ -1,7 +1,7 @@
 ﻿import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from supervisor.domain.types import AuditMode, CandidateWorkPriority, CandidateWorkStatus, BmadLane, ExecutionAttemptStatus, RiskLevel, RunMode, WorkflowState
@@ -43,6 +43,7 @@ class WorkItem(Base):
     leases: Mapped[list["QueueLease"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
     execution_attempts: Mapped[list["ExecutionAttempt"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
     audits: Mapped[list["AuditEvent"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
+    memory_proposals: Mapped[list["MemoryProposal"]] = relationship(back_populates="work_item", cascade="all, delete-orphan")
 
 
 class CandidateWork(Base):
@@ -133,6 +134,39 @@ class AuditEvent(Base):
     outcome: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     work_item: Mapped[WorkItem] = relationship(back_populates="audits")
+
+
+class MemoryProposal(Base):
+    __tablename__ = "memory_proposals"
+    __table_args__ = (UniqueConstraint("work_item_id", "proposal_id", name="uq_memory_proposals_work_item_proposal"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    work_item_id: Mapped[str] = mapped_column(ForeignKey("work_items.id"))
+    proposal_id: Mapped[str] = mapped_column(String(120))
+    label: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), default="pending_human_approval")
+    summary: Mapped[str] = mapped_column(Text)
+    source_refs_json: Mapped[list] = mapped_column(JSON, default=list)
+    evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list)
+    target_ref_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    target_vault_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_vault_folder: Mapped[str] = mapped_column(Text)
+    proposal_type: Mapped[str] = mapped_column(String(32))
+    suggested_content_summary: Mapped[str] = mapped_column(Text)
+    patch_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sensitivity: Mapped[str] = mapped_column(String(16))
+    freshness: Mapped[str] = mapped_column(String(16))
+    contradiction_status: Mapped[str] = mapped_column(String(16))
+    confidence: Mapped[str] = mapped_column(String(16))
+    operator_action: Mapped[str] = mapped_column(String(16))
+    decision_needed_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    backup_recovery_path: Mapped[str] = mapped_column(Text)
+    write_back_status: Mapped[str] = mapped_column(String(32))
+    write_back_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    work_item: Mapped[WorkItem] = relationship(back_populates="memory_proposals")
 
 
 class SupervisorControl(Base):

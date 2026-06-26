@@ -1614,6 +1614,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "test-work-packet-fixtures",
         "test-pipeline-state-matrix",
         "test-dashboard-pipeline-fixtures",
+        "test-dashboard-memory-proposals",
         "test-anti-churn-event-writer",
         "test-anti-churn-signature-classifier",
         "test-anti-churn-event-reader",
@@ -1670,6 +1671,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "test-work-packet-fixtures" in static_group["commandIds"]
     assert "test-pipeline-state-matrix" in static_group["commandIds"]
     assert "test-dashboard-pipeline-fixtures" in static_group["commandIds"]
+    assert "test-dashboard-memory-proposals" in static_group["commandIds"]
     assert "check-clean-install-boundary" in static_group["commandIds"]
     assert "test-codex-workspace" in static_group["commandIds"]
     assert "test-codex-workspace-state" in static_group["commandIds"]

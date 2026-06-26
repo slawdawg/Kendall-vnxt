@@ -88,6 +88,9 @@ from supervisor.api.schemas import (
     LowRiskDeliveryPlanReportView,
     LocalProviderAttemptMetadataView,
     LocalReadonlyWorkerPreviewView,
+    MemoryProposalCreateRequest,
+    MemoryProposalUpdateRequest,
+    MemoryProposalV0View,
     LocalWorktreePlanView,
     ManagedRecipePolicyReportView,
     MaintenanceActionPlanReportView,
@@ -211,7 +214,7 @@ from supervisor.domain.subscription_launch import (
 from supervisor.domain.types import AuditMode, BmadLane, CandidateWorkStatus, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
-from supervisor.infrastructure.db.models import AuditEvent, CandidateWork, ExecutionAttempt, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
+from supervisor.infrastructure.db.models import AuditEvent, CandidateWork, ExecutionAttempt, MemoryProposal, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
 from supervisor.infrastructure.streaming.bus import EventBus
 
 
@@ -432,6 +435,137 @@ class SupervisorService:
 
     async def list_work_items(self, session: AsyncSession) -> list[WorkItem]:
         result = await session.execute(select(WorkItem).order_by(WorkItem.created_at.desc()))
+        return list(result.scalars())
+
+    async def create_memory_proposal(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        payload: MemoryProposalCreateRequest,
+    ) -> MemoryProposal | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        existing_result = await session.execute(
+            select(MemoryProposal).where(
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.proposal_id == payload.proposalId,
+            )
+        )
+        if existing_result.scalar_one_or_none():
+            raise ValueError(f"Memory proposal already exists for this Work Item: {payload.proposalId}")
+        proposal = MemoryProposal(
+            work_item_id=work_item_id,
+            proposal_id=payload.proposalId,
+            label=payload.label,
+            status=payload.status,
+            summary=payload.summary,
+            source_refs_json=list(payload.sourceRefs),
+            evidence_refs_json=list(payload.evidenceRefs),
+            target_ref_json=payload.targetRef.model_dump() if payload.targetRef else None,
+            target_vault_path=payload.targetVaultPath,
+            target_vault_folder=payload.targetVaultFolder,
+            proposal_type=payload.proposalType,
+            suggested_content_summary=payload.suggestedContentSummary,
+            patch_summary=payload.patchSummary,
+            sensitivity=payload.sensitivity,
+            freshness=payload.freshness,
+            contradiction_status=payload.contradictionStatus,
+            confidence=payload.confidence,
+            operator_action=payload.operatorAction,
+            decision_needed_context=payload.decisionNeededContext,
+            backup_recovery_path=payload.backupRecoveryPath,
+            write_back_status=payload.writeBackStatus,
+            write_back_allowed=False,
+        )
+        session.add(proposal)
+        await session.flush()
+        await self._record_event(
+            session,
+            item,
+            "memory_proposal.created",
+            "Memory proposal was captured for review without write-back.",
+            {
+                "proposalId": proposal.proposal_id,
+                "sourceRefs": proposal.source_refs_json,
+                "evidenceRefs": proposal.evidence_refs_json,
+                "writeBackAllowed": False,
+                "retentionClass": "metadata_only",
+            },
+        )
+        await session.commit()
+        await session.refresh(proposal)
+        await self._publish_item(item)
+        return proposal
+
+    async def update_memory_proposal(
+        self,
+        session: AsyncSession,
+        work_item_id: str,
+        proposal_id: str,
+        payload: MemoryProposalUpdateRequest,
+    ) -> MemoryProposal | None:
+        item = await session.get(WorkItem, work_item_id)
+        if not item:
+            return None
+        result = await session.execute(
+            select(MemoryProposal).where(
+                MemoryProposal.work_item_id == work_item_id,
+                MemoryProposal.proposal_id == proposal_id,
+            )
+        )
+        proposal = result.scalar_one_or_none()
+        if not proposal:
+            return None
+
+        next_status = payload.status if payload.status is not None else proposal.status
+        next_operator_action = payload.operatorAction if payload.operatorAction is not None else proposal.operator_action
+        next_write_back_status = payload.writeBackStatus if payload.writeBackStatus is not None else proposal.write_back_status
+        if (
+            next_status == "approved"
+            and next_operator_action == "approve"
+            and next_write_back_status == "approved_for_future"
+            and (proposal.freshness != "fresh" or proposal.contradiction_status != "none")
+        ):
+            raise ValueError("Unsafe memory proposal cannot be approved for future write-back.")
+
+        if payload.status is not None:
+            proposal.status = payload.status
+        if payload.operatorAction is not None:
+            proposal.operator_action = payload.operatorAction
+        if payload.decisionNeededContext is not None:
+            proposal.decision_needed_context = payload.decisionNeededContext
+        if payload.writeBackStatus is not None:
+            proposal.write_back_status = payload.writeBackStatus
+        if payload.patchSummary is not None:
+            proposal.patch_summary = payload.patchSummary
+        proposal.write_back_allowed = False
+        proposal.updated_at = datetime.now(timezone.utc)
+        await self._record_event(
+            session,
+            item,
+            "memory_proposal.review_updated",
+            "Memory proposal review state was updated without write-back.",
+            {
+                "proposalId": proposal.proposal_id,
+                "status": proposal.status,
+                "operatorAction": proposal.operator_action,
+                "writeBackStatus": proposal.write_back_status,
+                "writeBackAllowed": False,
+                "retentionClass": "metadata_only",
+            },
+        )
+        await session.commit()
+        await session.refresh(proposal)
+        await self._publish_item(item)
+        return proposal
+
+    async def list_memory_proposals(self, session: AsyncSession, work_item_id: str) -> list[MemoryProposal]:
+        result = await session.execute(
+            select(MemoryProposal)
+            .where(MemoryProposal.work_item_id == work_item_id)
+            .order_by(MemoryProposal.created_at.asc())
+        )
         return list(result.scalars())
 
     async def create_candidate_work(self, session: AsyncSession, payload: CandidateWorkCreate) -> CandidateWork:
@@ -1251,6 +1385,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-dashboard-memory-proposals",
+                label="Dashboard memory proposal review tests",
+                command="pnpm run test:dashboard-memory-proposals",
+                status="required",
+                requiredFor=["memory proposal dashboard changes", "Obsidian memory review UI changes", "work packet memory proposal API changes"],
+                evidence=[
+                    "Validates the dashboard memory proposal review panel, review state labels, provenance display, stop lines, and disabled write-back action.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="test-codex-workspace",
                 label="Codex workspace protocol tests",
                 command="pnpm run test:codex-workspace",
@@ -1612,6 +1757,7 @@ class SupervisorService:
                     "test-work-packet-fixtures",
                     "test-pipeline-state-matrix",
                     "test-dashboard-pipeline-fixtures",
+                    "test-dashboard-memory-proposals",
                     "check-clean-install-boundary",
                     "test-codex-workspace",
                     "test-codex-workspace-state",
@@ -17647,11 +17793,14 @@ class SupervisorService:
             else None
         )
         task_packet = self._task_packet_from_preview(item, routing_preview) if item and routing_preview else None
+        memory_proposals = await self.list_memory_proposals(session, item.id) if item else []
+        memory_proposal_views = [self.to_memory_proposal_view(proposal, packet_id=f"work_item:{item.id}") for proposal in memory_proposals] if item else []
         stage, owner, status, mapping_reason_codes = self._map_work_packet_state(
             candidate=candidate_view,
             item=item_view,
             routing_preview=routing_preview,
             attempts=attempts,
+            memory_proposals=memory_proposal_views,
         )
         evidence_refs = self._work_packet_evidence_refs(item_view, routing_preview, attempts)
         artifact_refs = self._work_packet_artifact_refs(candidate_view, item_view, task_packet, attempts)
@@ -17685,7 +17834,7 @@ class SupervisorService:
             artifactRefs=artifact_refs,
             humanGateActions=[],
             laneCards=self._work_packet_lane_cards(attempts, routing_preview),
-            memoryProposals=[],
+            memoryProposals=memory_proposal_views,
             alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs),
             reviewSummaries=self._work_packet_review_summaries(item_view, evidence_refs, artifact_refs),
             recoveryActions=self._work_packet_recovery_actions(status, evidence_refs),
@@ -17742,6 +17891,7 @@ class SupervisorService:
         item: WorkItemView | None,
         routing_preview: RoutingPreviewView | None,
         attempts: list[ExecutionAttemptView],
+        memory_proposals: list[MemoryProposalV0View] | None = None,
     ) -> tuple[str, str, str, list[str]]:
         if attempts:
             latest = attempts[0]
@@ -17762,6 +17912,11 @@ class SupervisorService:
                         latest.lane,
                         f"execution_attempt.{latest.status.value}",
                     )
+
+        if memory_proposals:
+            active_proposals = [proposal for proposal in memory_proposals if proposal.status not in {"not_applicable", "rejected", "deferred"}]
+            if active_proposals:
+                return "learn", "memory_review", "waiting", ["memory_proposal.review_required"]
 
         if item:
             delivery_ready = item.deliveryReadiness.readyForApproval if item.deliveryReadiness else False
@@ -18341,6 +18496,37 @@ class SupervisorService:
             approvedAt=self._normalize_timestamp(candidate.approved_at) if candidate.approved_at else None,
             promotedWorkItemId=candidate.promoted_work_item_id,
             importMetadata=candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {},
+        )
+
+    def to_memory_proposal_view(self, proposal: MemoryProposal, *, packet_id: str) -> MemoryProposalV0View:
+        target_ref = None
+        if isinstance(proposal.target_ref_json, dict):
+            target_ref = SourceRefV0View(**proposal.target_ref_json)
+        source_refs = [str(ref) for ref in proposal.source_refs_json] if isinstance(proposal.source_refs_json, list) else []
+        evidence_refs = [str(ref) for ref in proposal.evidence_refs_json] if isinstance(proposal.evidence_refs_json, list) else []
+        return MemoryProposalV0View(
+            proposalId=proposal.proposal_id,
+            packetId=packet_id,
+            label=proposal.label,
+            status=proposal.status,
+            summary=proposal.summary,
+            targetRef=target_ref,
+            sourceRefs=source_refs,
+            evidenceRefs=evidence_refs,
+            targetVaultPath=proposal.target_vault_path,
+            targetVaultFolder=proposal.target_vault_folder,
+            proposalType=proposal.proposal_type,
+            suggestedContentSummary=proposal.suggested_content_summary,
+            patchSummary=proposal.patch_summary,
+            sensitivity=proposal.sensitivity,
+            freshness=proposal.freshness,
+            contradictionStatus=proposal.contradiction_status,
+            confidence=proposal.confidence,
+            operatorAction=proposal.operator_action,
+            decisionNeededContext=proposal.decision_needed_context,
+            backupRecoveryPath=proposal.backup_recovery_path,
+            writeBackStatus=proposal.write_back_status,
+            writeBackAllowed=False,
         )
 
     def to_work_item_view(self, item: WorkItem) -> WorkItemView:

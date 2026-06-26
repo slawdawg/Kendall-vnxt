@@ -62,6 +62,24 @@ def _update_execution_attempt_fixture(db_path: str, attempt_id: str, **fields: o
         conn.commit()
 
 
+def _sqlite_table_columns(db_path: str, table_name: str) -> set[str]:
+    with sqlite3.connect(db_path) as conn:
+        return {row[1] for row in conn.execute(f"pragma table_info({table_name})").fetchall()}
+
+
+def _sqlite_has_unique_index(db_path: str, table_name: str, columns: tuple[str, ...]) -> bool:
+    with sqlite3.connect(db_path) as conn:
+        for row in conn.execute(f"pragma index_list({table_name})").fetchall():
+            index_name = row[1]
+            is_unique = bool(row[2])
+            if not is_unique:
+                continue
+            index_columns = tuple(column_row[2] for column_row in conn.execute(f"pragma index_info({index_name})").fetchall())
+            if index_columns == columns:
+                return True
+    return False
+
+
 def _create_candidate(client: TestClient, *, title: str = "Capture cockpit packet") -> dict:
     response = client.post(
         "/candidate-work",
@@ -304,6 +322,351 @@ def test_work_packet_matches_candidate_from_work_item_metadata_without_mutation(
 
         assert client.get("/candidate-work").json()["data"] == before_candidates
         assert client.get("/work-items").json()["data"] == before_work_items
+
+
+def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-memory-proposals.db") as client:
+        work_item = _create_work_item(client, title="Obsidian memory review")
+
+        create_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-20260625T000000Z",
+                "label": "Memory proposal pending review",
+                "summary": "Example Co repeatedly asks for a one-page implementation checklist.",
+                "sourceRefs": ["obsidian:00-inbox-new-customer-insight"],
+                "evidenceRefs": ["evidence:read-only-proof"],
+                "targetVaultPath": "Obsidian/Kendall_Nxt/Inbox/mp-20260625T000000Z.md",
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Create a Kendall-authored draft for operator review.",
+                "patchSummary": "Metadata-only proposal preview; no note content copied.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "decisionNeededContext": "Operator must review before any draft write-back.",
+                "backupRecoveryPath": "No mutation performed; rerun read-only proof if stale.",
+                "writeBackStatus": "review_gated",
+            },
+        )
+
+        assert create_response.status_code == 200
+        created = create_response.json()["data"]
+        assert created["proposalId"] == "mp-20260625T000000Z"
+        assert created["writeBackAllowed"] is False
+        assert created["sourceRefs"] == ["obsidian:00-inbox-new-customer-insight"]
+        assert created["evidenceRefs"] == ["evidence:read-only-proof"]
+        assert "rawContent" not in created
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        assert packet["currentStage"] == "learn"
+        assert packet["currentOwner"] == "memory_review"
+        assert packet["status"] == "waiting"
+        assert len(packet["memoryProposals"]) == 1
+        proposal = packet["memoryProposals"][0]
+        assert proposal["proposalId"] == "mp-20260625T000000Z"
+        assert proposal["targetVaultFolder"] == "01 Dashboard Queue/AI Drafts"
+        assert proposal["writeBackAllowed"] is False
+        assert proposal["writeBackStatus"] == "review_gated"
+
+        update_response = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-20260625T000000Z",
+            json={
+                "status": "approved",
+                "operatorAction": "approve",
+                "decisionNeededContext": "Approved for a future gated draft preview only.",
+                "writeBackStatus": "approved_for_future",
+            },
+        )
+        assert update_response.status_code == 200
+        updated = update_response.json()["data"]
+        assert updated["status"] == "approved"
+        assert updated["operatorAction"] == "approve"
+        assert updated["writeBackAllowed"] is False
+        assert updated["writeBackStatus"] == "approved_for_future"
+
+        packet_after_update = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        assert packet_after_update["memoryProposals"][0]["status"] == "approved"
+        assert packet_after_update["memoryProposals"][0]["operatorAction"] == "approve"
+
+
+def test_work_item_accepts_proof_derived_dashboard_proposal_payload(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-kom-proof-proposal.db") as client:
+        work_item = _create_work_item(client, title="KOM proof-derived proposal review")
+        payload = {
+            "proposalId": "mp-20260626T003931Z",
+            "label": "Example Co onboarding signal",
+            "status": "pending_human_approval",
+            "summary": "The customer repeatedly asks for a one-page implementation checklist.",
+            "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+            "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+            "targetVaultPath": "01 Dashboard Queue/AI Drafts/example-co-onboarding-signal-mp-20260626T003931Z.md",
+            "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+            "proposalType": "new_note",
+            "suggestedContentSummary": "Create a Kendall-authored dashboard draft for operator review.",
+            "patchSummary": "Metadata-only proposal preview; no raw source note content copied.",
+            "sensitivity": "medium",
+            "freshness": "fresh",
+            "contradictionStatus": "none",
+            "confidence": "medium",
+            "operatorAction": "defer",
+            "decisionNeededContext": "Operator must review this proposal before any future draft write-back; canonical Obsidian notes remain human-owned.",
+            "backupRecoveryPath": "No mutation performed. If a future write-back is approved, create backup and rollback evidence before writing an AI draft.",
+            "writeBackStatus": "review_gated",
+            "writeBackAllowed": False,
+        }
+
+        create_response = client.post(f"/work-items/{work_item['id']}/memory-proposals", json=payload)
+
+        assert create_response.status_code == 200
+        created = create_response.json()["data"]
+        assert created["proposalId"] == payload["proposalId"]
+        assert created["sourceRefs"] == payload["sourceRefs"]
+        assert created["evidenceRefs"] == payload["evidenceRefs"]
+        assert created["targetVaultPath"] == payload["targetVaultPath"]
+        assert created["targetVaultFolder"] == "01 Dashboard Queue/AI Drafts"
+        assert created["sensitivity"] == "medium"
+        assert created["freshness"] == "fresh"
+        assert created["confidence"] == "medium"
+        assert created["writeBackAllowed"] is False
+        assert "rawContent" not in created
+
+        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        assert packet["currentOwner"] == "memory_review"
+        assert packet["status"] == "waiting"
+        assert len(packet["memoryProposals"]) == 1
+        packet_proposal = packet["memoryProposals"][0]
+        assert packet_proposal["proposalId"] == payload["proposalId"]
+        assert packet_proposal["sourceRefs"] == payload["sourceRefs"]
+        assert packet_proposal["evidenceRefs"] == payload["evidenceRefs"]
+        assert packet_proposal["writeBackStatus"] == "review_gated"
+        assert packet_proposal["writeBackAllowed"] is False
+
+
+def test_memory_proposal_schema_is_repaired_for_existing_sqlite_database(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-memory-proposal-legacy-schema.db"
+    db_path = _db_path(tmp_path, db_name)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            create table memory_proposals (
+                id varchar(36) primary key,
+                work_item_id varchar(36),
+                proposal_id varchar(120),
+                label varchar(255),
+                summary text
+            )
+            """
+        )
+        conn.execute(
+            """
+            insert into memory_proposals (id, work_item_id, proposal_id, label, summary)
+            values ('legacy-row', 'legacy-work-item', 'legacy-proposal', 'Legacy proposal', null)
+            """
+        )
+        conn.commit()
+
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        columns = _sqlite_table_columns(db_path, "memory_proposals")
+        assert {
+            "source_refs_json",
+            "evidence_refs_json",
+            "target_vault_folder",
+            "proposal_type",
+            "suggested_content_summary",
+            "sensitivity",
+            "freshness",
+            "contradiction_status",
+            "confidence",
+            "operator_action",
+            "backup_recovery_path",
+            "write_back_status",
+            "write_back_allowed",
+        }.issubset(columns)
+        assert _sqlite_has_unique_index(db_path, "memory_proposals", ("work_item_id", "proposal_id"))
+
+        work_item = _create_work_item(client, title="Migrated Obsidian memory review")
+        create_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-after-schema-repair",
+                "label": "Memory proposal after schema repair",
+                "summary": "Metadata-only summary after legacy schema repair.",
+                "sourceRefs": ["obsidian:source"],
+                "evidenceRefs": ["evidence:proof"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Metadata-only draft summary.",
+                "sensitivity": "low",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "medium",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "review_gated",
+            },
+        )
+        assert create_response.status_code == 200
+        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        assert packet["memoryProposals"][0]["proposalId"] == "mp-after-schema-repair"
+        assert packet["memoryProposals"][0]["writeBackAllowed"] is False
+
+    with sqlite3.connect(db_path) as conn:
+        legacy = conn.execute(
+            """
+            select status, summary, source_refs_json, evidence_refs_json, target_vault_folder,
+                   proposal_type, sensitivity, freshness, contradiction_status, confidence,
+                   operator_action, backup_recovery_path, write_back_status, write_back_allowed
+            from memory_proposals
+            where proposal_id = 'legacy-proposal'
+            """
+        ).fetchone()
+    assert legacy == (
+        "pending_human_approval",
+        "",
+        "[]",
+        "[]",
+        "",
+        "new_note",
+        "medium",
+        "fresh",
+        "none",
+        "medium",
+        "defer",
+        "No mutation performed.",
+        "review_gated",
+        0,
+    )
+
+
+def test_memory_proposal_duplicate_ids_are_rejected_per_work_item(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-duplicates.db") as client:
+        work_item = _create_work_item(client, title="Duplicate Obsidian memory review")
+        payload = {
+            "proposalId": "mp-duplicate",
+            "label": "Memory proposal pending review",
+            "summary": "Metadata-only summary.",
+            "sourceRefs": ["obsidian:source"],
+            "evidenceRefs": ["evidence:proof"],
+            "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+            "proposalType": "new_note",
+            "suggestedContentSummary": "Metadata-only draft summary.",
+            "sensitivity": "low",
+            "freshness": "fresh",
+            "contradictionStatus": "none",
+            "confidence": "medium",
+            "operatorAction": "defer",
+            "backupRecoveryPath": "No mutation performed.",
+            "writeBackStatus": "review_gated",
+        }
+
+        first_response = client.post(f"/work-items/{work_item['id']}/memory-proposals", json=payload)
+        assert first_response.status_code == 200
+
+        duplicate_response = client.post(f"/work-items/{work_item['id']}/memory-proposals", json=payload)
+        assert duplicate_response.status_code == 409
+        assert duplicate_response.json()["detail"]["error"]["code"] == "memory_proposal_conflict"
+
+        update_response = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-duplicate",
+            json={"status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future"},
+        )
+        assert update_response.status_code == 200
+
+
+def test_memory_proposal_rejects_unsafe_future_approval_updates(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-unsafe-approval.db") as client:
+        work_item = _create_work_item(client, title="Unsafe Obsidian memory approval")
+        base_payload = {
+            "label": "Memory proposal pending review",
+            "summary": "Metadata-only summary.",
+            "sourceRefs": ["obsidian:source"],
+            "evidenceRefs": ["evidence:proof"],
+            "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+            "proposalType": "new_note",
+            "suggestedContentSummary": "Metadata-only draft summary.",
+            "sensitivity": "low",
+            "freshness": "fresh",
+            "contradictionStatus": "none",
+            "confidence": "medium",
+            "operatorAction": "defer",
+            "backupRecoveryPath": "No mutation performed.",
+            "writeBackStatus": "review_gated",
+        }
+        cases = [
+            ("mp-stale-approval", {"freshness": "stale"}),
+            ("mp-contradictory-approval", {"contradictionStatus": "confirmed"}),
+        ]
+
+        for proposal_id, overrides in cases:
+            create_response = client.post(
+                f"/work-items/{work_item['id']}/memory-proposals",
+                json={**base_payload, **overrides, "proposalId": proposal_id},
+            )
+            assert create_response.status_code == 200
+
+            update_response = client.patch(
+                f"/work-items/{work_item['id']}/memory-proposals/{proposal_id}",
+                json={
+                    "status": "approved",
+                    "operatorAction": "approve",
+                    "writeBackStatus": "approved_for_future",
+                    "decisionNeededContext": "Attempted unsafe future approval.",
+                },
+            )
+            assert update_response.status_code == 400
+            assert update_response.json()["detail"]["error"]["code"] == "memory_proposal_review_rejected"
+
+            packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+            proposal = next(item for item in packet["memoryProposals"] if item["proposalId"] == proposal_id)
+            assert proposal["status"] == "pending_human_approval"
+            assert proposal["operatorAction"] == "defer"
+            assert proposal["writeBackStatus"] == "review_gated"
+            assert proposal["writeBackAllowed"] is False
+
+
+def test_memory_proposal_rejects_raw_content_missing_refs_and_write_back_authority(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-memory-proposal-rejections.db") as client:
+        work_item = _create_work_item(client, title="Rejected Obsidian memory review")
+        valid_payload = {
+            "proposalId": "mp-rejected-test",
+            "label": "Memory proposal pending review",
+            "summary": "Metadata-only summary.",
+            "sourceRefs": ["obsidian:source"],
+            "evidenceRefs": ["evidence:proof"],
+            "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+            "proposalType": "new_note",
+            "suggestedContentSummary": "Metadata-only draft summary.",
+            "sensitivity": "low",
+            "freshness": "fresh",
+            "contradictionStatus": "none",
+            "confidence": "medium",
+            "operatorAction": "defer",
+            "backupRecoveryPath": "No mutation performed.",
+            "writeBackStatus": "review_gated",
+        }
+
+        raw_content_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={**valid_payload, "proposalId": "mp-raw", "rawContent": "full source note"},
+        )
+        assert raw_content_response.status_code == 422
+
+        missing_refs_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={**valid_payload, "proposalId": "mp-missing-refs", "sourceRefs": []},
+        )
+        assert missing_refs_response.status_code == 422
+
+        write_back_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={**valid_payload, "proposalId": "mp-write", "writeBackAllowed": True},
+        )
+        assert write_back_response.status_code == 422
 
 
 def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path, monkeypatch) -> None:

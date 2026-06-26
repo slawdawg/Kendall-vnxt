@@ -2,7 +2,7 @@
 
 Status: source-owned policy plus bounded dry-run/read-only live proof.
 
-Last updated: 2026-06-25.
+Last updated: 2026-06-26.
 
 ## Purpose
 
@@ -124,6 +124,164 @@ Bounded write-preview or write-back operations require:
 - no excluded/private source content;
 - no raw payload retention;
 - no source-copy retention.
+
+## Live Readiness Gate
+
+Before any read-only live Obsidian proof, run:
+
+```text
+node scripts/knx-obsidian-memory.mjs live-readiness --config PATH
+```
+
+To create a redacted packet template for the operator to complete, run:
+
+```text
+node scripts/knx-obsidian-memory.mjs live-readiness-template
+```
+
+The template contains placeholders by design. It is not readiness evidence and
+must fail the readiness gate until the operator replaces every placeholder with
+approved vault, sync, backup, boundary, and review evidence.
+
+To create an operator-facing handoff packet from a candidate config without
+reading notes or performing any writes, run:
+
+```text
+node scripts/knx-obsidian-memory.mjs live-handoff-packet --config PATH [--note NOTE_PATH] [--work-item-id WORK_ITEM_ID] [--approval-ref REF] [--approved-by NAME]
+```
+
+The handoff packet reports readiness checklist status, blocked reason codes,
+and the exact argv arrays for the next safe commands. It does not execute those
+commands. If the packet is blocked, no live note proof or end-to-end live plan is
+authorized. If it is ready, the next command is still `live-readiness`; the
+packet is an operator handoff artifact, not a substitute for retained command
+evidence.
+
+The command is a no-scan/no-write metadata gate. It does not read note content,
+create proposals, create backups, mutate Obsidian, call providers, launch
+workers, call GitHub, send externally, or retain raw payloads.
+
+The gate must return `status=ready` before a later read-only live proof can be
+attempted. Required evidence:
+
+- config validation is clean with no concerns or failures;
+- live vault path exists and is a directory;
+- backup root exists, is outside the vault, and is a directory;
+- final live read allowlist is explicit;
+- queue/private/excluded folders are excluded from reads;
+- sync mechanism is one of `obsidian-sync`, `headless-sync`,
+  `local-folder-manual`, or `external-sync`;
+- sync health is `healthy` or `manual-current`;
+- sync check timestamp is recorded as a parseable date/time;
+- operator approval ref is recorded and is not a placeholder;
+- read-only proof approval ref is recorded and is not a placeholder;
+- source boundary ref is recorded and is not a placeholder;
+- KOM safety review ref is recorded and is not a placeholder.
+
+If the gate blocks, the next action is to supply the missing evidence or rerun
+KOM safety review. Blocking the readiness gate does not authorize a live vault
+read.
+
+After the readiness gate returns `status=ready`, use the readiness-enforced live
+proof command for the first approved live note read:
+
+```text
+node scripts/knx-obsidian-memory.mjs live-read-only-proof --config PATH --note NOTE_PATH
+```
+
+This command runs the live-readiness gate first and returns blocked metadata
+without reading the requested note when readiness is incomplete. It may read only
+the single requested allowlisted note after readiness is ready. It does not write
+to Obsidian, persist proposals, create backups, mutate source notes, call
+providers, launch workers, call GitHub, send externally, or retain raw/source
+content.
+
+When the live proof is allowed, the result includes a `dashboardProposal` object
+matching the supervisor `MemoryProposalV0` create payload. The payload must carry
+source refs, evidence refs, sensitivity, freshness, contradiction status,
+confidence, target queue metadata, recovery text, and `writeBackAllowed=false`.
+It is still a review proposal only; persisting it to the supervisor does not
+authorize an Obsidian write-back.
+
+To preview the exact supervisor persistence request without network egress or
+persistence, run:
+
+```text
+node scripts/knx-obsidian-memory.mjs proposal-persist-plan --config PATH --note NOTE_PATH --work-item-id WORK_ITEM_ID [--live]
+```
+
+Without `--live`, the command uses the local/fixture proof path. With `--live`,
+it runs the readiness-enforced live proof first. The output is a dry-run
+`supervisorRequest` envelope with method, path, and body. It does not call the
+supervisor, persist dashboard state, write Obsidian, create backups, call
+providers, launch workers, call GitHub, send externally, or retain raw/source
+content.
+
+The supervisor memory proposal API accepts the proof-derived payload shape with
+Obsidian source/evidence refs and queue target metadata. The accepted state is
+dashboard review state only and must keep `writeBackAllowed=false`.
+
+Before any tool persists a dry-run supervisor request, create an explicit
+metadata-only persistence approval packet:
+
+```text
+node scripts/knx-obsidian-memory.mjs proposal-persist-approval-packet --plan PATH --approval-ref REF [--approved-by NAME]
+```
+
+The approval packet validates that the dry-run plan is ready, targets
+`POST /work-items/{id}/memory-proposals`, contains a pending dashboard proposal,
+keeps `writeBackAllowed=false`, carries source/evidence refs, and has explicit
+operator approval metadata. It still does not call the supervisor, persist
+dashboard state, write Obsidian, create backups, call providers, launch
+workers, call GitHub, send externally, or retain raw/source content.
+
+To convert that approved packet into an exact local supervisor request plan
+without executing it, run:
+
+```text
+node scripts/knx-obsidian-memory.mjs proposal-persist-execution-plan --packet PATH [--supervisor-url URL]
+```
+
+The execution plan accepts only local supervisor URLs such as
+`http://127.0.0.1:8000` or `http://localhost:8000`. It emits the planned HTTP
+request and argv-safe `curl` command, but it does not run the command, call the
+supervisor, persist dashboard state, write Obsidian, create backups, call
+providers, launch workers, call GitHub, send externally, or retain raw/source
+content.
+
+To preview the full proof-to-draft sequence without network egress, supervisor
+persistence, backup creation, or Obsidian writes, run:
+
+```text
+node scripts/knx-obsidian-memory.mjs end-to-end-plan --config PATH --note NOTE_PATH --work-item-id WORK_ITEM_ID --approval-ref REF [--approved-by NAME] [--live]
+```
+
+The end-to-end plan composes the readiness-enforced proof, dashboard proposal
+persistence dry-run, draft approval packet, and approved draft write dry-run. In
+`--live` mode it stops at the live readiness gate before reading the note if
+vault, sync, backup, boundary, approval, or safety evidence is missing. A ready
+plan is still a plan only: it does not call the supervisor, persist dashboard
+state, create backups, write Obsidian, call providers, launch workers, call
+GitHub, send externally, or retain raw/source content.
+
+After dashboard review approves a proposal for a future draft, create a
+metadata-only draft approval packet before using any write-back command:
+
+```text
+node scripts/knx-obsidian-memory.mjs draft-approval-packet --proposal PATH --approval-ref REF [--approved-by NAME]
+```
+
+The approval packet bridges supervisor review state into the existing
+`write-approved-draft` gate by adding explicit operator approval metadata. It
+does not write Obsidian, persist supervisor state, create backups, call
+providers, launch workers, call GitHub, send externally, or retain raw/source
+content. The later `write-approved-draft --apply` step still requires the draft
+target to remain inside the dashboard queue and creates backup/rollback evidence
+before writing an AI draft.
+
+`write-approved-draft` accepts either the inner `approvalPacket` object or the
+full `draft-approval-packet` command output. Both forms are scanned for forbidden
+raw payload fields before the dry-run or apply gate can proceed.
 
 ## Current Implementation Boundary
 
