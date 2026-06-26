@@ -59,6 +59,9 @@ Workspace Coordination Report
   explicit merge approval is missing.
 - `local-only commit`: branch is ahead of its upstream or base and must be
   preserved until pushed, merged, or explicitly discarded.
+- `no-source refresh lane`: branch has been refreshed to the current base, the
+  worktree is clean, scoped verification passed, and there is no source diff to
+  commit. Preserve the evidence packet and do not create an empty PR.
 - `cleanup candidate`: PR is merged, worktree is clean, and cleanup dry-run
   names only the expected worktree and local branch.
 - `policy-approved low-risk delivery`: the active goal explicitly names merge
@@ -80,6 +83,11 @@ request reviews, status checks, conversation resolution, signed commits, linear
 history, merge queue, or successful deployments before changes land on a
 protected branch. A PR that does not meet the repository's visible merge
 requirements remains merge-gated.
+
+Use `docs/workflows/branch-protection-readiness-packet.md` as the source-owned
+branch protection readiness packet before proposing branch or ruleset changes.
+That packet is no GitHub mutation authority; it only records current evidence,
+candidate posture, future approval fields, rollback, and stop lines.
 
 Proof for low-risk delivery must come from current GitHub PR metadata, review
 threads, review requests, status/check results for the exact head SHA, local
@@ -110,6 +118,7 @@ Do not perform these actions from a generic continuation:
 - Rewrite a shared branch.
 - Resolve a review thread that has not been addressed.
 - Start work in a lane whose scope overlaps an active dirty lane.
+- Create an empty PR for a verified no-source refresh lane.
 
 Generic continuation is not standing approval. Use a narrow approval packet for
 merge, cleanup, branch deletion, or discarding local commits unless the active
@@ -117,6 +126,13 @@ goal explicitly grants the named GitHub delivery operation and the action meets
 the policy-approved low-risk delivery checklist above. If any checklist item is
 missing, ambiguous, stale, failing, or high risk, stop for explicit operator
 approval.
+
+If a lane classifies as `no-source refresh lane`, record the base SHA, takeover
+or ownership evidence, clean worktree status, scoped verification command and
+result, and the `finish-pr` dry-run refusal if checked. Close or delete the
+workspace only through a supported lifecycle command or an explicit cleanup
+approval packet; do not invent a source diff solely to make PR delivery
+possible.
 
 ## Next Safe Slice Rules
 

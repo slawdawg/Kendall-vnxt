@@ -117,6 +117,10 @@ cannot be completed without expanded party-mode authority.
    shared contracts.
 6. **Verify.** Run the smallest meaningful check first, then broaden when the
    touched surface crosses packages, APIs, workflows, or user-facing behavior.
+   If the branch has no source diff after a base refresh and scoped verification
+   passes, classify it as a no-source refresh lane: preserve the evidence
+   packet, do not create an empty PR, and close or clean up only through an
+   explicit supported lifecycle path.
 7. **Deliver PR.** Commit intended files, push the lane branch, open or update
    the PR, and monitor checks and review state.
 8. **Merge.** Merge only when the low-risk checklist is proven for the exact

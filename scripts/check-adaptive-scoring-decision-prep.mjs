@@ -15,6 +15,14 @@ function assertCondition(condition, message, failures) {
   }
 }
 
+function normalizeText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function includesText(content, text) {
+  return content.includes(text) || normalizeText(content).includes(normalizeText(text));
+}
+
 function listSourceFiles(dir, extensions, files = []) {
   const fullDir = join(rootDir, dir);
   if (!existsSync(fullDir)) {
@@ -102,12 +110,21 @@ for (const text of [
   "Candidate Metadata Signals",
   "Excluded inputs:",
   "Future Approval Packet Requirements",
+  "intended use statement and affected decision surfaces",
+  "lifecycle actors, named reviewer ownership, named operator ownership, and escalation owner for reviewer/operator conflicts",
+  "target report, API, or workflow surface",
+  "output fields and whether they may be displayed, including display-only report or dashboard surfaces",
+  "measurement plan, calibration method, failure thresholds, and management response owner",
+  "fake/local fixture set and negative test cases",
+  "monitoring cadence, drift response, and continual improvement cadence, criteria, owner, and resulting action path",
+  "operator appeal or override handling and escalation path",
+  "If reviewer ownership, operator ownership, management response ownership, or appeal escalation conflicts are unresolved, the lane remains blocked.",
   "The active verification chain includes `pnpm run check:adaptive-scoring`.",
   "Do not run adaptive scoring.",
   "Do not compute or persist adaptive scores.",
   "Do not let scores change work priority, routing, delivery, cleanup,",
 ]) {
-  assertCondition(decisionPrep.includes(text), `Decision prep doc must include: ${text}`, failures);
+  assertCondition(includesText(decisionPrep, text), `Decision prep doc must include: ${text}`, failures);
 }
 
 for (const url of [
@@ -125,10 +142,18 @@ for (const boundaryText of [
   "Authority family: `adaptive-scoring`",
   "docs/workflows/adaptive-scoring-decision-prep.md",
   "pnpm run check:adaptive-scoring",
+  "Intended use and affected decision surfaces.",
+  "Lifecycle actors, named reviewer ownership, named operator ownership, and escalation owner for reviewer/operator conflicts.",
+  "Target report, API, or workflow surface.",
+  "Measurement plan, calibration method, failure thresholds, and management response owner.",
+  "Fake/local fixture set and negative test cases.",
+  "Transparency, explainability, fairness, and operator review path.",
+  "Monitoring cadence, drift response, and continual improvement cadence, criteria, owner, and resulting action path.",
+  "Operator appeal or override handling and escalation path.",
   "Do not let scores change priority, routing, delivery, cleanup, authority,",
   "Do not treat this decision-prep package as approval.",
 ]) {
-  assertCondition(authorityBoundary.includes(boundaryText), `Execution authority boundary must include: ${boundaryText}`, failures);
+  assertCondition(includesText(authorityBoundary, boundaryText), `Execution authority boundary must include: ${boundaryText}`, failures);
 }
 
 for (const storyText of [
@@ -141,6 +166,10 @@ for (const storyText of [
 for (const serviceText of [
   'familyId="adaptive-scoring"',
   'status="blocked_pending_explicit_approval"',
+  "intended use, affected decision surfaces, approved inputs, outputs, retention, operator review, measurement, management response ownership, appeal handling, rollback, and stop lines.",
+  "intended use, affected decision surfaces, lifecycle actors, score inputs, output display/use, review path, appeal path, and rollback plan.",
+  "fairness, transparency, explainability, monitoring, drift response, and operator override handling before scores can be displayed",
+  "measurement plan, calibration method, failure thresholds, monitoring cadence, drift response, continual improvement action path, management response owner, and appeal escalation owner",
   "Use docs/workflows/adaptive-scoring-decision-prep.md and pnpm run check:adaptive-scoring to prepare a separate scoring decision packet before any adaptive scoring implementation starts.",
   "Do not run adaptive scoring.",
   "Do not let scores change work priority, authority state, or delivery/cleanup eligibility.",
@@ -149,7 +178,7 @@ for (const serviceText of [
   "check-adaptive-scoring",
   "pnpm run check:adaptive-scoring",
 ]) {
-  assertCondition(serviceSource.includes(serviceText), `Supervisor service must include adaptive scoring boundary text: ${serviceText}`, failures);
+  assertCondition(includesText(serviceSource, serviceText), `Supervisor service must include adaptive scoring boundary text: ${serviceText}`, failures);
 }
 
 for (const testText of [
@@ -157,6 +186,12 @@ for (const testText of [
   '"adaptive-scoring"',
   "docs/workflows/adaptive-scoring-decision-prep.md",
   "pnpm run check:adaptive-scoring",
+  "affected decision surfaces",
+  "fairness, transparency, explainability",
+  "before scores can be displayed",
+  "continual improvement action path",
+  "management response owner",
+  "appeal escalation owner",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert adaptive scoring text: ${testText}`, failures);
 }

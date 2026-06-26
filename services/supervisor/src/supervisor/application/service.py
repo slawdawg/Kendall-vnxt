@@ -956,6 +956,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-branch-protection-readiness",
+                label="Branch protection readiness packet drift",
+                command="pnpm run check:branch-protection-readiness",
+                status="required",
+                requiredFor=["branch protection readiness packet changes", "GitHub branch-protection authority boundary changes", "verification command changes"],
+                evidence=[
+                    "Validates the branch protection readiness packet, future approval fields, stop lines, workspace coordination reference, story index reference, and README command reference stay aligned.",
+                    "Runs as part of the static and full local verification commands without approving GitHub branch protection mutation.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-adaptive-scoring",
                 label="Adaptive scoring decision-prep drift",
                 command="pnpm run check:adaptive-scoring",
@@ -1217,6 +1228,28 @@ class SupervisorService:
                 evidence=[
                     "Validates workspace coordination report contracts, runbook guidance, CI/static check references, dashboard anchors, and cleanup stop lines stay aligned.",
                     "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="test-tmux-orientation-report",
+                label="Tmux orientation report tests",
+                command="pnpm run test:tmux-orientation-report",
+                status="required",
+                requiredFor=["tmux orientation report changes", "workspace lane orientation changes", "verification command changes"],
+                evidence=[
+                    "Validates metadata-only tmux pane/workspace mapping, owner stop lines, malformed metadata handling, and no pane capture or tmux mutation.",
+                    "Runs as part of the static and full local verification commands without approving tmux mutation.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-tmux-orientation-report",
+                label="Tmux orientation report drift",
+                command="pnpm run check:tmux-orientation-report",
+                status="required",
+                requiredFor=["tmux orientation report changes", "workspace lane orientation changes", "verification command changes"],
+                evidence=[
+                    "Validates tmux orientation report script, test, runbook, aggregate wiring, and safety text stay aligned.",
+                    "Runs as part of the static and full local verification commands.",
                 ],
             ),
             VerificationCommandView(
@@ -1675,6 +1708,7 @@ class SupervisorService:
                     "test-live-memory-source-enforcement",
                     "test-bounded-live-memory-source",
                     "check-authority-readiness",
+                    "check-branch-protection-readiness",
                     "check-adaptive-scoring",
                     "check-premium-execution",
                     "check-worker-launch",
@@ -1699,6 +1733,8 @@ class SupervisorService:
                     "check-maintenance-readiness",
                     "check-token-economy",
                     "check-workspace-coordination",
+                    "test-tmux-orientation-report",
+                    "check-tmux-orientation-report",
                     "check-mise-workflow",
                     "check-linux-install-lane",
                     "check-bmad-work-products",
@@ -1969,15 +2005,16 @@ class SupervisorService:
                 familyId="adaptive-scoring",
                 label="Adaptive scoring",
                 status="blocked_pending_explicit_approval",
-                summary="Adaptive scoring remains disabled until a scoring policy names approved inputs, outputs, retention, operator review, rollback, and stop lines.",
+                summary="Adaptive scoring remains disabled until a scoring policy names intended use, affected decision surfaces, approved inputs, outputs, retention, operator review, measurement, management response ownership, appeal handling, rollback, and stop lines.",
                 blockedStories=[],
                 requiredApprovals=[
-                    "Explicit operator approval naming the scoring authority, score inputs, output use, review path, and rollback plan.",
-                    "Approved scoring policy before scores can influence priority, launch, delivery, cleanup, or authority decisions.",
+                    "Explicit operator approval naming the scoring authority, intended use, affected decision surfaces, lifecycle actors, score inputs, output display/use, review path, appeal path, and rollback plan.",
+                    "Approved scoring policy with fairness, transparency, explainability, monitoring, drift response, and operator override handling before scores can be displayed or influence priority, launch, delivery, cleanup, or authority decisions.",
                 ],
                 requiredEvidence=[
                     "Current readiness and backlog reports remain read-only evidence surfaces.",
                     "No score is allowed to promote, execute, merge, clean up, or bypass a failed check.",
+                    "Future scoring evidence must define a measurement plan, calibration method, failure thresholds, monitoring cadence, drift response, continual improvement action path, management response owner, and appeal escalation owner before any score output is displayed or used.",
                     "Future scoring evidence must preserve metadata only and avoid raw prompts, completions, provider payloads, secrets, or unbounded source copies.",
                 ],
                 relatedReports=[
@@ -2116,6 +2153,45 @@ class SupervisorService:
                 ],
                 rollbackPath="Stop before remote mutation when PR state, CI, review, approval-ledger, or branch evidence is stale; preserve delivery evidence and return to dry-run planning.",
                 nextAction="Use the current delivery packet and GitHub state to drive human/connector-backed PR work only.",
+            ),
+            AuthorityReadinessFamilyView(
+                familyId="github-branch-protection",
+                label="GitHub branch protection",
+                status="readiness_only_no_authority_granted",
+                summary="Branch protection readiness evidence is prepared for dev, staging, main, and prod, but applying branch protection or repository rulesets requires a fresh exact approval packet.",
+                blockedStories=[],
+                requiredApprovals=[
+                    "Exact branch protection approval naming repository, target branch or pattern, implementation surface, operation, required checks, review settings, admin bypass, rollback path, stop lines, retained evidence and redaction policy, operator, timestamp, and expiry.",
+                    "Authenticated GitHub read-back approval evidence for the target branch or ruleset immediately before and after any approved setting change.",
+                ],
+                requiredEvidence=[
+                    "docs/workflows/branch-protection-readiness-packet.md records 2026-06-25 read-only GitHub and local branch foundation evidence.",
+                    "Current evidence says the repository default branch is main, auto-merge is enabled, repository rulesets are empty, main is protected with no enforced required checks, and dev/staging/prod are unprotected.",
+                    "The future approval packet must retain metadata-only GitHub read-back evidence, exact check-context evidence, rollback proof, and the redaction policy without raw credentials or unnecessary source copies.",
+                    "pnpm run check:branch-protection-readiness must pass before the packet can be used as approval-request evidence.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/authority-readiness-matrix-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/delivery-readiness-policy-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/branch-protection-readiness-packet.md",
+                    "docs/workflows/execution-authority-boundary.md#branch-protection-readiness-contract",
+                    "docs/github-connector-workflow.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#authority-readiness-matrix-report",
+                    "/controls#github-workflow-policy-report",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                stopLines=[
+                    "Do not apply branch protection or repository rulesets from the readiness packet alone.",
+                    "Do not change default branch, required checks, merge methods, merge queue, review rules, signed-commit rules, linear-history rules, admin bypass, branch refs, or GitHub Actions workflows from the readiness packet alone.",
+                    "Do not treat repository admin permission, CI success, live evidence, or branch protection readiness as approval.",
+                ],
+                rollbackPath="Stop before GitHub settings mutation when target branch, ruleset, check context, review setting, retained evidence, rollback, approval, or read-back evidence is stale or ambiguous.",
+                nextAction="Use docs/workflows/branch-protection-readiness-packet.md and pnpm run check:branch-protection-readiness to prepare an exact approval request; do not apply settings from readiness alone.",
             ),
             AuthorityReadinessFamilyView(
                 familyId="cleanup-automation",

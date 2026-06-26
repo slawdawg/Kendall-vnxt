@@ -119,6 +119,15 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   `bmad-review-adversarial-general`, `bmad-review-edge-case-hunter`, or
   `knx-safety-validation-review` only as follow-up lenses when the bundled
   code-review workflow leaves a specific gap.
+- When the operator asks to review implemented lane work, that request is
+  standing repo-level approval for the `bmad-code-review` workflow to run its
+  required review subagents or party-mode reviewers without a separate
+  subagent-specific approval prompt. Keep the run bounded to the reviewed lane,
+  use configured provider/model defaults, retain only summaries/findings/paths
+  and verification evidence, and stop before provider/model overrides, raw
+  provider payload retention, paid-usage expansion, GitHub mutation, cleanup,
+  worker launch, or any platform/tool policy that still requires explicit
+  approval.
 
 ## Alpha Slice Operating Model
 

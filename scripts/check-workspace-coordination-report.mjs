@@ -141,6 +141,7 @@ for (const classification of [
   "dirty active lane",
   "merge-gated lane",
   "local-only commit",
+  "no-source refresh lane",
   "cleanup candidate",
   "policy-approved low-risk delivery",
 ]) {
@@ -155,6 +156,7 @@ for (const stopLine of [
   "Rewrite a shared branch.",
   "Resolve a review thread that has not been addressed.",
   "Start work in a lane whose scope overlaps an active dirty lane.",
+  "Create an empty PR for a verified no-source refresh lane.",
 ]) {
   assertCondition(workflow.includes(stopLine), `Workspace coordination workflow must preserve stop line ${stopLine}`, failures);
 }
@@ -168,6 +170,9 @@ for (const requiredText of [
   "Merge only the exact reviewed head SHA; do not bypass branch protection.",
   "Proof for low-risk delivery must come from current GitHub PR metadata",
   "Generic continuation is not standing approval.",
+  "do not create an empty PR",
+  "finish-pr",
+  "do not invent a source diff",
   "policy-approved low-risk delivery checklist",
   "This workflow does not merge PRs, clean worktrees, delete branches",
 ]) {
