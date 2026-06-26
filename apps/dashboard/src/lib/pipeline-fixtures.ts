@@ -1366,6 +1366,26 @@ function buildAlphaMemorySourceStatus(
       ? ["Review blocked source refs", "Provide explicit approval metadata", "Refresh source refs or send back to Research", "Keep Obsidian canonical; do not promote LLM-Wiki"]
       : ["Run dry-run preview with explicit approval metadata"],
     evidenceRefs: evidenceRefs.map((ref) => ref.refId),
+    llmWikiReadiness: {
+      statusId: `llm-wiki-readiness:${packetId}`,
+      operationMode: "read_only",
+      decisionState: uniqueBlockedReasons.some((reason) => reason.includes("derived_non_canonical") || reason.includes("invalid_or_blocked") || reason.includes("stale"))
+        ? "blocked"
+        : "not_configured",
+      canonicality: "derived_disposable_rebuildable",
+      retentionClass: "metadata_only",
+      sourceRefs: alphaSourceRefs.filter((ref) => ref.sourceType !== "llm_wiki").map((ref) => ref.refId),
+      evidenceRefs: evidenceRefs.map((ref) => ref.refId),
+      memoryProposalRefs: [],
+      allowedInputs: [],
+      blockedReasons: uniqueBlockedReasons.length > 0 ? uniqueBlockedReasons : ["llm_wiki.no_memory_proposal_metadata"],
+      nextActions: ["Approve a fresh non-contradictory Obsidian memory proposal before derived LLM-Wiki rebuild readiness."],
+      boundarySummary: "LLM-Wiki is derived, disposable, and rebuildable; it never overrides Obsidian.",
+      canonicalMutationAllowed: false,
+      sourceMutationAllowed: false,
+      providerCallsAllowed: false,
+      durableWriteAllowed: false,
+    },
     canonicalMutationAllowed: false,
     sourceMutationAllowed: false,
     providerCallsAllowed: false,

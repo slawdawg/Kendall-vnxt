@@ -562,6 +562,142 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
         assert "SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured" in missing_config_response.json()["detail"]["error"]["message"]
 
 
+def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-readiness.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "LLM-Wiki derived readiness",
+                "requestedOutcome": "Show derived readiness from approved memory metadata.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "workPacketSourceRefs": [
+                        {
+                            "refId": "source:obsidian-approved",
+                            "sourceType": "obsidian",
+                            "label": "Approved Obsidian source",
+                            "pathOrUrl": "00 Inbox/new-customer-insight.md",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                        }
+                    ]
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+        create_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-llm-wiki-ready",
+                "label": "LLM-Wiki ready proposal",
+                "summary": "Metadata-only summary for derived index readiness.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultPath": "01 Dashboard Queue/AI Drafts/llm-wiki-ready-proposal-mp-llm-wiki-ready.md",
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Create a Kendall-authored draft for operator review.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert create_response.status_code == 200
+        approve_response = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-ready",
+            json={
+                "status": "approved",
+                "operatorAction": "approve",
+                "writeBackStatus": "approved_for_future",
+                "writeBackAllowed": False,
+            },
+        )
+        assert approve_response.status_code == 200
+
+        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        readiness = packet["alphaMemorySourceStatus"]["llmWikiReadiness"]
+        assert readiness["decisionState"] == "ready"
+        assert readiness["canonicality"] == "derived_disposable_rebuildable"
+        assert readiness["retentionClass"] == "metadata_only"
+        assert readiness["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
+        assert readiness["allowedInputs"] == ["memory_proposal:mp-llm-wiki-ready"]
+        assert readiness["blockedReasons"] == []
+        assert readiness["canonicalMutationAllowed"] is False
+        assert readiness["sourceMutationAllowed"] is False
+        assert readiness["providerCallsAllowed"] is False
+        assert readiness["durableWriteAllowed"] is False
+        assert "never overrides Obsidian" in readiness["boundarySummary"]
+
+
+def test_llm_wiki_readiness_blocks_unapproved_or_derived_only_sources(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-readiness-blocked.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "LLM-Wiki blocked readiness",
+                "requestedOutcome": "Keep derived-only memory from becoming trusted memory.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "workPacketSourceRefs": [
+                        {
+                            "refId": "source:llm-wiki-derived",
+                            "sourceType": "llm_wiki",
+                            "label": "Derived LLM-Wiki digest",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                        }
+                    ]
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+
+        packet_without_proposals = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        not_configured = packet_without_proposals["alphaMemorySourceStatus"]["llmWikiReadiness"]
+        assert not_configured["decisionState"] == "not_configured"
+        assert "llm_wiki.no_memory_proposal_metadata" in not_configured["blockedReasons"]
+        assert not_configured["durableWriteAllowed"] is False
+
+        create_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-llm-wiki-blocked",
+                "label": "Blocked LLM-Wiki proposal",
+                "summary": "Metadata-only summary that still needs review.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Create a Kendall-authored draft for operator review.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert create_response.status_code == 200
+
+        packet_with_pending = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        blocked = packet_with_pending["alphaMemorySourceStatus"]["llmWikiReadiness"]
+        assert blocked["decisionState"] == "blocked"
+        assert "source_ref.derived_non_canonical.source:llm-wiki-derived" in blocked["blockedReasons"]
+        assert "memory_proposal.not_approved.mp-llm-wiki-blocked" in blocked["blockedReasons"]
+        assert blocked["canonicalMutationAllowed"] is False
+
+
 def test_work_item_accepts_proof_derived_dashboard_proposal_payload(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-kom-proof-proposal.db") as client:
         work_item = _create_work_item(client, title="KOM proof-derived proposal review")

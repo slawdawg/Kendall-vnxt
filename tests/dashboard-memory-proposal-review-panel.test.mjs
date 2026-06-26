@@ -23,6 +23,9 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
   assert.match(panelSource, /No action here mutates canonical Obsidian notes/);
   assert.match(panelSource, /Approve future draft/);
   assert.match(panelSource, /Create AI draft/);
+  assert.match(panelSource, /LLM-Wiki readiness/);
+  assert.match(panelSource, /llmWikiReadiness/);
+  assert.match(panelSource, /durableWriteAllowed/);
   assert.match(panelSource, /Needs edit/);
   assert.match(panelSource, /Reject/);
   assert.match(panelSource, /Defer/);

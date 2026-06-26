@@ -494,12 +494,32 @@ export interface AlphaMemorySourceStatusV0 {
   blockedReasons: string[];
   recoveryOptions: string[];
   evidenceRefs: WorkPacketRefIdV0[];
+  llmWikiReadiness?: LlmWikiDerivedIndexReadinessV0 | null;
   canonicalMutationAllowed: false;
   sourceMutationAllowed: false;
   providerCallsAllowed: false;
   workerLaunchAllowed: false;
   githubCallsAllowed: false;
   networkEgressAllowed: false;
+}
+
+export interface LlmWikiDerivedIndexReadinessV0 {
+  statusId: string;
+  operationMode: "read_only";
+  decisionState: "ready" | "blocked" | "not_configured";
+  canonicality: "derived_disposable_rebuildable";
+  retentionClass: "metadata_only";
+  sourceRefs: WorkPacketRefIdV0[];
+  evidenceRefs: WorkPacketRefIdV0[];
+  memoryProposalRefs: WorkPacketRefIdV0[];
+  allowedInputs: string[];
+  blockedReasons: string[];
+  nextActions: string[];
+  boundarySummary: string;
+  canonicalMutationAllowed: false;
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  durableWriteAllowed: false;
 }
 
 export type RecoveryActionTypeV0 =
