@@ -131,6 +131,11 @@ cannot be completed without expanded party-mode authority.
    thread-aware review-thread check before merge. Resolve only threads whose
    feedback has been addressed by the current diff, test evidence, or explicit
    operator decision.
+   Use exact-head merge protection for GitHub CLI merges, such as
+   `gh pr merge <number> --merge --delete-branch --match-head-commit <headRefOid>`.
+   For dependency or bot PRs outside a managed lane, verify in a temporary
+   detached worktree from the PR head so dirty local work does not contaminate
+   merge evidence.
 9. **Cleanup.** Prefer `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
    run first. Apply cleanup only when the dry-run output names the expected PR,
@@ -141,6 +146,12 @@ cannot be completed without expanded party-mode authority.
    Stop if the worktree is dirty, no stable repository root is available, owner
    evidence is missing or mismatched, PR merge evidence is missing, or the
    local/remote branch head differs from the recorded PR delivery head.
+   If cleanup is for stale remote branches outside a managed lane, first build
+   an exact deletion set from current GitHub PR metadata and
+   `node ./scripts/codex-workspace.mjs list --active --json`; delete only
+   branches whose current remote SHA exactly matches a merged PR `headRefOid`
+   and that have no open PR, no closed-unmerged PR, and no active workspace
+   owner.
 
 ## Lane Ownership
 
@@ -183,6 +194,9 @@ Merge under `standard-delivery` only when current evidence proves all of these:
 - Local verification has completed for the changed surface.
 - The changed-file list avoids high-blast-radius surfaces.
 - A rollback or revert path is known.
+- For dependency/security bumps, the changed-file list is limited to the
+  affected package metadata/lockfiles and focused local verification covers the
+  package that changed.
 
 If any evidence source is stale, unavailable, ambiguous, failing, or too narrow
 for the changed surface, do not classify the merge as low risk.
@@ -225,6 +239,16 @@ Use controls such as:
 - Add tests, static drift checks, or verification scripts for new contracts.
 - Require clean-worktree, merged-PR, exact branch, owner, and path-allowlist
   evidence before cleanup.
+- Use supported installed `gh` commands. Prefer `gh pr diff <number> --name-only`
+  for changed-file discovery instead of relying on optional flags that may not
+  exist on the installed CLI.
+- For Python/uv verification, prefer repo wrappers with workspace-local cache
+  configuration. If direct `uv run --directory services/supervisor ...` fails
+  in the sandbox with a read-only `$HOME/.cache/uv` error, rerun the exact same
+  read-only command outside the sandbox rather than changing command scope.
+- If broad verification hangs or stops producing useful output, stop it
+  cleanly, record it as inconclusive, and run focused verification that covers
+  the changed surface.
 - Prefer the merged PR `headRefOid` as cleanup head evidence when available;
   local manifest delivery-head metadata can be stale after follow-up PR commits,
   but local and remote branch deletion must still fail closed if either branch

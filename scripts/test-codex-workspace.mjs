@@ -558,6 +558,44 @@ try {
     assert(result.stdout.includes("owner=runner-a"), result.stdout || result.stderr);
   });
 
+  test("list json emits structured workspace rows for automation", () => {
+    const jsonStateRoot = mkdtempSync(join(tmpdir(), "codex-list-json-"));
+    try {
+      const tasksDir = join(jsonStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "json-lane.json"),
+        `${JSON.stringify({
+          task_id: "json-lane",
+          branch: "codex/json-lane",
+          worktree_path: rootDir,
+          base_branch: "dev",
+          status: "active",
+          pr_url: "https://github.com/slawdawg/Kendall-vnxt/pull/123",
+          owner: "runner-json",
+          cleanup_started_at: "2026-06-26T00:00:00.000Z",
+          cleanup_expected_head_sha: "abc123",
+        })}\n`,
+      );
+
+      const result = run(["list", "--active", "--json", "--state-root", jsonStateRoot]);
+      const rows = JSON.parse(result.stdout);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(Array.isArray(rows), result.stdout || result.stderr);
+      assert(rows.length === 1, result.stdout || result.stderr);
+      assert(rows[0].taskId === "json-lane", result.stdout || result.stderr);
+      assert(rows[0].branch === "codex/json-lane", result.stdout || result.stderr);
+      assert(rows[0].baseBranch === "dev", result.stdout || result.stderr);
+      assert(rows[0].prNumber === 123, result.stdout || result.stderr);
+      assert(rows[0].owner === "runner-json", result.stdout || result.stderr);
+      assert(rows[0].cleanup.startedAt === "2026-06-26T00:00:00.000Z", result.stdout || result.stderr);
+      assert(rows[0].cleanup.expectedHeadSha === "abc123", result.stdout || result.stderr);
+    } finally {
+      rmSync(jsonStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("list and resume preserve existing main-targeting manifests", () => {
     const legacyStateRoot = mkdtempSync(join(tmpdir(), "codex-legacy-main-manifest-"));
     try {
