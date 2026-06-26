@@ -1,6 +1,6 @@
 # Linux Primary Development Runbook
 
-Date: 2026-06-16
+Date: 2026-06-26
 Status: active primary-development baseline
 
 ## Purpose
@@ -37,8 +37,8 @@ installer.
 | pnpm | `11.5.2` |
 | uv | `0.11.21`, system-visible through `/usr/local/bin/uv` |
 | gh | `2.46.0`; authentication is user-configured post-deployment when needed |
-| Codex CLI | `codex-cli 0.140.0` |
-| Claude Code | `2.1.178` |
+| Codex CLI | `codex-cli 0.141.0` |
+| Claude Code | `2.1.179` |
 | BMAD Method CLI | `6.8.0` |
 
 ## Connect
@@ -109,6 +109,9 @@ pnpm run check
 
 Current Linux VM evidence:
 
+- Current target tool rows were refreshed on 2026-06-26 from
+  `docs/linux-install/global-tool-manifest.json` and local version probes for
+  Node, pnpm, uv, gh, Codex CLI, Claude Code, and BMAD Method CLI.
 - Full `pnpm run check` passed after clean VM creation, toolchain install,
   post-deployment GitHub auth for repo access, repo clone, and setup.
 - Supervisor tests passed as `205 passed, 1 warning`.
