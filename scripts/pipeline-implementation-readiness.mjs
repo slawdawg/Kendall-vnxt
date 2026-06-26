@@ -165,7 +165,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     sourceFiles: ["apps/dashboard/src/app/pipeline/page.tsx", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "apps/dashboard/src/app/pipeline/page.tsx", tokens: ["PipelineCockpit", "realtimeRefresh={false}"] },
-      { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline workflow strip", "Pipeline operational strip", "Mission control focus strip", "Pipeline board"] },
+      { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline route map", "Pipeline operational strip", "Mission control focus strip", "Pipeline board"] },
       { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Packet detail", "Packet 5 Whys", "Gate, memory, recovery"] },
       { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["fixture-only cockpit frame without supervisor calls", "fetch\\s*\\("] },
     ],
@@ -362,7 +362,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     requiredTokens: [
       {
         file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx",
-        tokens: ["Refined pipeline cockpit frame", "Cockpit first-frame hierarchy", "Pipeline command strip", "Pipeline workflow strip", "Pipeline operational strip", "Pipeline route map", "Pipeline inspection panel"],
+        tokens: ["Refined pipeline cockpit frame", "Cockpit first-frame hierarchy", "Pipeline command strip", "Pipeline operational strip", "Pipeline route map", "Packet inspection panel"],
       },
       {
         file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx",
