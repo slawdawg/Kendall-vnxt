@@ -649,6 +649,14 @@ class MemoryProposalAiDraftWriteRequest(BaseModel):
     actorLabel: str | None = None
 
 
+class LlmWikiDisposableRebuildWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approvalRef: str
+    actorId: str | None = None
+    actorLabel: str | None = None
+
+
 class MemoryProposalV0View(BaseModel):
     proposalId: str
     packetId: str

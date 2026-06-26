@@ -739,6 +739,234 @@ def test_llm_wiki_readiness_blocks_unapproved_or_derived_only_sources(tmp_path, 
         assert blocked["rebuildDryRunPlan"] is None
 
 
+def test_approved_llm_wiki_rebuild_writes_disposable_derived_artifact(tmp_path, monkeypatch) -> None:
+    config_path, vault_root, backup_root = _write_obsidian_memory_config(tmp_path)
+    monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
+    with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-rebuild-write.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "LLM-Wiki disposable rebuild write",
+                "requestedOutcome": "Write a derived LLM-Wiki artifact after approval.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "workPacketSourceRefs": [
+                        {
+                            "refId": "obsidian:00 Inbox/new-customer-insight.md",
+                            "sourceType": "obsidian",
+                            "label": "Approved Obsidian note",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                        }
+                    ]
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+        create_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-llm-wiki-write",
+                "label": "LLM-Wiki rebuild write",
+                "summary": "Approved metadata summary for the derived LLM-Wiki artifact.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Create a derived index entry from approved metadata only.",
+                "patchSummary": "Metadata-only derived rebuild preview; no raw source note content copied.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "decisionNeededContext": "Operator must approve before disposable LLM-Wiki rebuild write.",
+                "backupRecoveryPath": "No mutation performed yet.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert create_response.status_code == 200
+        approve_response = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write",
+            json={
+                "status": "approved",
+                "operatorAction": "approve",
+                "decisionNeededContext": "Approved for disposable LLM-Wiki rebuild artifact only.",
+                "writeBackStatus": "approved_for_future",
+                "writeBackAllowed": False,
+            },
+        )
+        assert approve_response.status_code == 200
+
+        write_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
+            json={"approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
+        )
+
+        assert write_response.status_code == 200
+        proposal = write_response.json()["data"]
+        assert proposal["writeBackAllowed"] is False
+        assert proposal["targetVaultFolder"] == "01 Dashboard Queue/LLM Wiki Derived"
+        assert proposal["targetVaultPath"] == "01 Dashboard Queue/LLM Wiki Derived/llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md"
+        assert "LLM-Wiki derived artifact written" in proposal["patchSummary"]
+        assert "Obsidian remains canonical" in proposal["decisionNeededContext"]
+        assert "restore from" in proposal["backupRecoveryPath"]
+
+        artifact_path = vault_root / "01 Dashboard Queue" / "LLM Wiki Derived" / "llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md"
+        assert artifact_path.exists()
+        artifact_text = artifact_path.read_text(encoding="utf-8")
+        assert "status: llm-wiki-derived" in artifact_text
+        assert "proposal_id: mp-llm-wiki-write" in artifact_text
+        assert 'approval_ref: "approval:operator:llm-wiki-rebuild-2026-06-26"' in artifact_text
+        assert "canonicality: derived_disposable_rebuildable" in artifact_text
+        assert "raw_payload_retained: false" in artifact_text
+        assert "source_content_copied: false" in artifact_text
+        assert "write_back_allowed: false" in artifact_text
+        assert "approved-memory-proposals" in artifact_text
+        assert "Create a derived index entry from approved metadata only." in artifact_text
+        assert not (vault_root / "00 Inbox" / "llm-wiki-derived-llm-wiki-rebuild-write-mp-llm-wiki-write.md").exists()
+        assert any(backup_root.iterdir())
+
+        duplicate_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-write/llm-wiki-rebuild",
+            json={"approvalRef": "approval:operator:llm-wiki-rebuild-2026-06-26", "actorLabel": "Operator"},
+        )
+        assert duplicate_response.status_code == 200
+        assert "already exists" in duplicate_response.json()["data"]["patchSummary"]
+
+
+def test_llm_wiki_rebuild_write_blocks_without_approval_config_or_safe_readiness(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-rebuild-write-blocked.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Blocked LLM-Wiki disposable rebuild",
+                "requestedOutcome": "Block unsafe derived rebuild writes.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "workPacketSourceRefs": [
+                        {
+                            "refId": "obsidian:00 Inbox/new-customer-insight.md",
+                            "sourceType": "obsidian",
+                            "label": "Approved Obsidian note",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                        }
+                    ]
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+        create_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-llm-wiki-blocked-write",
+                "label": "Blocked LLM-Wiki rebuild write",
+                "summary": "Metadata summary.",
+                "sourceRefs": ["obsidian:00 Inbox/new-customer-insight.md"],
+                "evidenceRefs": ["evidence:read-only-proof:00 Inbox/new-customer-insight.md"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Create a derived index entry from approved metadata only.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "operatorAction": "defer",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "review_gated",
+                "writeBackAllowed": False,
+            },
+        )
+        assert create_response.status_code == 200
+
+        missing_approval_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",
+            json={"approvalRef": "", "actorLabel": "Operator"},
+        )
+        assert missing_approval_response.status_code == 400
+        assert "explicit operator approval ref" in missing_approval_response.json()["detail"]["error"]["message"]
+
+        unapproved_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",
+            json={"approvalRef": "approval:operator:test", "actorLabel": "Operator"},
+        )
+        assert unapproved_response.status_code == 400
+        assert "missing_approved_status" in unapproved_response.json()["detail"]["error"]["message"]
+
+        approve_response = client.patch(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write",
+            json={"status": "approved", "operatorAction": "approve", "writeBackStatus": "approved_for_future", "writeBackAllowed": False},
+        )
+        assert approve_response.status_code == 200
+        missing_config_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-blocked-write/llm-wiki-rebuild",
+            json={"approvalRef": "approval:operator:test", "actorLabel": "Operator"},
+        )
+        assert missing_config_response.status_code == 400
+        assert "SUPERVISOR_OBSIDIAN_MEMORY_CONFIG is not configured" in missing_config_response.json()["detail"]["error"]["message"]
+
+    config_path, _vault_root, _backup_root = _write_obsidian_memory_config(tmp_path)
+    monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
+    with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-rebuild-derived-blocked.db") as client:
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Derived source blocked LLM-Wiki rebuild",
+                "requestedOutcome": "Block derived-only source from rebuilding itself.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "workPacketSourceRefs": [
+                        {
+                            "refId": "source:llm-wiki-derived",
+                            "sourceType": "llm_wiki",
+                            "label": "Derived LLM-Wiki digest",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                        }
+                    ]
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+        create_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals",
+            json={
+                "proposalId": "mp-llm-wiki-derived-blocked",
+                "label": "Derived LLM-Wiki rebuild write",
+                "summary": "Metadata summary.",
+                "sourceRefs": ["source:llm-wiki-derived"],
+                "evidenceRefs": ["evidence:derived"],
+                "targetVaultFolder": "01 Dashboard Queue/AI Drafts",
+                "proposalType": "new_note",
+                "suggestedContentSummary": "Attempt derived index entry.",
+                "sensitivity": "medium",
+                "freshness": "fresh",
+                "contradictionStatus": "none",
+                "confidence": "high",
+                "status": "approved",
+                "operatorAction": "approve",
+                "backupRecoveryPath": "No mutation performed.",
+                "writeBackStatus": "approved_for_future",
+                "writeBackAllowed": False,
+            },
+        )
+        assert create_response.status_code == 200
+        blocked_response = client.post(
+            f"/work-items/{work_item['id']}/memory-proposals/mp-llm-wiki-derived-blocked/llm-wiki-rebuild",
+            json={"approvalRef": "approval:operator:test", "actorLabel": "Operator"},
+        )
+        assert blocked_response.status_code == 400
+        assert "source_ref.derived_non_canonical.source:llm-wiki-derived" in blocked_response.json()["detail"]["error"]["message"]
+
+
 def test_work_item_accepts_proof_derived_dashboard_proposal_payload(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-kom-proof-proposal.db") as client:
         work_item = _create_work_item(client, title="KOM proof-derived proposal review")
