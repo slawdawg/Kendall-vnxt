@@ -349,18 +349,31 @@ cleanup.
 
 ### `/pipeline` Status Rendering
 
-The dashboard may render governed Claude or Hermes dry-run attempts as
-`ExecutionAttempt` or Work Packet execution-attempt summaries when all of these
-remain true:
+The dashboard may render governed Claude or Hermes dry-run attempts and retained
+copied-worktree execution metadata as `ExecutionAttempt` or Work Packet
+execution-attempt summaries when all of these remain true:
 
-- `authorityMode` is `non_executing_dry_run`;
-- evidence refs are packet-local metadata refs;
+- `authorityMode` is `non_executing_dry_run` or
+  `copied_worktree_worker_execution`;
+- dry-run evidence refs are packet-local metadata refs, and copied-worktree
+  evidence refs match the retained producer refs such as
+  `metadata:worker-copied-worktree-execution/claude` or
+  `metadata:worker-copied-worktree-execution/hermes`;
 - retained evidence is `metadata_only` and `rawPayloadRetained` is false;
-- worker id uses a dry-run identity such as `claude.governed.dry_run` or
-  `hermes.governed.dry_run`;
-- visible status never implies `running_live_worker`, provider calls, network
-  access, session inheritance, source mutation, delivery, merge, cleanup, or raw
-  output retention.
+- worker id uses a governed identity such as `claude.governed.dry_run`,
+  `hermes.governed.dry_run`, or
+  `claude.governed.copied_worktree_worker_execution`;
+- visible status never implies `running_live_worker`, source mutation, delivery,
+  merge, cleanup, raw output retention, or authority beyond the exact retained
+  metadata mode.
+
+Copied-worktree metadata is completion or unavailability evidence, not process
+liveness. A successful Claude copied-worktree command that has already returned
+`KENDALL_COPY_EXECUTION_OK` should render as completed execution evidence ready
+for review. Hermes should render as blocked/unavailable until a runnable command
+and containment authority are proven. The dashboard must not launch workers,
+probe commands, read live process state, fetch provider output, infer trust, or
+trigger routing/retry decisions from these retained metadata packets.
 
 A UI label such as `running` may describe an active non-executing dry-run
 attempt only when the same packet also displays the dry-run authority mode and
