@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,6 +22,10 @@ import {
   collectToolVersionProbeAttempts,
   validateToolVersionProbeAttempt,
 } from "../scripts/governed-worker-version-probe.mjs";
+import {
+  collectSmokeExecutionAttempts,
+  validateSmokeExecutionAttempt,
+} from "../scripts/governed-worker-smoke-execution.mjs";
 
 const fixtureBase = new URL("./fixtures/governed-worker-execution-dry-run/", import.meta.url);
 const validatorSourcePath = new URL("../scripts/lib/governed-worker-execution-dry-run.mjs", import.meta.url);
@@ -29,6 +33,8 @@ const readinessCollectorSourcePath = new URL("../scripts/governed-worker-readine
 const readinessCollectorPath = fileURLToPath(readinessCollectorSourcePath);
 const versionProbeSourcePath = new URL("../scripts/governed-worker-version-probe.mjs", import.meta.url);
 const versionProbePath = fileURLToPath(versionProbeSourcePath);
+const smokeExecutionSourcePath = new URL("../scripts/governed-worker-smoke-execution.mjs", import.meta.url);
+const smokeExecutionPath = fileURLToPath(smokeExecutionSourcePath);
 const packageJsonPath = new URL("../package.json", import.meta.url);
 const checkWrapperPath = new URL("../scripts/check-governed-worker-execution-dry-run.mjs", import.meta.url);
 
@@ -646,6 +652,261 @@ test("version probe command avoids shell network GitHub cleanup and source mutat
   }
 });
 
+test("governed Claude smoke execution uses fixed print JSON prompt without tools or source authority", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-smoke-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    await writeFile(
+      claudePath,
+      "#!/bin/sh\ncase \" $* \" in *'--print'*'--output-format json'*'--safe-mode'*'--tools  '*'KENDALL_SMOKE_OK'*) echo '{\"result\":\"KENDALL_SMOKE_OK\"}'; exit 0;; *) echo bad-args; exit 9;; esac\n",
+      "utf8",
+    );
+    await chmod(claudePath, 0o755);
+
+    const [result] = collectSmokeExecutionAttempts({
+      env: { PATH: tempDir, PWD: process.cwd() },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 1000,
+      workers: ["claude"],
+    });
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.attempt.worker, "claude");
+    assert.equal(result.attempt.mode, "smoke_execution");
+    assert.equal(result.attempt.authority_level, "isolated_worker_smoke");
+    assert.equal(result.attempt.execution_state, "smoke_observed");
+    assert.equal(result.attempt.command_path, claudePath);
+    assert.deepEqual(result.attempt.command_args.slice(0, 2), ["--print", "--output-format"]);
+    assert.equal(result.attempt.command_args.includes("--safe-mode"), true);
+    assert.equal(result.attempt.command_args.includes("--no-session-persistence"), true);
+    assert.equal(result.attempt.command_args.includes("--max-budget-usd"), true);
+    assert.equal(result.attempt.expected_response, "KENDALL_SMOKE_OK");
+    assert.equal(result.attempt.observed_response, "KENDALL_SMOKE_OK");
+    assert.equal(result.attempt.shell_used, false);
+    assert.equal(result.attempt.network_allowed, true);
+    assert.equal(result.attempt.session_inheritance_allowed, true);
+    assert.equal(result.attempt.source_mutation_allowed, false);
+    assert.equal(result.attempt.tools_allowed, false);
+    assert.equal(result.attempt.raw_output_retained, false);
+    assert.equal(result.attempt.affects_trust, false);
+    assert.equal(result.attempt.affects_routing, false);
+    assert.match(result.attempt.safe_cwd, /^\/tmp\/kendall-worker-smoke-/);
+    assert.equal(existsSync(result.attempt.safe_cwd), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("smoke execution accepts Claude JSON result while ignoring token usage metadata", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-smoke-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    await writeFile(
+      claudePath,
+      "#!/bin/sh\necho '{\"type\":\"result\",\"result\":\"KENDALL_SMOKE_OK\",\"usage\":{\"inputTokens\":1,\"outputTokens\":1},\"session_id\":\"00000000-0000-0000-0000-000000000000\"}'\n",
+      "utf8",
+    );
+    await chmod(claudePath, 0o755);
+
+    const [result] = collectSmokeExecutionAttempts({
+      env: { PATH: tempDir, PWD: process.cwd() },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 1000,
+      workers: ["claude"],
+    });
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.attempt.execution_state, "smoke_observed");
+    assert.equal(result.attempt.observed_response, "KENDALL_SMOKE_OK");
+    assert.doesNotMatch(JSON.stringify(result), /inputTokens|outputTokens|session_id/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("smoke execution reports unsupported Hermes and invalid Claude output without raw retention", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-smoke-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    await writeFile(claudePath, "#!/bin/sh\necho '{\"result\":\"KENDALL_SMOKE_OK\"}'\necho 'raw_prompt sk-proj-123456789'\n", "utf8");
+    await chmod(claudePath, 0o755);
+
+    const results = collectSmokeExecutionAttempts({
+      env: { PATH: tempDir, PWD: process.cwd() },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 1000,
+      workers: ["claude", "hermes"],
+    });
+    const claude = results.find((result) => result.attempt.worker === "claude");
+    const hermes = results.find((result) => result.attempt.worker === "hermes");
+
+    assert.equal(claude.validation.ok, true);
+    assert.equal(claude.attempt.execution_state, "invalid_output");
+    assert.equal(claude.attempt.observed_response, null);
+    assert.doesNotMatch(JSON.stringify(claude), /sk-proj-123456789/);
+    assert.equal(hermes.validation.ok, true);
+    assert.equal(hermes.attempt.execution_state, "unsupported");
+    assert.equal(hermes.attempt.command_path, null);
+    assert.deepEqual(hermes.attempt.command_args, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("smoke execution CLI parse errors and unsupported workers stop before launch", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-smoke-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    const sentinelPath = join(tempDir, "sentinel");
+    await writeFile(claudePath, `#!/bin/sh\ntouch '${sentinelPath}'\necho '{\"result\":\"KENDALL_SMOKE_OK\"}'\n`, "utf8");
+    await chmod(claudePath, 0o755);
+
+    const invalidTimeout = spawnSync(
+      process.execPath,
+      [smokeExecutionPath, "--workers", "claude", "--timeout-ms", "50000"],
+      { encoding: "utf8", env: { ...process.env, PATH: tempDir } },
+    );
+    assert.notEqual(invalidTimeout.status, 0);
+    const invalidTimeoutOutput = JSON.parse(invalidTimeout.stdout);
+    assert.deepEqual(invalidTimeoutOutput.results, []);
+    assert.ok(invalidTimeoutOutput.errors.some((error) => error.reason === "invalid_timeout"));
+    assert.equal(existsSync(sentinelPath), false);
+
+    const unknownWorker = spawnSync(process.execPath, [smokeExecutionPath, "--workers", "codex"], { encoding: "utf8" });
+    assert.notEqual(unknownWorker.status, 0);
+    const unknownWorkerOutput = JSON.parse(unknownWorker.stdout);
+    assert.deepEqual(unknownWorkerOutput.results, []);
+    assert.ok(unknownWorkerOutput.errors.some((error) => error.reason === "unknown_worker"));
+    assert.ok(unknownWorkerOutput.errors.some((error) => error.reason === "empty_worker_selection"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("smoke execution skips symlinked workspace PATH entries and filters runtime PATH", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-smoke-"));
+  try {
+    const workspace = join(tempDir, "workspace");
+    const workspaceBin = join(workspace, "bin");
+    const safeBin = join(tempDir, "safe-bin");
+    const symlinkBin = join(tempDir, "symlink-bin");
+    const workspaceSentinel = join(tempDir, "workspace-sentinel");
+    const helperSentinel = join(tempDir, "helper-sentinel");
+    await mkdir(workspaceBin, { recursive: true });
+    await mkdir(safeBin, { recursive: true });
+    await writeFile(join(workspaceBin, "claude"), `#!/bin/sh\ntouch '${workspaceSentinel}'\necho bad\n`, "utf8");
+    await writeFile(join(workspaceBin, "helper"), `#!/bin/sh\ntouch '${helperSentinel}'\n`, "utf8");
+    await writeFile(
+      join(safeBin, "claude"),
+      "#!/bin/sh\nif command -v helper >/dev/null 2>&1; then helper; fi\necho '{\"result\":\"KENDALL_SMOKE_OK\"}'\n",
+      "utf8",
+    );
+    await chmod(join(workspaceBin, "claude"), 0o755);
+    await chmod(join(workspaceBin, "helper"), 0o755);
+    await chmod(join(safeBin, "claude"), 0o755);
+    await symlink(workspaceBin, symlinkBin);
+
+    const [result] = collectSmokeExecutionAttempts({
+      env: { PATH: [symlinkBin, safeBin, workspaceBin].join(":"), PWD: workspace },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 1000,
+      workers: ["claude"],
+    });
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.attempt.command_path, join(safeBin, "claude"));
+    assert.equal(result.attempt.execution_state, "smoke_observed");
+    assert.equal(existsSync(workspaceSentinel), false);
+    assert.equal(existsSync(helperSentinel), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("smoke execution validator fails closed for tools source mutation raw retention trust or routing effects", () => {
+  const baseAttempt = {
+    attempt_id: "smoke:claude",
+    worker: "claude",
+    mode: "smoke_execution",
+    authority_level: "isolated_worker_smoke",
+    execution_state: "smoke_observed",
+    command_path: "/usr/local/bin/claude",
+    command_args: [
+      "--print",
+      "--output-format",
+      "json",
+      "--input-format",
+      "text",
+      "--permission-mode",
+      "dontAsk",
+      "--no-session-persistence",
+      "--safe-mode",
+      "--tools",
+      "",
+      "--max-budget-usd",
+      "0.05",
+      "Reply exactly with KENDALL_SMOKE_OK. Do not explain.",
+    ],
+    expected_response: "KENDALL_SMOKE_OK",
+    observed_response: "KENDALL_SMOKE_OK",
+    exit_code: 0,
+    timed_out: false,
+    timeout_ms: 1000,
+    observed_at: "2026-06-27T00:00:00Z",
+    evidence_ref: "metadata:worker-smoke-execution/claude",
+    shell_used: false,
+    safe_cwd: "/tmp/kendall-worker-smoke-test",
+    network_allowed: true,
+    session_inheritance_allowed: true,
+    source_mutation_allowed: false,
+    tools_allowed: false,
+    raw_output_retained: false,
+    affects_trust: false,
+    affects_routing: false,
+  };
+  assert.equal(validateSmokeExecutionAttempt(baseAttempt).ok, true);
+
+  for (const [field, value] of [
+    ["command_args", ["--print", "mutate this repo"]],
+    ["observed_response", "raw_prompt sk-proj-123456789"],
+    ["shell_used", true],
+    ["safe_cwd", process.cwd()],
+    ["safe_cwd", "/tmp/kendall-worker-smoke-good/../repo"],
+    ["source_mutation_allowed", true],
+    ["tools_allowed", true],
+    ["raw_output_retained", true],
+    ["affects_trust", true],
+    ["affects_routing", true],
+  ]) {
+    const result = validateSmokeExecutionAttempt({ ...baseAttempt, [field]: value });
+    assert.equal(result.ok, false, `${field} should fail smoke validation`);
+    assert.ok(result.field_reasons.some((reason) => reason.field === field || reason.field === "execution_state" || reason.field === "$"));
+  }
+});
+
+test("smoke execution command avoids shell GitHub cleanup and source mutation primitives", async () => {
+  const source = await readFile(smokeExecutionSourcePath, "utf8");
+  assert.match(source, /spawnSync\(commandPath, commandArgs/);
+  assert.match(source, /shell: false/);
+  assert.match(source, /--safe-mode/);
+  assert.match(source, /--no-session-persistence/);
+  for (const forbiddenPattern of [
+    /\bnode:http\b/,
+    /\bnode:https\b/,
+    /\bnode:net\b/,
+    /\bnode:tls\b/,
+    /\bnode:dns\b/,
+    /\bWebSocket\b/,
+    /\bgh\s+/,
+    /\brm\s+/,
+    /\bunlink\b/,
+    /\brmdir\b/,
+    /\bwriteFile\b/,
+  ]) {
+    assert.doesNotMatch(source, forbiddenPattern);
+  }
+});
+
 test("real tool readiness probes fail closed for launch session network raw retention or trust effects", () => {
   const baseProbe = {
     probe_id: "probe:claude-readiness",
@@ -1138,6 +1399,10 @@ test("scoped package scripts and check wrapper are wired for the dry-run slice",
   assert.equal(
     packageJson.scripts?.["worker:version:probe"],
     "node ./scripts/governed-worker-version-probe.mjs",
+  );
+  assert.equal(
+    packageJson.scripts?.["worker:smoke:execute"],
+    "node ./scripts/governed-worker-smoke-execution.mjs",
   );
   assert.match(packageJson.scripts?.["check:static"], /pnpm run check:governed-worker-execution-dry-run/);
   assert.equal(existsSync(checkWrapperPath), true);
