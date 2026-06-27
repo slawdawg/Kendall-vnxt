@@ -205,6 +205,20 @@ worker path is found but no operator-observed version is supplied, the collector
 must report `blocked`, not `available`. Version strings may be supplied as
 bounded operator observations, for example `--version claude=<version text>`.
 
+The local version-probe command `pnpm run worker:version:probe` is the first
+bounded real worker process launch. It may execute only the discovered worker
+binary with exactly `--version`, without a shell, from a non-repo safe cwd, with
+a `SIGKILL` timeout no greater than 3000 ms, and with metadata-only sanitized
+output. It must skip PATH entries under the current workspace, and CLI parse
+errors must stop before any worker process launch. A version probe must not pass a task
+prompt, execute source mutation, retain raw output, affect trust, affect
+routing, deliver code, merge, clean up, or imply broader worker launch approval.
+Unknown worker selections, empty worker selections, invalid timestamps, unsafe
+version output, timeouts, and non-zero exits must remain visible as validated
+metadata rather than granting availability or execution authority. These limits
+bound the invocation mechanics; they are not a claim that an arbitrary worker
+binary is sandboxed from all operating-system side effects.
+
 Environment allowlist entries are names-only model data. The inherited
 environment is default-empty. Secret-like names or values are denied, including
 tokens, credentials, passwords, keys, browser/session variables, SSH/GitHub/cloud
