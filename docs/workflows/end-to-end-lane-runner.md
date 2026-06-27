@@ -201,6 +201,9 @@ sessions are expected.
 filters. Empty or placeholder owner values are not acceptable evidence for a
 takeover or cleanup decision.
 
+Use `resume --json` when an automation runner needs the matched worktree,
+branch, owner, PR, and owner-warning evidence without parsing human text.
+
 ## Low-Risk Merge Checklist
 
 Merge under `standard-delivery` only when current evidence proves all of these:

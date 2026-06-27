@@ -187,6 +187,9 @@ dispatch-next options:
   --no-fetch                Do not fetch origin before creating a workspace.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
+resume options:
+  --json                    Print the matched workspace resume packet as JSON.
+
 finish-pr options:
   --message <text>          Commit message. Defaults to task title.
   --stage-all               Stage all current worktree changes before commit.
@@ -1295,11 +1298,16 @@ function resumeWorkspace(argv) {
   const { positional, options } = parseOptions(argv);
   const manifestRecord = findManifest(workspaceState(options), positional.join(" "));
   const { manifest } = manifestRecord;
+  const ownerWarning = laneOwnerWarning(manifest, options);
+
+  if (options.json) {
+    console.log(JSON.stringify(buildResumePacket(manifestRecord, options, ownerWarning), null, 2));
+    return;
+  }
 
   console.log(`Task: ${manifest.task_id}`);
   console.log(`Status: ${manifest.status}`);
   console.log(`Owner: ${manifest.owner || "unowned"}`);
-  const ownerWarning = laneOwnerWarning(manifest, options);
   if (ownerWarning) {
     console.log(ownerWarning);
   }
@@ -1311,6 +1319,28 @@ function resumeWorkspace(argv) {
     console.log(`PR: ${manifest.pr_url}`);
   }
   console.log(`Command: cd "${manifest.worktree_path}"`);
+}
+
+function buildResumePacket({ manifest, path }, options, ownerWarning = laneOwnerWarning(manifest, options)) {
+  const currentOwner = currentLaneOwner(options);
+  return {
+    taskId: manifest.task_id,
+    status: manifest.status,
+    branch: manifest.branch,
+    baseBranch: manifest.base_branch || null,
+    baseRef: manifest.base_ref || null,
+    owner: manifest.owner || null,
+    currentOwner,
+    ownerMatches: !manifest.owner || manifest.owner === currentOwner,
+    ownerWarning: ownerWarning || null,
+    worktreePath: manifest.worktree_path,
+    worktreeExists: existsSync(manifest.worktree_path),
+    manifestPath: path,
+    prUrl: manifest.pr_url || null,
+    prNumber: manifest.pr_number || prNumberFromUrl(manifest.pr_url || "") || null,
+    command: `cd "${manifest.worktree_path}"`,
+    mutation: "none; resume only",
+  };
 }
 
 function finishPr(argv) {
