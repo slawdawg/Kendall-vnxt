@@ -147,6 +147,7 @@ assignment-report options:
 claim-next options:
   --dry-run                 Preview only; no mutation.
   --apply                   Write assignment metadata for an unowned ready lane.
+  --summary-json            With --dry-run, print a bounded JSON summary.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 heartbeat options:
@@ -777,6 +778,9 @@ function claimNext(argv) {
   if (!options.apply && !options.dryRun) {
     throw new Error("claim-next requires either --dry-run or --apply.");
   }
+  if (options.summaryJson && !options.dryRun) {
+    throw new Error("claim-next --summary-json is only supported with --dry-run.");
+  }
 
   const state = workspaceState(options);
   const currentOwner = currentLaneOwner(options);
@@ -808,6 +812,10 @@ function claimNext(argv) {
     plan.push(`start command ${selected.item.startCommand}`);
   }
   if (options.dryRun) {
+    if (options.summaryJson) {
+      console.log(JSON.stringify(buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selected, evaluations }), null, 2));
+      return;
+    }
     plan.push("preview only; no manifest, branch, PR, or worktree mutation");
     printPlan("claim-next", plan);
   } else {
@@ -832,6 +840,40 @@ function claimNext(argv) {
 
   console.log("Blocker evidence:");
   printClaimBlockers(evaluations, selected);
+}
+
+function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selected, evaluations }) {
+  const blockers = evaluations.filter((evaluation) => !evaluation.claimable);
+  return {
+    currentOwner,
+    stateRoot: state.root,
+    staleAfterSeconds,
+    selected: selected ? summarizeClaimEvaluation(selected) : null,
+    counts: {
+      total: evaluations.length,
+      claimable: evaluations.filter((evaluation) => evaluation.claimable).length,
+      blocked: blockers.length,
+    },
+    statusCounts: countByField(evaluations, "status"),
+    blockerStatusCounts: countByField(blockers, "status"),
+    blockers: blockers.slice(0, 10).map(summarizeClaimEvaluation),
+    blockersTruncated: blockers.length > 10,
+    mutation: "none; dry-run summary only",
+  };
+}
+
+function summarizeClaimEvaluation(evaluation) {
+  return {
+    itemId: evaluation.item.itemId,
+    sourceStatus: evaluation.item.status || "unknown",
+    status: evaluation.status,
+    claimable: evaluation.claimable,
+    branch: evaluation.item.branchName || null,
+    action: evaluation.action || null,
+    mutation: evaluation.mutation || null,
+    reason: evaluation.reason,
+    nextAction: evaluation.nextAction,
+  };
 }
 
 function heartbeat(argv) {
