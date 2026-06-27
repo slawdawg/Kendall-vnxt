@@ -200,9 +200,11 @@ Add a supervisor report and CLI read-only output that classify lanes as assignab
 Initial CLI implementation:
 
 - `node ./scripts/codex-workspace.mjs assignment-report`
+- `node ./scripts/codex-workspace.mjs assignment-report --summary-json`
 - reads safe backlog guidance from `services/supervisor/src/supervisor/application/service.py#get_safe_development_backlog_report`,
 - reads managed workspace manifests from the Codex workspace state root,
 - classifies safe backlog candidates and workspace assignments without mutating manifests, branches, PRs, or worktrees,
+- emits bounded summary JSON with backlog, lane-assignment, and workspace-assignment status counts for runner automation,
 - reports stale-owner takeover blockers as evidence only.
 
 ### Phase 3: Claim Dry Run

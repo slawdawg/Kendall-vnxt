@@ -1022,6 +1022,101 @@ try {
     assert(before === after, "assignment-report mutated a workspace manifest");
   });
 
+  test("assignment-report summary-json emits bounded inventory counts without mutation", () => {
+    const reportStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-summary-json-"));
+    try {
+      const tasksDir = join(reportStateRoot, "tasks");
+      const assignmentsDir = join(reportStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      seedClosedSafeBacklogManifests(reportStateRoot);
+      const now = new Date().toISOString();
+      const stale = new Date(Date.now() - 60_000).toISOString();
+      writeFileSync(
+        join(tasksDir, "unowned-active.json"),
+        `${JSON.stringify(
+          {
+            task_id: "unowned-active",
+            branch: "codex/unowned-active",
+            worktree_path: rootDir,
+            base_branch: "main",
+            status: "active",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(tasksDir, "stale-active.json"),
+        `${JSON.stringify(
+          {
+            task_id: "stale-active",
+            branch: "codex/stale-active",
+            worktree_path: rootDir,
+            base_branch: "main",
+            status: "active",
+            owner: "runner-b",
+            owner_updated_at: stale,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "claimed-assignment.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "claimed-assignment",
+            task_id: "claimed-assignment",
+            branch: "codex/claimed-assignment",
+            status: "claimed",
+            owner: "runner-a",
+            last_heartbeat_at: now,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run([
+        "assignment-report",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--stale-after-seconds",
+        "1",
+        "--state-root",
+        reportStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
+      assert(packet.staleAfterSeconds === 1, result.stdout || result.stderr);
+      assert(packet.counts.backlogCandidates > 0, result.stdout || result.stderr);
+      assert(packet.counts.laneAssignments === 1, result.stdout || result.stderr);
+      assert(packet.counts.workspaceAssignments >= 2, result.stdout || result.stderr);
+      assert(packet.backlogStatusCounts.closed >= 1, result.stdout || result.stderr);
+      assert(packet.backlogStatusCounts.blocked_authority === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentStatusCounts.claimed === 1, result.stdout || result.stderr);
+      assert(packet.workspaceAssignmentStatusCounts.assignable >= 1, result.stdout || result.stderr);
+      assert(packet.workspaceAssignmentStatusCounts.blocked_stale_owner_needs_takeover >= 1, result.stdout || result.stderr);
+      assert(packet.backlogCandidates.length <= 10, result.stdout || result.stderr);
+      assert(packet.laneAssignments.length <= 10, result.stdout || result.stderr);
+      assert(packet.workspaceAssignments.length <= 10, result.stdout || result.stderr);
+      assert(typeof packet.backlogCandidatesTruncated === "boolean", result.stdout || result.stderr);
+      assert(typeof packet.laneAssignmentsTruncated === "boolean", result.stdout || result.stderr);
+      assert(typeof packet.workspaceAssignmentsTruncated === "boolean", result.stdout || result.stderr);
+      assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
+      assert(taskSnapshot(tasksDir) === beforeTasks, "assignment-report summary-json mutated workspace manifests");
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "assignment-report summary-json mutated assignments");
+    } finally {
+      rmSync(reportStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next dry-run previews the next safe backlog lane without mutation", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
