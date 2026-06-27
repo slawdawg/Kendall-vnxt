@@ -11,6 +11,8 @@ test("work item detail surfaces persisted memory proposal review controls", asyn
 
   assert.match(supervisorSource, /export async function getWorkPacket\(packetId: string\)/);
   assert.match(supervisorSource, /\/work-packets\/\$\{encodeURIComponent\(packetId\)\}/);
+  assert.match(supervisorSource, /export async function getWorkPackets\(\): Promise<WorkPacketV0View\[\]>/);
+  assert.match(supervisorSource, /requestJson<WorkPacketV0View\[\]>\("\/work-packets"\)/);
   assert.match(pageSource, /getWorkPacket\(`work_item:\$\{workItemId\}`\)/);
   assert.match(pageSource, /<MemoryProposalReviewPanel packet=\{workPacket\} workItemId=\{item\.id\} \/>/);
   assert.match(pageSource, /href="#memory-proposals"/);

@@ -46,11 +46,14 @@ Do not claim a second lane during a smoke run.
 Prefer Codex's normal sandbox and approval model for the first worker:
 
 ```bash
-tmux new-session -d -s codex-1 -c /home/slaw_dawg/Kendall_Nxt \
+KENDALL_REPO="<path-to-Kendall_Nxt>"
+CODEX_WORKSPACES_ROOT="<path-to-codex-workspaces>"
+
+tmux new-session -d -s codex-1 -c "$KENDALL_REPO" \
   env CODEX_WORKSPACE_OWNER=codex-1 CODEX_THREAD_ID=tmux-codex-1 \
   codex --no-alt-screen \
-    --cd /home/slaw_dawg/Kendall_Nxt \
-    --add-dir /home/slaw_dawg/.codex-workspaces/slawdawg-kendall-vnxt \
+    --cd "$KENDALL_REPO" \
+    --add-dir "$CODEX_WORKSPACES_ROOT/slawdawg-kendall-vnxt" \
     --sandbox workspace-write \
     --ask-for-approval on-request \
     "<worker prompt>"
@@ -86,4 +89,3 @@ The supervising Codex session should:
   extreme-risk findings to the operator.
 - Do not hide launch failures. If the platform blocks a launch, record the
   rejection and reduce the launch surface.
-
