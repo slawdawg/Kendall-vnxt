@@ -157,6 +157,7 @@ claim-next options:
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 heartbeat options:
+  --json                    Print the written heartbeat evidence packet as JSON.
   --phase <phase>           Runner phase. Defaults to active.
   --runner-kind <kind>      Runner kind. Defaults to codex-cli.
   --current-command <text>  Current command or wait state summary.
@@ -1059,6 +1060,10 @@ function heartbeat(argv) {
       options,
       heartbeatOptions,
     });
+    if (options.json) {
+      console.log(JSON.stringify(buildHeartbeatPacket({ kind: "assignment", result, currentOwner }), null, 2));
+      return;
+    }
     printApplied("heartbeat", [
       `target assignment ${result.target}`,
       `owner ${currentOwner}`,
@@ -1075,6 +1080,10 @@ function heartbeat(argv) {
     options,
     heartbeatOptions,
   });
+  if (options.json) {
+    console.log(JSON.stringify(buildHeartbeatPacket({ kind: "workspace", result, currentOwner }), null, 2));
+    return;
+  }
   printApplied("heartbeat", [
     `target workspace ${result.target}`,
     `owner ${currentOwner}`,
@@ -1082,6 +1091,28 @@ function heartbeat(argv) {
     `wrote ${result.path}`,
     "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
   ]);
+}
+
+function buildHeartbeatPacket({ kind, result, currentOwner }) {
+  const record = kind === "assignment" ? readAssignment(result.path) : readManifest(result.path);
+  return {
+    targetKind: kind,
+    target: result.target,
+    path: result.path,
+    owner: record.owner || null,
+    currentOwner,
+    ownerMatches: record.owner === currentOwner,
+    status: record.status || null,
+    branch: record.branch || null,
+    phase: record.phase || null,
+    runnerKind: record.runner_kind || null,
+    currentCommand: record.current_command || null,
+    lastResult: record.last_result || null,
+    lastHeartbeatAt: record.last_heartbeat_at || null,
+    staleAfterSeconds: Number.isInteger(record.stale_after_seconds) ? record.stale_after_seconds : null,
+    heartbeatCount: Number.isInteger(record.heartbeat_count) ? record.heartbeat_count : null,
+    mutation: "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
+  };
 }
 
 function closeAssignments(argv) {
