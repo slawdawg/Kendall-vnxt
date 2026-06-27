@@ -1945,10 +1945,15 @@ test.describe("dashboard workflow coverage", () => {
     await assignmentRowFilters.getByLabel("Classification").selectOption("active");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("workspace");
     await expect(resetAssignmentFilters).toBeEnabled();
-    await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for active from Workspace with all source-completion states\./)).toBeVisible();
-    await expect(filteredSourceSummary.getByText(/Rows: workspace \d+, lane assignment 0, backlog 0/)).toBeVisible();
+    await expect(assignmentRowFilters.getByText(/Showing [1-9]\d*\/\d+ rows for active from Workspace with all source-completion states\./)).toBeVisible();
+    await expect(filteredSourceSummary.getByText(/Rows: workspace [1-9]\d*, lane assignment 0, backlog 0/)).toBeVisible();
     await expect(filteredSourceSummary.getByText(/Source completion: assignment 0, workspace 0, none \d+/)).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh")).toBeVisible();
+    await expect(
+      runnerAssignmentPanel
+        .locator("article")
+        .filter({ hasText: "e2e-dispatcher-queue-handoff-badges-refresh" })
+        .getByText("source: Workspace"),
+    ).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("assignable");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("backlog");
     await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for assignable from Backlog with all source-completion states\./)).toBeVisible();
@@ -2106,7 +2111,13 @@ test.describe("dashboard workflow coverage", () => {
     await assignmentRowFilters.getByLabel("Classification").selectOption("closed");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("lane");
     await assignmentRowFilters.getByLabel("Source completion").selectOption("all");
-    await expect(assignmentRowFilters.getByText(/Showing \d+\/\d+ rows for closed from Lane assignment with all source-completion states\./)).toBeVisible();
+    await expect(assignmentRowFilters.getByText(/Showing [1-9]\d*\/\d+ rows for closed from Lane assignment with all source-completion states\./)).toBeVisible();
+    await expect(
+      runnerAssignmentPanel
+        .locator("article")
+        .filter({ hasText: "codex/dispatcher-cleanup-assignment-closure-refresh" })
+        .getByText("source: Lane assignment"),
+    ).toBeVisible();
     await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh")).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("attention");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("all");
