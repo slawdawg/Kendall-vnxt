@@ -570,6 +570,79 @@ try {
     }
   });
 
+  test("repair-manifests dry-run plans only closed legacy manifest repairs", () => {
+    const repairStateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-repair-dry-run-"));
+    try {
+      const tasksDir = join(repairStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const closedPath = join(tasksDir, "closed-legacy.json");
+      const activePath = join(tasksDir, "active-legacy.json");
+      writeFileSync(
+        closedPath,
+        `${JSON.stringify({
+          task_id: "closed-legacy",
+          branch: "codex/closed-legacy",
+          status: "closed",
+        }, null, 2)}\n`,
+      );
+      writeFileSync(
+        activePath,
+        `${JSON.stringify({
+          task_id: "active-legacy",
+          branch: "codex/active-legacy",
+          status: "active",
+        }, null, 2)}\n`,
+      );
+
+      const beforeClosed = readFileSync(closedPath, "utf8");
+      const beforeActive = readFileSync(activePath, "utf8");
+      const result = run(["repair-manifests", "--state-root", repairStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("DRY RUN: repair-manifests"), result.stdout || result.stderr);
+      assert(result.stdout.includes("closed-legacy: add worktree_path, base_branch"), result.stdout || result.stderr);
+      assert(result.stdout.includes("blocked active-legacy.json: only closed legacy manifests can be repaired"), result.stdout || result.stderr);
+      assert(readFileSync(closedPath, "utf8") === beforeClosed, "repair dry-run mutated closed manifest");
+      assert(readFileSync(activePath, "utf8") === beforeActive, "repair dry-run mutated active manifest");
+    } finally {
+      rmSync(repairStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("repair-manifests apply fills closed legacy manifest validation fields", () => {
+    const repairStateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-repair-apply-"));
+    try {
+      const tasksDir = join(repairStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "closed-legacy.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify({
+          task_id: "closed-legacy",
+          branch: "codex/closed-legacy",
+          status: "closed",
+          owner: "runner-a",
+        }, null, 2)}\n`,
+      );
+
+      const result = run(["repair-manifests", "--state-root", repairStateRoot, "--apply"]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("APPLY: repair-manifests"), result.stdout || result.stderr);
+      const repaired = JSON.parse(readFileSync(manifestPath, "utf8"));
+      assert(repaired.worktree_path === join(repairStateRoot, "worktrees", "closed-legacy"), JSON.stringify(repaired));
+      assert(repaired.base_branch === "dev", JSON.stringify(repaired));
+      assert(Array.isArray(repaired.events), "repair event missing");
+      assert(repaired.events.some((event) => event.type === "manifest_repaired"), "repair event missing");
+      const list = run(["list", "--state-root", repairStateRoot, "--json"]);
+      assert(list.code === 0, list.stderr || list.stdout);
+      assert(list.stderr === "", list.stderr);
+      assert(JSON.parse(list.stdout)[0].taskId === "closed-legacy", list.stdout);
+    } finally {
+      rmSync(repairStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("list surfaces lane owner from manifests", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });

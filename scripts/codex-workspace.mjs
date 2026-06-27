@@ -73,6 +73,9 @@ try {
     case "cleanup-branches":
       cleanupBranches(commandArgs);
       break;
+    case "repair-manifests":
+      repairManifests(commandArgs);
+      break;
     case "rebuild-index":
       rebuildIndex(commandArgs);
       break;
@@ -104,6 +107,7 @@ Commands:
   cleanup-current           Remove the current clean worktree after its PR is merged.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
   cleanup-branches [query]  Remove safe local codex/* branches already present in the base ref by ancestry or patch-id.
+  repair-manifests          Preview or apply conservative repairs for closed legacy manifests.
   rebuild-index             Rebuild missing manifests from Git worktrees.
   doctor                    Check local workspace protocol readiness.
 
@@ -180,6 +184,9 @@ cleanup-branches options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --base <ref>              Ref to compare against. Defaults to origin/main.
                             Missing base refs fail closed; no fetch is performed.
+
+repair-manifests options:
+  --apply                   Apply closed-manifest repairs. Without this, repair is dry-run.
 `);
 }
 
@@ -1781,16 +1788,14 @@ function doctor(argv) {
 }
 
 function readManifests(state) {
-  if (!existsSync(state.tasksDir)) {
-    return [];
-  }
-
-  return readdirSync(state.tasksDir)
-    .filter((name) => name.endsWith(".json"))
-    .map((name) => {
-      const path = join(state.tasksDir, name);
+  return readManifestRecords(state)
+    .map((record) => {
+      if (record.error) {
+        return record;
+      }
+      const path = record.path;
       try {
-        const manifest = readManifest(path);
+        const manifest = record.manifest;
         validateManifest(manifest, path);
         reconcileManifest(manifest);
         return { path, manifest };
@@ -1808,8 +1813,127 @@ function readManifests(state) {
     .sort((left, right) => left.manifest.task_id.localeCompare(right.manifest.task_id));
 }
 
+function repairManifests(argv) {
+  const { options } = parseOptions(argv);
+  const state = workspaceState(options);
+  const apply = Boolean(options.apply);
+  const records = readManifestRecords(state);
+  const plans = [];
+  const blocked = [];
+
+  for (const record of records) {
+    const plan = closedManifestRepairPlan(record, state);
+    if (plan.repairable) {
+      plans.push(plan);
+    } else if (plan.reason) {
+      blocked.push(plan);
+    }
+  }
+
+  const lines = [];
+  if (plans.length === 0) {
+    lines.push("no repairable closed legacy manifests found");
+  } else {
+    for (const plan of plans) {
+      lines.push(`${plan.taskId}: add ${plan.fields.join(", ")} to closed manifest ${plan.path}`);
+    }
+  }
+  for (const plan of blocked) {
+    lines.push(`blocked ${plan.name}: ${plan.reason}`);
+  }
+
+  if (!apply) {
+    printPlan("repair-manifests", [...lines, "preview only; pass --apply to write repairable closed manifests"]);
+    return;
+  }
+
+  for (const plan of plans) {
+    withManifestLock(state, plan.taskId, () => {
+      const freshRecord = { path: plan.path, manifest: readManifest(plan.path) };
+      const freshPlan = closedManifestRepairPlan(freshRecord, state);
+      if (!freshPlan.repairable) {
+        throw new Error(`Repair target changed for ${plan.taskId}; rerun repair-manifests.`);
+      }
+      const repaired = {
+        ...freshRecord.manifest,
+        ...freshPlan.patch,
+        updated_at: new Date().toISOString(),
+      };
+      const fields = freshPlan.fields.join(", ");
+      repaired.events = Array.isArray(repaired.events) ? repaired.events : [];
+      repaired.events.push(taskEvent("manifest_repaired", `closed legacy manifest repaired: ${fields}`));
+      validateManifest(repaired, plan.path);
+      writeManifest(plan.path, repaired);
+    });
+  }
+
+  printApplied("repair-manifests", lines);
+}
+
+function closedManifestRepairPlan(record, state) {
+  const name = basename(record.path);
+  if (record.error) {
+    return { name, path: record.path, repairable: false, reason: record.error.message };
+  }
+
+  const manifest = record.manifest;
+  const taskId = String(manifest.task_id || "").trim();
+  const branch = String(manifest.branch || "").trim();
+  const status = String(manifest.status || "").trim();
+  if (!taskId || !branch || !status) {
+    return { name, path: record.path, repairable: false, reason: "missing task_id, branch, or status" };
+  }
+
+  const patch = {};
+  const fields = [];
+  if (!manifest.worktree_path) {
+    patch.worktree_path = join(state.worktreesDir, taskId);
+    fields.push("worktree_path");
+  }
+  if (!manifest.base_branch) {
+    patch.base_branch = defaultBaseBranch;
+    fields.push("base_branch");
+  }
+
+  if (fields.length === 0) {
+    return { name, path: record.path, taskId, repairable: false };
+  }
+
+  if (status !== "closed") {
+    return { name, path: record.path, taskId, repairable: false, reason: "only closed legacy manifests can be repaired" };
+  }
+
+  return {
+    name,
+    path: record.path,
+    taskId,
+    repairable: true,
+    fields,
+    patch,
+  };
+}
+
 function readManifest(path) {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function readManifestRecords(state) {
+  if (!existsSync(state.tasksDir)) {
+    return [];
+  }
+
+  return readdirSync(state.tasksDir)
+    .filter((name) => name.endsWith(".json"))
+    .sort((left, right) => left.localeCompare(right))
+    .map((name) => {
+      const path = join(state.tasksDir, name);
+      try {
+        const manifest = readManifest(path);
+        return { path, manifest };
+      } catch (error) {
+        return { path, error };
+      }
+    });
 }
 
 function readAssignments(state) {
