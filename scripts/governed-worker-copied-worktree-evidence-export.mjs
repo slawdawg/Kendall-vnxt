@@ -21,6 +21,7 @@ export const GOVERNED_WORKER_EVIDENCE_SNAPSHOT_VERSION = "governed_worker_copied
 export const DEFAULT_LOCAL_EVIDENCE_ROOT = ".kendall-local/governed-worker-evidence";
 
 const RAW_MARKER_PATTERN = /raw_prompt|provider_payload|authorization|bearer|token|secret|password|credential|sk-[a-z0-9_-]+/i;
+const SAFE_SOURCE_ID_PATTERN = /^[A-Za-z0-9:._-]{1,160}$/;
 const ALLOWED_SNAPSHOT_FIELDS = new Set([
   "schema_version",
   "generated_at",
@@ -140,6 +141,8 @@ export function validatePipelineEvidenceEntry(entry) {
   }
   if (typeof input.source_id !== "string" || input.source_id.trim().length === 0) {
     add("source_id");
+  } else if (!SAFE_SOURCE_ID_PATTERN.test(input.source_id)) {
+    add("source_id", "unsafe_source_id");
   }
   const taskId = typeof input.task_id === "string" ? input.task_id : "copy_execution_sentinel";
   if (input.expected_response !== expectedResponseForTask(taskId)) {
