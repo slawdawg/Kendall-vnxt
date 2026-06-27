@@ -4445,11 +4445,12 @@ class SupervisorService:
                 stepId="preserve-authority-stop-lines",
                 label="Preserve authority stop lines",
                 priority="P0",
-                status="ready",
-                summary="Start the approved authority-readiness planning/control-plane slice while keeping provider execution, process launch, commands, network, source mutation, and credential access disabled by default.",
+                status="closed",
+                summary="Completed the approved authority-readiness planning/control-plane slice while keeping provider execution, process launch, commands, network, source mutation, and credential access disabled by default.",
                 evidence=[
                     f"{len(blocked_backlog_items)} safe backlog items remain blocked pending explicit approval outside the approved authority-readiness slice.",
                     f"authority-blocked-work is {authority_backlog_item.status if authority_backlog_item else 'missing'} for approval-scope planning/control-plane work.",
+                    "Approval scope, disabled-default gates, runtime stop lines, and rollback expectations are durable as control-plane evidence.",
                     "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
                     "Subscription-agent, Codex CLI, Claude CLI, endpoint discovery, command execution, credentials, premium execution, external sends, and worker source mutation remain stop-lined for real runtime work.",
                 ],
@@ -4468,7 +4469,7 @@ class SupervisorService:
                     "/controls#execution-readiness-report",
                     "/controls#maintenance-readiness-report",
                 ],
-                nextAction="Run the authority-blocked approval scope readiness lane for planning/control-plane gates only; do not start provider execution, subscription-agent launch, or premium execution.",
+                nextAction="Use the completed authority approval scope readiness evidence only; successor runtime lanes still require exact endpoint or command-template policy approval.",
             ),
         ]
 
@@ -5248,10 +5249,10 @@ class SupervisorService:
             DevelopmentRunwaySliceView(
                 sliceId="authority-blocker-maintenance-slice",
                 label="Authority blocker maintenance slice",
-                status="ready",
-                recommendedPrScope="Batch source-owned approval evidence, disabled-default gates, rollback expectations, stop lines, safe backlog, and report updates for the approved planning/control-plane authority slice.",
-                summary="Use this slice to make the 2026-06-27 authority approval durable without moving Ollama, subscription-agent, Codex CLI, Claude CLI, premium, command, source, network, credential, or remote automation runtime behavior into execution.",
-                includedBacklogItems=["authority-blocked-implementation"],
+                status="closed",
+                recommendedPrScope="Completed source-owned approval evidence, disabled-default gates, rollback expectations, stop lines, safe backlog, and report updates for the approved planning/control-plane authority slice.",
+                summary="This slice made the 2026-06-27 authority approval durable without moving Ollama, subscription-agent, Codex CLI, Claude CLI, premium, command, source, network, credential, or remote automation runtime behavior into execution.",
+                includedBacklogItems=["authority-blocked-work"],
                 includedActionSteps=["preserve-authority-stop-lines"],
                 requiredVerification=[
                     "pnpm run check:docs",
@@ -5280,7 +5281,7 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="authority-approval-scope-recorded",
                         label="Authority approval scope recorded",
-                        status="ready",
+                        status="closed",
                         summary="Confirms the 2026-06-27 operator approval covers planning/control-plane preparation for the named authority families while runtime execution remains disabled.",
                         evidence=["Ollama local provider expansion", "subscription-agent launch", "orchestrator CLI worker launch"],
                         requiredCommandIds=["check-authority-readiness"],
@@ -5292,7 +5293,7 @@ class SupervisorService:
                     DevelopmentRunwayReadinessCheckView(
                         checkId="approval-checkpoint-indexed",
                         label="Approval checkpoint indexed",
-                        status="ready",
+                        status="closed",
                         summary="Confirms blocked authority work is governed by documentation authority and approval checkpoint evidence.",
                         evidence=["docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md"],
                         requiredCommandIds=["check-docs", "check-documentation-authority"],
@@ -5319,11 +5320,10 @@ class SupervisorService:
                 ],
                 blockedBy=[
                     "runtime execution successor with exact endpoint or command-template policy",
-                    "disabled-default provider/process safety gate evidence",
-                    "rollback evidence for each authority family",
+                    "explicit runtime feature flag and rollback approval for each authority family",
                 ],
-                nextLane=authority_blocked_approval_scope_lane,
-                nextAction="Start the authority approval scope readiness lane and keep real runtime execution disabled.",
+                nextLane=None,
+                nextAction="Use this completed authority approval scope readiness evidence only; do not requeue authority-blocked-work without a successor runtime approval packet.",
             ),
         ]
 
@@ -7427,14 +7427,14 @@ class SupervisorService:
                 itemId="authority-blocked-work",
                 label="Execution-authority stories",
                 priority="P1",
-                status="ready",
-                summary="Operator approved a bounded planning/control-plane implementation slice for Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch authority families.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Completed the bounded planning/control-plane implementation slice for Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch authority families.",
+                recommendedSliceSize="complete",
                 evidence=[
-                    "Operator approval now names Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch as the authority families for this planning/implementation slice.",
-                    "The first lane must make approval scope, disabled-default gates, rollback expectations, and no-runtime-execution stop lines durable before any real provider/process behavior expands.",
+                    "Operator approval names Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch as the authority families for this planning/implementation slice.",
+                    "Approval scope, disabled-default gates, rollback expectations, and no-runtime-execution stop lines are durable before any real provider/process behavior expands.",
                     "Ollama runtime remains limited to the previously approved Story 4.4 VM-to-host endpoint/model boundary until a successor PR records exact endpoint/provider settings.",
-                    "Subscription-agent, Codex CLI, and Claude CLI process launch remain disabled in this slice; command templates and rollback evidence must be prepared before execution.",
+                    "Subscription-agent, Codex CLI, and Claude CLI process launch remain disabled; command templates and rollback evidence still require successor runtime approval before execution.",
                     f"Blocked maintenance tracks: {', '.join(blocked_maintenance_tracks) or 'none'}.",
                 ],
                 relatedReports=[
@@ -7452,11 +7452,10 @@ class SupervisorService:
                 ],
                 blockedBy=[
                     "successor PR with exact endpoint or command-template policy before runtime execution",
-                    "disabled-default provider/process safety gate evidence",
-                    "rollback evidence for each authority family",
+                    "explicit runtime feature flag and rollback approval for each authority family",
                 ],
-                nextLane=authority_blocked_approval_scope_lane,
-                nextAction="Start authority-blocked approval scope readiness: make the approval, disabled-default gates, stop lines, and rollback expectations durable without launching providers or worker processes.",
+                nextLane=None,
+                nextAction="Use this completed authority approval scope readiness evidence only; do not requeue codex/authority-blocked-approval-scope-readiness without a successor runtime approval packet.",
             ),
         ]
 

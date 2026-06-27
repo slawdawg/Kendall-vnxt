@@ -20,6 +20,8 @@ On 2026-06-10, the operator explicitly approved Story 6.1 for a fake-worker orch
 
 On 2026-06-27, the operator explicitly approved a planning/implementation slice for the Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch authority families. That approval allows source-owned approval evidence, safe-backlog/readiness/report updates, disabled-default safety gate evidence, command/endpoint boundary preparation, no-call/no-process fixtures, and rollback documentation. It does not approve new Ollama endpoints or models beyond the existing Story 4.4 VM-to-host boundary, endpoint discovery, model discovery, LM Studio, vLLM, llama.cpp, remote providers, subscription-agent process launch, real Codex CLI process launch, real Claude Code CLI process launch, command execution by workers, credential/session access, premium execution, external sends, or worker source mutation. Any runtime execution successor must record the exact endpoint or command-template policy, feature flags, review point, and rollback path before it moves from planning/control-plane preparation to live execution.
 
+On 2026-06-27, the authority approval scope readiness lane completed the planning/control-plane evidence for that approval. The completed lane records durable approval scope, disabled-default gate expectations, rollback expectations, safe-backlog/report stop lines, and verification requirements. It does not convert any runtime authority family to live execution; successor runtime lanes still require exact endpoint or command-template policy, feature flags, review point, and rollback approval before implementation.
+
 ## Current Blocked Execution Stories
 
 ### Ollama Local Provider
