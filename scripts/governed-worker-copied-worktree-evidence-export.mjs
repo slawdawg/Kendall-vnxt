@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   collectCopiedWorktreeExecutionAttempts,
+  commandArgsForTask,
+  expectedResponseForTask,
   validateCopiedWorktreeExecutionAttempt,
 } from "./governed-worker-copied-worktree-execution.mjs";
 
@@ -31,12 +33,16 @@ const ALLOWED_SNAPSHOT_FIELDS = new Set([
 const ALLOWED_ENTRY_FIELDS = new Set([
   "source_id",
   "worker",
+  "task_id",
   "mode",
   "authority_level",
   "execution_state",
   "command_path",
   "expected_response",
   "observed_response",
+  "proposal_target_file",
+  "proposal_change_kind",
+  "proposal_summary",
   "exit_code",
   "timed_out",
   "observed_at",
@@ -84,12 +90,18 @@ export function copiedWorktreeAttemptToPipelineEvidence(attempt, index = 0) {
   const evidence = {
     source_id: safeSourceId(attempt, index),
     worker: attempt.worker,
+    task_id: attempt.task_id,
     mode: attempt.mode,
     authority_level: attempt.authority_level,
     execution_state: attempt.execution_state,
     command_path: attempt.command_path,
     expected_response: attempt.expected_response,
     observed_response: attempt.observed_response,
+    ...(attempt.task_id === "starter_patch_proposal" ? {
+      proposal_target_file: attempt.proposal_target_file,
+      proposal_change_kind: attempt.proposal_change_kind,
+      proposal_summary: attempt.proposal_summary,
+    } : {}),
     exit_code: attempt.exit_code,
     timed_out: attempt.timed_out,
     observed_at: attempt.observed_at,
@@ -127,31 +139,26 @@ export function validatePipelineEvidenceEntry(entry) {
   if (typeof input.source_id !== "string" || input.source_id.trim().length === 0) {
     add("source_id");
   }
+  const taskId = typeof input.task_id === "string" ? input.task_id : "copy_execution_sentinel";
+  if (input.expected_response !== expectedResponseForTask(taskId)) {
+    add("expected_response");
+  }
   const reconstructed = {
-    attempt_id: `copy-exec:${input.worker}`,
+    attempt_id: taskId === "copy_execution_sentinel" ? `copy-exec:${input.worker}` : `copy-exec:${input.worker}:${taskId}`,
     worker: input.worker,
     mode: input.mode,
     authority_level: input.authority_level,
     execution_state: input.execution_state,
     command_path: input.command_path,
-    command_args: input.worker === "claude" && input.command_path !== null ? [
-      "--print",
-      "--output-format",
-      "json",
-      "--input-format",
-      "text",
-      "--permission-mode",
-      "dontAsk",
-      "--no-session-persistence",
-      "--safe-mode",
-      "--tools",
-      "",
-      "--max-budget-usd",
-      "0.05",
-      "Reply exactly with KENDALL_COPY_EXECUTION_OK. Do not explain.",
-    ] : [],
+    command_args: input.worker === "claude" && input.command_path !== null ? commandArgsForTask(input.worker, taskId) : [],
     expected_response: input.expected_response,
+    task_id: taskId,
     observed_response: input.observed_response,
+    ...(taskId === "starter_patch_proposal" ? {
+      proposal_target_file: input.proposal_target_file,
+      proposal_change_kind: input.proposal_change_kind,
+      proposal_summary: input.proposal_summary,
+    } : {}),
     exit_code: input.exit_code,
     timed_out: input.timed_out,
     timeout_ms: 1000,

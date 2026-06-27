@@ -248,6 +248,15 @@ unsafe PATH entries, unsupported workers such as Hermes, copy failures,
 timeouts, non-zero exits, and unexpected/unsafe output must remain
 metadata-only evidence.
 
+The local starter proposal command `pnpm run worker:copy:patch-proposal`
+reuses the copied-worktree execution boundary for a harmless proposal-only task.
+It may ask Claude to return a tightly structured `KENDALL_PATCH_PROPOSAL_OK`
+JSON marker with proposal metadata for `README.md`, but it still runs with no
+built-in tools, no source mutation, no retained copy, no raw output retention,
+no trust or routing effect, and no delivery authority. The proposal metadata is
+for Codex review only; it is not a generated patch, not an applied diff, and not
+a permission to mutate the source worktree.
+
 The local evidence export command `pnpm run worker:copy:evidence:export` is the
 metadata persistence surface for copied-worktree attempts. It may either consume
 an existing producer JSON file with `--input-results` or run the copied-worktree

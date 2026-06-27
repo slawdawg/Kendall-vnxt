@@ -21,32 +21,47 @@ const MAX_TIMEOUT_MS = 10000;
 const SAFE_TMP_ROOT = "/tmp";
 const SAFE_CWD_PREFIX = join(SAFE_TMP_ROOT, "kendall-worker-copy-exec-");
 const EXPECTED_RESPONSE = "KENDALL_COPY_EXECUTION_OK";
+const PATCH_PROPOSAL_RESPONSE = "KENDALL_PATCH_PROPOSAL_OK";
+const DEFAULT_TASK_ID = "copy_execution_sentinel";
+const PATCH_PROPOSAL_TASK_ID = "starter_patch_proposal";
 const COPY_EXECUTION_PROMPT = `Reply exactly with ${EXPECTED_RESPONSE}. Do not explain.`;
+const PATCH_PROPOSAL_PROMPT = [
+  "You are running inside an ephemeral copied worktree for Kendall_Nxt.",
+  "Do not edit files.",
+  "Return exactly one compact JSON object and no prose, markdown, or code fence.",
+  `Return this exact JSON: {"result":"${PATCH_PROPOSAL_RESPONSE}","proposal":{"target_file":"README.md","change_kind":"append_line","summary":"Add a harmless Kendall starter note"}}`,
+].join(" ");
 const RAW_MARKER_PATTERN = /raw_prompt|provider_payload|authorization|bearer|token|secret|password|credential|sk-[a-z0-9_-]+/i;
 const MAX_TRACKED_FILES = 5000;
 const MAX_TRACKED_FILE_BYTES = 2 * 1024 * 1024;
 const GIT_BINARY = "/usr/bin/git";
 const GIT_ARGS = Object.freeze(["ls-files", "-z"]);
 
-const CLAUDE_COPY_ARGS = Object.freeze([
-  "--print",
-  "--output-format",
-  "json",
-  "--input-format",
-  "text",
-  "--permission-mode",
-  "dontAsk",
-  "--no-session-persistence",
-  "--safe-mode",
-  "--tools",
-  "",
-  "--max-budget-usd",
-  "0.05",
-  COPY_EXECUTION_PROMPT,
-]);
+function claudeArgsForPrompt(prompt) {
+  return [
+    "--print",
+    "--output-format",
+    "json",
+    "--input-format",
+    "text",
+    "--permission-mode",
+    "dontAsk",
+    "--no-session-persistence",
+    "--safe-mode",
+    "--tools",
+    "",
+    "--max-budget-usd",
+    "0.05",
+    prompt,
+  ];
+}
+
+const CLAUDE_COPY_ARGS = Object.freeze(claudeArgsForPrompt(COPY_EXECUTION_PROMPT));
+const CLAUDE_PATCH_PROPOSAL_ARGS = Object.freeze(claudeArgsForPrompt(PATCH_PROPOSAL_PROMPT));
 
 const ALLOWED_ATTEMPT_FIELDS = new Set([
   "attempt_id",
+  "task_id",
   "worker",
   "mode",
   "authority_level",
@@ -55,6 +70,9 @@ const ALLOWED_ATTEMPT_FIELDS = new Set([
   "command_args",
   "expected_response",
   "observed_response",
+  "proposal_target_file",
+  "proposal_change_kind",
+  "proposal_summary",
   "exit_code",
   "timed_out",
   "timeout_ms",
@@ -120,6 +138,29 @@ function parseTimeoutMs(args) {
     return { timeoutMs: DEFAULT_TIMEOUT_MS, errors: [{ field: "timeout_ms", reason: "invalid_timeout" }] };
   }
   return { timeoutMs, errors: [] };
+}
+
+function parseTaskId(args) {
+  const taskIndex = args.indexOf("--task");
+  if (taskIndex === -1 || typeof args[taskIndex + 1] !== "string") {
+    return { taskId: DEFAULT_TASK_ID, errors: [] };
+  }
+  const taskId = args[taskIndex + 1];
+  if (![DEFAULT_TASK_ID, PATCH_PROPOSAL_TASK_ID].includes(taskId)) {
+    return { taskId: DEFAULT_TASK_ID, errors: [{ field: "task_id", reason: "unknown_task" }] };
+  }
+  return { taskId, errors: [] };
+}
+
+export function expectedResponseForTask(taskId) {
+  return taskId === PATCH_PROPOSAL_TASK_ID ? PATCH_PROPOSAL_RESPONSE : EXPECTED_RESPONSE;
+}
+
+export function commandArgsForTask(worker, taskId) {
+  if (worker !== "claude") {
+    return [];
+  }
+  return taskId === PATCH_PROPOSAL_TASK_ID ? [...CLAUDE_PATCH_PROPOSAL_ARGS] : [...CLAUDE_COPY_ARGS];
 }
 
 function parseObservedAt(args) {
@@ -272,30 +313,75 @@ function copyTrackedFiles({ sourceWorktree, executionCwd, files }) {
   return { copiedFiles, copiedBytes, errors: [] };
 }
 
-function sanitizeObservedResponse(stdout, stderr) {
+function parseJsonObjectText(value) {
+  if (typeof value !== "string") {
+    return {};
+  }
+  const trimmed = value.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = fenced ? fenced[1].trim() : trimmed;
+  if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(candidate);
+    return isRecord(parsed) && !hasRawMarkerInObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function patchProposalPayloadFromParsedOutput(parsed) {
+  if (isRecord(parsed) && isRecord(parsed.proposal)) {
+    return parsed;
+  }
+  if (typeof parsed?.result !== "string") {
+    return {};
+  }
+  const nested = parseJsonObjectText(parsed.result);
+  return isRecord(nested) && !hasRawMarkerInObject(nested) ? nested : {};
+}
+
+function sanitizeObservedResponse(stdout, stderr, taskId = DEFAULT_TASK_ID) {
   const stdoutText = typeof stdout === "string" ? stdout : "";
   const stderrText = typeof stderr === "string" ? stderr : "";
   const combined = [stdoutText, stderrText].filter((value) => value.trim().length > 0).join("\n");
   if (combined.length === 0 || RAW_MARKER_PATTERN.test(stderrText)) {
-    return null;
+    return { observedResponse: null, proposalTargetFile: null, proposalChangeKind: null, proposalSummary: null };
   }
   try {
     const parsed = JSON.parse(stdoutText);
     if (!isRecord(parsed) || hasRawMarkerInObject(parsed)) {
-      return null;
+      return { observedResponse: null, proposalTargetFile: null, proposalChangeKind: null, proposalSummary: null };
     }
     const result = typeof parsed.result === "string" ? parsed.result.trim() : null;
-    return result === EXPECTED_RESPONSE ? result : null;
+    if (taskId === PATCH_PROPOSAL_TASK_ID) {
+      const proposalPayload = patchProposalPayloadFromParsedOutput(parsed);
+      const proposal = isRecord(proposalPayload.proposal) ? proposalPayload.proposal : {};
+      if (
+        proposalPayload.result === PATCH_PROPOSAL_RESPONSE
+        && proposal.target_file === "README.md"
+        && proposal.change_kind === "append_line"
+        && proposal.summary === "Add a harmless Kendall starter note"
+      ) {
+        return {
+          observedResponse: proposalPayload.result,
+          proposalTargetFile: proposal.target_file,
+          proposalChangeKind: proposal.change_kind,
+          proposalSummary: proposal.summary,
+        };
+      }
+      return { observedResponse: null, proposalTargetFile: null, proposalChangeKind: null, proposalSummary: null };
+    }
+    return {
+      observedResponse: result === EXPECTED_RESPONSE ? result : null,
+      proposalTargetFile: null,
+      proposalChangeKind: null,
+      proposalSummary: null,
+    };
   } catch {
-    return null;
+    return { observedResponse: null, proposalTargetFile: null, proposalChangeKind: null, proposalSummary: null };
   }
-}
-
-function commandArgsFor(worker) {
-  if (worker === "claude") {
-    return [...CLAUDE_COPY_ARGS];
-  }
-  return [];
 }
 
 export function validateCopiedWorktreeExecutionAttempt(attempt) {
@@ -307,6 +393,11 @@ export function validateCopiedWorktreeExecutionAttempt(attempt) {
 
   if (!isRecord(attempt)) {
     addReason("$");
+  }
+  const taskId = typeof input.task_id === "string" ? input.task_id : DEFAULT_TASK_ID;
+  const expectedResponse = expectedResponseForTask(taskId);
+  if (![DEFAULT_TASK_ID, PATCH_PROPOSAL_TASK_ID].includes(taskId)) {
+    addReason("task_id");
   }
   for (const field of ["attempt_id", "worker", "mode", "authority_level", "execution_state", "observed_at", "evidence_ref"]) {
     if (typeof input[field] !== "string" || input[field].trim().length === 0 || RAW_MARKER_PATTERN.test(input[field])) {
@@ -339,17 +430,38 @@ export function validateCopiedWorktreeExecutionAttempt(attempt) {
   if (!Array.isArray(input.command_args)) {
     addReason("command_args");
   } else if (input.worker === "claude" && input.command_path !== null) {
-    if (input.command_args.join("\u0000") !== CLAUDE_COPY_ARGS.join("\u0000")) {
+    if (input.command_args.join("\u0000") !== commandArgsForTask(input.worker, taskId).join("\u0000")) {
       addReason("command_args");
     }
   } else if (input.command_args.length !== 0) {
     addReason("command_args");
   }
-  if (input.expected_response !== EXPECTED_RESPONSE) {
+  if (input.expected_response !== expectedResponse) {
     addReason("expected_response");
   }
-  if (input.observed_response !== null && input.observed_response !== EXPECTED_RESPONSE) {
+  if (input.observed_response !== null && input.observed_response !== expectedResponse) {
     addReason("observed_response");
+  }
+  if (taskId === PATCH_PROPOSAL_TASK_ID && input.execution_state === "execution_observed") {
+    if (input.proposal_target_file !== "README.md") {
+      addReason("proposal_target_file");
+    }
+    if (input.proposal_change_kind !== "append_line") {
+      addReason("proposal_change_kind");
+    }
+    if (input.proposal_summary !== "Add a harmless Kendall starter note") {
+      addReason("proposal_summary");
+    }
+  } else if (taskId === PATCH_PROPOSAL_TASK_ID) {
+    if (input.proposal_target_file !== null || input.proposal_change_kind !== null || input.proposal_summary !== null) {
+      addReason("$");
+    }
+  } else if (
+    input.proposal_target_file !== undefined
+    || input.proposal_change_kind !== undefined
+    || input.proposal_summary !== undefined
+  ) {
+    addReason("$");
   }
   if (input.exit_code !== null && !Number.isInteger(input.exit_code)) {
     addReason("exit_code");
@@ -390,7 +502,7 @@ export function validateCopiedWorktreeExecutionAttempt(attempt) {
   if (Object.entries(input).some(([key, value]) => !ALLOWED_ATTEMPT_FIELDS.has(key) || hasRawMarkerInObject(value))) {
     addReason("$");
   }
-  if (input.execution_state === "execution_observed" && (input.observed_response !== EXPECTED_RESPONSE || input.exit_code !== 0 || input.timed_out !== false || input.command_path === null || input.copied_tracked_files < 1)) {
+  if (input.execution_state === "execution_observed" && (input.observed_response !== expectedResponse || input.exit_code !== 0 || input.timed_out !== false || input.command_path === null || input.copied_tracked_files < 1)) {
     addReason("execution_state");
   }
   if (["missing", "unsupported", "copy_failed"].includes(input.execution_state) && (input.observed_response !== null || input.exit_code !== null || input.timed_out !== false)) {
@@ -423,6 +535,7 @@ export function collectCopiedWorktreeExecutionAttempts({
   env = process.env,
   observedAt = new Date().toISOString(),
   sourceWorktree = process.cwd(),
+  taskId = DEFAULT_TASK_ID,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   workers = DEFAULT_WORKERS,
 } = {}) {
@@ -430,12 +543,15 @@ export function collectCopiedWorktreeExecutionAttempts({
     const workerAllowed = DEFAULT_WORKERS.includes(worker);
     const copySupported = SUPPORTED_COPY_WORKERS.has(worker);
     const commandPath = workerAllowed && copySupported ? findExecutableOnPath(worker, sourceWorktree, env) : null;
-    const commandArgs = commandPath ? commandArgsFor(worker) : [];
+    const commandArgs = commandPath ? commandArgsForTask(worker, taskId) : [];
     const executionCwd = createExecutionCwd();
     let executionState = copySupported ? "missing" : "unsupported";
     let exitCode = null;
     let timedOut = false;
     let observedResponse = null;
+    let proposalTargetFile = null;
+    let proposalChangeKind = null;
+    let proposalSummary = null;
     let copiedTrackedFiles = 0;
     let copyBytes = 0;
 
@@ -469,8 +585,12 @@ export function collectCopiedWorktreeExecutionAttempts({
               observedResponse = null;
               executionState = "failed";
             } else {
-              observedResponse = sanitizeObservedResponse(result.stdout, result.stderr);
-              if (observedResponse !== EXPECTED_RESPONSE) {
+              const sanitized = sanitizeObservedResponse(result.stdout, result.stderr, taskId);
+              observedResponse = sanitized.observedResponse;
+              proposalTargetFile = sanitized.proposalTargetFile;
+              proposalChangeKind = sanitized.proposalChangeKind;
+              proposalSummary = sanitized.proposalSummary;
+              if (observedResponse !== expectedResponseForTask(taskId)) {
                 executionState = "invalid_output";
               } else {
                 executionState = "execution_observed";
@@ -484,15 +604,21 @@ export function collectCopiedWorktreeExecutionAttempts({
     }
 
     const attempt = {
-      attempt_id: `copy-exec:${worker}`,
+      attempt_id: taskId === DEFAULT_TASK_ID ? `copy-exec:${worker}` : `copy-exec:${worker}:${taskId}`,
+      task_id: taskId,
       worker,
       mode: "copied_worktree_execution",
       authority_level: "copied_worktree_worker_execution",
       execution_state: executionState,
       command_path: commandPath,
       command_args: commandArgs,
-      expected_response: EXPECTED_RESPONSE,
+      expected_response: expectedResponseForTask(taskId),
       observed_response: observedResponse,
+      ...(taskId === PATCH_PROPOSAL_TASK_ID ? {
+        proposal_target_file: proposalTargetFile,
+        proposal_change_kind: proposalChangeKind,
+        proposal_summary: proposalSummary,
+      } : {}),
       exit_code: exitCode,
       timed_out: timedOut,
       timeout_ms: timeoutMs,
@@ -523,10 +649,11 @@ function main() {
   const args = process.argv.slice(2);
   const { workers, errors: workerErrors } = parseWorkers(args);
   const { timeoutMs, errors: timeoutErrors } = parseTimeoutMs(args);
+  const { taskId, errors: taskErrors } = parseTaskId(args);
   const { observedAt, errors: observedAtErrors } = parseObservedAt(args);
   const { sourceWorktree, errors: sourceWorktreeErrors } = parseSourceWorktree(args);
-  const errors = [...workerErrors, ...timeoutErrors, ...observedAtErrors, ...sourceWorktreeErrors];
-  const results = errors.length > 0 ? [] : collectCopiedWorktreeExecutionAttempts({ observedAt, sourceWorktree, timeoutMs, workers });
+  const errors = [...workerErrors, ...taskErrors, ...timeoutErrors, ...observedAtErrors, ...sourceWorktreeErrors];
+  const results = errors.length > 0 ? [] : collectCopiedWorktreeExecutionAttempts({ observedAt, sourceWorktree, taskId, timeoutMs, workers });
   console.log(JSON.stringify({ results, errors }, null, 2));
   process.exit(errors.length === 0 && results.every((result) => result.validation.ok) ? 0 : 1);
 }
