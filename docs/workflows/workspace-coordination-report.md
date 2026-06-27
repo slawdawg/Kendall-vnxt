@@ -40,6 +40,11 @@ assignment metadata, local git status, and source-owned safe backlog evidence.
 It must not create branches, worktrees, commits, PRs, merges, cleanup actions,
 remote mutations, or manifest writes.
 
+`node ./scripts/codex-workspace.mjs coordination-report --summary-json` is the
+bounded automation form for quick runner scans. It preserves counts for retained
+closed lanes and backlog classifications without dumping the full retained lane payload,
+and it follows the same read-only boundary as `--json`.
+
 ## Report Packet
 
 ```text

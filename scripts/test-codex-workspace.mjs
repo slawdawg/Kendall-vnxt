@@ -98,7 +98,71 @@ try {
       assert(["claimable", "none"].includes(packet.nextSafeSlice.status), result.stdout || result.stderr);
       assert(typeof packet.nextSafeSlice.action === "string", result.stdout || result.stderr);
       assert(packet.stopLines.includes("Merge a PR."), result.stdout || result.stderr);
+      assert(
+        packet.stopLines.includes("Delete a remote branch with no PR record, a SHA mismatch, an open PR, or an active workspace owner."),
+        result.stdout || result.stderr,
+      );
       assert(readFileSync(manifestPath, "utf8") === before, "coordination-report must not mutate manifests");
+    } finally {
+      rmSync(reportStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("coordination-report summary-json emits bounded counts without retained lane payloads", () => {
+    const reportStateRoot = mkdtempSync(join(tmpdir(), "codex-coordination-summary-json-"));
+    try {
+      const tasksDir = join(reportStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const activeManifestPath = join(tasksDir, "active-summary-lane.json");
+      const activeManifest = {
+        task_id: "active-summary-lane",
+        title: "Active summary lane",
+        branch: "codex/active-summary-lane",
+        base_branch: "dev",
+        base_ref: "origin/dev",
+        status: "active",
+        owner: "runner-a",
+        worktree_path: rootDir,
+        updated_at: "2026-06-27T00:00:00.000Z",
+      };
+      writeFileSync(activeManifestPath, JSON.stringify(activeManifest, null, 2));
+      for (let index = 0; index < 12; index += 1) {
+        writeFileSync(
+          join(tasksDir, `closed-summary-lane-${index}.json`),
+          JSON.stringify(
+            {
+              task_id: `closed-summary-lane-${index}`,
+              title: `Closed summary lane ${index}`,
+              branch: `codex/closed-summary-lane-${index}`,
+              base_branch: "dev",
+              base_ref: "origin/dev",
+              status: "closed",
+              owner: "runner-a",
+              worktree_path: join(reportStateRoot, `closed-summary-lane-${index}`),
+              updated_at: "2026-06-27T00:00:00.000Z",
+            },
+            null,
+            2,
+          ),
+        );
+      }
+      const before = readFileSync(activeManifestPath, "utf8");
+
+      const result = run(["coordination-report", "--summary-json", "--state-root", reportStateRoot, "--owner", "runner-a"]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
+      assert(packet.counts.activeManagedWorktrees === 1, result.stdout || result.stderr);
+      assert(packet.counts.closedButRetainedLanes === 12, result.stdout || result.stderr);
+      assert(!("closedButRetainedLanes" in packet), result.stdout || result.stderr);
+      assert(packet.activeManagedWorktrees[0].taskId === "active-summary-lane", result.stdout || result.stderr);
+      assert(packet.stopLines.includes("Merge a PR."), result.stdout || result.stderr);
+      assert(
+        packet.stopLines.includes("Delete a remote branch with no PR record, a SHA mismatch, an open PR, or an active workspace owner."),
+        result.stdout || result.stderr,
+      );
+      assert(readFileSync(activeManifestPath, "utf8") === before, "coordination-report summary-json must not mutate manifests");
     } finally {
       rmSync(reportStateRoot, { recursive: true, force: true });
     }
