@@ -165,6 +165,7 @@ heartbeat options:
 close-assignments options:
   --ids <a,b>               Comma-separated assignment ids to close.
   --apply                   Apply closeout. Without this, closeout is dry-run.
+  --summary-json            Without --apply, print a bounded JSON closeout summary.
 
 takeover options:
   --dry-run                 Print takeover packet without mutation.
@@ -1035,6 +1036,9 @@ function closeAssignments(argv) {
   if (options.apply && options.dryRun) {
     throw new Error("close-assignments accepts either --dry-run or --apply, not both.");
   }
+  if (options.summaryJson && options.apply) {
+    throw new Error("close-assignments --summary-json is only supported without --apply.");
+  }
 
   const assignmentIds = closeAssignmentIds(positional, options);
   if (assignmentIds.length === 0) {
@@ -1057,6 +1061,10 @@ function closeAssignments(argv) {
   const blocked = plans.filter((plan) => !plan.closeable && !plan.alreadyClosed);
 
   if (!options.apply) {
+    if (options.summaryJson) {
+      console.log(JSON.stringify(buildCloseAssignmentsSummary({ state, currentOwner, plans }), null, 2));
+      return;
+    }
     printPlan("close-assignments", [
       ...lines,
       "preview only; pass --apply to close eligible assignment records",
@@ -1075,6 +1083,39 @@ function closeAssignments(argv) {
     applyAssignmentCloseout(state, plan.assignmentId, currentOwner);
   }
   printApplied("close-assignments", lines);
+}
+
+function buildCloseAssignmentsSummary({ state, currentOwner, plans }) {
+  const results = plans.map(shapeAssignmentCloseoutPlan);
+  return {
+    generatedAt: new Date().toISOString(),
+    stateRoot: state.root,
+    currentOwner,
+    counts: {
+      total: results.length,
+      closeable: results.filter((result) => result.status === "closeable").length,
+      alreadyClosed: results.filter((result) => result.status === "already_closed").length,
+      blocked: results.filter((result) => result.status === "blocked").length,
+    },
+    statusCounts: countByField(results, "status"),
+    results: results.slice(0, 10),
+    resultsTruncated: results.length > 10,
+    mutation: "none; summary only",
+  };
+}
+
+function shapeAssignmentCloseoutPlan(plan) {
+  return {
+    assignmentId: plan.assignmentId,
+    status: plan.closeable ? "closeable" : plan.alreadyClosed ? "already_closed" : "blocked",
+    reason: plan.reason,
+    taskId: plan.taskId,
+    manifestTaskId: plan.manifest?.task_id || null,
+    branch: plan.manifest?.branch || null,
+    owner: plan.manifest?.owner || null,
+    assignmentPath: plan.assignmentPath,
+    manifestPath: plan.manifestPath,
+  };
 }
 
 function closeAssignmentIds(positional, options) {

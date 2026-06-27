@@ -153,6 +153,8 @@ cannot be completed without expanded party-mode authority.
    from a stable worktree.
    Orphan cleanup is for stale lane directories only; hidden workspace metadata
    under the worktrees root is outside the cleanup surface.
+   For assignment closeout, use `close-assignments --summary-json` to inspect
+   eligible closed-workspace evidence before `--apply`.
    Stop if the worktree is dirty, no stable repository root is available, owner
    evidence is missing or mismatched, PR merge evidence is missing, or the
    local/remote branch head differs from the recorded PR delivery head.
