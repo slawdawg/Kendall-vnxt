@@ -248,6 +248,25 @@ unsafe PATH entries, unsupported workers such as Hermes, copy failures,
 timeouts, non-zero exits, and unexpected/unsafe output must remain
 metadata-only evidence.
 
+The local evidence export command `pnpm run worker:copy:evidence:export` is the
+metadata persistence surface for copied-worktree attempts. It may either consume
+an existing producer JSON file with `--input-results` or run the copied-worktree
+collector with the same bounded authority as `worker:copy:execute`. It writes a
+versioned JSON snapshot only under `/tmp` or the ignored local runtime root
+`.kendall-local/governed-worker-evidence/`. The snapshot is for future
+`/pipeline` consumption without live provider calls and must retain only
+validated dashboard metadata fields: source id, worker, mode, authority level,
+execution state, command path, expected/observed sentinel response, exit/timeout
+metadata, evidence refs, copied file/byte counts, and boolean safety flags. It
+must not retain command args, execution cwd, shell state, copied source,
+absolute source worktree paths, raw stdout/stderr, raw prompts, provider
+payloads, secrets, delivery authority,
+positive trust/routing effects, retry authority, merge authority, cleanup
+authority, or a claim that any worker is currently live. False `affects_trust`
+and `affects_routing` safety flags may be retained only to prove the evidence
+does not influence trust or routing. Unsafe attempts may be summarized only as
+validation metadata without raw marker values.
+
 Environment allowlist entries are names-only model data. The inherited
 environment is default-empty. Secret-like names or values are denied, including
 tokens, credentials, passwords, keys, browser/session variables, SSH/GitHub/cloud

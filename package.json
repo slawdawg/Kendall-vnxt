@@ -45,6 +45,7 @@
     "worker:version:probe": "node ./scripts/governed-worker-version-probe.mjs",
     "worker:smoke:execute": "node ./scripts/governed-worker-smoke-execution.mjs",
     "worker:copy:execute": "node ./scripts/governed-worker-copied-worktree-execution.mjs",
+    "worker:copy:evidence:export": "node ./scripts/governed-worker-copied-worktree-evidence-export.mjs",
     "check:documentation-authority": "node ./scripts/check-documentation-authority-report.mjs",
     "check:verification-readiness": "node ./scripts/check-verification-readiness-report.mjs",
     "check:pipeline-implementation-readiness": "node ./scripts/check-pipeline-implementation-readiness.mjs",

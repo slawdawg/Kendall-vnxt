@@ -30,6 +30,15 @@ import {
   collectCopiedWorktreeExecutionAttempts,
   validateCopiedWorktreeExecutionAttempt,
 } from "../scripts/governed-worker-copied-worktree-execution.mjs";
+import {
+  buildGovernedWorkerEvidenceSnapshot,
+  copiedWorktreeAttemptToPipelineEvidence,
+  validateEvidenceInputPath,
+  resolveDefaultEvidenceOutputPath,
+  validateEvidenceOutputPath,
+  validateGovernedWorkerEvidenceSnapshot,
+  writeGovernedWorkerEvidenceSnapshot,
+} from "../scripts/governed-worker-copied-worktree-evidence-export.mjs";
 
 const fixtureBase = new URL("./fixtures/governed-worker-execution-dry-run/", import.meta.url);
 const validatorSourcePath = new URL("../scripts/lib/governed-worker-execution-dry-run.mjs", import.meta.url);
@@ -41,6 +50,7 @@ const smokeExecutionSourcePath = new URL("../scripts/governed-worker-smoke-execu
 const smokeExecutionPath = fileURLToPath(smokeExecutionSourcePath);
 const copiedWorktreeExecutionSourcePath = new URL("../scripts/governed-worker-copied-worktree-execution.mjs", import.meta.url);
 const copiedWorktreeExecutionPath = fileURLToPath(copiedWorktreeExecutionSourcePath);
+const copiedWorktreeEvidenceExportPath = fileURLToPath(new URL("../scripts/governed-worker-copied-worktree-evidence-export.mjs", import.meta.url));
 const packageJsonPath = new URL("../package.json", import.meta.url);
 const checkWrapperPath = new URL("../scripts/check-governed-worker-execution-dry-run.mjs", import.meta.url);
 
@@ -1236,6 +1246,256 @@ test("copied-worktree execution command avoids shell network modules GitHub deli
   }
 });
 
+test("copied-worktree evidence export writes metadata-only pipeline snapshots to a safe local path", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    const claudePath = join(safeBin, "claude");
+    await writeFile(claudePath, "#!/bin/sh\necho '{\"result\":\"KENDALL_COPY_EXECUTION_OK\"}'\n", "utf8");
+    await chmod(claudePath, 0o755);
+
+    const results = collectCopiedWorktreeExecutionAttempts({
+      env: { PATH: safeBin, PWD: sourceWorktree },
+      observedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+      timeoutMs: 1000,
+      workers: ["claude", "hermes"],
+    });
+    const { snapshot, validation } = buildGovernedWorkerEvidenceSnapshot({
+      attempts: results.map((result) => result.attempt),
+      generatedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+    });
+    const outputPath = join(tempDir, "governed-worker-evidence.json");
+    const writeResult = writeGovernedWorkerEvidenceSnapshot(snapshot, outputPath, { cwd: sourceWorktree });
+
+    assert.equal(validation.ok, true);
+    assert.equal(writeResult.ok, true);
+    const persisted = JSON.parse(await readFile(outputPath, "utf8"));
+    assert.equal(validateGovernedWorkerEvidenceSnapshot(persisted).ok, true);
+    assert.equal(persisted.metadata_only, true);
+    assert.equal(persisted.raw_payload_retained, false);
+    assert.equal(persisted.dashboard_consumption, "no_live_calls");
+    assert.equal(persisted.attempts.length, 2);
+    assert.deepEqual(persisted.errors, []);
+    assert.equal(persisted.attempts.find((entry) => entry.worker === "claude").execution_state, "execution_observed");
+    assert.equal(persisted.attempts.find((entry) => entry.worker === "hermes").execution_state, "unsupported");
+    assert.equal(persisted.attempts.every((entry) => entry.raw_output_retained === false), true);
+    assert.equal(persisted.attempts.every((entry) => entry.copy_retained === false), true);
+    assert.equal(Object.hasOwn(persisted, "source_worktree"), false);
+    assert.doesNotMatch(JSON.stringify(persisted), /source-worktree|command_args|execution_cwd|shell_used|raw_prompt|provider_payload|sk-proj/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copied-worktree evidence export rejects unsafe attempts and unsafe output paths", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const baseAttempt = {
+      attempt_id: "copy-exec:claude",
+      worker: "claude",
+      mode: "copied_worktree_execution",
+      authority_level: "copied_worktree_worker_execution",
+      execution_state: "execution_observed",
+      command_path: "/usr/local/bin/claude",
+      command_args: [
+        "--print",
+        "--output-format",
+        "json",
+        "--input-format",
+        "text",
+        "--permission-mode",
+        "dontAsk",
+        "--no-session-persistence",
+        "--safe-mode",
+        "--tools",
+        "",
+        "--max-budget-usd",
+        "0.05",
+        "Reply exactly with KENDALL_COPY_EXECUTION_OK. Do not explain.",
+      ],
+      expected_response: "KENDALL_COPY_EXECUTION_OK",
+      observed_response: "KENDALL_COPY_EXECUTION_OK",
+      exit_code: 0,
+      timed_out: false,
+      timeout_ms: 1000,
+      observed_at: "2026-06-27T00:00:00Z",
+      evidence_ref: "metadata:worker-copied-worktree-execution/claude",
+      shell_used: false,
+      source_worktree: sourceWorktree,
+      execution_cwd: "/tmp/kendall-worker-copy-exec-test",
+      copied_tracked_files: 1,
+      copy_bytes: 23,
+      copy_retained: false,
+      network_allowed: true,
+      session_inheritance_allowed: true,
+      source_mutation_allowed: false,
+      tools_allowed: false,
+      raw_output_retained: false,
+      affects_trust: false,
+      affects_routing: false,
+    };
+
+    assert.equal(copiedWorktreeAttemptToPipelineEvidence(baseAttempt).ok, true);
+    assert.equal(copiedWorktreeAttemptToPipelineEvidence({ ...baseAttempt, raw_output_retained: true }).ok, false);
+    assert.equal(copiedWorktreeAttemptToPipelineEvidence({ ...baseAttempt, observed_response: "provider_payload sk-proj-123" }).ok, false);
+    assert.equal(validateEvidenceOutputPath(join(sourceWorktree, "tracked.json"), { cwd: sourceWorktree }).ok, false);
+    assert.equal(validateEvidenceOutputPath("relative.json", { cwd: sourceWorktree }).ok, false);
+    assert.equal(validateEvidenceOutputPath(resolveDefaultEvidenceOutputPath({ cwd: sourceWorktree, generatedAt: "2026-06-27T00:00:00Z" }), { cwd: sourceWorktree }).ok, true);
+    assert.equal(validateEvidenceInputPath("relative.json", { cwd: sourceWorktree }).ok, false);
+    assert.equal(validateEvidenceInputPath("/etc/passwd", { cwd: sourceWorktree }).ok, false);
+
+    const { snapshot } = buildGovernedWorkerEvidenceSnapshot({
+      attempts: [baseAttempt, { ...baseAttempt, attempt_id: "copy-exec:claude-raw", observed_response: "provider_payload sk-proj-123" }],
+      generatedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+    });
+    assert.equal(validateGovernedWorkerEvidenceSnapshot(snapshot).ok, true);
+    assert.equal(snapshot.attempts.length, 1);
+    assert.equal(snapshot.errors.length, 1);
+    assert.doesNotMatch(JSON.stringify(snapshot), /sk-proj-123|provider_payload/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copied-worktree evidence export rejects symlink escapes and never overwrites snapshots", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-paths-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const baseAttempt = {
+      attempt_id: "copy-exec:claude",
+      worker: "claude",
+      mode: "copied_worktree_execution",
+      authority_level: "copied_worktree_worker_execution",
+      execution_state: "execution_observed",
+      command_path: "/usr/local/bin/claude",
+      command_args: ["--print", "--output-format", "json", "--input-format", "text", "--permission-mode", "dontAsk", "--no-session-persistence", "--safe-mode", "--tools", "", "--max-budget-usd", "0.05", "Reply exactly with KENDALL_COPY_EXECUTION_OK. Do not explain."],
+      expected_response: "KENDALL_COPY_EXECUTION_OK",
+      observed_response: "KENDALL_COPY_EXECUTION_OK",
+      exit_code: 0,
+      timed_out: false,
+      timeout_ms: 1000,
+      observed_at: "2026-06-27T00:00:00Z",
+      evidence_ref: "metadata:worker-copied-worktree-execution/claude",
+      shell_used: false,
+      source_worktree: sourceWorktree,
+      execution_cwd: "/tmp/kendall-worker-copy-exec-test",
+      copied_tracked_files: 1,
+      copy_bytes: 23,
+      copy_retained: false,
+      network_allowed: true,
+      session_inheritance_allowed: true,
+      source_mutation_allowed: false,
+      tools_allowed: false,
+      raw_output_retained: false,
+      affects_trust: false,
+      affects_routing: false,
+    };
+    const { snapshot } = buildGovernedWorkerEvidenceSnapshot({
+      attempts: [baseAttempt, { ...baseAttempt, attempt_id: "copy-exec:claude-retry" }],
+      generatedAt: "2026-06-27T00:00:00Z",
+    });
+    const sourceIds = snapshot.attempts.map((entry) => entry.source_id);
+    assert.equal(new Set(sourceIds).size, sourceIds.length);
+
+    const outputPath = join(tempDir, "evidence.json");
+    assert.equal(writeGovernedWorkerEvidenceSnapshot(snapshot, outputPath, { cwd: sourceWorktree }).ok, true);
+    const original = await readFile(outputPath, "utf8");
+    const overwrite = writeGovernedWorkerEvidenceSnapshot({ ...snapshot, generated_at: "2026-06-27T00:00:01Z" }, outputPath, { cwd: sourceWorktree });
+    assert.equal(overwrite.ok, false);
+    assert.ok(overwrite.errors.some((error) => error.reason === "output_exists"));
+    assert.equal(await readFile(outputPath, "utf8"), original);
+
+    const symlinkParent = join(tempDir, "allowed-link");
+    await symlink(sourceWorktree, symlinkParent);
+    const symlinkValidation = validateEvidenceOutputPath(join(symlinkParent, "escaped.json"), { cwd: sourceWorktree });
+    assert.equal(symlinkValidation.ok, false);
+    assert.ok(symlinkValidation.reasons.some((reason) => reason.reason === "output_realpath_inside_source_worktree"));
+
+    const symlinkWorkspace = join(tempDir, "symlink-workspace");
+    const symlinkWorkspaceTarget = join(tempDir, "symlink-target");
+    await mkdir(symlinkWorkspace, { recursive: true });
+    await mkdir(symlinkWorkspaceTarget, { recursive: true });
+    await symlink(symlinkWorkspaceTarget, join(symlinkWorkspace, ".kendall-local"));
+    const symlinkEvidencePath = resolveDefaultEvidenceOutputPath({ cwd: symlinkWorkspace, generatedAt: "2026-06-27T00:00:00Z" });
+    const symlinkEvidenceValidation = validateEvidenceOutputPath(symlinkEvidencePath, { cwd: symlinkWorkspace });
+    assert.equal(symlinkEvidenceValidation.ok, false);
+    assert.ok(symlinkEvidenceValidation.reasons.some((reason) => reason.reason === "output_symlinked_evidence_ancestor"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copied-worktree evidence export CLI persists supplied producer results without launching workers", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-cli-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    await writeFile(join(safeBin, "claude"), "#!/bin/sh\necho '{\"result\":\"KENDALL_COPY_EXECUTION_OK\"}'\n", "utf8");
+    await chmod(join(safeBin, "claude"), 0o755);
+    const results = collectCopiedWorktreeExecutionAttempts({
+      env: { PATH: safeBin, PWD: sourceWorktree },
+      observedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+      timeoutMs: 1000,
+      workers: ["claude"],
+    });
+    const inputPath = join(tempDir, "producer-results.json");
+    const outputPath = join(tempDir, "exported-evidence.json");
+    await writeFile(inputPath, JSON.stringify({ results, errors: [] }), "utf8");
+
+    const cliResult = spawnSync(
+      process.execPath,
+      [copiedWorktreeEvidenceExportPath, "--input-results", inputPath, "--output", outputPath, "--observed-at", "2026-06-27T00:00:00Z"],
+      { cwd: sourceWorktree, encoding: "utf8", env: { ...process.env, PATH: "" } },
+    );
+
+    assert.equal(cliResult.status, 0, cliResult.stderr || cliResult.stdout);
+    const output = JSON.parse(cliResult.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(existsSync(outputPath), true);
+    assert.equal(JSON.parse(await readFile(outputPath, "utf8")).attempts.length, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copied-worktree evidence export CLI fails closed for invalid input results", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-cli-invalid-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const malformedInput = join(tempDir, "malformed.json");
+    const missingResultsInput = join(tempDir, "missing-results.json");
+    await writeFile(malformedInput, "{not json", "utf8");
+    await writeFile(missingResultsInput, JSON.stringify({ attempts: [] }), "utf8");
+
+    for (const [inputPath, reason] of [
+      [join(tempDir, "missing.json"), "input_unreadable_or_invalid_json"],
+      [malformedInput, "input_unreadable_or_invalid_json"],
+      [missingResultsInput, "input_missing_results"],
+    ]) {
+      const cliResult = spawnSync(
+        process.execPath,
+        [copiedWorktreeEvidenceExportPath, "--input-results", inputPath, "--output", join(tempDir, `${reason}.json`)],
+        { cwd: sourceWorktree, encoding: "utf8" },
+      );
+      assert.notEqual(cliResult.status, 0);
+      const output = JSON.parse(cliResult.stdout);
+      assert.equal(output.ok, false);
+      assert.ok(output.errors.some((error) => error.reason === reason));
+      assert.doesNotMatch(cliResult.stderr, /SyntaxError|ENOENT|at .*governed-worker/i);
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("real tool readiness probes fail closed for launch session network raw retention or trust effects", () => {
   const baseProbe = {
     probe_id: "probe:claude-readiness",
@@ -1736,6 +1996,10 @@ test("scoped package scripts and check wrapper are wired for the dry-run slice",
   assert.equal(
     packageJson.scripts?.["worker:copy:execute"],
     "node ./scripts/governed-worker-copied-worktree-execution.mjs",
+  );
+  assert.equal(
+    packageJson.scripts?.["worker:copy:evidence:export"],
+    "node ./scripts/governed-worker-copied-worktree-evidence-export.mjs",
   );
   assert.match(packageJson.scripts?.["check:static"], /pnpm run check:governed-worker-execution-dry-run/);
   assert.equal(existsSync(checkWrapperPath), true);
