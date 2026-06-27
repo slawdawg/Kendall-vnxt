@@ -1009,6 +1009,7 @@ test("governed copied-worktree Claude starter patch proposal returns metadata on
     assert.equal(result.attempt.execution_state, "execution_observed");
     assert.equal(result.attempt.expected_response, "KENDALL_PATCH_PROPOSAL_OK");
     assert.equal(result.attempt.observed_response, "KENDALL_PATCH_PROPOSAL_OK");
+    assert.equal(result.attempt.output_contract_diagnostic, "structured_match");
     assert.equal(result.attempt.proposal_target_file, "README.md");
     assert.equal(result.attempt.proposal_change_kind, "append_line");
     assert.equal(result.attempt.proposal_summary, "Add a harmless Kendall starter note");
@@ -1051,6 +1052,7 @@ test("copied-worktree starter patch proposal accepts Claude JSON output wrapper"
     assert.equal(result.validation.ok, true);
     assert.equal(result.attempt.execution_state, "execution_observed");
     assert.equal(result.attempt.observed_response, "KENDALL_PATCH_PROPOSAL_OK");
+    assert.equal(result.attempt.output_contract_diagnostic, "structured_match");
     assert.equal(result.attempt.proposal_target_file, "README.md");
     assert.equal(result.attempt.raw_output_retained, false);
   } finally {
@@ -1086,6 +1088,7 @@ printf '%s\n' '{"type":"result","result":"KENDALL_PATCH_PROPOSAL_OK"}'
     assert.equal(result.validation.ok, true);
     assert.equal(result.attempt.execution_state, "invalid_output");
     assert.equal(result.attempt.observed_response, null);
+    assert.equal(result.attempt.output_contract_diagnostic, "missing_proposal");
     assert.equal(result.attempt.proposal_target_file, null);
     assert.equal(result.attempt.proposal_change_kind, null);
     assert.equal(result.attempt.proposal_summary, null);
@@ -1118,10 +1121,12 @@ test("copied-worktree execution reports unsupported Hermes and invalid Claude ou
     assert.equal(claude.validation.ok, true);
     assert.equal(claude.attempt.execution_state, "invalid_output");
     assert.equal(claude.attempt.observed_response, null);
+    assert.equal(claude.attempt.output_contract_diagnostic, "stdout_raw_marker");
     assert.doesNotMatch(JSON.stringify(claude), /sk-proj-123456789/);
     assert.equal(existsSync(claude.attempt.execution_cwd), false);
     assert.equal(hermes.validation.ok, true);
     assert.equal(hermes.attempt.execution_state, "unsupported");
+    assert.equal(hermes.attempt.output_contract_diagnostic, "not_applicable");
     assert.equal(hermes.attempt.command_path, null);
     assert.deepEqual(hermes.attempt.command_args, []);
     assert.equal(hermes.attempt.copied_tracked_files, 0);
@@ -1150,6 +1155,7 @@ test("copied-worktree execution requires Claude JSON output and complete tracked
     assert.equal(plaintextResult.validation.ok, true);
     assert.equal(plaintextResult.attempt.execution_state, "invalid_output");
     assert.equal(plaintextResult.attempt.observed_response, null);
+    assert.equal(plaintextResult.attempt.output_contract_diagnostic, "stdout_not_json");
 
     const oversizedSource = await createTrackedSourceWorktree(join(tempDir, "oversized"));
     await writeFile(join(oversizedSource, "large.bin"), Buffer.alloc((2 * 1024 * 1024) + 1), "utf8");
@@ -1293,6 +1299,7 @@ test("copied-worktree execution validator fails closed for retained copy tools m
     ],
     expected_response: "KENDALL_COPY_EXECUTION_OK",
     observed_response: "KENDALL_COPY_EXECUTION_OK",
+    output_contract_diagnostic: "structured_match",
     exit_code: 0,
     timed_out: false,
     timeout_ms: 1000,
@@ -1467,6 +1474,7 @@ test("copied-worktree evidence export rejects unsafe attempts and unsafe output 
       ],
       expected_response: "KENDALL_COPY_EXECUTION_OK",
       observed_response: "KENDALL_COPY_EXECUTION_OK",
+      output_contract_diagnostic: "structured_match",
       exit_code: 0,
       timed_out: false,
       timeout_ms: 1000,
@@ -1524,6 +1532,7 @@ test("copied-worktree evidence export rejects symlink escapes and never overwrit
       command_args: ["--print", "--output-format", "json", "--input-format", "text", "--permission-mode", "dontAsk", "--no-session-persistence", "--safe-mode", "--tools", "", "--max-budget-usd", "0.05", "Reply exactly with KENDALL_COPY_EXECUTION_OK. Do not explain."],
       expected_response: "KENDALL_COPY_EXECUTION_OK",
       observed_response: "KENDALL_COPY_EXECUTION_OK",
+      output_contract_diagnostic: "structured_match",
       exit_code: 0,
       timed_out: false,
       timeout_ms: 1000,
@@ -1700,6 +1709,7 @@ test("copied-worktree evidence export CLI persists supplied patch proposal metad
     assert.equal(directSnapshot.snapshot.attempts.length, 1);
     assert.equal(directSnapshot.snapshot.attempts[0].task_id, "starter_patch_proposal");
     assert.equal(directSnapshot.snapshot.attempts[0].expected_response, "KENDALL_PATCH_PROPOSAL_OK");
+    assert.equal(directSnapshot.snapshot.attempts[0].output_contract_diagnostic, "structured_match");
     assert.equal(directSnapshot.snapshot.attempts[0].proposal_target_file, "README.md");
     assert.equal(directSnapshot.snapshot.attempts[0].proposal_change_kind, "append_line");
     assert.equal(directSnapshot.snapshot.attempts[0].proposal_summary, "Add a harmless Kendall starter note");
@@ -1718,6 +1728,7 @@ test("copied-worktree evidence export CLI persists supplied patch proposal metad
     assert.equal(validateGovernedWorkerEvidenceSnapshot(persisted).ok, true);
     assert.equal(persisted.attempts[0].task_id, "starter_patch_proposal");
     assert.equal(persisted.attempts[0].proposal_target_file, "README.md");
+    assert.equal(persisted.attempts[0].output_contract_diagnostic, "structured_match");
     assert.equal(persisted.attempts[0].raw_output_retained, false);
     assert.equal(persisted.attempts[0].tools_allowed, false);
     assert.equal(persisted.attempts[0].source_mutation_allowed, false);
