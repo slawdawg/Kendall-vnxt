@@ -231,6 +231,23 @@ worker task authority. CLI parse errors must stop before launch, unsupported
 workers such as Hermes must not launch, and any timeout, non-zero exit, or
 unexpected/unsafe output must remain metadata-only evidence.
 
+The local copied-worktree command `pnpm run worker:copy:execute` is the next
+bounded worker task execution surface. It may execute Claude only from an
+ephemeral tracked-file copy of a source worktree under `/tmp`, using the same
+fixed-argument `--print` JSON command shape, safe mode, no session persistence,
+no built-in tools, `dontAsk` permissions, and small budget cap. The copy must be
+created from tracked files only, must exclude Git metadata and untracked local
+state, must be deleted before returning, and must retain only metadata such as
+the copied file count and byte count. Its only accepted response is
+`KENDALL_COPY_EXECUTION_OK`. It may inherit the operator's normal Claude
+auth/session and use network for the model call, but it must not mutate the
+source worktree, enable tools, retain the copied source, retain raw output,
+affect trust, affect routing, deliver code, merge, clean up anything outside the
+ephemeral copy, or imply broader worker task authority. Unsafe source worktrees,
+unsafe PATH entries, unsupported workers such as Hermes, copy failures,
+timeouts, non-zero exits, and unexpected/unsafe output must remain
+metadata-only evidence.
+
 Environment allowlist entries are names-only model data. The inherited
 environment is default-empty. Secret-like names or values are denied, including
 tokens, credentials, passwords, keys, browser/session variables, SSH/GitHub/cloud
