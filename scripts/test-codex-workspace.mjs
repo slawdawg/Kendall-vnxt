@@ -1247,6 +1247,79 @@ try {
     }
   });
 
+  test("close-assignments dry-run previews delivery support closeouts as one batch", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-delivery-support-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      const lanes = [
+        "assignment-report-queue-proof-refresh",
+        "dispatcher-continuity-snapshot-refresh",
+        "report-catalog-shortcut-refresh",
+        "worker-backlog-queue-refresh",
+        "dispatcher-queue-state-fixtures-refresh",
+        "lane-handoff-evidence-refresh",
+      ];
+      for (const lane of lanes) {
+        writeFileSync(
+          join(tasksDir, `${lane}.json`),
+          `${JSON.stringify(
+            {
+              task_id: lane,
+              branch: `codex/${lane}`,
+              worktree_path: rootDir,
+              base_branch: "dev",
+              status: "closed",
+              owner: "runner-a",
+              source_assignment_id: lane,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+        writeFileSync(
+          join(assignmentsDir, `${lane}.json`),
+          `${JSON.stringify(
+            {
+              assignment_id: lane,
+              task_id: lane,
+              branch: `codex/${lane}`,
+              status: "active",
+              owner: "runner-a",
+              phase: "handoff",
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        lanes.join(","),
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      for (const lane of lanes) {
+        assert(result.stdout.includes(`close ${lane}`), result.stdout || result.stderr);
+        assert(result.stdout.includes(`closed workspace evidence ${lane}`), result.stdout || result.stderr);
+      }
+      assert(taskSnapshot(tasksDir) === beforeTasks, "delivery support closeout dry-run mutated manifests");
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "delivery support closeout dry-run mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("close-assignments apply fails closed on owner mismatch", () => {
     const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-owner-"));
     try {
