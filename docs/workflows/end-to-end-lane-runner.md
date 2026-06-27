@@ -171,7 +171,9 @@ cannot be completed without expanded party-mode authority.
    local/remote branch head differs from the recorded PR delivery head.
    If cleanup is for stale remote branches outside a managed lane, first build
    an exact deletion set from current GitHub PR metadata and
-   `node ./scripts/codex-workspace.mjs list --active --json`; delete only
+   `node ./scripts/codex-workspace.mjs list --active --json`; use
+   `list --summary-json` when automation needs bounded inventory counts before
+   loading row-level JSON. Delete only
    branches whose current remote SHA exactly matches a merged PR `headRefOid`
    and that have no open PR, no closed-unmerged PR, and no active workspace
    owner.
