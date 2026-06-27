@@ -278,7 +278,7 @@ function pathIsUnder(parent, child) {
   return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
-export function validateEvidenceOutputPath(outputPath, { cwd = process.cwd() } = {}) {
+export function validateEvidenceOutputPath(outputPath, { cwd = process.cwd(), sourceWorktree = null } = {}) {
   const reasons = [];
   if (typeof outputPath !== "string" || !isAbsolute(outputPath)) {
     reasons.push({ field: "output", reason: "output_not_absolute" });
@@ -311,9 +311,19 @@ export function validateEvidenceOutputPath(outputPath, { cwd = process.cwd() } =
     reasons.push({ field: "output", reason: "output_not_json" });
   }
   const realSourceRoot = existsSync(sourceRoot) ? realpathSync(sourceRoot) : sourceRoot;
+  const realExplicitSourceRoot = typeof sourceWorktree === "string" && isAbsolute(sourceWorktree) && existsSync(sourceWorktree)
+    ? realpathSync(sourceWorktree)
+    : null;
   const realParentAnchor = realpathNearestExistingAncestor(parent);
-  const realParent = existsSync(parent) ? realpathSync(parent) : realParentAnchor;
+  const parentExists = existsSync(parent);
+  const realParent = parentExists ? realpathSync(parent) : realParentAnchor;
   const realParentUnderSource = pathIsUnder(realSourceRoot, realParent);
+  const realParentUnderExplicitSource = realExplicitSourceRoot !== null
+    && realExplicitSourceRoot !== realSourceRoot
+    && pathIsUnder(realExplicitSourceRoot, realParent);
+  if (realParentUnderExplicitSource) {
+    reasons.push({ field: "output", reason: "output_inside_source_worktree" });
+  }
   if (realParentUnderSource && !underEvidenceRoot) {
     reasons.push({ field: "output", reason: "output_realpath_inside_source_worktree" });
   }
@@ -333,7 +343,7 @@ export function validateEvidenceOutputPath(outputPath, { cwd = process.cwd() } =
       reasons.push({ field: "output", reason: "output_symlinked_evidence_ancestor" });
     }
   }
-  if (existsSync(parent)) {
+  if (parentExists) {
     if (!statSync(realParent).isDirectory()) {
       reasons.push({ field: "output", reason: "output_parent_not_directory" });
     }
@@ -385,10 +395,31 @@ function parseArgs(args) {
   const outputIndex = args.indexOf("--output");
   const observedAtIndex = args.indexOf("--observed-at");
   const inputIndex = args.indexOf("--input-results");
+  const sourceIndex = args.indexOf("--source-worktree");
   const generatedAt = observedAtIndex >= 0 && typeof args[observedAtIndex + 1] === "string" ? args[observedAtIndex + 1] : new Date().toISOString();
   const output = outputIndex >= 0 && typeof args[outputIndex + 1] === "string" ? args[outputIndex + 1] : resolveDefaultEvidenceOutputPath({ generatedAt });
   const inputResults = inputIndex >= 0 && typeof args[inputIndex + 1] === "string" ? args[inputIndex + 1] : null;
-  return { output, generatedAt, inputResults };
+  const sourceValueMissing = sourceIndex >= 0 && (typeof args[sourceIndex + 1] !== "string" || args[sourceIndex + 1].startsWith("--"));
+  const requestedSourceWorktree = sourceIndex >= 0 && !sourceValueMissing ? args[sourceIndex + 1] : process.cwd();
+  const sourceValidation = sourceValueMissing
+    ? { sourceWorktree: null, errors: [{ field: "source_worktree", reason: "source_worktree_missing" }] }
+    : validateSourceWorktreeArg(requestedSourceWorktree);
+  return { output, generatedAt, inputResults, sourceWorktree: sourceValidation.sourceWorktree, errors: sourceValidation.errors };
+}
+
+function validateSourceWorktreeArg(sourceWorktree) {
+  if (typeof sourceWorktree !== "string" || !isAbsolute(sourceWorktree)) {
+    return { sourceWorktree, errors: [{ field: "source_worktree", reason: "source_worktree_not_absolute" }] };
+  }
+  try {
+    const realSourceWorktree = realpathSync(sourceWorktree);
+    if (!statSync(realSourceWorktree).isDirectory()) {
+      return { sourceWorktree: realSourceWorktree, errors: [{ field: "source_worktree", reason: "source_worktree_not_directory" }] };
+    }
+    return { sourceWorktree: realSourceWorktree, errors: [] };
+  } catch {
+    return { sourceWorktree, errors: [{ field: "source_worktree", reason: "source_worktree_unreadable" }] };
+  }
 }
 
 function attemptsFromInputResults(inputResults) {
@@ -410,17 +441,21 @@ function attemptsFromInputResults(inputResults) {
 
 function main() {
   const args = process.argv.slice(2);
-  const { output, generatedAt, inputResults } = parseArgs(args);
+  const { output, generatedAt, inputResults, sourceWorktree, errors } = parseArgs(args);
+  if (errors.length > 0) {
+    console.log(JSON.stringify({ ok: false, output_path: null, errors }, null, 2));
+    process.exit(1);
+  }
   const collected = inputResults
     ? attemptsFromInputResults(inputResults)
-    : { attempts: collectCopiedWorktreeExecutionAttempts({ observedAt: generatedAt }).map((result) => result.attempt), errors: [] };
+    : { attempts: collectCopiedWorktreeExecutionAttempts({ observedAt: generatedAt, sourceWorktree }).map((result) => result.attempt), errors: [] };
   if (collected.errors.length > 0) {
     console.log(JSON.stringify({ ok: false, output_path: null, errors: collected.errors }, null, 2));
     process.exit(1);
   }
   const { snapshot, validation } = buildGovernedWorkerEvidenceSnapshot({ attempts: collected.attempts, generatedAt });
   const result = validation.ok
-    ? writeGovernedWorkerEvidenceSnapshot(snapshot, output)
+    ? writeGovernedWorkerEvidenceSnapshot(snapshot, output, { sourceWorktree })
     : { ok: false, output_path: null, errors: validation.reasons };
   console.log(JSON.stringify({ ...result, snapshot }, null, 2));
   process.exit(result.ok ? 0 : 1);

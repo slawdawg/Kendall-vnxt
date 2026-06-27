@@ -1291,6 +1291,39 @@ test("copied-worktree evidence export writes metadata-only pipeline snapshots to
   }
 });
 
+test("copied-worktree evidence export creates the default local evidence directory in a fresh worktree", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-default-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    const claudePath = join(safeBin, "claude");
+    await writeFile(claudePath, "#!/bin/sh\necho '{\"result\":\"KENDALL_COPY_EXECUTION_OK\"}'\n", "utf8");
+    await chmod(claudePath, 0o755);
+
+    const results = collectCopiedWorktreeExecutionAttempts({
+      env: { PATH: safeBin, PWD: sourceWorktree },
+      observedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+      timeoutMs: 1000,
+      workers: ["claude"],
+    });
+    const { snapshot } = buildGovernedWorkerEvidenceSnapshot({
+      attempts: results.map((result) => result.attempt),
+      generatedAt: "2026-06-27T00:00:00Z",
+    });
+    const outputPath = resolveDefaultEvidenceOutputPath({ cwd: sourceWorktree, generatedAt: "2026-06-27T00:00:00Z" });
+
+    assert.equal(existsSync(join(sourceWorktree, ".kendall-local")), false);
+    const writeResult = writeGovernedWorkerEvidenceSnapshot(snapshot, outputPath, { cwd: sourceWorktree });
+
+    assert.equal(writeResult.ok, true);
+    assert.equal(validateGovernedWorkerEvidenceSnapshot(JSON.parse(await readFile(outputPath, "utf8"))).ok, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("copied-worktree evidence export rejects unsafe attempts and unsafe output paths", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-"));
   try {
@@ -1426,6 +1459,94 @@ test("copied-worktree evidence export rejects symlink escapes and never overwrit
     const symlinkEvidenceValidation = validateEvidenceOutputPath(symlinkEvidencePath, { cwd: symlinkWorkspace });
     assert.equal(symlinkEvidenceValidation.ok, false);
     assert.ok(symlinkEvidenceValidation.reasons.some((reason) => reason.reason === "output_symlinked_evidence_ancestor"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copied-worktree evidence export CLI can run against an explicit harmless source worktree", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-source-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    await writeFile(join(safeBin, "claude"), "#!/bin/sh\necho '{\"result\":\"KENDALL_COPY_EXECUTION_OK\"}'\n", "utf8");
+    await chmod(join(safeBin, "claude"), 0o755);
+    const outputPath = join(tempDir, "exported-explicit-source.json");
+
+    const result = spawnSync(
+      process.execPath,
+      [copiedWorktreeEvidenceExportPath, "--source-worktree", sourceWorktree, "--output", outputPath, "--observed-at", "2026-06-27T00:00:00Z"],
+      { encoding: "utf8", env: { ...process.env, PATH: safeBin } },
+    );
+
+    assert.equal(result.status, 0);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    const persisted = JSON.parse(await readFile(outputPath, "utf8"));
+    assert.equal(persisted.attempts.find((entry) => entry.worker === "claude").execution_state, "execution_observed");
+    assert.equal(persisted.attempts.find((entry) => entry.worker === "claude").copied_tracked_files, 1);
+    assert.doesNotMatch(JSON.stringify(persisted), /source_worktree|execution_cwd|command_args|shell_used/);
+
+    const blockedOutput = join(sourceWorktree, "blocked-evidence.json");
+    const blocked = spawnSync(
+      process.execPath,
+      [copiedWorktreeEvidenceExportPath, "--source-worktree", sourceWorktree, "--output", blockedOutput, "--observed-at", "2026-06-27T00:00:00Z"],
+      { encoding: "utf8", env: { ...process.env, PATH: safeBin } },
+    );
+
+    assert.notEqual(blocked.status, 0);
+    const blockedResult = JSON.parse(blocked.stdout);
+    assert.equal(blockedResult.ok, false);
+    assert.ok(blockedResult.errors.some((error) => error.reason === "output_inside_source_worktree"));
+    assert.equal(existsSync(blockedOutput), false);
+
+    const defaultOutput = spawnSync(
+      process.execPath,
+      [copiedWorktreeEvidenceExportPath, "--source-worktree", sourceWorktree, "--observed-at", "2026-06-27T00:00:01Z"],
+      { cwd: tempDir, encoding: "utf8", env: { ...process.env, PATH: safeBin } },
+    );
+
+    assert.equal(defaultOutput.status, 0);
+    const defaultResult = JSON.parse(defaultOutput.stdout);
+    assert.equal(defaultResult.ok, true);
+    assert.equal(defaultResult.output_path.startsWith(join(tempDir, ".kendall-local", "governed-worker-evidence")), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copied-worktree evidence export CLI rejects unsafe source worktree before launch", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-source-invalid-"));
+  try {
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    const sentinel = join(tempDir, "sentinel");
+    await writeFile(join(safeBin, "claude"), "#!/bin/sh\ntouch " + sentinel + "\necho bad\n", "utf8");
+    await chmod(join(safeBin, "claude"), 0o755);
+
+    const result = spawnSync(
+      process.execPath,
+      [copiedWorktreeEvidenceExportPath, "--source-worktree", "relative-source"],
+      { encoding: "utf8", env: { ...process.env, PATH: safeBin } },
+    );
+
+    assert.notEqual(result.status, 0);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, false);
+    assert.ok(output.errors.some((error) => error.reason === "source_worktree_not_absolute"));
+
+    const missingValue = spawnSync(
+      process.execPath,
+      [copiedWorktreeEvidenceExportPath, "--source-worktree", "--observed-at", "2026-06-27T00:00:00Z"],
+      { encoding: "utf8", env: { ...process.env, PATH: safeBin } },
+    );
+
+    assert.notEqual(missingValue.status, 0);
+    const missingValueOutput = JSON.parse(missingValue.stdout);
+    assert.equal(missingValueOutput.ok, false);
+    assert.ok(missingValueOutput.errors.some((error) => error.reason === "source_worktree_missing"));
+    assert.equal(existsSync(sentinel), false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
