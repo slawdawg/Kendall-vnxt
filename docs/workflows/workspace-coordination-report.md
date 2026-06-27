@@ -64,6 +64,10 @@ Workspace Coordination Report
   commit. Preserve the evidence packet and do not create an empty PR.
 - `cleanup candidate`: PR is merged, worktree is clean, and cleanup dry-run
   names only the expected worktree and local branch.
+- `manifest repair candidate`: a closed retained manifest fails validation only
+  because inert lifecycle fields are missing, and
+  `node ./scripts/codex-workspace.mjs repair-manifests --dry-run` names that
+  manifest as repairable.
 - `remote branch cleanup candidate`: the remote branch is not owned by an
   active workspace, no open or closed-unmerged PR uses the branch head, and the
   current remote SHA exactly matches a merged PR `headRefOid`.
@@ -157,6 +161,23 @@ evidence gate before `git push origin --delete <branch>`:
 Preserve the exact deleted branch list and the excluded branch reasons as
 cleanup evidence.
 
+## Manifest Repair Rules
+
+Use manifest repair only for retained closed workspace evidence that the
+workspace lifecycle tool can classify without changing source branches,
+worktrees, PRs, ownership, or active lane state.
+
+```text
+node ./scripts/codex-workspace.mjs repair-manifests --dry-run
+node ./scripts/codex-workspace.mjs repair-manifests --apply
+```
+
+The dry-run must name the exact manifest, fields, and reason before apply. Apply
+is acceptable only when the plan is limited to closed legacy manifests and fills
+validation fields such as `worktree_path` or `base_branch`. Active malformed
+manifests, unreadable JSON, missing identity fields, and healthy manifests are
+not repair targets; stop and inspect them separately.
+
 ## Stop Lines
 
 Do not perform these actions from a generic continuation:
@@ -170,6 +191,7 @@ Do not perform these actions from a generic continuation:
 - Start work in a lane whose scope overlaps an active dirty lane.
 - Create an empty PR for a verified no-source refresh lane.
 - Mutate an active workspace branch owned by another runner.
+- Repair an active or unreadable workspace manifest without explicit inspection.
 - Delete a remote branch with no PR record, a SHA mismatch, an open PR, or an
   active workspace owner.
 

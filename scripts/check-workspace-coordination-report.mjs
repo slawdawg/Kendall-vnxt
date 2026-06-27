@@ -143,6 +143,7 @@ for (const classification of [
   "local-only commit",
   "no-source refresh lane",
   "cleanup candidate",
+  "manifest repair candidate",
   "remote branch cleanup candidate",
   "superseded PR",
   "dependency security bump",
@@ -161,6 +162,7 @@ for (const stopLine of [
   "Start work in a lane whose scope overlaps an active dirty lane.",
   "Create an empty PR for a verified no-source refresh lane.",
   "Mutate an active workspace branch owned by another runner.",
+  "Repair an active or unreadable workspace manifest without explicit inspection.",
   "Delete a remote branch with no PR record, a SHA mismatch, an open PR, or an",
 ]) {
   assertCondition(workflow.includes(stopLine), `Workspace coordination workflow must preserve stop line ${stopLine}`, failures);
@@ -179,6 +181,12 @@ for (const requiredText of [
   "read-only `$HOME/.cache/uv` error",
   "record the inconclusive result",
   "Remote Branch Cleanup Rules",
+  "Manifest Repair Rules",
+  "node ./scripts/codex-workspace.mjs repair-manifests --dry-run",
+  "node ./scripts/codex-workspace.mjs repair-manifests --apply",
+  "limited to closed legacy manifests",
+  "Active malformed",
+  "unreadable JSON, missing identity fields",
   "node ./scripts/codex-workspace.mjs list --active --json",
   "origin/<branch>` SHA exactly equals the merged",
   "Proof for low-risk delivery must come from current GitHub PR metadata",
