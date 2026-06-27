@@ -3919,6 +3919,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         preferred_successor_ids = (
+            "authority-blocked-work",
             "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
             "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
             "dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh",
@@ -4364,6 +4365,7 @@ class SupervisorService:
         verification_chain = [command.command for command in verification.requiredCommands]
         ready_backlog_items = [item for item in backlog.items if item.status == "ready"]
         blocked_backlog_items = [item for item in backlog.items if "blocked" in item.status]
+        authority_backlog_item = next((item for item in backlog.items if item.itemId == "authority-blocked-work"), None)
         active_report_count = sum(1 for report in catalog.reports if report.status == "active")
 
         steps = [
@@ -4443,13 +4445,13 @@ class SupervisorService:
                 stepId="preserve-authority-stop-lines",
                 label="Preserve authority stop lines",
                 priority="P0",
-                status="blocked_pending_explicit_approval",
-                summary="Keep unapproved provider execution, process launch, premium execution, commands, network, source mutation, and credential access outside maintenance work.",
+                status="ready",
+                summary="Start the approved authority-readiness planning/control-plane slice while keeping provider execution, process launch, commands, network, source mutation, and credential access disabled by default.",
                 evidence=[
-                    f"{len(blocked_backlog_items)} safe backlog items remain blocked pending explicit approval.",
+                    f"{len(blocked_backlog_items)} safe backlog items remain blocked pending explicit approval outside the approved authority-readiness slice.",
+                    f"authority-blocked-work is {authority_backlog_item.status if authority_backlog_item else 'missing'} for approval-scope planning/control-plane work.",
                     "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
-                    "Ollama Stories 4.1-4.3 remain the required gate, redaction, retention, timeout, and no-call preparation evidence.",
-                    "Subscription-agent Story 5.5 remains blocked.",
+                    "Subscription-agent, Codex CLI, Claude CLI, endpoint discovery, command execution, credentials, premium execution, external sends, and worker source mutation remain stop-lined for real runtime work.",
                 ],
                 verificationCommands=["pnpm run check:docs", "pnpm run check:execution-boundary", "pnpm run check:process-lifecycle"],
                 relatedReports=[
@@ -4466,14 +4468,14 @@ class SupervisorService:
                     "/controls#execution-readiness-report",
                     "/controls#maintenance-readiness-report",
                 ],
-                nextAction="Do not move blocked authority stories into implementation from generic continuation or maintenance language.",
+                nextAction="Run the authority-blocked approval scope readiness lane for planning/control-plane gates only; do not start provider execution, subscription-agent launch, or premium execution.",
             ),
         ]
 
         return MaintenanceActionPlanReportView(
             reportId="maintenance-action-plan-report-v1",
             generatedAt=datetime.now(timezone.utc),
-            summary="Read-only operator plan for choosing, verifying, and delivering larger safe maintenance slices while authority work remains blocked.",
+            summary="Read-only operator plan for choosing, verifying, and delivering larger safe maintenance slices while authority runtime work remains blocked behind disabled-default gates.",
             steps=steps,
             verificationChain=verification_chain,
             stopLines=[
@@ -5072,6 +5074,32 @@ class SupervisorService:
                 "pnpm run test:e2e:dashboard:controls",
             ],
         )
+        authority_blocked_approval_scope_lane = self._safe_backlog_next_lane(
+            lane_slug="authority-blocked-approval-scope-readiness",
+            lane_title="Authority blocked approval scope readiness",
+            scope=[
+                "durable approval evidence for Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch authority families",
+                "disabled-default safety gate evidence for provider calls, process launch, command execution, credential access, network expansion, and worker source mutation",
+                "rollback expectations and no-runtime-execution stop lines for the planning/control-plane implementation slice",
+            ],
+            verification_commands=[
+                "pnpm run check:documentation-authority",
+                "pnpm run check:authority-readiness",
+                "pnpm run check:execution-boundary",
+                "pnpm run check:process-lifecycle",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+            ],
+            stop_lines=[
+                "Do not perform any provider/model calls in this readiness slice, including the approved Story 4.4 Ollama endpoint/model; reserve runtime use for a separate runtime lane.",
+                "Do not launch subscription-agent, Codex CLI, or Claude CLI processes in this slice.",
+                "Do not add endpoint discovery, command execution, credential access, premium execution, external sends, or worker source mutation.",
+                "Keep runtime gates disabled by default and rollback by reverting this PR or leaving the gates disabled.",
+            ],
+        )
+
         slices = [
             DevelopmentRunwaySliceView(
                 sliceId="report-evidence-navigation-slice",
@@ -5221,9 +5249,9 @@ class SupervisorService:
             DevelopmentRunwaySliceView(
                 sliceId="authority-blocker-maintenance-slice",
                 label="Authority blocker maintenance slice",
-                status="blocked_pending_explicit_authority_approval",
-                recommendedPrScope="Only documentation, blocked-story indexing, approval-checkpoint evidence, and read-only dashboard/report updates may be batched here until explicit authority approval exists.",
-                summary="Use this slice to keep blocked authority state current without moving Ollama, subscription launch, premium, command, source, network, credential, or remote automation work into implementation.",
+                status="ready",
+                recommendedPrScope="Batch source-owned approval evidence, disabled-default gates, rollback expectations, stop lines, safe backlog, and report updates for the approved planning/control-plane authority slice.",
+                summary="Use this slice to make the 2026-06-27 authority approval durable without moving Ollama, subscription-agent, Codex CLI, Claude CLI, premium, command, source, network, credential, or remote automation runtime behavior into execution.",
                 includedBacklogItems=["authority-blocked-implementation"],
                 includedActionSteps=["preserve-authority-stop-lines"],
                 requiredVerification=[
@@ -5251,16 +5279,16 @@ class SupervisorService:
                 ],
                 readinessChecks=[
                     DevelopmentRunwayReadinessCheckView(
-                        checkId="authority-families-blocked",
-                        label="Authority families blocked",
-                        status="blocked",
-                        summary="Confirms execution-authority families still require explicit approval before implementation.",
-                        evidence=blocked_families,
+                        checkId="authority-approval-scope-recorded",
+                        label="Authority approval scope recorded",
+                        status="ready",
+                        summary="Confirms the 2026-06-27 operator approval covers planning/control-plane preparation for the named authority families while runtime execution remains disabled.",
+                        evidence=["Ollama local provider expansion", "subscription-agent launch", "orchestrator CLI worker launch"],
                         requiredCommandIds=["check-authority-readiness"],
                         relatedReports=["GET /supervisor/authority-readiness-matrix-report"],
                         relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
                         dashboardAnchors=["/controls#authority-readiness-matrix-report"],
-                        nextAction="Keep this slice read-only until explicit operator approval names the authority family and scope.",
+                        nextAction="Prepare approval-scope evidence and disabled-default gates without launching providers or worker processes.",
                     ),
                     DevelopmentRunwayReadinessCheckView(
                         checkId="approval-checkpoint-indexed",
@@ -5290,8 +5318,13 @@ class SupervisorService:
                         nextAction="Do not treat green boundary checks as approval to implement blocked authority stories.",
                     ),
                 ],
-                blockedBy=blocked_families,
-                nextAction="Keep this slice limited to read-only authority evidence until explicit operator approval names the authority family and scope.",
+                blockedBy=[
+                    "runtime execution successor with exact endpoint or command-template policy",
+                    "disabled-default provider/process safety gate evidence",
+                    "rollback evidence for each authority family",
+                ],
+                nextLane=authority_blocked_approval_scope_lane,
+                nextAction="Start the authority approval scope readiness lane and keep real runtime execution disabled.",
             ),
         ]
 
@@ -5308,7 +5341,7 @@ class SupervisorService:
                 "Default to larger reviewable PRs that close a complete safe slice across contracts, supervisor service, dashboard, tests, drift checks, and docs.",
                 "Do not open separate PRs for isolated report text, story-index, dashboard assertion, or drift-check updates when they support the same operator-facing slice.",
                 "Use a narrow PR only for urgent breakage, security fixes, or isolated failures that cannot wait for the surrounding slice.",
-                "Keep authority-blocked work out of batching decisions; larger PRs do not expand execution authority.",
+                "Keep runtime authority out of batching decisions; larger PRs may prepare the approved control-plane slice but do not expand live execution.",
             ],
             prBatchingChecklist=[
                 "One clear slice label and story evidence file are present.",
@@ -5321,13 +5354,13 @@ class SupervisorService:
             stopLines=[
                 "Development runway slices are not execution-authority approvals.",
                 "Do not use a larger PR slice to hide provider calls, process launch, premium execution, arbitrary worker commands, source mutation, network access, credential access, or remote automation.",
-                "Blocked authority stories remain blocked until explicit operator approval names authority and scope.",
+                "Authority approval scope readiness may prepare control-plane evidence only; runtime execution still needs exact endpoint or command-template policy.",
             ],
             nextSafeActions=[
                 f"Select one of {len(ready_items)} ready safe backlog items and batch all related surfaces into one PR.",
                 "Use the report-evidence navigation slice for read-only evidence improvements.",
                 "Use the verification-runbook hardening slice for command, check, and setup guidance changes.",
-                "Keep authority-blocker maintenance read-only until explicit approval exists.",
+                "Use authority approval scope readiness for durable approval evidence while keeping runtime launch disabled.",
                 "Batch future safe work into larger PRs when the changes share one reviewable operator outcome.",
             ],
         )
@@ -5397,13 +5430,13 @@ class SupervisorService:
             MaintenanceReadinessTrackView(
                 trackId="authority-blocker-watch",
                 label="Authority blocker watch",
-                status="blocked_pending_explicit_approval",
-                summary="Only the approved Ollama host endpoint/model may cross the provider boundary; all other provider calls and subscription-agent launch stay blocked.",
+                status="ready",
+                summary="The 2026-06-27 approval allows planning/control-plane readiness for Ollama expansion, subscription-agent launch, and orchestrator CLI worker launch while runtime execution stays disabled.",
                 evidence=[
                     "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
                     "Raw Ollama prompts, completions, reasoning fields, and provider payloads must not be retained.",
-                    "Subscription-agent launch Story 5.5 remains blocked.",
-                    "Generic continuation language is not execution-authority approval.",
+                    "Subscription-agent, Codex CLI, and Claude CLI process launch remain disabled for this readiness slice.",
+                    "Runtime execution still needs exact endpoint or command-template policy, disabled-default gates, review point, and rollback evidence.",
                 ],
                 relatedReports=[
                     "GET /supervisor/documentation-authority-report",
@@ -5414,7 +5447,7 @@ class SupervisorService:
                     "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=["/controls#documentation-authority-report", "/controls#execution-readiness-report"],
-                nextAction="Wait for explicit operator approval naming authority and scope before moving blocked stories into implementation.",
+                nextAction="Prepare approval scope, disabled-default gates, stop lines, and rollback evidence without launching providers or worker processes.",
             ),
         ]
 
@@ -5424,15 +5457,15 @@ class SupervisorService:
             summary="Read-only maintenance map for safe repo hygiene while execution-authority stories remain blocked.",
             tracks=tracks,
             stopLines=[
-                "Maintenance work must not approve local provider/model calls.",
-                "Maintenance work must not approve subscription-agent process launch.",
+                "Maintenance work must not approve runtime local provider/model calls beyond the existing Story 4.4 boundary.",
+                "Maintenance work must not approve subscription-agent, Codex CLI, or Claude CLI process launch.",
                 "Maintenance work must not approve premium execution.",
                 "Maintenance work must not grant worker commands, source mutation, network access, or credential access.",
             ],
             nextSafeActions=[
                 "Batch maintenance changes into coherent PRs covering API, dashboard, docs, and tests when surfaces are related.",
                 "Keep documentation, verification, report catalog, and runtime export references synchronized.",
-                "Prefer read-only evidence improvements until explicit execution-authority approval is recorded.",
+                "Prefer approval-scope evidence improvements until exact runtime endpoint or command-template policy is recorded.",
             ],
         )
 
@@ -6079,6 +6112,32 @@ class SupervisorService:
                 "pnpm run check:static",
                 "pnpm run test:codex-workspace",
                 "pnpm run test:e2e:dashboard:controls",
+            ],
+        )
+        authority_blocked_approval_scope_lane = self._safe_backlog_next_lane(
+            lane_slug="authority-blocked-approval-scope-readiness",
+            lane_title="Authority blocked approval scope readiness",
+            scope=[
+                "durable approval evidence for Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch authority families",
+                "safe backlog and documentation authority surfaces that distinguish approved planning/control-plane work from real runtime execution",
+                "disabled-default safety gate evidence for provider calls, process launch, command execution, credential access, network expansion, and worker source mutation",
+                "metadata-only implementation slice without launching workers, calling providers, discovering endpoints, using credentials, or broadening approved runtime boundaries",
+            ],
+            verification_commands=[
+                "pnpm run check:documentation-authority",
+                "pnpm run check:authority-readiness",
+                "pnpm run check:execution-boundary",
+                "pnpm run check:process-lifecycle",
+                "pnpm run check:safe-backlog",
+                "pnpm run check:development-runway",
+                "pnpm run check:static",
+                "pnpm run test:codex-workspace",
+            ],
+            stop_lines=[
+                "Do not perform any provider/model calls in this readiness slice, including the approved Story 4.4 Ollama endpoint/model; reserve runtime use for a separate runtime lane.",
+                "Do not launch subscription-agent, Codex CLI, or Claude CLI processes in this slice.",
+                "Do not add endpoint discovery, command execution, credential access, premium execution, external sends, or worker source mutation.",
+                "Keep runtime gates disabled by default and rollback by reverting this PR or leaving the gates disabled.",
             ],
         )
 
@@ -7368,14 +7427,15 @@ class SupervisorService:
             SafeDevelopmentBacklogItemView(
                 itemId="authority-blocked-work",
                 label="Execution-authority stories",
-                priority="blocked",
-                status="blocked_pending_explicit_approval",
-                summary="Unapproved provider execution and subscription-agent process launch remain outside the safe backlog.",
-                recommendedSliceSize="do_not_start",
+                priority="P1",
+                status="ready",
+                summary="Operator approved a bounded planning/control-plane implementation slice for Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch authority families.",
+                recommendedSliceSize="medium_to_large",
                 evidence=[
-                    "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
-                    "LM Studio, vLLM, llama.cpp, remote providers, premium execution, commands, source mutation, credentials, and unapproved network access remain blocked.",
-                    "Subscription-agent Story 5.5 remains blocked pending explicit process-launch approval.",
+                    "Operator approval now names Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch as the authority families for this planning/implementation slice.",
+                    "The first lane must make approval scope, disabled-default gates, rollback expectations, and no-runtime-execution stop lines durable before any real provider/process behavior expands.",
+                    "Ollama runtime remains limited to the previously approved Story 4.4 VM-to-host endpoint/model boundary until a successor PR records exact endpoint/provider settings.",
+                    "Subscription-agent, Codex CLI, and Claude CLI process launch remain disabled in this slice; command templates and rollback evidence must be prepared before execution.",
                     f"Blocked maintenance tracks: {', '.join(blocked_maintenance_tracks) or 'none'}.",
                 ],
                 relatedReports=[
@@ -7392,11 +7452,12 @@ class SupervisorService:
                     "/controls#authority-readiness-matrix-report",
                 ],
                 blockedBy=[
-                    "explicit operator approval naming authority and scope",
-                    "provider/process PRD approval",
-                    "safety gate evidence",
+                    "successor PR with exact endpoint or command-template policy before runtime execution",
+                    "disabled-default provider/process safety gate evidence",
+                    "rollback evidence for each authority family",
                 ],
-                nextAction="Do not implement blocked authority stories from generic continuation language.",
+                nextLane=authority_blocked_approval_scope_lane,
+                nextAction="Start authority-blocked approval scope readiness: make the approval, disabled-default gates, stop lines, and rollback expectations durable without launching providers or worker processes.",
             ),
         ]
 
@@ -7410,15 +7471,15 @@ class SupervisorService:
             items=items,
             stopLines=[
                 "Safe backlog items are planning and maintenance guidance, not execution-authority approvals.",
-                "Do not start Ollama provider execution stories without explicit approval naming authority and scope.",
-                "Do not start subscription-agent launch stories without explicit approval naming authority and scope.",
+                "Authority-blocked approval scope readiness may prepare control-plane evidence only; runtime execution still needs exact endpoint or command-template policy.",
+                "Do not start subscription-agent, Codex CLI, or Claude CLI process launch until disabled-default gates, command boundaries, and rollback evidence are durable.",
                 "Do not add provider/model calls, process launch, premium execution, worker shell commands, source mutation, network access, or credential access.",
             ],
             nextSafeActions=[
                 "Choose the next PR from ready safe backlog items and keep it large enough to include API, dashboard, docs, and tests when related.",
                 "Keep GitHub delivery hygiene current before relying on remote PR automation, and avoid persistent plaintext token storage.",
                 "Use required verification commands and focused e2e runners as acceptance evidence for each slice.",
-                "Keep blocked authority work visible but outside implementation until explicit approval arrives.",
+                "Start with approval scope readiness for authority-blocked work and keep real runtime execution behind exact disabled-default gates.",
             ],
         )
 
@@ -7442,7 +7503,7 @@ class SupervisorService:
             startCommand=f'node ./scripts/codex-workspace.mjs start "{lane_slug.replace("-", " ")}"',
             scope=scope,
             verificationCommands=verification_commands,
-            stopLines=stop_lines or default_stop_lines,
+            stopLines=default_stop_lines + (stop_lines or []),
         )
 
     def _report_evidence_navigation_next_lane(self) -> NextLaneRecommendationView:

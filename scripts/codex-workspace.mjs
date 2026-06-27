@@ -897,7 +897,7 @@ function claimNext(argv) {
       staleAfterSeconds,
     }),
   );
-  const selected = evaluations.find((evaluation) => evaluation.claimable) || null;
+  const selected = selectClaimableEvaluation(evaluations);
 
   const plan = [
     `current owner ${currentOwner}`,
@@ -967,6 +967,7 @@ function summarizeClaimEvaluation(evaluation) {
   return {
     itemId: evaluation.item.itemId,
     sourceStatus: evaluation.item.status || "unknown",
+    priority: evaluation.item.priority || null,
     status: evaluation.status,
     claimable: evaluation.claimable,
     branch: evaluation.item.branchName || null,
@@ -3136,7 +3137,8 @@ function applyClaimNext(selected, context) {
 
 function dispatchPlan(context) {
   const evaluations = dispatchCandidateEvaluations(context);
-  const selected = evaluations.find((evaluation) => evaluation.claimable) || null;
+  const deliveryWorkspaceCount = openDeliveryWorkspaceCount(context);
+  const selected = deliveryWorkspaceCount > 0 ? null : selectClaimableEvaluation(evaluations);
   const packet = dispatchPacket(selected, evaluations, context);
   return {
     evaluations,
@@ -3168,6 +3170,10 @@ function dispatchPacket(selected, evaluations, context) {
     blockers.push("no dispatchable safe backlog lane found");
   }
   const candidateStateCounts = queueCandidateStateCounts(evaluations);
+  const deliveryWorkspaceCount = openDeliveryWorkspaceCount(context);
+  if (deliveryWorkspaceCount > 0) {
+    candidateStateCounts.delivery = Math.max(candidateStateCounts.delivery || 0, deliveryWorkspaceCount);
+  }
   const nextActionGuidance = dispatchNextActionGuidance(selected, candidateStateCounts);
 
   return {
@@ -3182,7 +3188,7 @@ function dispatchPacket(selected, evaluations, context) {
     readiness_profile: context.readinessProfile,
     next_command: selected ? dispatchNextCommand(selected, context.readinessProfile) : null,
     handoff: selected ? "runner may resume prepared worktree; no worker or provider process launched" : null,
-    stop_lines: defaultDispatchStopLines(),
+    stop_lines: stopLinesForSafeBacklogItem(selected?.item, defaultDispatchStopLines()),
     allowed: blockers.length === 0,
     blockers,
     next_action_guidance: nextActionGuidance,
@@ -3269,6 +3275,36 @@ function queueCandidateStateCounts(evaluations) {
     counts[status] = (counts[status] || 0) + 1;
   }
   return counts;
+}
+
+function selectClaimableEvaluation(evaluations) {
+  const claimedByCurrentRunner = evaluations.find(
+    (evaluation) => evaluation.claimable && evaluation.status === "claimed" && evaluation.mutation === "assignment_refresh",
+  );
+  if (claimedByCurrentRunner) {
+    return claimedByCurrentRunner;
+  }
+  return evaluations.reduce((selected, evaluation) => {
+    if (!evaluation.claimable) {
+      return selected;
+    }
+    if (!selected) {
+      return evaluation;
+    }
+    const selectedPriority = safeBacklogPriorityRank(selected.item);
+    const candidatePriority = safeBacklogPriorityRank(evaluation.item);
+    return candidatePriority < selectedPriority ? evaluation : selected;
+  }, null);
+}
+
+function safeBacklogPriorityRank(item) {
+  const priority = String(item?.priority || "").trim().toUpperCase();
+  const match = priority.match(/^P(\d+)$/);
+  return match ? Number(match[1]) : 99;
+}
+
+function openDeliveryWorkspaceCount(context) {
+  return readManifests(context.state).filter(({ manifest }) => manifest.status === "pr_open").length;
 }
 
 function formatQueueCandidateStateCounts(counts = {}) {
@@ -3582,7 +3618,7 @@ function dispatchHandoffPacket(selected, context, manifest, readiness, workspace
     readiness,
     next_command: `cd ${manifest.worktree_path}`,
     handoff: "resume this prepared worktree; no worker or provider process launched",
-    stop_lines: defaultDispatchStopLines(),
+    stop_lines: stopLinesForSafeBacklogItem(selected.item, defaultDispatchStopLines()),
     candidate_state_counts: candidateStateCounts,
     generated_at: new Date().toISOString(),
   };
@@ -3803,7 +3839,7 @@ function buildLaneAssignment(item, existingAssignment, options = {}) {
       start_command: item.startCommand || null,
     },
     authority_profile: existingAssignment?.authority_profile || "standard-delivery",
-    stop_lines: existingAssignment?.stop_lines || defaultAssignmentStopLines(),
+    stop_lines: existingAssignment?.stop_lines || stopLinesForSafeBacklogItem(item, defaultAssignmentStopLines()),
     events: [
       ...(Array.isArray(existingAssignment?.events) ? existingAssignment.events : []),
       taskEvent(
@@ -3823,6 +3859,16 @@ function defaultAssignmentStopLines() {
     "no authority-blocked work mutation",
     "no branch, PR, merge, cleanup, or implementation mutation from claim-next --apply",
   ];
+}
+
+function stopLinesForSafeBacklogItem(item, defaults) {
+  const lines = Array.isArray(defaults) ? [...defaults] : [];
+  for (const line of Array.isArray(item?.stopLines) ? item.stopLines : []) {
+    if (typeof line === "string" && line && !lines.includes(line)) {
+      lines.push(line);
+    }
+  }
+  return lines;
 }
 
 function laneSlugFromBranch(branchName) {
@@ -4339,15 +4385,18 @@ function readSafeBacklogItems() {
       const item = {
         itemId: pythonStringField(block, "itemId"),
         status: pythonStringField(block, "status"),
+        priority: pythonStringField(block, "priority"),
         recommendedSliceSize: pythonStringField(block, "recommendedSliceSize"),
         branchName: "",
         startCommand: "",
+        stopLines: [],
       };
       const nextLaneVariable = pythonIdentifierField(block, "nextLane");
       const nextLane = nextLanes.get(nextLaneVariable);
       if (nextLane) {
         item.branchName = nextLane.branchName;
         item.startCommand = nextLane.startCommand;
+        item.stopLines = nextLane.stopLines;
       }
       return item;
     })
@@ -4367,6 +4416,7 @@ function readSafeBacklogNextLanes(source) {
     nextLanes.set(variableName, {
       branchName: `codex/${laneSlug}`,
       startCommand: `node ./scripts/codex-workspace.mjs start "${laneSlug.replace(/-/g, " ")}"`,
+      stopLines: pythonStringListField(match[0], "stop_lines"),
     });
   }
 
@@ -4380,6 +4430,7 @@ function readSafeBacklogNextLanes(source) {
     nextLanes.set("report_navigation_lane", {
       branchName: pythonStringField(block, "branchName"),
       startCommand: interpolatePythonTemplate(pythonStringField(block, "startCommand"), { lane_slug: laneSlug }),
+      stopLines: pythonStringListField(block, "stopLines"),
     });
   }
 
@@ -4389,6 +4440,14 @@ function readSafeBacklogNextLanes(source) {
 function pythonStringField(source, fieldName) {
   const match = source.match(new RegExp(`${fieldName}\\s*=\\s*[fF]?(['"])([\\s\\S]*?)\\1`));
   return match?.[2] || "";
+}
+
+function pythonStringListField(source, fieldName) {
+  const match = source.match(new RegExp(`${fieldName}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
+  if (!match) {
+    return [];
+  }
+  return [...match[1].matchAll(/(['"])([\s\S]*?)\1/g)].map((item) => item[2]).filter(Boolean);
 }
 
 function pythonIdentifierField(source, fieldName) {

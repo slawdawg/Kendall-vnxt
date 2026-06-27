@@ -306,11 +306,12 @@ assertCondition(
 );
 
 for (const safetyText of [
-  "blocked_pending_explicit_approval",
-  "do_not_start",
-  "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
-  "LM Studio, vLLM, llama.cpp, remote providers, premium execution, commands, source mutation, credentials, and unapproved network access remain blocked.",
-  "Subscription-agent Story 5.5 remains blocked pending explicit process-launch approval",
+  "authority-blocked-approval-scope-readiness",
+  "Operator approval now names Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch",
+  "The first lane must make approval scope, disabled-default gates, rollback expectations, and no-runtime-execution stop lines durable",
+  "Ollama runtime remains limited to the previously approved Story 4.4 VM-to-host endpoint/model boundary",
+  "Subscription-agent, Codex CLI, and Claude CLI process launch remain disabled in this slice",
+  "runtime execution still needs exact endpoint or command-template policy",
   "provider/model calls",
   "worker shell commands",
   "credential access",

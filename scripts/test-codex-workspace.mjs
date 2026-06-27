@@ -1013,7 +1013,7 @@ try {
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | assignable"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- authority-blocked-work | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
     assert(result.stdout.includes("- other-active | blocked_owned_active"), result.stdout || result.stderr);
@@ -1099,7 +1099,7 @@ try {
       assert(packet.counts.laneAssignments === 1, result.stdout || result.stderr);
       assert(packet.counts.workspaceAssignments >= 2, result.stdout || result.stderr);
       assert(packet.backlogStatusCounts.closed >= 1, result.stdout || result.stderr);
-      assert(packet.backlogStatusCounts.blocked_authority === 1, result.stdout || result.stderr);
+      assert(packet.backlogStatusCounts.assignable >= 3, result.stdout || result.stderr);
       assert(packet.laneAssignmentStatusCounts.claimed === 1, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.assignable >= 1, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.blocked_stale_owner_needs_takeover >= 1, result.stdout || result.stderr);
@@ -1120,10 +1120,11 @@ try {
   test("claim-next dry-run previews the next safe backlog lane without mutation", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
-    const expected = expectedClaimCandidate();
+    const expected = expectedAuthorityClaimCandidate();
+    const lowerPriority = expectedClaimCandidate();
     seedGeneratedSuccessorPrerequisites(stateRoot);
-    if (branchExists(rootDir, expected.branch)) {
-      seedUnownedSafeBacklogWorkspace(stateRoot, expected.slug);
+    if (branchExists(rootDir, lowerPriority.branch)) {
+      seedUnownedSafeBacklogWorkspace(stateRoot, lowerPriority.slug);
     }
     const before = taskSnapshot(tasksDir);
 
@@ -1139,7 +1140,7 @@ try {
       result.stdout || result.stderr,
     );
     assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- authority-blocked-work | blocked_authority"), result.stdout || result.stderr);
+    assert(result.stdout.includes(`- ${lowerPriority.slug} | assignable`), result.stdout || result.stderr);
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
@@ -1148,10 +1149,11 @@ try {
     try {
       const tasksDir = join(claimStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
-      const expected = expectedClaimCandidate();
+      const expected = expectedAuthorityClaimCandidate();
+      const lowerPriority = expectedClaimCandidate();
       seedGeneratedSuccessorPrerequisites(claimStateRoot);
-      if (branchExists(rootDir, expected.branch)) {
-        seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug);
+      if (branchExists(rootDir, lowerPriority.branch)) {
+        seedUnownedSafeBacklogWorkspace(claimStateRoot, lowerPriority.slug);
       }
       const before = taskSnapshot(tasksDir);
 
@@ -1185,14 +1187,16 @@ try {
         "verification-surface-hardening",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
+        "authority-blocked-work",
       ]) {
+        const branch = laneSlug === "authority-blocked-work" ? "codex/authority-blocked-approval-scope-readiness" : `codex/${laneSlug}`;
         writeFileSync(
           join(assignmentsDir, `${laneSlug}.json`),
           `${JSON.stringify({
             assignment_id: laneSlug,
             task_id: laneSlug,
             lane_slug: laneSlug,
-            branch: `codex/${laneSlug}`,
+            branch,
             status: "claimed",
             owner: "runner-b",
             last_heartbeat_at: new Date().toISOString(),
@@ -1235,6 +1239,7 @@ try {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-closed-source-requeue-guard-"));
     try {
       const expected = expectedClaimCandidate();
+      const successor = expectedAuthorityClaimCandidate();
       const tasksDir = join(queueStateRoot, "tasks");
       const assignmentsDir = join(queueStateRoot, "assignments");
       seedGeneratedSuccessorPrerequisites(queueStateRoot);
@@ -1245,19 +1250,81 @@ try {
       const report = run(["assignment-report", "--owner", "runner-a", "--state-root", queueStateRoot]);
       const claim = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
       const dispatch = run(["dispatch-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
+      const dispatchSummary = run(["dispatch-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", queueStateRoot]);
 
       assert(report.code === 0, report.stderr || report.stdout);
       assert(report.stdout.includes(`- ${expected.slug} | closed`), report.stdout || report.stderr);
       assert(report.stdout.includes(`reason=closed assignment evidence exists for ${expected.slug}`), report.stdout || report.stderr);
       assert(claim.code === 0, claim.stderr || claim.stdout);
-      assert(claim.stdout.includes("no claimable safe backlog lane found"), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes(`claim candidate ${successor.slug}`), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${expected.slug} | closed`), claim.stdout || claim.stderr);
       assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
-      assert(dispatch.stdout.includes("- selected lane none"), dispatch.stdout || dispatch.stderr);
-      assert(dispatch.stdout.includes("no dispatchable safe backlog lane found"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes(`- selected lane ${successor.slug}`), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes("- blockers none"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${expected.slug} | closed`), dispatch.stdout || dispatch.stderr);
+      assert(dispatchSummary.code === 0, dispatchSummary.stderr || dispatchSummary.stdout);
+      const packet = JSON.parse(dispatchSummary.stdout);
+      assert(packet.dispatch.stopLines.includes("Do not launch subscription-agent, Codex CLI, or Claude CLI processes in this slice."), dispatchSummary.stdout);
+      assert(packet.dispatch.stopLines.includes("Do not add endpoint discovery, command execution, credential access, premium execution, external sends, or worker source mutation."), dispatchSummary.stdout);
       assert(beforeTasks === taskSnapshot(tasksDir), "closed source guard dry-runs mutated task manifests");
       assert(beforeAssignments === taskSnapshot(assignmentsDir), "closed source guard dry-runs mutated assignments");
+    } finally {
+      rmSync(queueStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next and dispatch-next prefer higher-priority ready lanes", () => {
+    const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-priority-lane-selection-"));
+    try {
+      const lowerPriority = expectedClaimCandidate();
+      const higherPriority = expectedAuthorityClaimCandidate();
+      const tasksDir = join(queueStateRoot, "tasks");
+      const assignmentsDir = join(queueStateRoot, "assignments");
+      seedGeneratedSuccessorPrerequisites(queueStateRoot);
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const claim = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
+      const dispatch = run(["dispatch-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
+
+      assert(claim.code === 0, claim.stderr || claim.stdout);
+      assert(claim.stdout.includes(`claim candidate ${higherPriority.slug}`), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes(`- ${lowerPriority.slug} | assignable`), claim.stdout || claim.stderr);
+      assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
+      assert(dispatch.stdout.includes(`- selected lane ${higherPriority.slug}`), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes("- blockers none"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes(`- ${lowerPriority.slug} | assignable`), dispatch.stdout || dispatch.stderr);
+      assert(beforeTasks === taskSnapshot(tasksDir), "priority selection dry-runs mutated task manifests");
+      assert(beforeAssignments === taskSnapshot(assignmentsDir), "priority selection dry-runs mutated assignments");
+    } finally {
+      rmSync(queueStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next and dispatch-next refresh an already-owned lane before new priority work", () => {
+    const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-owned-lane-priority-selection-"));
+    try {
+      const owned = expectedClaimCandidate();
+      const higherPriority = expectedAuthorityClaimCandidate();
+      const tasksDir = join(queueStateRoot, "tasks");
+      const assignmentsDir = join(queueStateRoot, "assignments");
+      seedGeneratedSuccessorPrerequisites(queueStateRoot);
+      seedClaimedSafeBacklogAssignment(queueStateRoot, owned.slug, "runner-a", owned.branch);
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const claim = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
+      const dispatch = run(["dispatch-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
+
+      assert(claim.code === 0, claim.stderr || claim.stdout);
+      assert(claim.stdout.includes(`claim candidate ${owned.slug}`), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes(`refresh existing assignment ${owned.slug}`), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes(`- ${higherPriority.slug} | assignable`), claim.stdout || claim.stderr);
+      assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
+      assert(dispatch.stdout.includes(`- selected lane ${owned.slug}`), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes(`- ${higherPriority.slug} | assignable`), dispatch.stdout || dispatch.stderr);
+      assert(beforeTasks === taskSnapshot(tasksDir), "owned lane priority dry-runs mutated task manifests");
+      assert(beforeAssignments === taskSnapshot(assignmentsDir), "owned lane priority dry-runs mutated assignments");
     } finally {
       rmSync(queueStateRoot, { recursive: true, force: true });
     }
@@ -1266,7 +1333,7 @@ try {
   test("dispatch-next dry-run surfaces delivery-first next action guidance", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-delivery-guidance-"));
     try {
-      const expected = expectedClaimCandidate();
+      const expected = expectedAuthorityClaimCandidate();
       seedGeneratedSuccessorPrerequisites(queueStateRoot);
       seedOpenDeliveryManifest(queueStateRoot, expected);
       const tasksDir = join(queueStateRoot, "tasks");
@@ -1280,7 +1347,7 @@ try {
       assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
       assert(result.stdout.includes("- selected lane none"), result.stdout || result.stderr);
       assert(result.stdout.includes("- queue states "), result.stdout || result.stderr);
-      assert(result.stdout.includes("blocked_authority=1"), result.stdout || result.stderr);
+      assert(result.stdout.includes("assignable="), result.stdout || result.stderr);
       assert(result.stdout.includes("closed="), result.stdout || result.stderr);
       assert(result.stdout.includes("delivery=1"), result.stdout || result.stderr);
       assert(
@@ -1298,16 +1365,81 @@ try {
     }
   });
 
+  test("dispatch-next dry-run blocks on open delivery work outside backlog candidates", () => {
+    const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-external-delivery-guidance-"));
+    try {
+      const unrelatedDelivery = {
+        slug: "manual-delivery-lane",
+        title: "manual delivery lane",
+        branch: "codex/manual-delivery-lane",
+      };
+      seedGeneratedSuccessorPrerequisites(queueStateRoot);
+      seedOpenDeliveryManifest(queueStateRoot, unrelatedDelivery);
+      const tasksDir = join(queueStateRoot, "tasks");
+      const assignmentsDir = join(queueStateRoot, "assignments");
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run(["dispatch-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", queueStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.dispatch.allowed === false, result.stdout);
+      assert(packet.dispatch.selectedLane === null, result.stdout);
+      assert(packet.candidateStateCounts.delivery === 1, result.stdout);
+      assert(
+        packet.dispatch.nextActionGuidance ===
+          "finish open delivery lanes first: verify PR checks, review threads, exact head, merge evidence, then run merged-lane cleanup",
+        result.stdout,
+      );
+      assert(beforeTasks === taskSnapshot(tasksDir), "external delivery dry-run mutated task manifests");
+      assert(beforeAssignments === taskSnapshot(assignmentsDir), "external delivery dry-run mutated assignments");
+    } finally {
+      rmSync(queueStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("dispatch-next dry-run blocks on open delivery work owned by another runner", () => {
+    const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-owned-delivery-guidance-"));
+    try {
+      const expected = expectedAuthorityClaimCandidate();
+      seedGeneratedSuccessorPrerequisites(queueStateRoot);
+      seedOpenDeliveryManifest(queueStateRoot, { ...expected, owner: "runner-b" });
+      const tasksDir = join(queueStateRoot, "tasks");
+      const assignmentsDir = join(queueStateRoot, "assignments");
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run(["dispatch-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", queueStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.dispatch.allowed === false, result.stdout);
+      assert(packet.dispatch.selectedLane === null, result.stdout);
+      assert(packet.candidateStateCounts.delivery === 1, result.stdout);
+      assert(packet.candidateStateCounts.blocked_owned_active >= 1, result.stdout);
+      assert(
+        packet.dispatch.nextActionGuidance ===
+          "finish open delivery lanes first: verify PR checks, review threads, exact head, merge evidence, then run merged-lane cleanup",
+        result.stdout,
+      );
+      assert(beforeTasks === taskSnapshot(tasksDir), "owned delivery dry-run mutated task manifests");
+      assert(beforeAssignments === taskSnapshot(assignmentsDir), "owned delivery dry-run mutated assignments");
+    } finally {
+      rmSync(queueStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next apply claims the next lane without creating a branch or worktree", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-apply-"));
     try {
-      const expected = expectedClaimCandidate();
+      const expected = expectedAuthorityClaimCandidate();
       const tasksDir = join(claimStateRoot, "tasks");
       const branch = expected.branch;
       const branchBefore = branchExists(rootDir, branch);
       if (branchBefore) {
         seedGeneratedSuccessorPrerequisites(claimStateRoot);
-        seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug);
+        seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug, expected.branch);
       } else {
         seedGeneratedSuccessorPrerequisites(claimStateRoot);
       }
@@ -1350,7 +1482,7 @@ try {
   test("claim-next apply is idempotent for the current owner", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-idempotent-"));
     try {
-      const expected = expectedClaimCandidate();
+      const expected = expectedAuthorityClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
         seedGeneratedSuccessorPrerequisites(claimStateRoot);
         seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
@@ -1382,9 +1514,9 @@ try {
   test("assignment-report surfaces claimed lane assignment metadata", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-report-claimed-"));
     try {
-      const expected = expectedClaimCandidate();
+      const expected = expectedAuthorityClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
-        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
+        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a", expected.branch);
       } else {
         seedGeneratedSuccessorPrerequisites(claimStateRoot);
         const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
@@ -1410,9 +1542,9 @@ try {
   test("heartbeat updates current-owner assignment lease evidence", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-assignment-"));
     try {
-      const expected = expectedClaimCandidate();
+      const expected = expectedAuthorityClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
-        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
+        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a", expected.branch);
       } else {
         seedGeneratedSuccessorPrerequisites(claimStateRoot);
         const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
@@ -1494,9 +1626,9 @@ try {
   test("heartbeat refuses assignment owned by another runner without mutation", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-owned-assignment-"));
     try {
-      const expected = expectedClaimCandidate();
+      const expected = expectedAuthorityClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
-        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-b");
+        seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-b", expected.branch);
       } else {
         seedGeneratedSuccessorPrerequisites(claimStateRoot, "runner-a");
         const claim = run(["claim-next", "--apply", "--owner", "runner-b", "--state-root", claimStateRoot]);
@@ -1832,10 +1964,10 @@ try {
   test("dispatch-next dry-run previews handoff without mutation", () => {
     const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-dry-run-"));
     try {
-      const expected = expectedClaimCandidate();
+      const expected = expectedAuthorityClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
         seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
-        seedUnownedSafeBacklogWorkspace(dispatchStateRoot, expected.slug);
+        seedUnownedSafeBacklogWorkspace(dispatchStateRoot, expected.slug, expected.branch);
       } else {
         seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
       }
@@ -1863,7 +1995,7 @@ try {
       assert(result.stdout.includes("- base branch "), result.stdout || result.stderr);
       assert(result.stdout.includes("- blockers none"), result.stdout || result.stderr);
       assert(result.stdout.includes("- queue states "), result.stdout || result.stderr);
-      assert(result.stdout.includes("blocked_authority=1"), result.stdout || result.stderr);
+      assert(result.stdout.includes("assignable="), result.stdout || result.stderr);
       assert(result.stdout.includes("closed="), result.stdout || result.stderr);
       assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch dry-run mutated assignments");
       assert(taskSnapshot(tasksDir) === beforeTasks, "dispatch dry-run mutated manifests");
@@ -1875,10 +2007,10 @@ try {
   test("dispatch-next summary-json previews a bounded handoff summary without mutation", () => {
     const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-summary-json-"));
     try {
-      const expected = expectedClaimCandidate();
+      const expected = expectedAuthorityClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
         seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
-        seedUnownedSafeBacklogWorkspace(dispatchStateRoot, expected.slug);
+        seedUnownedSafeBacklogWorkspace(dispatchStateRoot, expected.slug, expected.branch);
       } else {
         seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
       }
@@ -1911,7 +2043,7 @@ try {
       assert(packet.dispatch.nextActionGuidance.includes("dispatch-next --apply"), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
       assert(packet.counts.dispatchable >= 1, result.stdout || result.stderr);
-      assert(packet.candidateStateCounts.blocked_authority === 1, result.stdout || result.stderr);
+      assert(packet.candidateStateCounts.assignable >= 2, result.stdout || result.stderr);
       assert(packet.candidateStateCounts.closed >= 1, result.stdout || result.stderr);
       assert(packet.blockedCandidates.length <= 10, result.stdout || result.stderr);
       assert(typeof packet.blockedCandidatesTruncated === "boolean", result.stdout || result.stderr);
@@ -1968,6 +2100,7 @@ try {
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "dispatch-workspace.json");
       const expected = expectedClaimCandidate();
+      seedClosedSourceCompletion(dispatchStateRoot, expectedAuthorityClaimCandidate());
       seedClaimedSafeBacklogAssignment(dispatchStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
@@ -2010,7 +2143,6 @@ try {
       const latestHandoff = manifest.dispatch_handoffs.at(-1);
       assert(latestHandoff.readiness.status === "skipped", "readiness skip evidence missing");
       assert(latestHandoff.candidate_state_counts.active >= 1, "dispatch handoff active count missing");
-      assert(latestHandoff.candidate_state_counts.blocked_authority >= 1, "dispatch handoff blocked count missing");
       assert(latestHandoff.candidate_state_counts.closed >= 1, "dispatch handoff closed count missing");
       assert(manifest.events.some((event) => event.type === "dispatch_handoff"), "dispatch event missing");
       assert(!existsSync(join(dispatchStateRoot, "assignments", `${expected.slug}.json`)), "workspace dispatch created assignment metadata");
@@ -2073,6 +2205,7 @@ try {
         "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh",
         "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
+        "codex/authority-blocked-approval-scope-readiness",
       ];
       const manifestPaths = blockedBranches.map((branchName, index) => {
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
@@ -2116,6 +2249,7 @@ try {
 
   test("claim-next apply blocks a lane assigned to another owner", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-owned-assignment-"));
+    let authorityWorktreePath = "";
     try {
       const expected = expectedClaimCandidate();
       if (branchExists(rootDir, expected.branch)) {
@@ -2126,6 +2260,21 @@ try {
         assert(first.code === 0, first.stderr || first.stdout);
       }
       const assignmentsDir = join(claimStateRoot, "assignments");
+      const tasksDir = join(claimStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      authorityWorktreePath = mkdtempSync(join(tmpdir(), "codex-authority-owned-worktree-"));
+      writeFileSync(
+        join(tasksDir, "authority-blocked-work.json"),
+        `${JSON.stringify({
+          task_id: "authority-blocked-work",
+          branch: "codex/authority-blocked-approval-scope-readiness",
+          worktree_path: authorityWorktreePath,
+          base_branch: "dev",
+          status: "active",
+          owner: "runner-b",
+          owner_updated_at: new Date().toISOString(),
+        })}\n`,
+      );
       for (const laneSlug of [
         "github-delivery-hygiene",
         "read-only-evidence-polish",
@@ -2163,14 +2312,17 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
+        "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
+        "authority-blocked-work",
       ]) {
+        const branch = laneSlug === "authority-blocked-work" ? "codex/authority-blocked-approval-scope-readiness" : `codex/${laneSlug}`;
         writeFileSync(
           join(assignmentsDir, `${laneSlug}.json`),
           `${JSON.stringify({
             assignment_id: laneSlug,
             task_id: laneSlug,
             lane_slug: laneSlug,
-            branch: `codex/${laneSlug}`,
+            branch,
             status: "claimed",
             owner: "runner-b",
             last_heartbeat_at: new Date().toISOString(),
@@ -2214,6 +2366,8 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
+        "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
+        "authority-blocked-work",
       ].map((laneSlug) => join(assignmentsDir, `${laneSlug}.json`));
       const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
@@ -2226,6 +2380,9 @@ try {
       assert(before === after, "blocked claim-next --apply mutated another owner's assignment");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
+      if (authorityWorktreePath) {
+        rmSync(authorityWorktreePath, { recursive: true, force: true });
+      }
     }
   });
 
@@ -2236,6 +2393,7 @@ try {
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
       const expected = expectedClaimCandidate();
+      seedClosedSourceCompletion(claimStateRoot, expectedAuthorityClaimCandidate());
       seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
@@ -2272,6 +2430,7 @@ try {
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
       const expected = expectedClaimCandidate();
+      seedClosedSourceCompletion(claimStateRoot, expectedAuthorityClaimCandidate());
       seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
@@ -2576,14 +2735,16 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
+        "authority-blocked-work",
       ].map((laneSlug) => {
+        const branch = laneSlug === "authority-blocked-work" ? "codex/authority-blocked-approval-scope-readiness" : `codex/${laneSlug}`;
         const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
         writeFileSync(
           manifestPath,
           `${JSON.stringify(
             {
               task_id: `owned-${laneSlug}`,
-              branch: `codex/${laneSlug}`,
+              branch,
               worktree_path: rootDir,
               base_branch: "main",
               status: "active",
@@ -3271,6 +3432,14 @@ function expectedClaimCandidate() {
   };
 }
 
+function expectedAuthorityClaimCandidate() {
+  return {
+    slug: "authority-blocked-work",
+    title: "authority blocked approval scope readiness",
+    branch: "codex/authority-blocked-approval-scope-readiness",
+  };
+}
+
 function seedClosedSafeBacklogManifests(stateRootPath) {
   const tasksDir = join(stateRootPath, "tasks");
   mkdirSync(tasksDir, { recursive: true });
@@ -3326,7 +3495,7 @@ function seedClosedSafeBacklogManifests(stateRootPath) {
   }
 }
 
-function seedUnownedSafeBacklogWorkspace(stateRootPath, laneSlug) {
+function seedUnownedSafeBacklogWorkspace(stateRootPath, laneSlug, branch = `codex/${laneSlug}`) {
   const tasksDir = join(stateRootPath, "tasks");
   mkdirSync(tasksDir, { recursive: true });
   writeFileSync(
@@ -3334,7 +3503,7 @@ function seedUnownedSafeBacklogWorkspace(stateRootPath, laneSlug) {
     `${JSON.stringify(
       {
         task_id: `${laneSlug}-workspace`,
-        branch: `codex/${laneSlug}`,
+        branch,
         worktree_path: rootDir,
         base_branch: "main",
         status: "active",
@@ -3353,7 +3522,7 @@ function seedUnownedVerificationWorkspace(stateRootPath) {
   seedUnownedSafeBacklogWorkspace(stateRootPath, "verification-surface-hardening");
 }
 
-function seedClaimedSafeBacklogAssignment(stateRootPath, laneSlug, owner) {
+function seedClaimedSafeBacklogAssignment(stateRootPath, laneSlug, owner, branch = `codex/${laneSlug}`) {
   const assignmentsDir = join(stateRootPath, "assignments");
   mkdirSync(assignmentsDir, { recursive: true });
   const now = new Date().toISOString();
@@ -3364,7 +3533,7 @@ function seedClaimedSafeBacklogAssignment(stateRootPath, laneSlug, owner) {
         assignment_id: laneSlug,
         task_id: laneSlug,
         lane_slug: laneSlug,
-        branch: `codex/${laneSlug}`,
+        branch,
         status: "claimed",
         owner,
         owner_updated_at: now,
@@ -3443,7 +3612,7 @@ function seedOpenDeliveryManifest(stateRootPath, candidate) {
         status: "pr_open",
         pr_url: "https://example.test/pull/282",
         pr_number: 282,
-        owner: "runner-a",
+        owner: candidate.owner || "runner-a",
         created_at: "2026-06-27T00:00:00.000Z",
         updated_at: "2026-06-27T00:00:00.000Z",
         events: [],
