@@ -1314,7 +1314,7 @@ try {
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-counts-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh | closed"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
@@ -1401,7 +1401,7 @@ try {
       assert(packet.counts.laneAssignments === 1, result.stdout || result.stderr);
       assert(packet.counts.workspaceAssignments >= 2, result.stdout || result.stderr);
       assert(packet.backlogStatusCounts.closed >= 1, result.stdout || result.stderr);
-      assert(packet.backlogStatusCounts.assignable >= 3, result.stdout || result.stderr);
+      assert(packet.backlogStatusCounts.assignable >= 1, result.stdout || result.stderr);
       assert(packet.laneAssignmentStatusCounts.claimed === 1, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.assignable >= 1, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.blocked_stale_owner_needs_takeover >= 1, result.stdout || result.stderr);
@@ -1847,7 +1847,7 @@ try {
       result.stdout || result.stderr,
     );
     assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
-    assert(result.stdout.includes(`- ${lowerPriority.slug} | assignable`), result.stdout || result.stderr);
+    assert(result.stdout.includes(`- ${lowerPriority.slug} | closed`), result.stdout || result.stderr);
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
@@ -1876,9 +1876,9 @@ try {
       assert(packet.counts.total > 0, result.stdout || result.stderr);
       assert(packet.counts.claimable >= 1, result.stdout || result.stderr);
       assert(packet.counts.excluded >= 1, result.stdout || result.stderr);
-      assert(packet.counts.sourceDrift >= 1, result.stdout || result.stderr);
+      assert(packet.counts.sourceDrift === 0, result.stdout || result.stderr);
       assert(packet.nextActionSummary.action === "claim selected lane", result.stdout || result.stderr);
-      assert(packet.nextActionSummary.sourceDrift >= 1, result.stdout || result.stderr);
+      assert(packet.nextActionSummary.sourceDrift === 0, result.stdout || result.stderr);
       assert(packet.statusCounts.assignable >= 1, result.stdout || result.stderr);
       assert(!packet.blockerStatusCounts.closed, result.stdout || result.stderr);
       assert(packet.excludedStatusCounts.closed >= 1, result.stdout || result.stderr);
@@ -1887,7 +1887,7 @@ try {
       assert(packet.excluded.length <= 10, result.stdout || result.stderr);
       assert(typeof packet.excludedTruncated === "boolean", result.stdout || result.stderr);
       assert(packet.sourceDrift.length <= 10, result.stdout || result.stderr);
-      assert(packet.sourceDrift.some((entry) => entry.itemId === lowerPriority.slug), result.stdout || result.stderr);
+      assert(packet.sourceDrift.length === 0, result.stdout || result.stderr);
       assert(typeof packet.sourceDriftTruncated === "boolean", result.stdout || result.stderr);
       assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
       assert(before === after, "claim-next --summary-json mutated workspace manifests");
@@ -1896,7 +1896,7 @@ try {
     }
   });
 
-  test("claim-next advances to closed source guard filter empty state shortcut reason keyboard loop after completed reason focus lane", () => {
+  test("claim-next reports no fallback generated lane after completed keyboard loop closeout", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-generated-queue-"));
     try {
       const assignmentsDir = join(queueStateRoot, "assignments");
@@ -1927,8 +1927,10 @@ try {
       const after = taskSnapshot(assignmentsDir);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("claim candidate dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"), result.stdout || result.stderr);
-      assert(result.stdout.includes("branch codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("no claimable safe backlog lane found"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claimable=0 blocked=1 excluded=42 sourceDrift=0"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- authority-blocked-work | blocked_owned_active"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
       assert(result.stdout.includes("- worker-backlog-queue-refresh | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- lane-handoff-evidence-refresh | closed"), result.stdout || result.stderr);
@@ -1972,7 +1974,7 @@ try {
 
       assert(report.code === 0, report.stderr || report.stdout);
       assert(report.stdout.includes(`- ${expected.slug} | closed`), report.stdout || report.stderr);
-      assert(report.stdout.includes(`reason=closed assignment evidence exists for ${expected.slug}`), report.stdout || report.stderr);
+      assert(report.stdout.includes("reason=safe backlog item is already complete and must not be requeued"), report.stdout || report.stderr);
       assert(claim.code === 0, claim.stderr || claim.stdout);
       assert(claim.stdout.includes(`claim candidate ${successor.slug}`), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${expected.slug} | closed`), claim.stdout || claim.stderr);
@@ -2007,11 +2009,11 @@ try {
 
       assert(claim.code === 0, claim.stderr || claim.stdout);
       assert(claim.stdout.includes(`claim candidate ${higherPriority.slug}`), claim.stdout || claim.stderr);
-      assert(claim.stdout.includes(`- ${lowerPriority.slug} | assignable`), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes(`- ${lowerPriority.slug} | closed`), claim.stdout || claim.stderr);
       assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
       assert(dispatch.stdout.includes(`- selected lane ${higherPriority.slug}`), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes("- blockers none"), dispatch.stdout || dispatch.stderr);
-      assert(dispatch.stdout.includes(`- ${lowerPriority.slug} | assignable`), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes(`- ${lowerPriority.slug} | closed`), dispatch.stdout || dispatch.stderr);
       assert(beforeTasks === taskSnapshot(tasksDir), "priority selection dry-runs mutated task manifests");
       assert(beforeAssignments === taskSnapshot(assignmentsDir), "priority selection dry-runs mutated assignments");
     } finally {
@@ -2022,8 +2024,7 @@ try {
   test("claim-next and dispatch-next refresh an already-owned lane before new priority work", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-owned-lane-priority-selection-"));
     try {
-      const owned = expectedClaimCandidate();
-      const higherPriority = expectedAuthorityClaimCandidate();
+      const owned = expectedAuthorityClaimCandidate();
       const tasksDir = join(queueStateRoot, "tasks");
       const assignmentsDir = join(queueStateRoot, "assignments");
       seedGeneratedSuccessorPrerequisites(queueStateRoot);
@@ -2037,10 +2038,8 @@ try {
       assert(claim.code === 0, claim.stderr || claim.stdout);
       assert(claim.stdout.includes(`claim candidate ${owned.slug}`), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`refresh existing assignment ${owned.slug}`), claim.stdout || claim.stderr);
-      assert(claim.stdout.includes(`- ${higherPriority.slug} | assignable`), claim.stdout || claim.stderr);
       assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
       assert(dispatch.stdout.includes(`- selected lane ${owned.slug}`), dispatch.stdout || dispatch.stderr);
-      assert(dispatch.stdout.includes(`- ${higherPriority.slug} | assignable`), dispatch.stdout || dispatch.stderr);
       assert(beforeTasks === taskSnapshot(tasksDir), "owned lane priority dry-runs mutated task manifests");
       assert(beforeAssignments === taskSnapshot(assignmentsDir), "owned lane priority dry-runs mutated assignments");
     } finally {
@@ -2065,7 +2064,6 @@ try {
       assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
       assert(result.stdout.includes("- selected lane none"), result.stdout || result.stderr);
       assert(result.stdout.includes("- queue states "), result.stdout || result.stderr);
-      assert(result.stdout.includes("assignable="), result.stdout || result.stderr);
       assert(result.stdout.includes("closed="), result.stdout || result.stderr);
       assert(result.stdout.includes("delivery=1"), result.stdout || result.stderr);
       assert(
@@ -2816,7 +2814,7 @@ try {
       assert(packet.dispatch.nextActionGuidance.includes("dispatch-next --apply"), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
       assert(packet.counts.dispatchable >= 1, result.stdout || result.stderr);
-      assert(packet.candidateStateCounts.assignable >= 2, result.stdout || result.stderr);
+      assert(packet.candidateStateCounts.assignable >= 1, result.stdout || result.stderr);
       assert(packet.candidateStateCounts.closed >= 1, result.stdout || result.stderr);
       assert(packet.blockedCandidates.length <= 10, result.stdout || result.stderr);
       assert(typeof packet.blockedCandidatesTruncated === "boolean", result.stdout || result.stderr);
@@ -2872,8 +2870,7 @@ try {
       const tasksDir = join(dispatchStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "dispatch-workspace.json");
-      const expected = expectedClaimCandidate();
-      seedClosedSourceCompletion(dispatchStateRoot, expectedAuthorityClaimCandidate());
+      const expected = expectedAuthorityClaimCandidate();
       seedClaimedSafeBacklogAssignment(dispatchStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
@@ -3148,7 +3145,7 @@ try {
       const after = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
       assert(second.code !== 0, "claim-next --apply unexpectedly claimed another owner's assignment");
-      assert(second.stdout.includes(`- ${expectedClaimCandidate().slug} | blocked_owned_active`), second.stdout || second.stderr);
+      assert(second.stdout.includes(`- ${expectedAuthorityClaimCandidate().slug} | blocked_owned_active`), second.stdout || second.stderr);
       assert(second.stderr.includes("No claimable safe backlog lane found"), second.stderr || second.stdout);
       assert(before === after, "blocked claim-next --apply mutated another owner's assignment");
     } finally {
@@ -3165,8 +3162,7 @@ try {
       const tasksDir = join(claimStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
-      const expected = expectedClaimCandidate();
-      seedClosedSourceCompletion(claimStateRoot, expectedAuthorityClaimCandidate());
+      const expected = expectedAuthorityClaimCandidate();
       seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
@@ -3202,8 +3198,7 @@ try {
       const tasksDir = join(claimStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
-      const expected = expectedClaimCandidate();
-      seedClosedSourceCompletion(claimStateRoot, expectedAuthorityClaimCandidate());
+      const expected = expectedAuthorityClaimCandidate();
       seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
@@ -3594,7 +3589,7 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("no claimable safe backlog lane found"), result.stdout || result.stderr);
       assert(result.stdout.includes("- verification-surface-hardening | closed"), result.stdout || result.stderr);
-      assert(result.stdout.includes(`- ${expectedClaimCandidate().slug} | blocked_owned_active`), result.stdout || result.stderr);
+      assert(result.stdout.includes(`- ${expectedAuthorityClaimCandidate().slug} | blocked_owned_active`), result.stdout || result.stderr);
       assert(result.stdout.includes("do not mutate without explicit takeover approval"), result.stdout || result.stderr);
       assert(before === after, "claim-next --dry-run mutated the owned lane manifest");
     } finally {

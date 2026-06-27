@@ -1979,17 +1979,10 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
         for check in slice_item["readinessChecks"]:
             _assert_unique_related_docs(check)
     report_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "report-evidence-navigation-slice")
-    assert report_slice["status"] == "ready"
+    assert report_slice["status"] == "closed"
     assert report_slice["includedBacklogItems"] == ["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"]
     assert "verify-evidence-surfaces" in report_slice["includedActionSteps"]
-    assert report_slice["nextLane"]["laneSlug"] == "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
-    assert report_slice["nextLane"]["branchName"] == "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
-    assert report_slice["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh"'
-    assert "pnpm run check:runner-assignment-status" in report_slice["nextLane"]["verificationCommands"]
-    assert "pnpm run check:safe-backlog" in report_slice["nextLane"]["verificationCommands"]
-    assert "pnpm run test:e2e:dashboard:controls" in report_slice["nextLane"]["verificationCommands"]
-    assert any("merge, cleanup, issue-sync" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
-    assert any("another active lane" in stop_line for stop_line in report_slice["nextLane"]["stopLines"])
+    assert report_slice["nextLane"] is None
     assert "pnpm run check:reports" in report_slice["requiredVerification"]
     assert "docs/workflows/implementation-evidence-boundary.md" in report_slice["relatedDocs"]
     assert report_slice["relatedDocs"].count("docs/workflows/implementation-evidence-boundary.md") == 1
@@ -1999,8 +1992,9 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
         "action-plan-coverage",
         "focused-verification",
     }
-    assert all(check["status"] == "ready" for check in report_slice["readinessChecks"])
     ready_check = next(check for check in report_slice["readinessChecks"] if check["checkId"] == "ready-backlog-item")
+    assert ready_check["status"] == "closed"
+    assert all(check["status"] == "ready" for check in report_slice["readinessChecks"] if check["checkId"] != "ready-backlog-item")
     assert "docs/workflows/implementation-evidence-boundary.md" in ready_check["relatedDocs"]
     assert "/controls#safe-development-backlog" in ready_check["dashboardAnchors"]
     verification_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "verification-runbook-hardening-slice")
@@ -2413,9 +2407,10 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "docs/workflows/implementation-evidence-boundary.md" in github_item["relatedDocs"]
     assert any("plaintext gh token" in evidence for evidence in github_item["evidence"])
     evidence_item = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish")
-    assert evidence_item["nextLane"]["branchName"] == "codex/read-only-evidence-polish"
-    assert evidence_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "read only evidence polish"'
-    assert "pnpm run check:runtime-export" in evidence_item["nextLane"]["verificationCommands"]
+    assert evidence_item["status"] == "closed"
+    assert evidence_item["recommendedSliceSize"] == "complete"
+    assert evidence_item["nextLane"] is None
+    assert "do not requeue read-only-evidence-polish" in evidence_item["nextAction"]
     assert "/controls#supervisor-report-catalog" in evidence_item["dashboardAnchors"]
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
@@ -2655,10 +2650,13 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item = next(
         item for item in report["items"] if item["itemId"] == "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
     )
-    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["status"] == "ready"
-    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["nextLane"]["branchName"] == "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
-    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["nextLane"]["startCommand"] == 'node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh"'
-    assert "pnpm run test:e2e:dashboard:controls" in dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["nextLane"]["verificationCommands"]
+    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["status"] == "closed"
+    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["recommendedSliceSize"] == "complete"
+    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["nextLane"] is None
+    assert (
+        "do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
+        in dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["nextAction"]
+    )
     assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
     assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
@@ -8646,8 +8644,8 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert dispatcher_closed_source_guard_filter_empty_state_shortcut_disabled_reasons_backlog["reasonCode"] == "backlog-closed"
     assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_focus_backlog["classification"] == "closed"
     assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_focus_backlog["reasonCode"] == "backlog-closed"
-    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_backlog["classification"] == "assignable"
-    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_backlog["reasonCode"] == "backlog-assignable"
+    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_backlog["classification"] == "closed"
+    assert dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_backlog["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-query-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-queue-handoff-audit-export-refresh"]["classification"] == "closed"
@@ -8698,8 +8696,8 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert queue_proof_rows["dispatcher-closed-source-guard-filter-empty-state-shortcut-disabled-reasons-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh"]["reasonCode"] == "backlog-closed"
-    assert queue_proof_rows["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"]["classification"] == "assignable"
-    assert queue_proof_rows["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"]["reasonCode"] == "backlog-assignable"
+    assert queue_proof_rows["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"]["classification"] == "closed"
+    assert queue_proof_rows["dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["dispatcher-queue-state-fixtures-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-continuity-snapshot-refresh"]["classification"] == "closed"
     assert queue_proof_rows["assignment-report-queue-proof-refresh"]["classification"] == "closed"
@@ -8773,40 +8771,20 @@ def test_runner_assignment_status_report_closes_stale_ready_items_with_source_co
     assert response.status_code == 200
     report = response.json()["data"]
     assert report["sourceCompletionRollup"] == {
-        "total": 2,
-        "assignment": 1,
-        "workspace": 1,
-        "sourceBacklogItemIds": ["read-only-evidence-polish", "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"],
+        "total": 0,
+        "assignment": 0,
+        "workspace": 0,
+        "sourceBacklogItemIds": [],
     }
     filter_empty_state_shortcut_reason_keyboard_loop_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh")
     assert filter_empty_state_shortcut_reason_keyboard_loop_backlog["classification"] == "closed"
-    assert filter_empty_state_shortcut_reason_keyboard_loop_backlog["reasonCode"] == "backlog-closed-source-assignment"
-    assert filter_empty_state_shortcut_reason_keyboard_loop_backlog["reason"] == "closed assignment evidence exists for dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
-    assert filter_empty_state_shortcut_reason_keyboard_loop_backlog["nextSafeAction"] == "Use closed source completion evidence only; choose the next ready safe backlog lane"
-    assert filter_empty_state_shortcut_reason_keyboard_loop_backlog["sourceCompletionEvidence"] == {
-        "evidenceKind": "assignment",
-        "recordId": "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
-        "sourceBacklogItemId": "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
-        "branch": "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
-        "taskId": "20260623-dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
-        "sourceAssignmentId": None,
-        "evidencePath": (assignments_dir / "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.json").as_posix(),
-        "evidenceSummary": "Closed assignment record dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh matches source backlog item dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh.",
-    }
+    assert filter_empty_state_shortcut_reason_keyboard_loop_backlog["reasonCode"] == "backlog-closed"
+    assert filter_empty_state_shortcut_reason_keyboard_loop_backlog["sourceCompletionEvidence"] is None
     assert report["dispatcherContinuity"]["selectedBacklogItemId"] != "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
     read_only_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "read-only-evidence-polish")
     assert read_only_backlog["classification"] == "closed"
-    assert read_only_backlog["reasonCode"] == "backlog-closed-source-workspace"
-    assert read_only_backlog["sourceCompletionEvidence"] == {
-        "evidenceKind": "workspace",
-        "recordId": "20260623-read-only-evidence-polish",
-        "sourceBacklogItemId": "read-only-evidence-polish",
-        "branch": "codex/read-only-evidence-polish",
-        "taskId": "20260623-read-only-evidence-polish",
-        "sourceAssignmentId": "read-only-evidence-polish",
-        "evidencePath": (tasks_dir / "read-only-evidence-polish.json").as_posix(),
-        "evidenceSummary": "Closed workspace record 20260623-read-only-evidence-polish matches source backlog item read-only-evidence-polish.",
-    }
+    assert read_only_backlog["reasonCode"] == "backlog-closed"
+    assert read_only_backlog["sourceCompletionEvidence"] is None
 
 
 def test_runner_assignment_status_report_surfaces_dispatch_handoff_evidence(tmp_path, monkeypatch) -> None:

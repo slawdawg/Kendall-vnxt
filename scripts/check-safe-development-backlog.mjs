@@ -409,9 +409,7 @@ for (const browserText of [
   "Large-slice development map",
   "Report-aligned backlog governance",
   "Next lane handoff",
-  "branch: codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh"',
-  "pnpm run check:runner-assignment-status",
+  "Completed dispatcher continuity and report navigation work now remains closed evidence rather than dispatchable backlog capacity.",
   "pnpm run check:safe-backlog",
   "Related report links",
   "Source evidence labels",
@@ -501,11 +499,9 @@ for (const browserText of [
   "Dispatcher closed source guard filter empty state shortcut reason focus refresh",
   "do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
   "Dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh",
-  "branch: codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
-  'start: node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh"',
+  "do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
   "Execution-authority stories",
   "pnpm run check:safe-backlog",
-  "Do not start or modify another active lane while using this recommendation.",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert ${browserText}`, failures);
 }
@@ -536,10 +532,10 @@ assertCondition(
     supervisorTests.includes('dispatcher_closed_source_guard_source_kind_summary_item["nextLane"] is None') &&
     supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_focus_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_focus_item["nextLane"] is None') &&
-    supervisorTests.includes('"codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"') &&
-    supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh"') &&
-    supervisorTests.includes("pnpm run check:runner-assignment-status") &&
-    workspaceProtocolTests.includes("claim-next advances to closed source guard filter empty state shortcut reason keyboard loop after completed reason focus lane") &&
+    supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["status"] == "closed"') &&
+    supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["nextLane"] is None') &&
+    supervisorTests.includes("do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh") &&
+    workspaceProtocolTests.includes("claim-next reports no fallback generated lane after completed keyboard loop closeout") &&
     workspaceProtocolTests.includes("claim-next summary-json previews a bounded queue summary without mutation") &&
     runnerAssignmentSpec.includes("node ./scripts/codex-workspace.mjs claim-next --dry-run --summary-json") &&
     runnerAssignmentSpec.includes("bounded summary JSON with selected lane, status counts, blocker status counts, and a truncated blocker sample") &&
@@ -594,7 +590,8 @@ assertCondition(
     supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_counts_item["nextLane"] is None') &&
     supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_disabled_reasons_item["status"] == "closed"') &&
     supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_focus_item["status"] == "closed"') &&
-    supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["status"] == "ready"'),
+    supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["status"] == "closed"') &&
+    supervisorTests.includes('dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["nextLane"] is None'),
   "Supervisor tests must assert completed backlog and next-lane handoff evidence",
   failures,
 );
