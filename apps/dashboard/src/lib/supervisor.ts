@@ -147,6 +147,10 @@ export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View>
   return requestJson<WorkPacketV0View>(`/work-packets/${encodeURIComponent(packetId)}`);
 }
 
+export async function getWorkPackets(): Promise<WorkPacketV0View[]> {
+  return requestJson<WorkPacketV0View[]>("/work-packets");
+}
+
 export async function getExecutionAttempts(workItemId: string): Promise<ExecutionAttemptView[]> {
   return requestJson<ExecutionAttemptView[]>(`/work-items/${workItemId}/execution-attempts`);
 }
