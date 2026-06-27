@@ -138,6 +138,7 @@ list options:
 
 coordination-report options:
   --json                    Print the coordination packet as JSON for automation.
+  --summary-json            Print a bounded JSON summary for quick runner scans.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 assignment-report options:
@@ -384,11 +385,70 @@ function listWorkspaces(argv) {
 function coordinationReport(argv) {
   const { options } = parseOptions(argv);
   const packet = buildCoordinationReportPacket(options);
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildCoordinationReportSummary(packet), null, 2));
+    return;
+  }
   if (options.json) {
     console.log(JSON.stringify(packet, null, 2));
     return;
   }
   printCoordinationReport(packet);
+}
+
+function buildCoordinationReportSummary(packet) {
+  return {
+    generatedAt: packet.generatedAt,
+    stateRoot: packet.stateRoot,
+    currentOwner: packet.currentOwner,
+    staleAfterSeconds: packet.staleAfterSeconds,
+    currentCheckout: packet.currentCheckout,
+    rootStatus: packet.rootStatus,
+    counts: {
+      activeManagedWorktrees: packet.activeManagedWorktrees.length,
+      prsWaitingAtMergeGate: packet.prsWaitingAtMergeGate.length,
+      cleanActiveLanes: packet.cleanActiveLanes.length,
+      dirtyActiveLanes: packet.dirtyActiveLanes.length,
+      localOnlyCommits: packet.localOnlyCommits.length,
+      closedButRetainedLanes: packet.closedButRetainedLanes.length,
+      cleanupCandidates: packet.cleanupCandidates.length,
+      blockedApprovalPackets: packet.blockedApprovalPackets.length,
+      backlogSummary: packet.backlogSummary.length,
+      backlogClassificationSummary: packet.backlogClassificationSummary.length,
+    },
+    activeManagedWorktrees: packet.activeManagedWorktrees.map(summaryLane),
+    prsWaitingAtMergeGate: packet.prsWaitingAtMergeGate.map(summaryLane),
+    dirtyActiveLanes: packet.dirtyActiveLanes.map(summaryLane),
+    localOnlyCommits: packet.localOnlyCommits.map((lane) => ({
+      taskId: lane.taskId,
+      branch: lane.branch,
+      localOnlyCommits: lane.localOnlyCommits,
+    })),
+    cleanupCandidates: packet.cleanupCandidates.map(summaryLane),
+    blockedApprovalPackets: packet.blockedApprovalPackets.slice(0, 10),
+    blockedApprovalPacketsTruncated: packet.blockedApprovalPackets.length > 10,
+    backlogSummary: packet.backlogSummary.slice(0, 10),
+    backlogSummaryTruncated: packet.backlogSummary.length > 10,
+    backlogClassificationSummary: packet.backlogClassificationSummary.slice(0, 10),
+    backlogClassificationSummaryTruncated: packet.backlogClassificationSummary.length > 10,
+    nextSafeSlice: packet.nextSafeSlice,
+    stopLines: packet.stopLines,
+  };
+}
+
+function summaryLane(lane) {
+  return {
+    taskId: lane.taskId,
+    status: lane.status,
+    assignmentStatus: lane.assignmentStatus,
+    branch: lane.branch,
+    owner: lane.owner,
+    worktreeExists: lane.worktreeExists,
+    dirty: lane.dirty,
+    localOnlyCommits: lane.localOnlyCommits,
+    prNumber: lane.prNumber,
+    nextAction: lane.nextAction,
+  };
 }
 
 function buildCoordinationReportPacket(options = {}) {
@@ -596,6 +656,7 @@ function coordinationReportStopLines() {
     "Create an empty PR for a verified no-source refresh lane.",
     "Mutate an active workspace branch owned by another runner.",
     "Repair an active or unreadable workspace manifest without explicit inspection.",
+    "Delete a remote branch with no PR record, a SHA mismatch, an open PR, or an active workspace owner.",
   ];
 }
 
