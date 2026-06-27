@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readdir, readFile, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,6 +17,7 @@ const pipelineComponentsPath = new URL("../apps/dashboard/src/components/pipelin
 const cockpitPath = new URL("pipeline-cockpit.tsx", pipelineComponentsPath);
 const packetDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPath);
 const fixturesPath = new URL("../apps/dashboard/src/lib/pipeline-fixtures.ts", import.meta.url);
+const pipelineEvidenceSourcePath = new URL("../apps/dashboard/src/lib/pipeline-evidence-source.ts", import.meta.url);
 const globalsPath = new URL("../apps/dashboard/src/app/globals.css", import.meta.url);
 const shellPath = new URL("../apps/dashboard/src/components/shell.tsx", import.meta.url);
 const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-graph-background.tsx", import.meta.url);
@@ -524,7 +525,7 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(cockpitSource, /findTopAttentionPacket/);
   assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
   assert.match(fixtureSource, /Density \$\{ordinal\}:/);
-  assert.match(routeSource, /pipelineCockpitPackets/);
+  assert.match(routeSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
   const fixturePacketCount = (fixtureSource.match(/packetFixture\(\{/g) ?? []).length;
   const densityCloneCountMatch = fixtureSource.match(/Array\.from\(\{ length: (\d+) \}/);
   assert.ok(densityCloneCountMatch, "density fixture clone count should be explicit");
@@ -1108,7 +1109,10 @@ test("pipeline action guards reject stale unsafe unknown and boundary cases thro
 });
 
 test("governed copied-worktree evidence projects into pipeline packets without live dashboard authority", async () => {
-  const { projectGovernedCopiedWorktreeExecutionEvidence } = await loadCompiledDashboardFixtures();
+  const {
+    projectGovernedCopiedWorktreeExecutionEvidence,
+    projectGovernedCopiedWorktreeExecutionEvidenceSnapshot,
+  } = await loadCompiledDashboardFixtures();
   const baseEvidence = {
     mode: "copied_worktree_execution",
     authority_level: "copied_worktree_worker_execution",
@@ -1235,6 +1239,195 @@ test("governed copied-worktree evidence projects into pipeline packets without l
     },
   ]);
   assert.deepEqual(unsafePackets, []);
+
+  const snapshotPackets = projectGovernedCopiedWorktreeExecutionEvidenceSnapshot({
+    schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+    generated_at: "2026-06-27T00:00:00Z",
+    metadata_only: true,
+    raw_payload_retained: false,
+    dashboard_consumption: "no_live_calls",
+    attempts: [
+      {
+        ...baseEvidence,
+        source_id: "claude-run-1",
+        worker: "claude",
+        execution_state: "execution_observed",
+      },
+    ],
+    errors: [],
+  });
+  assert.equal(snapshotPackets.length, 1);
+  assert.equal(snapshotPackets[0].executionAttempts[0].authorityMode, "copied_worktree_worker_execution");
+  assert.deepEqual(projectGovernedCopiedWorktreeExecutionEvidenceSnapshot({
+    schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+    generated_at: "2026-06-27T00:00:00Z",
+    metadata_only: true,
+    raw_payload_retained: false,
+    dashboard_consumption: "no_live_calls",
+    source_worktree: "/home/operator/repo",
+    attempts: [],
+    errors: [],
+  }), []);
+  assert.deepEqual(projectGovernedCopiedWorktreeExecutionEvidenceSnapshot({
+    schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+    generated_at: "2026-06-27T00:00:00Z",
+    metadata_only: true,
+    raw_payload_retained: false,
+    dashboard_consumption: "no_live_calls",
+    attempts: [],
+    errors: [{ reason: "provider_payload sk-proj-123" }],
+  }), []);
+  assert.deepEqual(projectGovernedCopiedWorktreeExecutionEvidenceSnapshot({
+    schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+    generated_at: "2026-06-27T00:00:00Z",
+    metadata_only: true,
+    raw_payload_retained: false,
+    dashboard_consumption: "no_live_calls",
+    attempts: [
+      {
+        ...baseEvidence,
+        source_id: "claude-run-1",
+        worker: "claude",
+        execution_state: "execution_observed",
+        source_worktree: "/home/operator/repo",
+      },
+    ],
+    errors: [],
+  }), []);
+  assert.deepEqual(projectGovernedCopiedWorktreeExecutionEvidenceSnapshot({
+    schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+    generated_at: "2026-06-27T00:00:00Z",
+    metadata_only: true,
+    raw_payload_retained: false,
+    dashboard_consumption: "no_live_calls",
+    operator_note: "looks harmless",
+    attempts: [],
+    errors: [],
+  }), []);
+  assert.deepEqual(projectGovernedCopiedWorktreeExecutionEvidenceSnapshot({
+    schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+    generated_at: "2026-06-27T00:00:00Z",
+    metadata_only: true,
+    raw_payload_retained: false,
+    dashboard_consumption: "no_live_calls",
+    attempts: [
+      {
+        ...baseEvidence,
+        source_id: "claude-run-1",
+        worker: "claude",
+        execution_state: "execution_observed",
+        operator_note: "looks harmless",
+      },
+    ],
+    errors: [],
+  }), []);
+});
+
+test("pipeline evidence source loads persisted worker snapshots without live calls", async () => {
+  const {
+    loadPersistedGovernedWorkerEvidencePackets,
+    pipelinePacketsWithPersistedGovernedWorkerEvidence,
+  } = await loadCompiledDashboardEvidenceSource();
+  const tempDir = await mkdtemp(join(tmpdir(), "pipeline-worker-evidence-"));
+  try {
+    const evidenceDir = join(tempDir, ".kendall-local", "governed-worker-evidence");
+    await mkdir(evidenceDir, { recursive: true });
+    await writeFile(join(evidenceDir, "snapshot.json"), JSON.stringify({
+      schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+      generated_at: "2026-06-27T00:00:00Z",
+      metadata_only: true,
+      raw_payload_retained: false,
+      dashboard_consumption: "no_live_calls",
+      attempts: [
+        {
+          source_id: "copy-exec:claude:execution_observed:20260627:0",
+          worker: "claude",
+          mode: "copied_worktree_execution",
+          authority_level: "copied_worktree_worker_execution",
+          execution_state: "execution_observed",
+          evidence_ref: "metadata:worker-copied-worktree-execution/claude",
+          status_event_ref: "metadata:worker-copied-worktree-execution/claude:status-event",
+          observed_at: "2026-06-27T00:00:00Z",
+          expected_response: "KENDALL_COPY_EXECUTION_OK",
+          observed_response: "KENDALL_COPY_EXECUTION_OK",
+          exit_code: 0,
+          timed_out: false,
+          command_path: "/usr/local/bin/claude",
+          copied_tracked_files: 7,
+          copy_bytes: 2048,
+          copy_retained: false,
+          network_allowed: true,
+          session_inheritance_allowed: true,
+          source_mutation_allowed: false,
+          tools_allowed: false,
+          raw_output_retained: false,
+          affects_trust: false,
+          affects_routing: false,
+        },
+      ],
+      errors: [],
+    }), "utf8");
+    await writeFile(join(evidenceDir, "unsafe.json"), JSON.stringify({
+      schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+      generated_at: "2026-06-27T00:00:00Z",
+      metadata_only: true,
+      raw_payload_retained: false,
+      dashboard_consumption: "no_live_calls",
+      attempts: [],
+      errors: [{ reason: "raw_prompt sk-proj-123" }],
+    }), "utf8");
+    const linkedTarget = join(tempDir, "linked-target.json");
+    await writeFile(linkedTarget, JSON.stringify({ metadata_only: true }), "utf8");
+    await symlink(linkedTarget, join(evidenceDir, "linked.json"));
+    await symlink(join(tempDir, "missing-target.json"), join(evidenceDir, "broken.json"));
+
+    const loaded = loadPersistedGovernedWorkerEvidencePackets({ cwd: tempDir, env: {} });
+    assert.equal(loaded.packets.length, 1);
+    assert.equal(loaded.packets[0].title, "Governed Claude copied-worktree execution completed");
+    assert.equal(loaded.evidenceFiles.length, 1);
+    assert.ok(loaded.warnings.includes("evidence_file_symlink_rejected"));
+
+    const packets = pipelinePacketsWithPersistedGovernedWorkerEvidence({ cwd: tempDir, env: {} });
+    assert.equal(packets[0].packetId, loaded.packets[0].packetId);
+    assert.ok(packets.length > loaded.packets.length);
+
+    const rejected = loadPersistedGovernedWorkerEvidencePackets({ cwd: tempDir, env: { KENDALL_PIPELINE_WORKER_EVIDENCE_DIR: "/etc" } });
+    assert.deepEqual(rejected.packets, []);
+    assert.ok(rejected.warnings.includes("evidence_dir_outside_safe_roots"));
+
+    const symlinkedWorkspace = join(tempDir, "symlinked-workspace");
+    const symlinkedTarget = join(tempDir, "other-source-dir");
+    await mkdir(join(symlinkedWorkspace, ".kendall-local"), { recursive: true });
+    await mkdir(symlinkedTarget, { recursive: true });
+    await symlink(symlinkedTarget, join(symlinkedWorkspace, ".kendall-local", "governed-worker-evidence"));
+    const symlinked = loadPersistedGovernedWorkerEvidencePackets({ cwd: symlinkedWorkspace, env: {} });
+    assert.deepEqual(symlinked.packets, []);
+    assert.ok(
+      symlinked.warnings.includes("evidence_dir_symlink_rejected")
+        || symlinked.warnings.includes("evidence_dir_realpath_outside_workspace")
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("pipeline evidence source stays local and non-executing", async () => {
+  const source = await readFile(pipelineEvidenceSourcePath, "utf8");
+  assert.match(source, /readFileSync/);
+  assert.match(source, /projectGovernedCopiedWorktreeExecutionEvidenceSnapshot/);
+  for (const forbiddenPattern of [
+    /fetch\s*\(/,
+    /EventSource/,
+    /WebSocket/,
+    /XMLHttpRequest/,
+    /sendBeacon/,
+    /spawnSync|execSync|fork\s*\(/,
+    /node:child_process/,
+    /node:http|node:https|node:net|node:tls|node:dns/,
+    /worker:copy:execute|collectCopiedWorktreeExecutionAttempts/,
+  ]) {
+    assert.doesNotMatch(source, forbiddenPattern);
+  }
 });
 
 async function loadCompiledDashboardFixtures() {
@@ -1250,6 +1443,10 @@ async function loadCompiledDashboardFixtures() {
       "--moduleResolution",
       "Bundler",
       "--strict",
+      "--types",
+      "node",
+      "--typeRoots",
+      "apps/dashboard/node_modules/@types",
       "--verbatimModuleSyntax",
       "--rootDir",
       ".",
@@ -1273,6 +1470,55 @@ async function loadCompiledDashboardFixtures() {
   );
 
   return import(pathToFileURL(compiledFixturePath).href);
+}
+
+async function loadCompiledDashboardEvidenceSource() {
+  const outDir = await mkdtemp(join(tmpdir(), "dashboard-evidence-source-"));
+  await writeFile(join(outDir, "package.json"), '{"type":"module"}\n');
+  const result = spawnSync(
+    "apps/dashboard/node_modules/.bin/tsc",
+    [
+      "--target",
+      "ES2022",
+      "--module",
+      "ESNext",
+      "--moduleResolution",
+      "Bundler",
+      "--strict",
+      "--types",
+      "node",
+      "--typeRoots",
+      "apps/dashboard/node_modules/@types",
+      "--verbatimModuleSyntax",
+      "--rootDir",
+      ".",
+      "--outDir",
+      outDir,
+      "apps/dashboard/src/lib/pipeline-evidence-source.ts",
+      "apps/dashboard/src/lib/pipeline-fixtures.ts",
+      "packages/workflow-core/src/pipeline-state-fixture-matrix.ts",
+    ],
+    { encoding: "utf8" }
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const compiledFixturePath = join(outDir, "apps/dashboard/src/lib/pipeline-fixtures.js");
+  const compiledEvidencePath = join(outDir, "apps/dashboard/src/lib/pipeline-evidence-source.js");
+  const compiledFixtureSource = await readFile(compiledFixturePath, "utf8");
+  const compiledEvidenceSource = await readFile(compiledEvidencePath, "utf8");
+  await writeFile(
+    compiledFixturePath,
+    compiledFixtureSource.replace(
+      'from "@kendall/workflow-core"',
+      'from "../../../../packages/workflow-core/src/pipeline-state-fixture-matrix.js"'
+    )
+  );
+  await writeFile(
+    compiledEvidencePath,
+    compiledEvidenceSource.replace('from "./pipeline-fixtures"', 'from "./pipeline-fixtures.js"')
+  );
+
+  return import(pathToFileURL(compiledEvidencePath).href);
 }
 
 async function readPipelineComponentSource() {
