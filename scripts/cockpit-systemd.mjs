@@ -15,13 +15,14 @@ export function renderCockpitUnits({
   repoRoot,
   pnpmPath,
   uvPath,
-  dashboardPort = "3100",
+  dashboardPort = "3000",
   supervisorPort = "8100",
 }) {
   const dataDir = join(repoRoot, ".data");
   const tmpDir = join(dataDir, "tmp");
   const uvCacheDir = join(dataDir, "uv-cache");
   const supervisorUrl = `http://127.0.0.1:${supervisorPort}`;
+  const workerEvidenceDir = join(repoRoot, ".kendall-local", "governed-worker-evidence");
 
   return {
     [unitNames.target]: `[Unit]
@@ -64,6 +65,7 @@ Environment=NEXT_PUBLIC_SUPERVISOR_URL=${supervisorUrl}
 Environment=SUPERVISOR_INTERNAL_URL=${supervisorUrl}
 Environment=TEMP=${tmpDir}
 Environment=TMP=${tmpDir}
+Environment=KENDALL_PIPELINE_WORKER_EVIDENCE_DIR=${workerEvidenceDir}
 ExecStart=${pnpmPath} --filter @kendall/dashboard exec next dev --hostname 0.0.0.0 --port ${dashboardPort}
 Restart=always
 RestartSec=5
@@ -132,7 +134,7 @@ function tryEnableLinger() {
 }
 
 function install({ enableLinger = true } = {}) {
-  const dashboardPort = process.env.KENDALL_COCKPIT_DASHBOARD_PORT || "3100";
+  const dashboardPort = process.env.KENDALL_COCKPIT_DASHBOARD_PORT || "3000";
   const supervisorPort = process.env.KENDALL_COCKPIT_SUPERVISOR_PORT || "8100";
   const units = renderCockpitUnits({
     repoRoot: rootDir,
@@ -144,6 +146,7 @@ function install({ enableLinger = true } = {}) {
 
   mkdirSync(join(rootDir, ".data", "tmp"), { recursive: true });
   mkdirSync(join(rootDir, ".data", "uv-cache"), { recursive: true });
+  mkdirSync(join(rootDir, ".kendall-local", "governed-worker-evidence"), { recursive: true });
   mkdirSync(userSystemdDir(), { recursive: true });
 
   for (const [name, contents] of Object.entries(units)) {
@@ -177,7 +180,7 @@ function printUnits() {
     repoRoot: rootDir,
     pnpmPath: commandPath("pnpm"),
     uvPath: commandPath("uv"),
-    dashboardPort: process.env.KENDALL_COCKPIT_DASHBOARD_PORT || "3100",
+    dashboardPort: process.env.KENDALL_COCKPIT_DASHBOARD_PORT || "3000",
     supervisorPort: process.env.KENDALL_COCKPIT_SUPERVISOR_PORT || "8100",
   });
   for (const [name, contents] of Object.entries(units)) {

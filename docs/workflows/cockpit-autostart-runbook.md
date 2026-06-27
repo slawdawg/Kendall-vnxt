@@ -1,12 +1,12 @@
 # Cockpit Autostart Runbook
 
 This runbook keeps the Kendall cockpit running as a user-level systemd service.
-It starts the supervisor on port `8100` and the dashboard on port `3100`.
+It starts the supervisor on port `8100` and the dashboard on port `3000`.
 
 The cockpit URL is:
 
 ```text
-http://127.0.0.1:3100/pipeline
+http://127.0.0.1:3000/pipeline
 ```
 
 ## Install
@@ -26,6 +26,10 @@ This writes these user systemd units:
 ```
 
 The services use `Restart=always`, so systemd restarts them if they crash.
+The dashboard unit also pins `KENDALL_PIPELINE_WORKER_EVIDENCE_DIR` to the
+repo-root `.kendall-local/governed-worker-evidence/` directory so `/pipeline`
+reads the same persisted worker metadata no matter which package directory Next
+uses at runtime.
 
 ## Boot Behavior
 
@@ -61,7 +65,7 @@ pnpm run cockpit:print
 Defaults:
 
 ```text
-KENDALL_COCKPIT_DASHBOARD_PORT=3100
+KENDALL_COCKPIT_DASHBOARD_PORT=3000
 KENDALL_COCKPIT_SUPERVISOR_PORT=8100
 ```
 

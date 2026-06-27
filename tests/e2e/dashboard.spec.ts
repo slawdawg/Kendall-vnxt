@@ -567,7 +567,7 @@ test.describe("dashboard workflow coverage", () => {
 
   test("opens fixture-backed pipeline cockpit without live execution framing", async ({ page, baseURL }, testInfo) => {
     testInfo.setTimeout(90_000);
-    const dashboardOrigin = new URL(baseURL ?? "http://127.0.0.1:3100").origin;
+    const dashboardOrigin = new URL(baseURL ?? "http://127.0.0.1:3000").origin;
     const supervisorOrigin = new URL(supervisorUrl).origin;
     const liveSupervisorRequests: string[] = [];
     const sameOriginRuntimeRequests: string[] = [];

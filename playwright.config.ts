@@ -1,9 +1,9 @@
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
-const dashboardUrl = process.env.PLAYWRIGHT_DASHBOARD_URL ?? "http://127.0.0.1:3100";
+const dashboardUrl = process.env.PLAYWRIGHT_DASHBOARD_URL ?? "http://127.0.0.1:3000";
 const supervisorUrl = process.env.PLAYWRIGHT_SUPERVISOR_URL ?? "http://127.0.0.1:8100";
-const dashboardPort = new URL(dashboardUrl).port || "3100";
+const dashboardPort = new URL(dashboardUrl).port || "3000";
 const supervisorPort = new URL(supervisorUrl).port || "8100";
 const localDataDir = path.join(__dirname, ".data");
 const uvCacheDir = process.env.UV_CACHE_DIR ?? path.join(localDataDir, "uv-cache");
