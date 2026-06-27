@@ -1594,6 +1594,35 @@ test("copied-worktree evidence export rejects unsafe attempts and unsafe output 
     assert.equal(copiedWorktreeAttemptToPipelineEvidence(baseAttempt).ok, true);
     assert.equal(copiedWorktreeAttemptToPipelineEvidence({ ...baseAttempt, raw_output_retained: true }).ok, false);
     assert.equal(copiedWorktreeAttemptToPipelineEvidence({ ...baseAttempt, observed_response: "provider_payload sk-proj-123" }).ok, false);
+    const safeEvidence = copiedWorktreeAttemptToPipelineEvidence(baseAttempt).evidence;
+    assert.equal(
+      validateGovernedWorkerEvidenceSnapshot({
+        schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+        generated_at: "2026-06-27T00:00:00Z",
+        metadata_only: true,
+        raw_payload_retained: false,
+        dashboard_consumption: "no_live_calls",
+        attempts: [safeEvidence],
+        errors: [],
+      }).ok,
+      true,
+    );
+    for (const unsafeSourceId of [
+      "/home/operator/source-worktree",
+      "copy exec claude",
+      "copy-exec:\nclaude",
+      "x".repeat(161),
+    ]) {
+      assert.equal(validateGovernedWorkerEvidenceSnapshot({
+        schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+        generated_at: "2026-06-27T00:00:00Z",
+        metadata_only: true,
+        raw_payload_retained: false,
+        dashboard_consumption: "no_live_calls",
+        attempts: [{ ...safeEvidence, source_id: unsafeSourceId }],
+        errors: [],
+      }).ok, false, `${unsafeSourceId} should fail source_id validation`);
+    }
     assert.equal(validateEvidenceOutputPath(join(sourceWorktree, "tracked.json"), { cwd: sourceWorktree }).ok, false);
     assert.equal(validateEvidenceOutputPath("relative.json", { cwd: sourceWorktree }).ok, false);
     assert.equal(validateEvidenceOutputPath(resolveDefaultEvidenceOutputPath({ cwd: sourceWorktree, generatedAt: "2026-06-27T00:00:00Z" }), { cwd: sourceWorktree }).ok, true);
