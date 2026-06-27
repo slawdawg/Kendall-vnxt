@@ -46,6 +46,8 @@ The dry-run MVP may model, validate, and report:
 - metadata-first evidence policy,
 - retry, RCA, stale-run, and promotion-block states,
 - backend/report status events for future `/pipeline` integration,
+- metadata-only real-tool readiness observations for Claude and Hermes, such as
+  an operator-shell observed command path/version or missing-tool state,
 - the exact future approval packet needed for each blocked operation.
 
 The dry-run MVP may not execute a worker, mutate source through a worker, call a
@@ -170,6 +172,31 @@ environment, and undeclared transitive effects are invalid packet shapes.
 Executables must be absolute paths or resolved through a documented resolver
 with pinned lookup roots. Ambiguous resolution, PATH-only lookup, or missing
 version/hash evidence where required fails closed.
+
+### Real-Tool Readiness Observations
+
+A later slice may need to prove whether Claude or Hermes is available before any
+launch approval is considered. The allowed readiness-only surface is a
+metadata-only observation, not a runner:
+
+- `mode` must be `readiness_only`;
+- `authority_level` must be `non_executing`;
+- `readiness_state` may be `available`, `missing`, `blocked`, or `unknown`;
+- command path/version values may be retained only as bounded metadata;
+  `available` observations must include both, while `missing` observations must
+  set both fields to explicit `null`;
+- the observation may cite `operator_shell_observation` or `fixture` as the
+  command-resolution source;
+- `network_required`, `session_inheritance_required`,
+  `credential_access_required`, `raw_output_retained`, `affects_trust`,
+  `affects_routing`, and `launch_attempted` must all be explicitly present and
+  false.
+
+This readiness surface must not execute Claude, Hermes, Codex, shell commands,
+provider calls, network probes, login checks, credential reads, source mutation,
+delivery, merge, cleanup, or adaptive trust updates. A successful readiness
+observation does not grant launch authority and must not change routing,
+priority, trust, retry, approval, delivery, merge, or cleanup behavior.
 
 Environment allowlist entries are names-only model data. The inherited
 environment is default-empty. Secret-like names or values are denied, including

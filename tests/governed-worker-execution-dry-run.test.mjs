@@ -10,6 +10,7 @@ import {
   evaluateStatusEvents,
   renderDryRunReport,
   validateDryRunPacket,
+  validateToolReadinessProbe,
 } from "../scripts/lib/governed-worker-execution-dry-run.mjs";
 import { precheckGovernedWorkerExecutionDryRun } from "../scripts/check-governed-worker-execution-dry-run.mjs";
 
@@ -147,6 +148,148 @@ test("accepted Claude and Hermes dry-run fixtures validate with metadata-only re
     assert.ok(result.evidence_refs.length > 0, "evidence refs should be retained as metadata");
     assert.ok(result.status_events.length > 0, "status events should be retained as metadata");
   }
+});
+
+test("real tool readiness probes validate metadata-only availability without launch authority", () => {
+  for (const probe of [
+    {
+      probe_id: "probe:claude-readiness",
+      worker: "claude",
+      mode: "readiness_only",
+      authority_level: "non_executing",
+      readiness_state: "available",
+      command_resolution: "operator_shell_observation",
+      command_path: "/usr/local/bin/claude",
+      command_version: "2.1.179 Claude Code",
+      observed_at: "2026-06-27T00:00:00Z",
+      evidence_ref: "metadata:worker-readiness/claude",
+      network_required: false,
+      session_inheritance_required: false,
+      credential_access_required: false,
+      raw_output_retained: false,
+      affects_trust: false,
+      affects_routing: false,
+      launch_attempted: false,
+    },
+    {
+      probe_id: "probe:hermes-readiness",
+      worker: "hermes",
+      mode: "readiness_only",
+      authority_level: "non_executing",
+      readiness_state: "missing",
+      command_resolution: "fixture",
+      command_path: null,
+      command_version: null,
+      observed_at: "2026-06-27T00:00:00Z",
+      evidence_ref: "metadata:worker-readiness/hermes",
+      network_required: false,
+      session_inheritance_required: false,
+      credential_access_required: false,
+      raw_output_retained: false,
+      affects_trust: false,
+      affects_routing: false,
+      launch_attempted: false,
+    },
+  ]) {
+    const result = validateToolReadinessProbe(probe);
+    assert.equal(result.ok, true, `${probe.worker} readiness probe should validate`);
+    assert.equal(result.mode, "readiness_only");
+    assert.equal(result.authority_level, "non_executing");
+    assert.equal(result.readiness_state, probe.readiness_state);
+    assert.equal(result.evidence_ref, probe.evidence_ref);
+    assert.deepEqual(result.denied_reasons, []);
+  }
+});
+
+test("real tool readiness probes fail closed for launch session network raw retention or trust effects", () => {
+  const baseProbe = {
+    probe_id: "probe:claude-readiness",
+    worker: "claude",
+    mode: "readiness_only",
+    authority_level: "non_executing",
+    readiness_state: "available",
+    command_resolution: "operator_shell_observation",
+    command_path: "/usr/local/bin/claude",
+    command_version: "2.1.179 Claude Code",
+    observed_at: "2026-06-27T00:00:00Z",
+    evidence_ref: "metadata:worker-readiness/claude",
+    network_required: false,
+    session_inheritance_required: false,
+    credential_access_required: false,
+    raw_output_retained: false,
+    affects_trust: false,
+    affects_routing: false,
+    launch_attempted: false,
+  };
+
+  for (const [field, value] of [
+    ["mode", "dry_run"],
+    ["authority_level", "write"],
+    ["readiness_state", "running_live_worker"],
+    ["command_resolution", "path_lookup"],
+    ["command_path", "claude"],
+    ["command_path", null],
+    ["command_version", null],
+    ["command_version", "raw_prompt sk-proj-123456789"],
+    ["evidence_ref", "raw_prompt: sk-proj-123456789"],
+    ["network_required", true],
+    ["session_inheritance_required", true],
+    ["credential_access_required", true],
+    ["raw_output_retained", true],
+    ["affects_trust", true],
+    ["affects_routing", true],
+    ["launch_attempted", true],
+  ]) {
+    const result = validateToolReadinessProbe({ ...baseProbe, [field]: value });
+    assert.equal(result.ok, false, `${field} should fail readiness validation`);
+    assert.ok(
+      result.field_reasons.some((reason) => reason.reason === "invalid_tool_readiness_probe"),
+      `${field} should produce invalid_tool_readiness_probe`,
+    );
+    assert.ok(
+      result.denial_details.some((detail) => detail.authority_family === "worker-command-execution"),
+      `${field} should retain command-execution denial details`,
+    );
+  }
+
+  for (const field of [
+    "command_path",
+    "command_version",
+    "network_required",
+    "session_inheritance_required",
+    "credential_access_required",
+    "raw_output_retained",
+    "affects_trust",
+    "affects_routing",
+    "launch_attempted",
+  ]) {
+    const probe = { ...baseProbe };
+    delete probe[field];
+    const result = validateToolReadinessProbe(probe);
+    assert.equal(result.ok, false, `${field} must be explicit readiness metadata`);
+    assert.ok(result.field_reasons.some((reason) => reason.field === field));
+  }
+
+  for (const probe of [
+    { ...baseProbe, readiness_state: "missing", command_path: "/usr/local/bin/claude", command_version: null },
+    { ...baseProbe, readiness_state: "missing", command_path: null, command_version: "2.1.179 Claude Code" },
+  ]) {
+    const result = validateToolReadinessProbe(probe);
+    assert.equal(result.ok, false, "missing readiness cannot retain command path or version proof");
+    assert.ok(result.field_reasons.some((reason) => reason.field === "readiness_state"));
+  }
+
+  const rawIdentityResult = validateToolReadinessProbe({ ...baseProbe, probe_id: "probe:sk-proj-123456789" });
+  assert.equal(rawIdentityResult.ok, false);
+  assert.equal(rawIdentityResult.probe_id, null);
+  assert.equal(rawIdentityResult.worker, "claude");
+  assert.equal(rawIdentityResult.mode, "readiness_only");
+  assert.equal(rawIdentityResult.authority_level, "non_executing");
+
+  const rawWorkerResult = validateToolReadinessProbe({ ...baseProbe, worker: "sk-proj-123456789" });
+  assert.equal(rawWorkerResult.ok, false);
+  assert.equal(rawWorkerResult.worker, null);
+  assert.equal(rawWorkerResult.probe_id, "probe:claude-readiness");
 });
 
 test("accepted packets fail closed when safety policy fields request live authority", async () => {

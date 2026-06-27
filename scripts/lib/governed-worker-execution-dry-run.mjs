@@ -80,6 +80,28 @@ const ALLOWED_AUTHORITY_SOURCES = new Set([
   "source_owned_policy",
   "explicit_operator_approval",
 ]);
+const ALLOWED_TOOL_READINESS_STATES = new Set(["available", "missing", "blocked", "unknown"]);
+const ALLOWED_TOOL_READINESS_MODES = new Set(["readiness_only"]);
+const ALLOWED_TOOL_READINESS_RESOLUTION = new Set(["operator_shell_observation", "fixture"]);
+const ALLOWED_TOOL_READINESS_FIELDS = new Set([
+  "probe_id",
+  "worker",
+  "mode",
+  "authority_level",
+  "readiness_state",
+  "command_resolution",
+  "command_path",
+  "command_version",
+  "observed_at",
+  "evidence_ref",
+  "network_required",
+  "session_inheritance_required",
+  "credential_access_required",
+  "raw_output_retained",
+  "affects_trust",
+  "affects_routing",
+  "launch_attempted",
+]);
 const SHELL_COMMANDS = new Set([
   "bash",
   "dash",
@@ -304,6 +326,12 @@ const DENIAL_DETAILS_BY_REASON = Object.freeze({
     source_policy: "docs/workflows/governed-worker-execution-dry-run.md",
     future_approval_required: "Dry-run review requirement contract update",
     summary: "Packets must keep Codex/operator review gates visible.",
+  },
+  invalid_tool_readiness_probe: {
+    authority_family: "worker-command-execution",
+    source_policy: "docs/workflows/governed-worker-execution-dry-run.md",
+    future_approval_required: "Corrected readiness-only probe evidence before any launch approval",
+    summary: "Tool readiness observations must stay metadata-only and non-executing.",
   },
 });
 
@@ -775,6 +803,14 @@ function safeAuthorityLevel(value) {
   return ALLOWED_AUTHORITY_LEVELS.has(value) ? value : "unknown";
 }
 
+function safeReadinessText(value) {
+  return typeof value === "string" && value.trim().length > 0 && !hasRawMarkerInObject(value) ? value : null;
+}
+
+function safeToolReadinessState(value) {
+  return ALLOWED_TOOL_READINESS_STATES.has(value) ? value : "unknown";
+}
+
 function safeTaskClass(packet) {
   if (
     !isRecord(packet) ||
@@ -867,6 +903,114 @@ export function renderDryRunReport(packet, validationResult = validateDryRunPack
     `Retry/RCA state: ${retryState}`,
     `Next approval packet required: ${nextApprovalLines(deniedDetails).join("; ")}`,
   ].join("\n");
+}
+
+export function validateToolReadinessProbe(probe) {
+  const input = isRecord(probe) ? probe : {};
+  const field_reasons = [];
+
+  if (!isRecord(probe)) {
+    addFieldReason(field_reasons, "$", "invalid_tool_readiness_probe");
+  }
+
+  for (const field of [
+    "probe_id",
+    "worker",
+    "mode",
+    "authority_level",
+    "readiness_state",
+    "command_resolution",
+    "observed_at",
+    "evidence_ref",
+  ]) {
+    if (!hasOwnField(input, field) || isEmptyRequiredValue(input[field])) {
+      addFieldReason(field_reasons, field, "invalid_tool_readiness_probe");
+    }
+  }
+
+  if (!ALLOWED_WORKERS.has(input.worker)) {
+    addFieldReason(field_reasons, "worker", "invalid_tool_readiness_probe");
+  }
+  if (!ALLOWED_TOOL_READINESS_MODES.has(input.mode)) {
+    addFieldReason(field_reasons, "mode", "invalid_tool_readiness_probe");
+  }
+  if (input.authority_level !== "non_executing") {
+    addFieldReason(field_reasons, "authority_level", "invalid_tool_readiness_probe");
+  }
+  if (!ALLOWED_TOOL_READINESS_STATES.has(input.readiness_state)) {
+    addFieldReason(field_reasons, "readiness_state", "invalid_tool_readiness_probe");
+  }
+  if (!ALLOWED_TOOL_READINESS_RESOLUTION.has(input.command_resolution)) {
+    addFieldReason(field_reasons, "command_resolution", "invalid_tool_readiness_probe");
+  }
+  if (hasOwnField(input, "command_path")) {
+    const commandPathAllowed =
+      input.command_path === null ||
+      (typeof input.command_path === "string" &&
+        input.command_path.startsWith("/") &&
+        basename(input.command_path) === input.worker);
+    if (!commandPathAllowed) {
+      addFieldReason(field_reasons, "command_path", "invalid_tool_readiness_probe");
+    }
+  }
+  for (const field of ["command_path", "command_version"]) {
+    if (!hasOwnField(input, field)) {
+      addFieldReason(field_reasons, field, "invalid_tool_readiness_probe");
+    }
+  }
+  if (hasOwnField(input, "command_version") && input.command_version !== null) {
+    if (typeof input.command_version !== "string" || input.command_version.length > 120 || hasRawMarkerInObject(input.command_version)) {
+      addFieldReason(field_reasons, "command_version", "invalid_tool_readiness_probe");
+    }
+  }
+  if (input.readiness_state === "available") {
+    if (typeof input.command_path !== "string" || typeof input.command_version !== "string" || input.command_version.trim().length === 0) {
+      addFieldReason(field_reasons, "readiness_state", "invalid_tool_readiness_probe");
+    }
+  }
+  if (input.readiness_state === "missing" && (input.command_path !== null || input.command_version !== null)) {
+    addFieldReason(field_reasons, "readiness_state", "invalid_tool_readiness_probe");
+  }
+  if (!Number.isFinite(parseTimestamp(input.observed_at))) {
+    addFieldReason(field_reasons, "observed_at", "invalid_tool_readiness_probe");
+  }
+  if (hasRawEvidenceMarker(input.evidence_ref)) {
+    addFieldReason(field_reasons, "evidence_ref", "invalid_tool_readiness_probe");
+  }
+  for (const [field, expected] of [
+    ["network_required", false],
+    ["session_inheritance_required", false],
+    ["credential_access_required", false],
+    ["raw_output_retained", false],
+    ["affects_trust", false],
+    ["affects_routing", false],
+    ["launch_attempted", false],
+  ]) {
+    if (!hasOwnField(input, field) || input[field] !== expected) {
+      addFieldReason(field_reasons, field, "invalid_tool_readiness_probe");
+    }
+  }
+  if (
+    Object.entries(input).some(([key, value]) => {
+      return !ALLOWED_TOOL_READINESS_FIELDS.has(key) || hasRawMarkerInObject(value);
+    })
+  ) {
+    addFieldReason(field_reasons, "$", "invalid_tool_readiness_probe");
+  }
+
+  const denied_reasons = [...new Set(field_reasons.map((reason) => reason.reason))];
+  return {
+    ok: field_reasons.length === 0,
+    probe_id: safeReadinessText(input.probe_id),
+    worker: ALLOWED_WORKERS.has(input.worker) ? input.worker : null,
+    mode: ALLOWED_TOOL_READINESS_MODES.has(input.mode) ? input.mode : null,
+    authority_level: input.authority_level === "non_executing" ? input.authority_level : null,
+    readiness_state: safeToolReadinessState(input.readiness_state),
+    evidence_ref: hasOwnField(input, "evidence_ref") && !hasRawEvidenceMarker(input.evidence_ref) ? input.evidence_ref : null,
+    denied_reasons,
+    field_reasons,
+    denial_details: denialDetailsFor(field_reasons),
+  };
 }
 
 export function validateDryRunPacket(packet) {
