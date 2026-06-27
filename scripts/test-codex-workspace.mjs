@@ -52,6 +52,58 @@ try {
     );
   });
 
+  test("coordination-report renders the workspace coordination packet for an empty state root", () => {
+    const emptyStateRoot = mkdtempSync(join(tmpdir(), "codex-coordination-empty-"));
+    try {
+      const result = run(["coordination-report", "--state-root", emptyStateRoot, "--owner", "runner-a"]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("Workspace Coordination Report"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- Active managed worktrees:"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- Next safe slice:"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- Stop lines:"), result.stdout || result.stderr);
+    } finally {
+      rmSync(emptyStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("coordination-report json exposes active lanes and remains read-only", () => {
+    const reportStateRoot = mkdtempSync(join(tmpdir(), "codex-coordination-json-"));
+    try {
+      const tasksDir = join(reportStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "active-report-lane.json");
+      const manifest = {
+        task_id: "active-report-lane",
+        title: "Active report lane",
+        branch: "codex/active-report-lane",
+        base_branch: "dev",
+        base_ref: "origin/dev",
+        status: "active",
+        owner: "runner-a",
+        worktree_path: rootDir,
+        updated_at: "2026-06-27T00:00:00.000Z",
+      };
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      const before = readFileSync(manifestPath, "utf8");
+
+      const result = run(["coordination-report", "--json", "--state-root", reportStateRoot, "--owner", "runner-a"]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
+      assert(packet.activeManagedWorktrees.length === 1, result.stdout || result.stderr);
+      assert(packet.activeManagedWorktrees[0].taskId === "active-report-lane", result.stdout || result.stderr);
+      assert(packet.activeManagedWorktrees[0].assignmentStatus === "active", result.stdout || result.stderr);
+      assert(packet.activeManagedWorktrees[0].worktreeExists === true, result.stdout || result.stderr);
+      assert(["claimable", "none"].includes(packet.nextSafeSlice.status), result.stdout || result.stderr);
+      assert(typeof packet.nextSafeSlice.action === "string", result.stdout || result.stderr);
+      assert(packet.stopLines.includes("Merge a PR."), result.stdout || result.stderr);
+      assert(readFileSync(manifestPath, "utf8") === before, "coordination-report must not mutate manifests");
+    } finally {
+      rmSync(reportStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("start dry-run defaults new work to dev when branch foundation exists", () => {
     const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
     try {
@@ -176,6 +228,7 @@ try {
   test("help lists local codex branch cleanup", () => {
     const result = run(["--help"]);
     assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("coordination-report"), result.stdout || result.stderr);
     assert(result.stdout.includes("assignment-report"), result.stdout || result.stderr);
     assert(result.stdout.includes("cleanup-branches [query]"), result.stdout || result.stderr);
     assert(result.stdout.includes("heartbeat <query>"), result.stdout || result.stderr);
