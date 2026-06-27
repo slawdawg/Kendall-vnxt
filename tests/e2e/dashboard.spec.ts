@@ -1629,7 +1629,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("handoff-checkpoint-coverage", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("authority-approval-scope-recorded", { exact: true })).toBeVisible();
-    await expect(runwayPanel.getByText("authority-blocked-approval-scope-readiness", { exact: true }).first()).toBeVisible();
+    await expect(runwayPanel.getByText("Use this completed authority approval scope readiness evidence only")).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:development-runway", { exact: true }).first()).toBeVisible();
     await expect(runwayPanel.getByRole("link", { name: "/controls#development-runway-report" }).first()).toBeVisible();
     await expect(runwayPanel.getByText("Development runway slices are not execution-authority approvals.")).toBeVisible();

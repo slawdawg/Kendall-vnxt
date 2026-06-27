@@ -307,10 +307,11 @@ assertCondition(
 
 for (const safetyText of [
   "authority-blocked-approval-scope-readiness",
-  "Operator approval now names Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch",
-  "The first lane must make approval scope, disabled-default gates, rollback expectations, and no-runtime-execution stop lines durable",
+  "Completed the bounded planning/control-plane implementation slice",
+  "Approval scope, disabled-default gates, rollback expectations, and no-runtime-execution stop lines are durable",
   "Ollama runtime remains limited to the previously approved Story 4.4 VM-to-host endpoint/model boundary",
-  "Subscription-agent, Codex CLI, and Claude CLI process launch remain disabled in this slice",
+  "Subscription-agent, Codex CLI, and Claude CLI process launch remain disabled",
+  "do not requeue codex/authority-blocked-approval-scope-readiness",
   "runtime execution still needs exact endpoint or command-template policy",
   "provider/model calls",
   "worker shell commands",
