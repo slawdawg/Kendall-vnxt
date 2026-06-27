@@ -206,6 +206,7 @@ cleanup-current options:
 
 cleanup-branches options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
+  --summary-json            Without --apply, print a bounded JSON branch cleanup summary.
   --base <ref>              Ref to compare against. Defaults to origin/main.
                             Missing base refs fail closed; no fetch is performed.
 
@@ -2376,15 +2377,24 @@ function cleanupBranches(argv) {
   const query = positional.join(" ").trim().toLowerCase();
   const apply = Boolean(options.apply);
   const baseRef = String(options.base || cleanupBranchesDefaultBaseRef);
+  if (options.summaryJson && apply) {
+    throw new Error("cleanup-branches --summary-json is only supported without --apply.");
+  }
 
   if (!refExists(baseRef)) {
     throw new Error(`Base ref not found locally: ${baseRef}`);
   }
   const baseSha = git(["rev-parse", "--short", baseRef], { cwd: repoRoot }).stdout.trim() || "unknown";
-  console.log(`Base: ${baseRef} (${baseSha})`);
+  if (!options.summaryJson) {
+    console.log(`Base: ${baseRef} (${baseSha})`);
+  }
 
   const branches = localCodexBranches().filter((branch) => !query || branch.toLowerCase().includes(query));
   if (branches.length === 0) {
+    if (options.summaryJson) {
+      console.log(JSON.stringify(buildCleanupBranchesSummary({ baseRef, baseSha, query, branches, eligible: [], skipped: [] }), null, 2));
+      return;
+    }
     console.log(query ? `No local codex/* branches matched: ${query}` : "No local codex/* branches found.");
     return;
   }
@@ -2395,20 +2405,32 @@ function cleanupBranches(argv) {
       .filter(Boolean),
   );
   const eligible = [];
+  const skipped = [];
 
   for (const branch of branches) {
     assertSafeBranch(branch);
     if (activeWorktreeBranches.has(branch)) {
-      console.log(`SKIP ${branch}: branch is checked out in a worktree.`);
+      skipped.push({ branch, reason: "branch is checked out in a worktree" });
+      if (!options.summaryJson) {
+        console.log(`SKIP ${branch}: branch is checked out in a worktree.`);
+      }
       continue;
     }
 
     const safety = branchCleanupSafety(branch, baseRef);
     if (!safety.safe) {
-      console.log(`SKIP ${branch}: ${safety.reason}`);
+      skipped.push({ branch, reason: safety.reason });
+      if (!options.summaryJson) {
+        console.log(`SKIP ${branch}: ${safety.reason}`);
+      }
       continue;
     }
     eligible.push({ branch, reason: safety.reason });
+  }
+
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildCleanupBranchesSummary({ baseRef, baseSha, query, branches, eligible, skipped }), null, 2));
+    return;
   }
 
   if (eligible.length === 0) {
@@ -2430,6 +2452,26 @@ function cleanupBranches(argv) {
     console.log(`Deleted local branch ${branch}`);
   }
   console.log(`Deleted ${eligible.length} safe local codex/* branch(es).`);
+}
+
+function buildCleanupBranchesSummary({ baseRef, baseSha, query, branches, eligible, skipped }) {
+  return {
+    generatedAt: new Date().toISOString(),
+    baseRef,
+    baseSha,
+    query: query || null,
+    counts: {
+      total: branches.length,
+      safe: eligible.length,
+      skipped: skipped.length,
+    },
+    skippedReasonCounts: countByField(skipped, "reason"),
+    safeBranches: eligible.slice(0, 10),
+    safeBranchesTruncated: eligible.length > 10,
+    skippedBranches: skipped.slice(0, 10),
+    skippedBranchesTruncated: skipped.length > 10,
+    mutation: "none; summary only",
+  };
 }
 
 function rebuildIndex(argv) {
