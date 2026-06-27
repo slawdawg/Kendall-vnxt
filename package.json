@@ -41,6 +41,7 @@
     "check:docs": "node ./scripts/check-doc-indexes.mjs",
     "test:governed-worker-execution-dry-run": "node --test tests/governed-worker-execution-dry-run.test.mjs",
     "check:governed-worker-execution-dry-run": "node ./scripts/check-governed-worker-execution-dry-run.mjs",
+    "worker:readiness:collect": "node ./scripts/governed-worker-readiness-collect.mjs",
     "check:documentation-authority": "node ./scripts/check-documentation-authority-report.mjs",
     "check:verification-readiness": "node ./scripts/check-verification-readiness-report.mjs",
     "check:pipeline-implementation-readiness": "node ./scripts/check-pipeline-implementation-readiness.mjs",

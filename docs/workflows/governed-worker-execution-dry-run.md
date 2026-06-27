@@ -198,6 +198,13 @@ delivery, merge, cleanup, or adaptive trust updates. A successful readiness
 observation does not grant launch authority and must not change routing,
 priority, trust, retry, approval, delivery, merge, or cleanup behavior.
 
+The local collector command `pnpm run worker:readiness:collect` may search the
+current PATH with Node filesystem checks only and emit validated metadata-only
+readiness observations. It must not execute the discovered worker binary. If a
+worker path is found but no operator-observed version is supplied, the collector
+must report `blocked`, not `available`. Version strings may be supplied as
+bounded operator observations, for example `--version claude=<version text>`.
+
 Environment allowlist entries are names-only model data. The inherited
 environment is default-empty. Secret-like names or values are denied, including
 tokens, credentials, passwords, keys, browser/session variables, SSH/GitHub/cloud

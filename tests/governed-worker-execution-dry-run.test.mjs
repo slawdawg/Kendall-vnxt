@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   BLOCKED_AUTHORITY_FAMILIES,
@@ -13,9 +17,12 @@ import {
   validateToolReadinessProbe,
 } from "../scripts/lib/governed-worker-execution-dry-run.mjs";
 import { precheckGovernedWorkerExecutionDryRun } from "../scripts/check-governed-worker-execution-dry-run.mjs";
+import { collectToolReadinessProbes } from "../scripts/governed-worker-readiness-collect.mjs";
 
 const fixtureBase = new URL("./fixtures/governed-worker-execution-dry-run/", import.meta.url);
 const validatorSourcePath = new URL("../scripts/lib/governed-worker-execution-dry-run.mjs", import.meta.url);
+const readinessCollectorSourcePath = new URL("../scripts/governed-worker-readiness-collect.mjs", import.meta.url);
+const readinessCollectorPath = fileURLToPath(readinessCollectorSourcePath);
 const packageJsonPath = new URL("../package.json", import.meta.url);
 const checkWrapperPath = new URL("../scripts/check-governed-worker-execution-dry-run.mjs", import.meta.url);
 
@@ -198,6 +205,181 @@ test("real tool readiness probes validate metadata-only availability without lau
     assert.equal(result.readiness_state, probe.readiness_state);
     assert.equal(result.evidence_ref, probe.evidence_ref);
     assert.deepEqual(result.denied_reasons, []);
+  }
+});
+
+test("governed worker readiness collector reports available only with operator-observed version", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-readiness-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    await writeFile(claudePath, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(claudePath, 0o755);
+
+    const [result] = collectToolReadinessProbes({
+      env: { PATH: tempDir },
+      observedAt: "2026-06-27T00:00:00Z",
+      versions: new Map([["claude", "2.1.179 Claude Code"]]),
+      workers: ["claude"],
+    });
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.probe.worker, "claude");
+    assert.equal(result.probe.readiness_state, "available");
+    assert.equal(result.probe.command_path, claudePath);
+    assert.equal(result.probe.command_version, "2.1.179 Claude Code");
+    assert.equal(result.probe.command_resolution, "operator_shell_observation");
+    assert.equal(result.probe.network_required, false);
+    assert.equal(result.probe.session_inheritance_required, false);
+    assert.equal(result.probe.credential_access_required, false);
+    assert.equal(result.probe.raw_output_retained, false);
+    assert.equal(result.probe.affects_trust, false);
+    assert.equal(result.probe.affects_routing, false);
+    assert.equal(result.probe.launch_attempted, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("collector blocks found workers without version and reports missing workers with explicit nulls", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-readiness-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    await writeFile(claudePath, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(claudePath, 0o755);
+
+    const results = collectToolReadinessProbes({
+      env: { PATH: tempDir },
+      observedAt: "2026-06-27T00:00:00Z",
+      versions: new Map(),
+      workers: ["claude", "hermes"],
+    });
+
+    const claude = results.find((result) => result.probe.worker === "claude");
+    const hermes = results.find((result) => result.probe.worker === "hermes");
+
+    assert.equal(claude.validation.ok, true);
+    assert.equal(claude.probe.readiness_state, "blocked");
+    assert.equal(claude.probe.command_path, claudePath);
+    assert.equal(claude.probe.command_version, null);
+    assert.equal(claude.probe.launch_attempted, false);
+
+    assert.equal(hermes.validation.ok, true);
+    assert.equal(hermes.probe.readiness_state, "missing");
+    assert.equal(hermes.probe.command_path, null);
+    assert.equal(hermes.probe.command_version, null);
+    assert.equal(hermes.probe.launch_attempted, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("collector ignores executable directories when discovering worker paths", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-readiness-"));
+  try {
+    await mkdir(join(tempDir, "claude"));
+    await chmod(join(tempDir, "claude"), 0o755);
+
+    const [result] = collectToolReadinessProbes({
+      env: { PATH: tempDir },
+      observedAt: "2026-06-27T00:00:00Z",
+      versions: new Map([["claude", "2.1.179 Claude Code"]]),
+      workers: ["claude"],
+    });
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.probe.readiness_state, "missing");
+    assert.equal(result.probe.command_path, null);
+    assert.equal(result.probe.command_version, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("collector CLI fails closed for invalid blocked or missing validation results", () => {
+  const invalidObservedAt = spawnSync(
+    process.execPath,
+    [readinessCollectorPath, "--workers", "claude", "--observed-at", "not-a-date"],
+    { encoding: "utf8", env: { ...process.env, PATH: "" } },
+  );
+
+  assert.notEqual(invalidObservedAt.status, 0);
+  const invalidObservedAtOutput = JSON.parse(invalidObservedAt.stdout);
+  assert.equal(invalidObservedAtOutput.results[0].probe.readiness_state, "missing");
+  assert.equal(invalidObservedAtOutput.results[0].validation.ok, false);
+  assert.ok(
+    invalidObservedAtOutput.results[0].validation.field_reasons.some((reason) => reason.field === "observed_at"),
+  );
+
+  const unknownWorker = spawnSync(process.execPath, [readinessCollectorPath, "--workers", "claud"], { encoding: "utf8" });
+  assert.notEqual(unknownWorker.status, 0);
+  const unknownWorkerOutput = JSON.parse(unknownWorker.stdout);
+  assert.deepEqual(unknownWorkerOutput.results, []);
+  assert.ok(unknownWorkerOutput.errors.some((error) => error.reason === "unknown_worker"));
+  assert.ok(unknownWorkerOutput.errors.some((error) => error.reason === "empty_worker_selection"));
+
+  const emptyWorker = spawnSync(process.execPath, [readinessCollectorPath, "--workers", ""], { encoding: "utf8" });
+  assert.notEqual(emptyWorker.status, 0);
+  const emptyWorkerOutput = JSON.parse(emptyWorker.stdout);
+  assert.deepEqual(emptyWorkerOutput.results, []);
+  assert.ok(emptyWorkerOutput.errors.some((error) => error.reason === "empty_worker_selection"));
+});
+
+test("collector CLI rejects unsafe version observations without echoing raw input", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-readiness-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    await writeFile(claudePath, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(claudePath, 0o755);
+
+    const result = spawnSync(
+      process.execPath,
+      [readinessCollectorPath, "--workers", "claude", "--version", "claude=raw_prompt sk-proj-123456789"],
+      { encoding: "utf8", env: { ...process.env, PATH: tempDir } },
+    );
+
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stdout, /sk-proj-123456789/);
+    assert.doesNotMatch(result.stdout, /raw_prompt/);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.results[0].probe.readiness_state, "blocked");
+    assert.equal(output.results[0].probe.command_version, null);
+    assert.ok(output.errors.some((error) => error.reason === "invalid_version_observation"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("collector ignores relative PATH entries and does not expose launch authority", async () => {
+  const [result] = collectToolReadinessProbes({
+    env: { PATH: ["relative-bin", ""].join(":"), PWD: process.cwd() },
+    observedAt: "2026-06-27T00:00:00Z",
+    versions: new Map([["claude", "2.1.179 Claude Code"]]),
+    workers: ["claude"],
+  });
+
+  assert.equal(result.validation.ok, true);
+  assert.equal(result.probe.readiness_state, "missing");
+  assert.equal(result.probe.command_path, null);
+  assert.equal(result.probe.command_version, null);
+  assert.equal(result.probe.launch_attempted, false);
+
+  const source = await readFile(readinessCollectorSourcePath, "utf8");
+  for (const forbiddenPattern of [
+    /\bchild_process\b/,
+    /\bspawn\b/,
+    /\bexec\b/,
+    /\bfetch\s*\(/,
+    /\bnode:http\b/,
+    /\bnode:https\b/,
+    /\bnode:net\b/,
+    /\bnode:tls\b/,
+    /\bnode:dns\b/,
+    /\bWebSocket\b/,
+    /\bgh\s+/,
+    /\brm\s+/,
+    /\bwriteFile\b/,
+  ]) {
+    assert.doesNotMatch(source, forbiddenPattern);
   }
 });
 
@@ -685,6 +867,10 @@ test("scoped package scripts and check wrapper are wired for the dry-run slice",
   assert.equal(
     packageJson.scripts?.["check:governed-worker-execution-dry-run"],
     "node ./scripts/check-governed-worker-execution-dry-run.mjs",
+  );
+  assert.equal(
+    packageJson.scripts?.["worker:readiness:collect"],
+    "node ./scripts/governed-worker-readiness-collect.mjs",
   );
   assert.match(packageJson.scripts?.["check:static"], /pnpm run check:governed-worker-execution-dry-run/);
   assert.equal(existsSync(checkWrapperPath), true);
