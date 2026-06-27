@@ -2712,6 +2712,7 @@ function dispatchPacket(selected, evaluations, context) {
     blockers.push("no dispatchable safe backlog lane found");
   }
   const candidateStateCounts = queueCandidateStateCounts(evaluations);
+  const nextActionGuidance = dispatchNextActionGuidance(selected, candidateStateCounts);
 
   return {
     schema_version: 1,
@@ -2728,6 +2729,7 @@ function dispatchPacket(selected, evaluations, context) {
     stop_lines: defaultDispatchStopLines(),
     allowed: blockers.length === 0,
     blockers,
+    next_action_guidance: nextActionGuidance,
     generated_at: context.generatedAt.toISOString(),
     candidate_state_counts: candidateStateCounts,
     blocked_candidates: evaluations
@@ -2739,6 +2741,31 @@ function dispatchPacket(selected, evaluations, context) {
         next_action: evaluation.nextAction,
       })),
   };
+}
+
+function dispatchNextActionGuidance(selected, counts = {}) {
+  if (selected) {
+    return "run dispatch-next --apply after reviewing the dry-run packet";
+  }
+  if (counts.delivery > 0) {
+    return "finish open delivery lanes first: verify PR checks, review threads, exact head, merge evidence, then run merged-lane cleanup";
+  }
+  if (counts.cleanup > 0) {
+    return "run cleanup-merged dry-run for merged lanes before claiming more work";
+  }
+  if (counts.blocked_stale_owner_needs_takeover > 0) {
+    return "prepare takeover evidence for stale owned lanes and ask the operator before mutation";
+  }
+  if (counts.blocked_owned_active > 0) {
+    return "wait for active owned lanes or get explicit takeover approval before mutation";
+  }
+  if (counts.blocked_authority > 0) {
+    return "wait for explicit authority approval before starting blocked-authority work";
+  }
+  if (counts.ambiguous > 0) {
+    return "resolve ambiguous workspace or assignment evidence before claiming another lane";
+  }
+  return "add or refresh source-owned safe backlog next-lane metadata";
 }
 
 function queueCandidateStateCounts(evaluations) {
@@ -3165,6 +3192,9 @@ function printDispatchPacket(label, packet) {
   console.log(`- next ${packet.next_command || "none"}`);
   console.log(`- allowed ${packet.allowed !== false}`);
   console.log(`- queue states ${formatQueueCandidateStateCounts(packet.candidate_state_counts) || "none"}`);
+  if (packet.next_action_guidance) {
+    console.log(`- next action guidance ${packet.next_action_guidance}`);
+  }
   if (packet.blockers?.length) {
     for (const blocker of packet.blockers) {
       console.log(`- blocker ${blocker}`);
