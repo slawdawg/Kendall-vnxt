@@ -1179,6 +1179,78 @@ try {
     }
   });
 
+  test("close-assignments summary-json previews closeout without mutation", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-summary-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-summary-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-summary-lane",
+            branch: "codex/dispatcher-queue-handoff-summary-refresh",
+            worktree_path: rootDir,
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-a",
+            source_assignment_id: "dispatcher-queue-handoff-summary-refresh",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "dispatcher-queue-handoff-summary-refresh.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "dispatcher-queue-handoff-summary-refresh",
+            task_id: "closed-summary-lane",
+            branch: "codex/dispatcher-queue-handoff-summary-refresh",
+            status: "active",
+            owner: "runner-a",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "dispatcher-queue-handoff-summary-refresh",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
+      assert(packet.counts.total === 1, result.stdout || result.stderr);
+      assert(packet.counts.closeable === 1, result.stdout || result.stderr);
+      assert(packet.statusCounts.closeable === 1, result.stdout || result.stderr);
+      assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
+      const [closeout] = packet.results;
+      assert(closeout.assignmentId === "dispatcher-queue-handoff-summary-refresh", result.stdout || result.stderr);
+      assert(closeout.status === "closeable", result.stdout || result.stderr);
+      assert(closeout.manifestTaskId === "closed-summary-lane", result.stdout || result.stderr);
+      assert(closeout.branch === "codex/dispatcher-queue-handoff-summary-refresh", result.stdout || result.stderr);
+      assert(closeout.owner === "runner-a", result.stdout || result.stderr);
+      assert(taskSnapshot(tasksDir) === beforeTasks, "close-assignments summary-json mutated manifests");
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "close-assignments summary-json mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("close-assignments apply closes only assignments backed by closed workspace evidence", () => {
     const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-apply-"));
     try {
