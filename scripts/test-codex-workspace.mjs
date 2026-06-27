@@ -2748,6 +2748,45 @@ try {
     }
   });
 
+  test("cleanup-merged summary-json reports cleanup readiness without mutation", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--summary-json", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.mode === "cleanup-merged", `mode is ${summary.mode}`);
+      assert(summary.deleteRemote === true, "deleteRemote was not captured");
+      assert(summary.counts.total === 1, `total count is ${summary.counts.total}`);
+      assert(summary.counts.cleanupReady === 1, `cleanupReady count is ${summary.counts.cleanupReady}`);
+      assert(summary.statusCounts.ready === 1, `ready status count is ${summary.statusCounts.ready}`);
+      assert(summary.mutation === "none; summary only", `mutation is ${summary.mutation}`);
+
+      const [cleanup] = summary.results;
+      assert(cleanup.taskId === "cleanup-task", `taskId is ${cleanup.taskId}`);
+      assert(cleanup.status === "ready", `status is ${cleanup.status}`);
+      assert(cleanup.pr.number === 123, `PR number is ${cleanup.pr.number}`);
+      assert(cleanup.expectedHeadSha, "summary missing expected cleanup head");
+      assert(cleanup.localBranchSha, "summary missing local branch head");
+      assert(cleanup.remoteBranchSha, "summary missing remote branch head");
+      assert(cleanup.worktree.exists === true, "summary did not report existing worktree");
+      assert(cleanup.worktree.dirty === false, "summary reported dirty worktree");
+      assert(cleanup.plan.some((line) => line.includes(`git worktree remove ${fixture.worktree}`)), "summary missing worktree cleanup plan");
+      assert(cleanup.plan.some((line) => line.includes(`git push origin --delete ${fixture.branch}`)), "summary missing remote cleanup plan");
+
+      assert(existsSync(fixture.worktree), "summary unexpectedly removed target worktree");
+      assert(branchExists(fixture.root, fixture.branch), "summary unexpectedly deleted local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "summary unexpectedly deleted remote branch");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "cleanup-task.json"));
+      assert(manifest.status === "merged", `manifest status is ${manifest.status}`);
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-merged resumes cleanup_partial after worktree removal", () => {
     const fixture = createMergedCleanupFixture();
     try {
