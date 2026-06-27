@@ -142,6 +142,7 @@ coordination-report options:
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 assignment-report options:
+  --summary-json            Print a bounded JSON summary for quick runner scans.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 claim-next options:
@@ -684,6 +685,32 @@ function assignmentReport(argv) {
   const backlogItems = readSafeBacklogItems();
   const manifestBranchStates = workspaceBranchStates(manifests);
   const assignmentBranchStates = assignmentBranchStatesByBranch(assignments);
+  const context = {
+    currentOwner,
+    generatedAt,
+    staleAfterSeconds,
+  };
+
+  if (options.summaryJson) {
+    console.log(
+      JSON.stringify(
+        buildAssignmentReportSummary({
+          state,
+          currentOwner,
+          staleAfterSeconds,
+          generatedAt,
+          manifests,
+          assignments,
+          backlogItems,
+          manifestBranchStates,
+          assignmentBranchStates,
+        }),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
 
   console.log("Assignment Report");
   console.log(`Generated: ${generatedAt.toISOString()}`);
@@ -719,9 +746,7 @@ function assignmentReport(argv) {
   } else {
     for (const assignment of assignments) {
       const classification = classifyLaneAssignment(assignment, {
-        currentOwner,
-        generatedAt,
-        staleAfterSeconds,
+        ...context,
       });
       console.log(
         [
@@ -749,9 +774,7 @@ function assignmentReport(argv) {
 
   for (const manifest of manifests) {
     const classification = classifyWorkspaceAssignment(manifest, {
-      currentOwner,
-      generatedAt,
-      staleAfterSeconds,
+      ...context,
     });
     console.log(
       [
@@ -769,6 +792,82 @@ function assignmentReport(argv) {
       ].join(" | "),
     );
   }
+}
+
+function buildAssignmentReportSummary({
+  state,
+  currentOwner,
+  staleAfterSeconds,
+  generatedAt,
+  manifests,
+  assignments,
+  backlogItems,
+  manifestBranchStates,
+  assignmentBranchStates,
+}) {
+  const context = { currentOwner, generatedAt, staleAfterSeconds };
+  const backlogCandidates = backlogItems.map((item) => {
+    const classification = classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates, manifests, assignments);
+    return {
+      itemId: item.itemId,
+      sourceStatus: item.status || "unknown",
+      status: classification.status,
+      branch: item.branchName || null,
+      reason: classification.reason,
+    };
+  });
+  const laneAssignments = assignments.map((assignment) => {
+    const classification = classifyLaneAssignment(assignment, context);
+    return {
+      assignmentId: assignment.assignment_id,
+      taskId: assignment.task_id || null,
+      status: classification.status,
+      owner: assignment.owner || null,
+      branch: assignment.branch || null,
+      phase: assignment.phase || null,
+      heartbeat: assignment.last_heartbeat_at || null,
+      reason: classification.reason,
+      nextAction: classification.nextAction,
+    };
+  });
+  const workspaceAssignments = manifests.map((manifest) => {
+    const classification = classifyWorkspaceAssignment(manifest, context);
+    return {
+      taskId: manifest.task_id,
+      status: classification.status,
+      manifestStatus: manifest.status,
+      owner: manifest.owner || null,
+      branch: manifest.branch || null,
+      worktreePath: manifest.worktree_path || null,
+      phase: manifest.phase || null,
+      heartbeat: manifest.last_heartbeat_at || manifest.owner_updated_at || null,
+      reason: classification.reason,
+      nextAction: classification.nextAction,
+    };
+  });
+
+  return {
+    generatedAt: generatedAt.toISOString(),
+    stateRoot: state.root,
+    currentOwner,
+    staleAfterSeconds,
+    safeBacklogSource: "services/supervisor/src/supervisor/application/service.py#get_safe_development_backlog_report",
+    counts: {
+      backlogCandidates: backlogCandidates.length,
+      laneAssignments: laneAssignments.length,
+      workspaceAssignments: workspaceAssignments.length,
+    },
+    backlogStatusCounts: countByField(backlogCandidates, "status"),
+    laneAssignmentStatusCounts: countByField(laneAssignments, "status"),
+    workspaceAssignmentStatusCounts: countByField(workspaceAssignments, "status"),
+    backlogCandidates: backlogCandidates.slice(0, 10),
+    backlogCandidatesTruncated: backlogCandidates.length > 10,
+    laneAssignments: laneAssignments.slice(0, 10),
+    laneAssignmentsTruncated: laneAssignments.length > 10,
+    workspaceAssignments: workspaceAssignments.slice(0, 10),
+    workspaceAssignmentsTruncated: workspaceAssignments.length > 10,
+    mutation: "none; summary only",
+  };
 }
 
 function claimNext(argv) {
