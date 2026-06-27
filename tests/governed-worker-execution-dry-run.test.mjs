@@ -981,6 +981,120 @@ test("governed copied-worktree Claude execution uses an ephemeral tracked-file c
   }
 });
 
+test("governed copied-worktree Claude starter patch proposal returns metadata only", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-proposal-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    const claudePath = join(safeBin, "claude");
+    await writeFile(
+      claudePath,
+      `#!/bin/sh\n[ -f README.md ] || exit 8\necho '{"result":"KENDALL_PATCH_PROPOSAL_OK","proposal":{"target_file":"README.md","change_kind":"append_line","summary":"Add a harmless Kendall starter note"}}'\n`,
+      "utf8",
+    );
+    await chmod(claudePath, 0o755);
+
+    const [result] = collectCopiedWorktreeExecutionAttempts({
+      env: { PATH: safeBin, PWD: sourceWorktree },
+      observedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+      taskId: "starter_patch_proposal",
+      timeoutMs: 1000,
+      workers: ["claude"],
+    });
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.attempt.task_id, "starter_patch_proposal");
+    assert.equal(result.attempt.execution_state, "execution_observed");
+    assert.equal(result.attempt.expected_response, "KENDALL_PATCH_PROPOSAL_OK");
+    assert.equal(result.attempt.observed_response, "KENDALL_PATCH_PROPOSAL_OK");
+    assert.equal(result.attempt.proposal_target_file, "README.md");
+    assert.equal(result.attempt.proposal_change_kind, "append_line");
+    assert.equal(result.attempt.proposal_summary, "Add a harmless Kendall starter note");
+    assert.equal(result.attempt.tools_allowed, false);
+    assert.equal(result.attempt.raw_output_retained, false);
+    assert.equal(result.attempt.source_mutation_allowed, false);
+    assert.equal(result.attempt.affects_trust, false);
+    assert.equal(result.attempt.affects_routing, false);
+    assert.equal(await readFile(join(sourceWorktree, "README.md"), "utf8"), "copy execution fixture\n");
+    assert.equal(existsSync(result.attempt.execution_cwd), false);
+    assert.equal(validateCopiedWorktreeExecutionAttempt({ ...result.attempt, proposal_summary: "provider_payload sk-proj-123" }).ok, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copied-worktree starter patch proposal accepts Claude JSON output wrapper", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-proposal-wrapper-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    const claudePath = join(safeBin, "claude");
+    await writeFile(
+      claudePath,
+      `#!/bin/sh\nprintf '%s\n' '{"type":"result","result":"{\\"result\\":\\"KENDALL_PATCH_PROPOSAL_OK\\",\\"proposal\\":{\\"target_file\\":\\"README.md\\",\\"change_kind\\":\\"append_line\\",\\"summary\\":\\"Add a harmless Kendall starter note\\"}}"}'\n`,
+      "utf8",
+    );
+    await chmod(claudePath, 0o755);
+
+    const [result] = collectCopiedWorktreeExecutionAttempts({
+      env: { PATH: safeBin, PWD: sourceWorktree },
+      observedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+      taskId: "starter_patch_proposal",
+      timeoutMs: 1000,
+      workers: ["claude"],
+    });
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.attempt.execution_state, "execution_observed");
+    assert.equal(result.attempt.observed_response, "KENDALL_PATCH_PROPOSAL_OK");
+    assert.equal(result.attempt.proposal_target_file, "README.md");
+    assert.equal(result.attempt.raw_output_retained, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copied-worktree starter patch proposal rejects marker-only Claude wrapper", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-proposal-marker-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    const claudePath = join(safeBin, "claude");
+    await writeFile(
+      claudePath,
+      `#!/bin/sh
+printf '%s\n' '{"type":"result","result":"KENDALL_PATCH_PROPOSAL_OK"}'
+`,
+      "utf8",
+    );
+    await chmod(claudePath, 0o755);
+
+    const [result] = collectCopiedWorktreeExecutionAttempts({
+      env: { PATH: safeBin, PWD: sourceWorktree },
+      observedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+      taskId: "starter_patch_proposal",
+      timeoutMs: 1000,
+      workers: ["claude"],
+    });
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.attempt.execution_state, "invalid_output");
+    assert.equal(result.attempt.observed_response, null);
+    assert.equal(result.attempt.proposal_target_file, null);
+    assert.equal(result.attempt.proposal_change_kind, null);
+    assert.equal(result.attempt.proposal_summary, null);
+    assert.equal(result.attempt.raw_output_retained, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("copied-worktree execution reports unsupported Hermes and invalid Claude output without raw retention", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-exec-"));
   try {
@@ -1547,6 +1661,66 @@ test("copied-worktree evidence export CLI rejects unsafe source worktree before 
     assert.equal(missingValueOutput.ok, false);
     assert.ok(missingValueOutput.errors.some((error) => error.reason === "source_worktree_missing"));
     assert.equal(existsSync(sentinel), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+
+test("copied-worktree evidence export CLI persists supplied patch proposal metadata", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-proposal-cli-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    await writeFile(
+      join(safeBin, "claude"),
+      "#!/bin/sh\nprintf \"%s\\n\" \"{\\\"result\\\":\\\"KENDALL_PATCH_PROPOSAL_OK\\\",\\\"proposal\\\":{\\\"target_file\\\":\\\"README.md\\\",\\\"change_kind\\\":\\\"append_line\\\",\\\"summary\\\":\\\"Add a harmless Kendall starter note\\\"}}\"\n",
+      "utf8",
+    );
+    await chmod(join(safeBin, "claude"), 0o755);
+    const results = collectCopiedWorktreeExecutionAttempts({
+      env: { PATH: safeBin, PWD: sourceWorktree },
+      observedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+      taskId: "starter_patch_proposal",
+      timeoutMs: 1000,
+      workers: ["claude"],
+    });
+    const inputPath = join(tempDir, "patch-producer-results.json");
+    const outputPath = join(tempDir, "patch-exported-evidence.json");
+    await writeFile(inputPath, JSON.stringify({ results, errors: [] }), "utf8");
+
+    const directSnapshot = buildGovernedWorkerEvidenceSnapshot({
+      attempts: results.map((result) => result.attempt),
+      generatedAt: "2026-06-27T00:00:00Z",
+    });
+
+    assert.equal(directSnapshot.validation.ok, true);
+    assert.equal(directSnapshot.snapshot.attempts.length, 1);
+    assert.equal(directSnapshot.snapshot.attempts[0].task_id, "starter_patch_proposal");
+    assert.equal(directSnapshot.snapshot.attempts[0].expected_response, "KENDALL_PATCH_PROPOSAL_OK");
+    assert.equal(directSnapshot.snapshot.attempts[0].proposal_target_file, "README.md");
+    assert.equal(directSnapshot.snapshot.attempts[0].proposal_change_kind, "append_line");
+    assert.equal(directSnapshot.snapshot.attempts[0].proposal_summary, "Add a harmless Kendall starter note");
+    assert.doesNotMatch(JSON.stringify(directSnapshot.snapshot), /source_worktree|execution_cwd|command_args|shell_used|raw_prompt|provider_payload|sk-proj/i);
+
+    const cliResult = spawnSync(
+      process.execPath,
+      [copiedWorktreeEvidenceExportPath, "--input-results", inputPath, "--output", outputPath, "--observed-at", "2026-06-27T00:00:00Z"],
+      { cwd: sourceWorktree, encoding: "utf8", env: { ...process.env, PATH: "" } },
+    );
+
+    assert.equal(cliResult.status, 0, cliResult.stderr || cliResult.stdout);
+    const output = JSON.parse(cliResult.stdout);
+    assert.equal(output.ok, true);
+    const persisted = JSON.parse(await readFile(outputPath, "utf8"));
+    assert.equal(validateGovernedWorkerEvidenceSnapshot(persisted).ok, true);
+    assert.equal(persisted.attempts[0].task_id, "starter_patch_proposal");
+    assert.equal(persisted.attempts[0].proposal_target_file, "README.md");
+    assert.equal(persisted.attempts[0].raw_output_retained, false);
+    assert.equal(persisted.attempts[0].tools_allowed, false);
+    assert.equal(persisted.attempts[0].source_mutation_allowed, false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -2121,6 +2295,10 @@ test("scoped package scripts and check wrapper are wired for the dry-run slice",
   assert.equal(
     packageJson.scripts?.["worker:copy:evidence:export"],
     "node ./scripts/governed-worker-copied-worktree-evidence-export.mjs",
+  );
+  assert.equal(
+    packageJson.scripts?.["worker:copy:patch-proposal"],
+    "node ./scripts/governed-worker-copied-worktree-execution.mjs --task starter_patch_proposal",
   );
   assert.match(packageJson.scripts?.["check:static"], /pnpm run check:governed-worker-execution-dry-run/);
   assert.equal(existsSync(checkWrapperPath), true);
