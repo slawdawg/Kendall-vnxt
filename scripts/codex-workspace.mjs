@@ -2291,6 +2291,7 @@ function cleanupOrphans(argv) {
 
   const directories = readdirSync(state.worktreesDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
+    .filter((entry) => !hiddenWorkspaceMetadataEntry(entry.name))
     .map((entry) => join(state.worktreesDir, entry.name))
     .filter((worktreePath) => !worktreeListed(worktreePath))
     .filter((worktreePath) => !query || basename(worktreePath).toLowerCase().includes(query));
@@ -2323,6 +2324,10 @@ function cleanupOrphans(argv) {
     removeManagedDirectory(worktreePath, state);
     console.log(`Removed orphan directory ${worktreePath}`);
   }
+}
+
+function hiddenWorkspaceMetadataEntry(name) {
+  return String(name || "").startsWith(".");
 }
 
 function cleanupBranches(argv) {

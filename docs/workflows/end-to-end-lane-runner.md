@@ -151,6 +151,8 @@ cannot be completed without expanded party-mode authority.
    Cleanup is resumable; if a previous attempt removed the worktree but stopped
    before branch deletion or manifest closure, rerun the same cleanup command
    from a stable worktree.
+   Orphan cleanup is for stale lane directories only; hidden workspace metadata
+   under the worktrees root is outside the cleanup surface.
    Stop if the worktree is dirty, no stable repository root is available, owner
    evidence is missing or mismatched, PR merge evidence is missing, or the
    local/remote branch head differs from the recorded PR delivery head.
