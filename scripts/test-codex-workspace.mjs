@@ -1715,6 +1715,57 @@ try {
     }
   });
 
+  test("dispatch-next summary-json previews a bounded handoff summary without mutation", () => {
+    const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-summary-json-"));
+    try {
+      const expected = expectedClaimCandidate();
+      if (branchExists(rootDir, expected.branch)) {
+        seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
+        seedUnownedSafeBacklogWorkspace(dispatchStateRoot, expected.slug);
+      } else {
+        seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
+      }
+      const tasksDir = join(dispatchStateRoot, "tasks");
+      const assignmentsDir = join(dispatchStateRoot, "assignments");
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const result = run([
+        "dispatch-next",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        dispatchStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
+      assert(packet.readinessProfile === "doctor", result.stdout || result.stderr);
+      assert(packet.selected.itemId === expected.slug, result.stdout || result.stderr);
+      assert(packet.dispatch.allowed === true, result.stdout || result.stderr);
+      assert(packet.dispatch.selectedLane === expected.slug, result.stdout || result.stderr);
+      assert(
+        packet.dispatch.workspaceAction === "claim_and_create_workspace" ||
+          packet.dispatch.workspaceAction === "claim_existing_workspace",
+        result.stdout || result.stderr,
+      );
+      assert(packet.dispatch.nextActionGuidance.includes("dispatch-next --apply"), result.stdout || result.stderr);
+      assert(packet.counts.total > 0, result.stdout || result.stderr);
+      assert(packet.counts.dispatchable >= 1, result.stdout || result.stderr);
+      assert(packet.candidateStateCounts.blocked_authority === 1, result.stdout || result.stderr);
+      assert(packet.candidateStateCounts.closed >= 1, result.stdout || result.stderr);
+      assert(packet.blockedCandidates.length <= 10, result.stdout || result.stderr);
+      assert(typeof packet.blockedCandidatesTruncated === "boolean", result.stdout || result.stderr);
+      assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch summary-json mutated assignments");
+      assert(taskSnapshot(tasksDir) === beforeTasks, "dispatch summary-json mutated manifests");
+    } finally {
+      rmSync(dispatchStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("dispatch-next apply validates workspace base before assignment mutation", () => {
     const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-invalid-base-"));
     try {

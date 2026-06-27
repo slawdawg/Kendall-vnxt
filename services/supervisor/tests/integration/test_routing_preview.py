@@ -8576,6 +8576,7 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert continuity["selectedBacklogItemId"] == "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
     assert continuity["selectedBranch"] == "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
+    assert continuity["summaryDryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner <owner>"
     assert continuity["assignableCount"] >= 1
     assert "blocked-authority" in continuity["blockerCodes"]
     queue_proof_rows = {row["backlogItemId"]: row for row in continuity["queueProofRows"]}

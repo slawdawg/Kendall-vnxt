@@ -2151,6 +2151,7 @@ export interface RunnerDispatcherContinuitySnapshotView {
   selectedBacklogItemId?: string | null;
   selectedBranch?: string | null;
   dryRunCommand: string;
+  summaryDryRunCommand: string;
   assignableCount: number;
   activeCount: number;
   blockedCount: number;

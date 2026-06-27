@@ -96,6 +96,7 @@ for (const serviceText of [
   "dispatcherContinuity",
   "dispatcher-continuity-snapshot-v1",
   "dispatch-next --dry-run --owner <owner>",
+  "dispatch-next --dry-run --summary-json",
   "queueProofRows",
   "dispatcher-queue-state-fixtures-refresh",
   "dispatcher-queue-handoff-badges-refresh",

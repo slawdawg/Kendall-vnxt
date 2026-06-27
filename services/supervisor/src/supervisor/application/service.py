@@ -3990,6 +3990,7 @@ class SupervisorService:
             selectedBacklogItemId=selected_backlog.backlogItemId if selected_backlog else None,
             selectedBranch=selected_backlog.branch if selected_backlog else None,
             dryRunCommand="node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>",
+            summaryDryRunCommand="node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner <owner>",
             assignableCount=summary.assignable,
             activeCount=summary.active,
             blockedCount=summary.blocked,
