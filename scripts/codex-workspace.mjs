@@ -40,6 +40,9 @@ try {
     case "list":
       listWorkspaces(commandArgs);
       break;
+    case "coordination-report":
+      coordinationReport(commandArgs);
+      break;
     case "assignment-report":
       assignmentReport(commandArgs);
       break;
@@ -96,6 +99,7 @@ function printHelp() {
 Commands:
   start <description>       Create a task manifest, branch, and worktree.
   list                      Show known Codex workspaces.
+  coordination-report       Show a read-only workspace coordination packet.
   assignment-report         Show read-only runner assignment inventory and blockers.
   claim-next                Preview the next claimable runner assignment lane.
   heartbeat <query>         Update owner-only runner heartbeat evidence.
@@ -131,6 +135,10 @@ list options:
   --owned                   Show only workspaces owned by the current runner.
   --owner <id>              Show only workspaces owned by the given owner.
   --json                    Print matching workspaces as JSON for automation.
+
+coordination-report options:
+  --json                    Print the coordination packet as JSON for automation.
+  --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
 
 assignment-report options:
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
@@ -371,6 +379,224 @@ function listWorkspaces(argv) {
       ].join(" | "),
     );
   }
+}
+
+function coordinationReport(argv) {
+  const { options } = parseOptions(argv);
+  const packet = buildCoordinationReportPacket(options);
+  if (options.json) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+  printCoordinationReport(packet);
+}
+
+function buildCoordinationReportPacket(options = {}) {
+  const state = workspaceState(options);
+  const currentOwner = currentLaneOwner(options);
+  const staleAfterSeconds = positiveInteger(options.staleAfterSeconds, 86_400);
+  const generatedAt = new Date();
+  const manifests = readManifests(state).map(({ manifest }) => manifest);
+  const assignments = readAssignments(state).map(({ assignment }) => assignment);
+  const activeManifests = manifests.filter((manifest) => manifest.status !== "closed");
+  const context = { currentOwner, generatedAt, staleAfterSeconds };
+  const rootStatus = parseStatus(repoRoot);
+  const checkout = currentCheckoutPacket(repoRoot);
+  const activeLanes = activeManifests.map((manifest) => coordinationLanePacket(manifest, context));
+  const cleanActiveLanes = activeLanes.filter((lane) => lane.worktreeExists && !lane.dirty);
+  const dirtyActiveLanes = activeLanes.filter((lane) => lane.dirty);
+  const localOnlyCommits = activeLanes.filter((lane) => lane.localOnlyCommits > 0);
+  const prWaitingAtMergeGate = activeLanes.filter((lane) => lane.status === "pr_open");
+  const cleanupCandidates = activeLanes.filter((lane) => lane.assignmentStatus === "cleanup" && !lane.dirty);
+  const blockedApprovalPackets = [
+    ...activeLanes.filter((lane) => String(lane.assignmentStatus).startsWith("blocked")),
+    ...assignments
+      .map((assignment) => {
+        const classification = classifyLaneAssignment(assignment, context);
+        return {
+          id: assignment.assignment_id,
+          branch: assignment.branch || null,
+          status: classification.status,
+          reason: classification.reason,
+          nextAction: classification.nextAction,
+        };
+      })
+      .filter((assignment) => String(assignment.status).startsWith("blocked")),
+  ];
+
+  const manifestBranchStates = workspaceBranchStates(manifests);
+  const assignmentBranchStates = assignmentBranchStatesByBranch(assignments);
+  const backlogItems = readSafeBacklogItems();
+  const claimEvaluations = backlogItems.map((item) =>
+    evaluateClaimCandidate(item, manifests, assignments, {
+      currentOwner,
+      generatedAt,
+      staleAfterSeconds,
+    }),
+  );
+  const selected = claimEvaluations.find((evaluation) => evaluation.claimable) || null;
+  const closedRetainedLanes = manifests
+    .filter((manifest) => manifest.status === "closed")
+    .map((manifest) => ({
+      taskId: manifest.task_id,
+      branch: manifest.branch,
+      prNumber: manifest.pr_number || prNumberFromUrl(manifest.pr_url || "") || null,
+      worktreePath: manifest.worktree_path,
+      worktreeExists: Boolean(manifest.worktree_path && existsSync(manifest.worktree_path)),
+    }));
+
+  return {
+    generatedAt: generatedAt.toISOString(),
+    stateRoot: state.root,
+    currentOwner,
+    staleAfterSeconds,
+    currentCheckout: checkout,
+    rootStatus: {
+      dirty: rootStatus.any,
+      staged: rootStatus.staged,
+      unstaged: rootStatus.unstaged,
+      pathCount: rootStatus.lines.length,
+    },
+    activeManagedWorktrees: activeLanes,
+    prsWaitingAtMergeGate: prWaitingAtMergeGate,
+    cleanActiveLanes,
+    dirtyActiveLanes,
+    localOnlyCommits,
+    closedButRetainedLanes: closedRetainedLanes,
+    cleanupCandidates,
+    blockedApprovalPackets,
+    nextSafeSlice: selected
+      ? {
+          status: "claimable",
+          itemId: selected.item.itemId,
+          branch: selected.item.branchName || null,
+          action: selected.action,
+          nextAction: selected.nextAction,
+        }
+      : {
+          status: "none",
+          itemId: null,
+          branch: null,
+          action: "no claimable safe backlog lane found",
+          nextAction: "choose the next ready safe backlog lane or wait for explicit authority approval",
+        },
+    backlogSummary: claimEvaluations.map((evaluation) => ({
+      itemId: evaluation.item.itemId,
+      sourceStatus: evaluation.item.status || "unknown",
+      status: evaluation.status,
+      branch: evaluation.item.branchName || null,
+      reason: evaluation.reason,
+      nextAction: evaluation.nextAction,
+    })),
+    backlogClassificationSummary: backlogItems.map((item) => {
+      const classification = classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates, manifests, assignments);
+      return {
+        itemId: item.itemId,
+        sourceStatus: item.status || "unknown",
+        status: classification.status,
+        branch: item.branchName || null,
+        reason: classification.reason,
+      };
+    }),
+    stopLines: coordinationReportStopLines(),
+  };
+}
+
+function printCoordinationReport(packet) {
+  console.log("Workspace Coordination Report");
+  console.log(`- Current checkout: ${packet.currentCheckout.branch || "unknown"} at ${packet.currentCheckout.shortHead || "unknown"} (${packet.currentCheckout.path})`);
+  console.log(`- Root status: ${packet.rootStatus.dirty ? `dirty (${packet.rootStatus.pathCount} path(s))` : "clean"}`);
+  printCoordinationRows("- Active managed worktrees:", packet.activeManagedWorktrees, formatCoordinationLane);
+  printCoordinationRows("- PRs waiting at merge gate:", packet.prsWaitingAtMergeGate, formatCoordinationLane);
+  printCoordinationRows("- Clean active lanes:", packet.cleanActiveLanes, formatCoordinationLane);
+  printCoordinationRows("- Dirty active lanes:", packet.dirtyActiveLanes, formatCoordinationLane);
+  printCoordinationRows("- Local-only commits:", packet.localOnlyCommits, (lane) => `${lane.taskId} | ${lane.branch} | ahead=${lane.localOnlyCommits}`);
+  printCoordinationRows("- Closed but retained lanes:", packet.closedButRetainedLanes, (lane) => `${lane.taskId} | ${lane.branch} | worktreeExists=${lane.worktreeExists}`);
+  printCoordinationRows("- Cleanup candidates:", packet.cleanupCandidates, formatCoordinationLane);
+  printCoordinationRows("- Blocked approval packets:", packet.blockedApprovalPackets, (entry) => `${entry.id || entry.taskId} | ${entry.status} | ${entry.reason} | next=${entry.nextAction}`);
+  console.log(`- Next safe slice: ${packet.nextSafeSlice.status} | ${packet.nextSafeSlice.action} | next=${packet.nextSafeSlice.nextAction}`);
+  printCoordinationRows("- Stop lines:", packet.stopLines, (line) => line);
+}
+
+function printCoordinationRows(label, rows, formatter) {
+  console.log(label);
+  if (!rows.length) {
+    console.log("  - none");
+    return;
+  }
+  for (const row of rows) {
+    console.log(`  - ${formatter(row)}`);
+  }
+}
+
+function formatCoordinationLane(lane) {
+  return `${lane.taskId} | ${lane.status} | ${lane.branch} | ${lane.cleanState} | assignment=${lane.assignmentStatus} | next=${lane.nextAction}`;
+}
+
+function coordinationLanePacket(manifest, context) {
+  const classification = classifyWorkspaceAssignment(manifest, context);
+  const worktreeExists = Boolean(manifest.worktree_path && existsSync(manifest.worktree_path));
+  const status = worktreeExists ? parseStatus(manifest.worktree_path) : { any: false, staged: false, unstaged: false, lines: [] };
+  const localOnlyCommits = worktreeExists ? commitsAheadOfBase(manifest) : 0;
+  return {
+    taskId: manifest.task_id,
+    title: manifest.title || manifest.description || manifest.task_id,
+    status: manifest.status,
+    assignmentStatus: classification.status,
+    reason: classification.reason,
+    nextAction: classification.nextAction,
+    branch: manifest.branch,
+    owner: manifest.owner || null,
+    worktreePath: manifest.worktree_path,
+    worktreeExists,
+    dirty: status.any,
+    cleanState: status.any ? `dirty:${status.lines.length}` : "clean",
+    staged: status.staged,
+    unstaged: status.unstaged,
+    localOnlyCommits,
+    prUrl: manifest.pr_url || null,
+    prNumber: manifest.pr_number || prNumberFromUrl(manifest.pr_url || "") || null,
+  };
+}
+
+function currentCheckoutPacket(cwd) {
+  const branch = git(["branch", "--show-current"], { cwd }).stdout.trim();
+  const head = git(["rev-parse", "HEAD"], { cwd }).stdout.trim();
+  return {
+    path: cwd,
+    branch: branch || "detached",
+    head: head || null,
+    shortHead: head ? head.slice(0, 7) : null,
+  };
+}
+
+function commitsAheadOfBase(manifest) {
+  const baseRef = String(manifest.base_ref || manifest.base_branch || "").trim();
+  if (!baseRef) {
+    return 0;
+  }
+  const base = git(["rev-parse", "--verify", "--quiet", baseRef], { cwd: manifest.worktree_path });
+  if (base.code !== 0 || !base.stdout.trim()) {
+    return 0;
+  }
+  const ahead = git(["rev-list", "--count", `${baseRef}..HEAD`], { cwd: manifest.worktree_path });
+  const count = Number.parseInt(ahead.stdout.trim(), 10);
+  return ahead.code === 0 && Number.isFinite(count) ? count : 0;
+}
+
+function coordinationReportStopLines() {
+  return [
+    "Merge a PR.",
+    "Delete a worktree.",
+    "Delete a local or remote branch.",
+    "Discard local commits.",
+    "Rewrite a shared branch.",
+    "Resolve a review thread that has not been addressed.",
+    "Start work in a lane whose scope overlaps an active dirty lane.",
+    "Create an empty PR for a verified no-source refresh lane.",
+    "Mutate an active workspace branch owned by another runner.",
+    "Repair an active or unreadable workspace manifest without explicit inspection.",
+  ];
 }
 
 function assignmentReport(argv) {

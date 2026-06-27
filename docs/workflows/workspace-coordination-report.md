@@ -28,10 +28,17 @@ Start with these small sources:
 AGENTS.md#codex-workspace-protocol
 docs/ai-context/index.md
 node ./scripts/codex-workspace.mjs list --active --json
+node ./scripts/codex-workspace.mjs coordination-report
 git status --short --branch
 ```
 
 Expand only when a lane's purpose or safety boundary is unclear.
+
+`node ./scripts/codex-workspace.mjs coordination-report --json` is the
+read-only automation form of the packet below. It may read workspace manifests,
+assignment metadata, local git status, and source-owned safe backlog evidence.
+It must not create branches, worktrees, commits, PRs, merges, cleanup actions,
+remote mutations, or manifest writes.
 
 ## Report Packet
 
