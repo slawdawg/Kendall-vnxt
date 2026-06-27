@@ -1576,6 +1576,68 @@ try {
     }
   });
 
+  test("takeover summary-json previews compact takeover evidence without mutation", () => {
+    const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-summary-json-"));
+    try {
+      const assignmentsDir = join(takeoverStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      const assignmentPath = join(assignmentsDir, "stale-assignment.json");
+      writeFileSync(
+        assignmentPath,
+        `${JSON.stringify(
+          {
+            assignment_id: "stale-assignment",
+            task_id: "stale-assignment",
+            lane_slug: "stale-assignment",
+            branch: "codex/stale-assignment",
+            status: "claimed",
+            owner: "runner-b",
+            updated_at: "2026-06-21T00:00:00.000Z",
+            last_heartbeat_at: "2026-06-21T00:00:00.000Z",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const before = readFileSync(assignmentPath, "utf8");
+
+      const result = run([
+        "takeover",
+        "stale-assignment",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--takeover-reason",
+        "stale owner evidence reviewed",
+        "--stale-after-seconds",
+        "60",
+        "--state-root",
+        takeoverStateRoot,
+      ]);
+      const after = readFileSync(assignmentPath, "utf8");
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.targetKind === "assignment", result.stdout || result.stderr);
+      assert(packet.targetId === "stale-assignment", result.stdout || result.stderr);
+      assert(packet.previousOwner === "runner-b", result.stdout || result.stderr);
+      assert(packet.requestingOwner === "runner-a", result.stdout || result.stderr);
+      assert(packet.decision === "blocked", result.stdout || result.stderr);
+      assert(packet.allowed === false, result.stdout || result.stderr);
+      assert(packet.heartbeat.isStale === true, result.stdout || result.stderr);
+      assert(packet.heartbeat.staleAfterSeconds === 60, result.stdout || result.stderr);
+      assert(packet.worktree.status === "not_applicable", result.stdout || result.stderr);
+      assert(packet.approval.present === false, result.stdout || result.stderr);
+      assert(packet.blockers.includes("explicit operator approval evidence is required for apply"), result.stdout || result.stderr);
+      assert(packet.dirtyState.dirtyLineCount === 0, result.stdout || result.stderr);
+      assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
+      assert(before === after, "takeover summary-json mutated assignment");
+    } finally {
+      rmSync(takeoverStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("takeover apply requires approval evidence before assignment mutation", () => {
     const takeoverStateRoot = mkdtempSync(join(tmpdir(), "codex-takeover-no-approval-"));
     try {

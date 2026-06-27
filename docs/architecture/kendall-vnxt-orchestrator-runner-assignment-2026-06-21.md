@@ -255,8 +255,10 @@ Add explicit takeover packets. Takeover requires operator approval unless a futu
 Initial CLI implementation:
 
 - `node ./scripts/codex-workspace.mjs takeover <task-or-assignment> --dry-run`
+- `node ./scripts/codex-workspace.mjs takeover <task-or-assignment> --dry-run --summary-json`
 - `node ./scripts/codex-workspace.mjs takeover <task-or-assignment> --apply`
 - emits a `TakeoverDecision` packet with previous owner, requesting owner, reason, heartbeat evidence, worktree evidence, branch evidence, PR evidence, dirty-state evidence, approval evidence, decision, and blockers,
+- emits compact dry-run summary JSON for runner automation without retaining full dirty status payloads,
 - requires stale heartbeat evidence before ownership mutation,
 - requires clean worktree evidence for workspace-manifest takeover,
 - requires explicit operator approval evidence and a takeover reason before `--apply`,
