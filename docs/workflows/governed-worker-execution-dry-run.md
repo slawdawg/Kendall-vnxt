@@ -257,6 +257,14 @@ no trust or routing effect, and no delivery authority. The proposal metadata is
 for Codex review only; it is not a generated patch, not an applied diff, and not
 a permission to mutate the source worktree.
 
+Copied-worktree attempts may include `output_contract_diagnostic` metadata such
+as `structured_match`, `stdout_not_json`, `stdout_raw_marker`, `missing_result`,
+`missing_proposal`, or `unexpected_proposal`. These values classify only the
+output contract shape needed for Codex review and prompt/protocol adjustment.
+They must not retain raw stdout, stderr, prompts, provider payloads, secrets, or
+source copies, and they must not affect trust, routing, source mutation, or
+delivery authority.
+
 The local evidence export command `pnpm run worker:copy:evidence:export` is the
 metadata persistence surface for copied-worktree attempts. It may either consume
 an existing producer JSON file with `--input-results` or run the copied-worktree

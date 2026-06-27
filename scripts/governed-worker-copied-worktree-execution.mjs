@@ -36,6 +36,19 @@ const MAX_TRACKED_FILES = 5000;
 const MAX_TRACKED_FILE_BYTES = 2 * 1024 * 1024;
 const GIT_BINARY = "/usr/bin/git";
 const GIT_ARGS = Object.freeze(["ls-files", "-z"]);
+const OUTPUT_CONTRACT_DIAGNOSTICS = Object.freeze([
+  "not_applicable",
+  "empty_output",
+  "stderr_raw_marker",
+  "stdout_not_json",
+  "stdout_json_not_object",
+  "stdout_raw_marker",
+  "missing_result",
+  "unexpected_result",
+  "missing_proposal",
+  "unexpected_proposal",
+  "structured_match",
+]);
 
 function claudeArgsForPrompt(prompt) {
   return [
@@ -70,6 +83,7 @@ const ALLOWED_ATTEMPT_FIELDS = new Set([
   "command_args",
   "expected_response",
   "observed_response",
+  "output_contract_diagnostic",
   "proposal_target_file",
   "proposal_change_kind",
   "proposal_summary",
@@ -343,45 +357,72 @@ function patchProposalPayloadFromParsedOutput(parsed) {
 }
 
 function sanitizeObservedResponse(stdout, stderr, taskId = DEFAULT_TASK_ID) {
+  const emptyResult = (diagnostic) => ({
+    observedResponse: null,
+    proposalTargetFile: null,
+    proposalChangeKind: null,
+    proposalSummary: null,
+    outputContractDiagnostic: diagnostic,
+  });
   const stdoutText = typeof stdout === "string" ? stdout : "";
   const stderrText = typeof stderr === "string" ? stderr : "";
   const combined = [stdoutText, stderrText].filter((value) => value.trim().length > 0).join("\n");
-  if (combined.length === 0 || RAW_MARKER_PATTERN.test(stderrText)) {
-    return { observedResponse: null, proposalTargetFile: null, proposalChangeKind: null, proposalSummary: null };
+  if (combined.length === 0) {
+    return emptyResult("empty_output");
   }
+  if (RAW_MARKER_PATTERN.test(stderrText)) {
+    return emptyResult("stderr_raw_marker");
+  }
+  if (RAW_MARKER_PATTERN.test(stdoutText)) {
+    return emptyResult("stdout_raw_marker");
+  }
+  let parsed;
   try {
-    const parsed = JSON.parse(stdoutText);
-    if (!isRecord(parsed) || hasRawMarkerInObject(parsed)) {
-      return { observedResponse: null, proposalTargetFile: null, proposalChangeKind: null, proposalSummary: null };
-    }
-    const result = typeof parsed.result === "string" ? parsed.result.trim() : null;
-    if (taskId === PATCH_PROPOSAL_TASK_ID) {
-      const proposalPayload = patchProposalPayloadFromParsedOutput(parsed);
-      const proposal = isRecord(proposalPayload.proposal) ? proposalPayload.proposal : {};
-      if (
-        proposalPayload.result === PATCH_PROPOSAL_RESPONSE
-        && proposal.target_file === "README.md"
-        && proposal.change_kind === "append_line"
-        && proposal.summary === "Add a harmless Kendall starter note"
-      ) {
-        return {
-          observedResponse: proposalPayload.result,
-          proposalTargetFile: proposal.target_file,
-          proposalChangeKind: proposal.change_kind,
-          proposalSummary: proposal.summary,
-        };
-      }
-      return { observedResponse: null, proposalTargetFile: null, proposalChangeKind: null, proposalSummary: null };
-    }
-    return {
-      observedResponse: result === EXPECTED_RESPONSE ? result : null,
-      proposalTargetFile: null,
-      proposalChangeKind: null,
-      proposalSummary: null,
-    };
+    parsed = JSON.parse(stdoutText);
   } catch {
-    return { observedResponse: null, proposalTargetFile: null, proposalChangeKind: null, proposalSummary: null };
+    return emptyResult("stdout_not_json");
   }
+  if (!isRecord(parsed)) {
+    return emptyResult("stdout_json_not_object");
+  }
+  if (hasRawMarkerInObject(parsed)) {
+    return emptyResult("stdout_raw_marker");
+  }
+  const result = typeof parsed.result === "string" ? parsed.result.trim() : null;
+  if (taskId === PATCH_PROPOSAL_TASK_ID) {
+    const proposalPayload = patchProposalPayloadFromParsedOutput(parsed);
+    const proposal = isRecord(proposalPayload.proposal) ? proposalPayload.proposal : null;
+    if ((proposalPayload.result === PATCH_PROPOSAL_RESPONSE || result === PATCH_PROPOSAL_RESPONSE) && proposal === null) {
+      return emptyResult("missing_proposal");
+    }
+    if (proposalPayload.result !== PATCH_PROPOSAL_RESPONSE) {
+      return emptyResult(result === null ? "missing_result" : "unexpected_result");
+    }
+    if (
+      proposal.target_file === "README.md"
+      && proposal.change_kind === "append_line"
+      && proposal.summary === "Add a harmless Kendall starter note"
+    ) {
+      return {
+        observedResponse: proposalPayload.result,
+        proposalTargetFile: proposal.target_file,
+        proposalChangeKind: proposal.change_kind,
+        proposalSummary: proposal.summary,
+        outputContractDiagnostic: "structured_match",
+      };
+    }
+    return emptyResult("unexpected_proposal");
+  }
+  if (result === null) {
+    return emptyResult("missing_result");
+  }
+  return {
+    observedResponse: result === EXPECTED_RESPONSE ? result : null,
+    proposalTargetFile: null,
+    proposalChangeKind: null,
+    proposalSummary: null,
+    outputContractDiagnostic: result === EXPECTED_RESPONSE ? "structured_match" : "unexpected_result",
+  };
 }
 
 export function validateCopiedWorktreeExecutionAttempt(attempt) {
@@ -441,6 +482,9 @@ export function validateCopiedWorktreeExecutionAttempt(attempt) {
   }
   if (input.observed_response !== null && input.observed_response !== expectedResponse) {
     addReason("observed_response");
+  }
+  if (!OUTPUT_CONTRACT_DIAGNOSTICS.includes(input.output_contract_diagnostic)) {
+    addReason("output_contract_diagnostic");
   }
   if (taskId === PATCH_PROPOSAL_TASK_ID && input.execution_state === "execution_observed") {
     if (input.proposal_target_file !== "README.md") {
@@ -502,19 +546,19 @@ export function validateCopiedWorktreeExecutionAttempt(attempt) {
   if (Object.entries(input).some(([key, value]) => !ALLOWED_ATTEMPT_FIELDS.has(key) || hasRawMarkerInObject(value))) {
     addReason("$");
   }
-  if (input.execution_state === "execution_observed" && (input.observed_response !== expectedResponse || input.exit_code !== 0 || input.timed_out !== false || input.command_path === null || input.copied_tracked_files < 1)) {
+  if (input.execution_state === "execution_observed" && (input.observed_response !== expectedResponse || input.output_contract_diagnostic !== "structured_match" || input.exit_code !== 0 || input.timed_out !== false || input.command_path === null || input.copied_tracked_files < 1)) {
     addReason("execution_state");
   }
-  if (["missing", "unsupported", "copy_failed"].includes(input.execution_state) && (input.observed_response !== null || input.exit_code !== null || input.timed_out !== false)) {
+  if (["missing", "unsupported", "copy_failed"].includes(input.execution_state) && (input.observed_response !== null || input.output_contract_diagnostic !== "not_applicable" || input.exit_code !== null || input.timed_out !== false)) {
     addReason("execution_state");
   }
-  if (input.execution_state === "failed" && (input.command_path === null || !Number.isInteger(input.exit_code) || input.exit_code === 0 || input.timed_out !== false || input.observed_response !== null)) {
+  if (input.execution_state === "failed" && (input.command_path === null || !Number.isInteger(input.exit_code) || input.exit_code === 0 || input.timed_out !== false || input.observed_response !== null || input.output_contract_diagnostic !== "not_applicable")) {
     addReason("execution_state");
   }
-  if (input.execution_state === "timed_out" && (input.command_path === null || input.timed_out !== true || input.observed_response !== null)) {
+  if (input.execution_state === "timed_out" && (input.command_path === null || input.timed_out !== true || input.observed_response !== null || input.output_contract_diagnostic !== "not_applicable")) {
     addReason("execution_state");
   }
-  if (input.execution_state === "invalid_output" && (input.command_path === null || input.exit_code !== 0 || input.timed_out !== false || input.observed_response !== null)) {
+  if (input.execution_state === "invalid_output" && (input.command_path === null || input.exit_code !== 0 || input.timed_out !== false || input.observed_response !== null || !OUTPUT_CONTRACT_DIAGNOSTICS.includes(input.output_contract_diagnostic) || ["not_applicable", "structured_match"].includes(input.output_contract_diagnostic))) {
     addReason("execution_state");
   }
 
@@ -552,6 +596,7 @@ export function collectCopiedWorktreeExecutionAttempts({
     let proposalTargetFile = null;
     let proposalChangeKind = null;
     let proposalSummary = null;
+    let outputContractDiagnostic = "not_applicable";
     let copiedTrackedFiles = 0;
     let copyBytes = 0;
 
@@ -590,6 +635,7 @@ export function collectCopiedWorktreeExecutionAttempts({
               proposalTargetFile = sanitized.proposalTargetFile;
               proposalChangeKind = sanitized.proposalChangeKind;
               proposalSummary = sanitized.proposalSummary;
+              outputContractDiagnostic = sanitized.outputContractDiagnostic;
               if (observedResponse !== expectedResponseForTask(taskId)) {
                 executionState = "invalid_output";
               } else {
@@ -614,6 +660,7 @@ export function collectCopiedWorktreeExecutionAttempts({
       command_args: commandArgs,
       expected_response: expectedResponseForTask(taskId),
       observed_response: observedResponse,
+      output_contract_diagnostic: outputContractDiagnostic,
       ...(taskId === PATCH_PROPOSAL_TASK_ID ? {
         proposal_target_file: proposalTargetFile,
         proposal_change_kind: proposalChangeKind,

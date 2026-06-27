@@ -40,6 +40,7 @@ const ALLOWED_ENTRY_FIELDS = new Set([
   "command_path",
   "expected_response",
   "observed_response",
+  "output_contract_diagnostic",
   "proposal_target_file",
   "proposal_change_kind",
   "proposal_summary",
@@ -97,6 +98,7 @@ export function copiedWorktreeAttemptToPipelineEvidence(attempt, index = 0) {
     command_path: attempt.command_path,
     expected_response: attempt.expected_response,
     observed_response: attempt.observed_response,
+    output_contract_diagnostic: attempt.output_contract_diagnostic,
     ...(attempt.task_id === "starter_patch_proposal" ? {
       proposal_target_file: attempt.proposal_target_file,
       proposal_change_kind: attempt.proposal_change_kind,
@@ -154,6 +156,7 @@ export function validatePipelineEvidenceEntry(entry) {
     expected_response: input.expected_response,
     task_id: taskId,
     observed_response: input.observed_response,
+    output_contract_diagnostic: input.output_contract_diagnostic,
     ...(taskId === "starter_patch_proposal" ? {
       proposal_target_file: input.proposal_target_file,
       proposal_change_kind: input.proposal_change_kind,
