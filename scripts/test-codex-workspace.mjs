@@ -539,6 +539,37 @@ try {
     assert(result.stderr.includes("skipping invalid manifest"));
   });
 
+  test("list json keeps malformed manifest warnings off stdout", () => {
+    const jsonStateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-json-list-"));
+    try {
+      const tasksDir = join(jsonStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      writeFileSync(join(tasksDir, "bad.json"), "{not json");
+      writeFileSync(
+        join(tasksDir, "good.json"),
+        `${JSON.stringify({
+          task_id: "good",
+          branch: "codex/good",
+          worktree_path: rootDir,
+          base_branch: "dev",
+          status: "active",
+          owner: "runner-a",
+        }, null, 2)}\n`,
+      );
+
+      const result = run(["list", "--state-root", jsonStateRoot, "--json"]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stderr.includes("skipping invalid manifest"));
+      assert(!result.stdout.includes("WARN:"), "machine-readable stdout must not include warnings");
+      const parsed = JSON.parse(result.stdout);
+      assert(parsed.length === 1, result.stdout);
+      assert(parsed[0].taskId === "good", result.stdout);
+    } finally {
+      rmSync(jsonStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("list surfaces lane owner from manifests", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
