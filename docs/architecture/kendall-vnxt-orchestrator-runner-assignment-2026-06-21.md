@@ -268,11 +268,13 @@ Add a local orchestrator command that claims one lane, prepares the workspace, r
 Initial CLI implementation:
 
 - `node ./scripts/codex-workspace.mjs dispatch-next --dry-run`
+- `node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json`
 - `node ./scripts/codex-workspace.mjs dispatch-next --apply`
 - reuses the proven `claim-next` candidate selection and blocker rules,
 - claims or refreshes exactly one safe backlog lane for the current runner,
 - claims an existing unowned workspace or creates a managed workspace from source-owned branch metadata when no active workspace exists,
 - records dispatch handoff evidence on the workspace manifest and assignment metadata when present,
+- exposes a bounded dry-run JSON summary for quick end-to-end runner scans without candidate payload sprawl or mutation,
 - supports bounded readiness profiles: `doctor`, `preflight`, and `none`,
 - stops after handoff evidence; it does not launch workers, make provider/model calls, push, open PRs, merge, clean up, or mutate authority-blocked work.
 

@@ -167,6 +167,7 @@ takeover options:
 dispatch-next options:
   --dry-run                 Preview dispatch without mutation.
   --apply                   Claim/prepare one lane and record handoff evidence.
+  --summary-json            With --dry-run, print a bounded JSON summary.
   --readiness <profile>     Readiness profile: doctor, preflight, none. Defaults to doctor.
   --base <branch>           Base branch for a created worktree. Defaults to dev.
   --task-id <id>            Override task id when creating a workspace.
@@ -978,6 +979,9 @@ function dispatchNext(argv) {
   if (!options.apply && !options.dryRun) {
     throw new Error("dispatch-next requires either --dry-run or --apply.");
   }
+  if (options.summaryJson && !options.dryRun) {
+    throw new Error("dispatch-next --summary-json is only supported with --dry-run.");
+  }
 
   const readinessProfile = normalizeDispatchReadinessProfile(options.readiness || "doctor");
   const state = workspaceState(options);
@@ -995,6 +999,10 @@ function dispatchNext(argv) {
   const plan = dispatchPlan(context);
 
   if (options.dryRun) {
+    if (options.summaryJson) {
+      console.log(JSON.stringify(buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, readinessProfile, plan }), null, 2));
+      return;
+    }
     printDispatchPacket("DRY RUN", plan.packet);
     printClaimBlockers(plan.evaluations, plan.selected);
     return;
@@ -3081,6 +3089,40 @@ function dispatchPacket(selected, evaluations, context) {
         reason: evaluation.reason,
         next_action: evaluation.nextAction,
       })),
+  };
+}
+
+function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, readinessProfile, plan }) {
+  const blockedCandidates = plan.evaluations.filter((evaluation) => !evaluation.claimable);
+  return {
+    currentOwner,
+    stateRoot: state.root,
+    staleAfterSeconds,
+    readinessProfile,
+    selected: plan.selected ? summarizeClaimEvaluation(plan.selected) : null,
+    dispatch: {
+      allowed: plan.packet.allowed,
+      selectedLane: plan.packet.selected_lane,
+      branch: plan.packet.branch,
+      baseBranch: plan.packet.base_branch,
+      claimAction: plan.packet.claim_action,
+      claimMutation: plan.packet.claim_mutation,
+      workspaceAction: plan.packet.workspace_action,
+      nextCommand: plan.packet.next_command,
+      nextActionGuidance: plan.packet.next_action_guidance,
+      blockers: plan.packet.blockers,
+      stopLines: plan.packet.stop_lines,
+      generatedAt: plan.packet.generated_at,
+    },
+    counts: {
+      total: plan.evaluations.length,
+      dispatchable: plan.evaluations.filter((evaluation) => evaluation.claimable).length,
+      blocked: blockedCandidates.length,
+    },
+    candidateStateCounts: plan.packet.candidate_state_counts,
+    blockedCandidates: plan.packet.blocked_candidates.slice(0, 10),
+    blockedCandidatesTruncated: plan.packet.blocked_candidates.length > 10,
+    mutation: "none; dry-run summary only",
   };
 }
 

@@ -1530,6 +1530,7 @@ class RunnerDispatcherContinuitySnapshotView(BaseModel):
     selectedBacklogItemId: str | None = None
     selectedBranch: str | None = None
     dryRunCommand: str
+    summaryDryRunCommand: str
     assignableCount: int
     activeCount: int
     blockedCount: int

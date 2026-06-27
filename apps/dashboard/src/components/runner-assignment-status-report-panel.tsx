@@ -713,6 +713,7 @@ export function RunnerAssignmentStatusReportPanel({ report }: { report: RunnerAs
           <p className="break-all">Candidate: {report.dispatcherContinuity.selectedBacklogItemId ?? "none"}</p>
           <p className="break-all">Branch: {report.dispatcherContinuity.selectedBranch ?? "none"}</p>
           <p className="break-all">Dry run: {report.dispatcherContinuity.dryRunCommand}</p>
+          <p className="break-all">Summary: {report.dispatcherContinuity.summaryDryRunCommand}</p>
           <p>Assignable: {report.dispatcherContinuity.assignableCount}</p>
           <p>Active: {report.dispatcherContinuity.activeCount}</p>
           <p>Blocked: {report.dispatcherContinuity.blockedCount}</p>
