@@ -416,6 +416,9 @@ function buildCoordinationReportSummary(packet) {
       backlogSummary: packet.backlogSummary.length,
       backlogClassificationSummary: packet.backlogClassificationSummary.length,
     },
+    blockedApprovalPacketStatusCounts: countByField(packet.blockedApprovalPackets, "status"),
+    backlogStatusCounts: countByField(packet.backlogSummary, "status"),
+    backlogClassificationStatusCounts: countByField(packet.backlogClassificationSummary, "status"),
     activeManagedWorktrees: packet.activeManagedWorktrees.map(summaryLane),
     prsWaitingAtMergeGate: packet.prsWaitingAtMergeGate.map(summaryLane),
     dirtyActiveLanes: packet.dirtyActiveLanes.map(summaryLane),
@@ -434,6 +437,14 @@ function buildCoordinationReportSummary(packet) {
     nextSafeSlice: packet.nextSafeSlice,
     stopLines: packet.stopLines,
   };
+}
+
+function countByField(rows, field) {
+  return rows.reduce((counts, row) => {
+    const key = String(row[field] || "unknown");
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {});
 }
 
 function summaryLane(lane) {

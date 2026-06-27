@@ -43,7 +43,8 @@ remote mutations, or manifest writes.
 `node ./scripts/codex-workspace.mjs coordination-report --summary-json` is the
 bounded automation form for quick runner scans. It preserves counts for retained
 closed lanes and backlog classifications without dumping the full retained lane payload,
-and it follows the same read-only boundary as `--json`.
+groups blocked packet and backlog statuses by count, and it follows the same
+read-only boundary as `--json`.
 
 ## Report Packet
 

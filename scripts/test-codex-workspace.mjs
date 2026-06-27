@@ -112,7 +112,9 @@ try {
     const reportStateRoot = mkdtempSync(join(tmpdir(), "codex-coordination-summary-json-"));
     try {
       const tasksDir = join(reportStateRoot, "tasks");
+      const assignmentsDir = join(reportStateRoot, "assignments");
       mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
       const activeManifestPath = join(tasksDir, "active-summary-lane.json");
       const activeManifest = {
         task_id: "active-summary-lane",
@@ -126,6 +128,35 @@ try {
         updated_at: "2026-06-27T00:00:00.000Z",
       };
       writeFileSync(activeManifestPath, JSON.stringify(activeManifest, null, 2));
+      writeFileSync(
+        join(assignmentsDir, "stale-summary-assignment.json"),
+        JSON.stringify(
+          {
+            assignment_id: "stale-summary-assignment",
+            branch: "codex/stale-summary-assignment",
+            status: "claimed",
+            owner: "runner-b",
+            assigned_at: "2026-06-20T00:00:00.000Z",
+            last_heartbeat_at: "2026-06-20T00:00:00.000Z",
+          },
+          null,
+          2,
+        ),
+      );
+      writeFileSync(
+        join(assignmentsDir, "authority-summary-assignment.json"),
+        JSON.stringify(
+          {
+            assignment_id: "authority-summary-assignment",
+            branch: "codex/authority-summary-assignment",
+            status: "blocked_authority",
+            owner: "runner-b",
+            assigned_at: "2026-06-27T00:00:00.000Z",
+          },
+          null,
+          2,
+        ),
+      );
       for (let index = 0; index < 12; index += 1) {
         writeFileSync(
           join(tasksDir, `closed-summary-lane-${index}.json`),
@@ -155,6 +186,11 @@ try {
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
       assert(packet.counts.activeManagedWorktrees === 1, result.stdout || result.stderr);
       assert(packet.counts.closedButRetainedLanes === 12, result.stdout || result.stderr);
+      assert(packet.counts.blockedApprovalPackets === 2, result.stdout || result.stderr);
+      assert(packet.blockedApprovalPacketStatusCounts.blocked_stale_owner_needs_takeover === 1, result.stdout || result.stderr);
+      assert(packet.blockedApprovalPacketStatusCounts.blocked_authority === 1, result.stdout || result.stderr);
+      assert(packet.backlogStatusCounts.closed >= 1, result.stdout || result.stderr);
+      assert(packet.backlogClassificationStatusCounts.closed >= 1, result.stdout || result.stderr);
       assert(!("closedButRetainedLanes" in packet), result.stdout || result.stderr);
       assert(packet.activeManagedWorktrees[0].taskId === "active-summary-lane", result.stdout || result.stderr);
       assert(packet.stopLines.includes("Merge a PR."), result.stdout || result.stderr);

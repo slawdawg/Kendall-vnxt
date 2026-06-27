@@ -193,6 +193,7 @@ for (const requiredText of [
   "node ./scripts/codex-workspace.mjs coordination-report --summary-json",
   "bounded automation form",
   "full retained lane payload",
+  "groups blocked packet and backlog statuses by count",
   "It must not create branches, worktrees, commits, PRs, merges, cleanup actions",
   "origin/<branch>` SHA exactly equals the merged",
   "Proof for low-risk delivery must come from current GitHub PR metadata",
