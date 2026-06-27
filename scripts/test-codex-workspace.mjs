@@ -1081,6 +1081,53 @@ try {
     }
   });
 
+  test("resume json emits a read-only resume packet with owner warning evidence", () => {
+    const resumeStateRoot = mkdtempSync(join(tmpdir(), "codex-resume-json-"));
+    try {
+      const tasksDir = join(resumeStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "resume-json-lane.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify({
+          task_id: "resume-json-lane",
+          branch: "codex/resume-json-lane",
+          worktree_path: rootDir,
+          base_branch: "dev",
+          base_ref: "origin/dev",
+          status: "active",
+          owner: "other-runner",
+          pr_url: "https://github.com/slawdawg/Kendall-vnxt/pull/456",
+        }, null, 2)}\n`,
+      );
+
+      const before = readFileSync(manifestPath, "utf8");
+      const result = run(["resume", "resume-json-lane", "--json", "--state-root", resumeStateRoot, "--owner", "runner-a"]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!result.stdout.includes("Task:"), "resume --json stdout must not include text output");
+      const packet = JSON.parse(result.stdout);
+      assert(packet.taskId === "resume-json-lane", result.stdout || result.stderr);
+      assert(packet.status === "active", result.stdout || result.stderr);
+      assert(packet.branch === "codex/resume-json-lane", result.stdout || result.stderr);
+      assert(packet.baseBranch === "dev", result.stdout || result.stderr);
+      assert(packet.baseRef === "origin/dev", result.stdout || result.stderr);
+      assert(packet.owner === "other-runner", result.stdout || result.stderr);
+      assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
+      assert(packet.ownerMatches === false, result.stdout || result.stderr);
+      assert(packet.ownerWarning.includes("lane is owned by other-runner"), result.stdout || result.stderr);
+      assert(packet.worktreePath === rootDir, result.stdout || result.stderr);
+      assert(packet.worktreeExists === true, result.stdout || result.stderr);
+      assert(packet.manifestPath === manifestPath, result.stdout || result.stderr);
+      assert(packet.prNumber === 456, result.stdout || result.stderr);
+      assert(packet.command === `cd "${rootDir}"`, result.stdout || result.stderr);
+      assert(packet.mutation === "none; resume only", result.stdout || result.stderr);
+      assert(readFileSync(manifestPath, "utf8") === before, "resume --json mutated manifest");
+    } finally {
+      rmSync(resumeStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("assignment-report classifies safe backlog and workspace ownership without mutation", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
