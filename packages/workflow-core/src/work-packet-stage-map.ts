@@ -162,6 +162,13 @@ function resultForExecutionAttempt(
   lane: WorkPacketStageMappingInputV0["executionAttemptLane"],
   reasonCodes: string[]
 ): WorkPacketStageMappingResultV0 {
+  if (status === "rejected" && lane === "hermes_governed_execution") {
+    return stageResult("execute", "hermes_worker_mock", "blocked", [
+      `execution_attempt.${status}`,
+      "execution_lane.hermes_governed_execution",
+      ...reasonCodes
+    ]);
+  }
   switch (status) {
     case "planned":
       return stageResult("shape", "kendall", "waiting", [`execution_attempt.${status}`, ...reasonCodes]);
@@ -197,6 +204,12 @@ function ownerForExecutionLane(lane: WorkPacketStageMappingInputV0["executionAtt
 } {
   if (lane === "hermes_worker_mock") {
     return { owner: "hermes_worker_mock", reasonCodes: [], ambiguityNotes: [] };
+  }
+  if (lane === "hermes_governed_execution" || lane === "hermes_execution_dry_run") {
+    return { owner: "hermes_worker_mock", reasonCodes: [`execution_lane.${lane}`], ambiguityNotes: [] };
+  }
+  if (lane === "claude_governed_execution" || lane === "claude_execution_dry_run") {
+    return { owner: "claude_reviewer", reasonCodes: [`execution_lane.${lane}`], ambiguityNotes: [] };
   }
   if (lane === "codex_worker" || lane === "codex_cli_worker" || lane === "local_sandbox_execute") {
     return { owner: "codex_worker", reasonCodes: [], ambiguityNotes: [] };

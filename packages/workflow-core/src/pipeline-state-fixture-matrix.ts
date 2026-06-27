@@ -138,6 +138,8 @@ const REQUIRED_MATRIX_ROW_COVERAGE: Array<{ id: string; category: PipelineReadin
   { id: "execution_attempt.planned", category: "state" },
   { id: "execution_attempt.approved", category: "state" },
   { id: "execution_attempt.running", category: "state" },
+  { id: "governed_worker.claude_real_execution_running", category: "state" },
+  { id: "governed_worker.hermes_real_execution_unavailable", category: "state" },
   { id: "execution_attempt.failed", category: "state" },
   { id: "execution_attempt.completed", category: "state" },
   { id: "execution_attempt.review_rejected", category: "state" },
@@ -416,8 +418,35 @@ export const PIPELINE_STATE_EVIDENCE_MATRIX_V0: PipelineStateEvidenceMatrixRowV0
     mappingInput: { executionAttemptStatus: "running", executionAttemptLane: "claude_execution_dry_run" },
     disallowedOrStaleActions: [blockedAction("approve_execution", "Governed dry-run status is not live execution approval.")],
     requiredEvidence: ["attempt", "review"],
-    fixtureIds: ["codex_active_claude_pending"],
+    fixtureIds: ["governed_claude_real_execution_active"],
     futureRealSourceCoverage: "Future Claude dry-run status may populate execution-attempt refs without provider calls, network, sessions, source mutation, or raw output.",
+    storyType: ["projection_adapter", "mock_status", "readiness_evidence"]
+  }),
+  row({
+    id: "governed_worker.claude_real_execution_running",
+    sourceEntityState: "Governed Claude copied-worktree execution running",
+    stage: "execute",
+    owner: "claude_reviewer",
+    status: "active",
+    mappingInput: { executionAttemptStatus: "running", executionAttemptLane: "claude_governed_execution" },
+    disallowedOrStaleActions: [blockedAction("approve_execution", "Observed governed Claude execution metadata is not broader live-worker approval.")],
+    requiredEvidence: ["attempt", "event", "review"],
+    fixtureIds: ["codex_active_claude_pending"],
+    futureRealSourceCoverage: "Real governed Claude execution status may populate copied-worktree/smoke/version refs while omitting raw output and preserving no-source-mutation, no-tools, no-delivery, and metadata-only boundaries.",
+    storyType: ["projection_adapter", "mock_status", "readiness_evidence"]
+  }),
+  row({
+    id: "governed_worker.hermes_real_execution_unavailable",
+    sourceEntityState: "Governed Hermes real execution unavailable",
+    stage: "execute",
+    owner: "hermes_worker_mock",
+    status: "blocked",
+    mappingInput: { executionAttemptStatus: "rejected", executionAttemptLane: "hermes_governed_execution" },
+    allowedActions: ["rerun_smaller", "reroute", "send_back_to_shape", "request_clarification"],
+    recoveryActions: ["retry_smaller", "reroute", "send_back_to_shape"],
+    requiredEvidence: ["attempt", "event"],
+    fixtureIds: ["governed_hermes_real_execution_unavailable"],
+    futureRealSourceCoverage: "Real Hermes execution remains unavailable until a Hermes binary and containment authority are proven; dashboard visibility must show the blocked state instead of hiding the lane.",
     storyType: ["projection_adapter", "mock_status", "readiness_evidence"]
   }),
   row({
@@ -694,7 +723,7 @@ export const PIPELINE_STATE_FIXTURE_CATALOG_V0: PipelineFixtureCatalogEntryV0[] 
     id: "mocked_hermes_unavailable",
     label: "Mocked Hermes unavailable",
     provenance: "mocked",
-    matrixRowIds: ["execution_attempt.running", "mock.hermes_unavailable", "readiness.local_provider_disabled"],
+    matrixRowIds: ["execution_attempt.running", "governed_worker.hermes_dry_run_running", "mock.hermes_unavailable", "readiness.local_provider_disabled"],
     recoveryActions: ["retry_smaller", "reroute", "send_back_to_shape"],
     futureCoverageStates: ["model unavailable", "Hermes timeout"]
   }),
@@ -702,11 +731,30 @@ export const PIPELINE_STATE_FIXTURE_CATALOG_V0: PipelineFixtureCatalogEntryV0[] 
     id: "codex_active_claude_pending",
     label: "Codex active / Claude pending",
     provenance: "mocked",
-    matrixRowIds: ["execution_attempt.running", "execution_attempt.completed", "execution_attempt.review_rejected", "mock.codex_active", "mock.claude_pending_skipped"],
+    matrixRowIds: ["execution_attempt.running", "governed_worker.claude_dry_run_running", "execution_attempt.completed", "execution_attempt.review_rejected", "mock.codex_active", "mock.claude_pending_skipped"],
     recoveryActions: ["discard_result", "send_back_to_shape", "mark_blocked"],
     evidenceTypes: ["attempt", "review"],
     artifactTypes: ["progress", "report"],
     futureCoverageStates: ["Codex active", "Claude skipped due to scarce review policy", "rejected Claude finding"]
+  }),
+  fixture({
+    id: "governed_claude_real_execution_active",
+    label: "Governed Claude real execution active",
+    provenance: "future-real-source",
+    matrixRowIds: ["governed_worker.claude_real_execution_running"],
+    evidenceTypes: ["attempt", "event", "review"],
+    artifactTypes: ["progress", "fixture"],
+    futureCoverageStates: ["Claude copied-worktree execution visible", "raw output omitted"]
+  }),
+  fixture({
+    id: "governed_hermes_real_execution_unavailable",
+    label: "Governed Hermes real execution unavailable",
+    provenance: "future-real-source",
+    matrixRowIds: ["governed_worker.hermes_real_execution_unavailable"],
+    recoveryActions: ["retry_smaller", "reroute", "send_back_to_shape"],
+    evidenceTypes: ["attempt", "event"],
+    artifactTypes: ["fixture"],
+    futureCoverageStates: ["Hermes binary missing", "containment unproven", "real launch blocked"]
   }),
   fixture({
     id: "obsidian_proposal_pending_approval",

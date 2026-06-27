@@ -404,6 +404,10 @@ export type WorkPacketLaneTypeV0 =
   | "subscription_agent"
   | "premium_approval"
   | "codex_cli_worker"
+  | "claude_execution_dry_run"
+  | "hermes_execution_dry_run"
+  | "claude_governed_execution"
+  | "hermes_governed_execution"
   | "unknown";
 
 export type WorkPacketLaneStatusV0 =
