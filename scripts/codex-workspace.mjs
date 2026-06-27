@@ -512,6 +512,7 @@ function buildCoordinationReportSummary(packet) {
     counts: {
       activeManagedWorktrees: packet.activeManagedWorktrees.length,
       prsWaitingAtMergeGate: packet.prsWaitingAtMergeGate.length,
+      prStateReconciliation: packet.prStateReconciliation.length,
       cleanActiveLanes: packet.cleanActiveLanes.length,
       dirtyActiveLanes: packet.dirtyActiveLanes.length,
       localOnlyCommits: packet.localOnlyCommits.length,
@@ -526,6 +527,8 @@ function buildCoordinationReportSummary(packet) {
     backlogClassificationStatusCounts: countByField(packet.backlogClassificationSummary, "status"),
     activeManagedWorktrees: packet.activeManagedWorktrees.map(summaryLane),
     prsWaitingAtMergeGate: packet.prsWaitingAtMergeGate.map(summaryLane),
+    prStateReconciliation: packet.prStateReconciliation.slice(0, 10).map(summaryLane),
+    prStateReconciliationTruncated: packet.prStateReconciliation.length > 10,
     dirtyActiveLanes: packet.dirtyActiveLanes.map(summaryLane),
     localOnlyCommits: packet.localOnlyCommits.map((lane) => ({
       taskId: lane.taskId,
@@ -563,6 +566,9 @@ function summaryLane(lane) {
     dirty: lane.dirty,
     localOnlyCommits: lane.localOnlyCommits,
     prNumber: lane.prNumber,
+    prState: lane.prState,
+    prStateReason: lane.prStateReason,
+    prStateNextAction: lane.prStateNextAction,
     nextAction: lane.nextAction,
   };
 }
@@ -583,6 +589,7 @@ function buildCoordinationReportPacket(options = {}) {
   const dirtyActiveLanes = activeLanes.filter((lane) => lane.dirty);
   const localOnlyCommits = activeLanes.filter((lane) => lane.localOnlyCommits > 0);
   const prWaitingAtMergeGate = activeLanes.filter((lane) => lane.status === "pr_open");
+  const prStateReconciliation = prWaitingAtMergeGate.filter((lane) => lane.prState === "merged_evidence_present");
   const cleanupCandidates = activeLanes.filter((lane) => lane.assignmentStatus === "cleanup" && !lane.dirty);
   const blockedApprovalPackets = [
     ...activeLanes.filter((lane) => String(lane.assignmentStatus).startsWith("blocked")),
@@ -635,6 +642,7 @@ function buildCoordinationReportPacket(options = {}) {
     },
     activeManagedWorktrees: activeLanes,
     prsWaitingAtMergeGate: prWaitingAtMergeGate,
+    prStateReconciliation,
     cleanActiveLanes,
     dirtyActiveLanes,
     localOnlyCommits,
@@ -684,6 +692,11 @@ function printCoordinationReport(packet) {
   console.log(`- Root status: ${packet.rootStatus.dirty ? `dirty (${packet.rootStatus.pathCount} path(s))` : "clean"}`);
   printCoordinationRows("- Active managed worktrees:", packet.activeManagedWorktrees, formatCoordinationLane);
   printCoordinationRows("- PRs waiting at merge gate:", packet.prsWaitingAtMergeGate, formatCoordinationLane);
+  printCoordinationRows(
+    "- PR state reconciliation:",
+    packet.prStateReconciliation,
+    (lane) => `${lane.taskId} | ${lane.status} | pr=${lane.prNumber || "unknown"} | ${lane.prStateReason} | next=${lane.prStateNextAction}`,
+  );
   printCoordinationRows("- Clean active lanes:", packet.cleanActiveLanes, formatCoordinationLane);
   printCoordinationRows("- Dirty active lanes:", packet.dirtyActiveLanes, formatCoordinationLane);
   printCoordinationRows("- Local-only commits:", packet.localOnlyCommits, (lane) => `${lane.taskId} | ${lane.branch} | ahead=${lane.localOnlyCommits}`);
@@ -732,7 +745,40 @@ function coordinationLanePacket(manifest, context) {
     localOnlyCommits,
     prUrl: manifest.pr_url || null,
     prNumber: manifest.pr_number || prNumberFromUrl(manifest.pr_url || "") || null,
+    prState: coordinationPrState(manifest),
+    prStateReason: coordinationPrStateReason(manifest),
+    prStateNextAction: coordinationPrStateNextAction(manifest),
   };
+}
+
+function coordinationPrState(manifest) {
+  if (manifest.status === "pr_open" && (manifest.merged_at || manifest.pr_merged_at)) {
+    return "merged_evidence_present";
+  }
+  if (manifest.status === "pr_open") {
+    return "open_unverified";
+  }
+  return "not_applicable";
+}
+
+function coordinationPrStateReason(manifest) {
+  if (coordinationPrState(manifest) === "merged_evidence_present") {
+    return `manifest is pr_open but has merged evidence at ${manifest.merged_at || manifest.pr_merged_at}`;
+  }
+  if (coordinationPrState(manifest) === "open_unverified") {
+    return "manifest says pr_open and has no local merged evidence";
+  }
+  return "manifest is not waiting at the merge gate";
+}
+
+function coordinationPrStateNextAction(manifest) {
+  if (coordinationPrState(manifest) === "merged_evidence_present") {
+    return "run cleanup-merged or inspect before treating as active blocked work";
+  }
+  if (coordinationPrState(manifest) === "open_unverified") {
+    return "verify PR state before merge or cleanup action";
+  }
+  return "no PR state reconciliation needed";
 }
 
 function currentCheckoutPacket(cwd) {
@@ -1014,10 +1060,12 @@ function claimNext(argv) {
     plan.push(`start command ${selected.item.startCommand}`);
   }
   if (options.dryRun) {
+    const summary = buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selected, evaluations });
     if (options.summaryJson) {
-      console.log(JSON.stringify(buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selected, evaluations }), null, 2));
+      console.log(JSON.stringify(summary, null, 2));
       return;
     }
+    plan.push(formatClaimNextActionSummary(summary.nextActionSummary));
     plan.push("preview only; no manifest, branch, PR, or worktree mutation");
     printPlan("claim-next", plan);
   } else {
@@ -1047,16 +1095,19 @@ function claimNext(argv) {
 function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selected, evaluations }) {
   const blockers = evaluations.filter((evaluation) => claimEvaluationIsBlocker(evaluation));
   const excluded = evaluations.filter((evaluation) => claimEvaluationIsExcluded(evaluation));
+  const sourceDrift = excluded.filter((evaluation) => claimEvaluationIsSourceDrift(evaluation));
   return {
     currentOwner,
     stateRoot: state.root,
     staleAfterSeconds,
     selected: selected ? summarizeClaimEvaluation(selected) : null,
+    nextActionSummary: buildClaimNextActionSummary({ selected, blockers, excluded, sourceDrift, evaluations }),
     counts: {
       total: evaluations.length,
       claimable: evaluations.filter((evaluation) => evaluation.claimable).length,
       blocked: blockers.length,
       excluded: excluded.length,
+      sourceDrift: sourceDrift.length,
     },
     statusCounts: countByField(evaluations, "status"),
     blockerStatusCounts: countByField(blockers, "status"),
@@ -1065,6 +1116,8 @@ function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selecte
     excludedStatusCounts: countByField(excluded, "status"),
     excluded: excluded.slice(0, 10).map(summarizeClaimEvaluation),
     excludedTruncated: excluded.length > 10,
+    sourceDrift: sourceDrift.slice(0, 10).map(summarizeClaimEvaluation),
+    sourceDriftTruncated: sourceDrift.length > 10,
     mutation: "none; dry-run summary only",
   };
 }
@@ -1075,6 +1128,42 @@ function claimEvaluationIsExcluded(evaluation) {
 
 function claimEvaluationIsBlocker(evaluation) {
   return !evaluation.claimable && !claimEvaluationIsExcluded(evaluation);
+}
+
+function claimEvaluationIsSourceDrift(evaluation) {
+  return (
+    claimEvaluationIsExcluded(evaluation) &&
+    evaluation.item?.status === "ready" &&
+    /^closed (workspace|assignment) evidence /.test(evaluation.reason || "")
+  );
+}
+
+function buildClaimNextActionSummary({ selected, blockers, excluded, sourceDrift, evaluations }) {
+  if (selected) {
+    return {
+      action: "claim selected lane",
+      itemId: selected.item.itemId,
+      nextAction: selected.nextAction,
+      claimable: evaluations.filter((evaluation) => evaluation.claimable).length,
+      blocked: blockers.length,
+      excluded: excluded.length,
+      sourceDrift: sourceDrift.length,
+    };
+  }
+  const primaryBlocker = blockers[0] || null;
+  return {
+    action: primaryBlocker ? "wait for blocked lane or explicit approval" : "reconcile source drift or add a ready lane",
+    itemId: primaryBlocker?.item?.itemId || sourceDrift[0]?.item?.itemId || null,
+    nextAction: primaryBlocker?.nextAction || sourceDrift[0]?.nextAction || "choose the next ready safe backlog lane",
+    claimable: 0,
+    blocked: blockers.length,
+    excluded: excluded.length,
+    sourceDrift: sourceDrift.length,
+  };
+}
+
+function formatClaimNextActionSummary(summary) {
+  return `next action summary ${summary.action}; claimable=${summary.claimable} blocked=${summary.blocked} excluded=${summary.excluded} sourceDrift=${summary.sourceDrift}; next=${summary.nextAction}`;
 }
 
 function summarizeClaimEvaluation(evaluation) {

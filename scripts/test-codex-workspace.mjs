@@ -150,6 +150,27 @@ try {
       };
       writeFileSync(activeManifestPath, JSON.stringify(activeManifest, null, 2));
       writeFileSync(
+        join(tasksDir, "merged-evidence-pr-open-lane.json"),
+        JSON.stringify(
+          {
+            task_id: "merged-evidence-pr-open-lane",
+            title: "Merged evidence PR open lane",
+            branch: "codex/merged-evidence-pr-open-lane",
+            base_branch: "dev",
+            base_ref: "origin/dev",
+            status: "pr_open",
+            owner: "runner-a",
+            worktree_path: rootDir,
+            pr_url: "https://example.test/pull/987",
+            pr_number: 987,
+            merged_at: "2026-06-27T12:00:00.000Z",
+            updated_at: "2026-06-27T12:00:00.000Z",
+          },
+          null,
+          2,
+        ),
+      );
+      writeFileSync(
         join(assignmentsDir, "stale-summary-assignment.json"),
         JSON.stringify(
           {
@@ -205,7 +226,9 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       const packet = JSON.parse(result.stdout);
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
-      assert(packet.counts.activeManagedWorktrees === 1, result.stdout || result.stderr);
+      assert(packet.counts.activeManagedWorktrees === 2, result.stdout || result.stderr);
+      assert(packet.counts.prsWaitingAtMergeGate === 1, result.stdout || result.stderr);
+      assert(packet.counts.prStateReconciliation === 1, result.stdout || result.stderr);
       assert(packet.counts.closedButRetainedLanes === 12, result.stdout || result.stderr);
       assert(packet.counts.blockedApprovalPackets === 2, result.stdout || result.stderr);
       assert(packet.blockedApprovalPacketStatusCounts.blocked_stale_owner_needs_takeover === 1, result.stdout || result.stderr);
@@ -214,6 +237,10 @@ try {
       assert(packet.backlogClassificationStatusCounts.closed >= 1, result.stdout || result.stderr);
       assert(!("closedButRetainedLanes" in packet), result.stdout || result.stderr);
       assert(packet.activeManagedWorktrees[0].taskId === "active-summary-lane", result.stdout || result.stderr);
+      assert(packet.prStateReconciliation[0].taskId === "merged-evidence-pr-open-lane", result.stdout || result.stderr);
+      assert(packet.prStateReconciliation[0].prState === "merged_evidence_present", result.stdout || result.stderr);
+      assert(typeof packet.prStateReconciliation[0].prStateNextAction === "string", result.stdout || result.stderr);
+      assert(typeof packet.prStateReconciliationTruncated === "boolean", result.stdout || result.stderr);
       assert(packet.stopLines.includes("Merge a PR."), result.stdout || result.stderr);
       assert(
         packet.stopLines.includes("Delete a remote branch with no PR record, a SHA mismatch, an open PR, or an active workspace owner."),
@@ -1832,6 +1859,7 @@ try {
       const expected = expectedAuthorityClaimCandidate();
       const lowerPriority = expectedClaimCandidate();
       seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      seedClosedSourceCompletion(claimStateRoot, lowerPriority);
       if (branchExists(rootDir, lowerPriority.branch)) {
         seedUnownedSafeBacklogWorkspace(claimStateRoot, lowerPriority.slug);
       }
@@ -1848,6 +1876,9 @@ try {
       assert(packet.counts.total > 0, result.stdout || result.stderr);
       assert(packet.counts.claimable >= 1, result.stdout || result.stderr);
       assert(packet.counts.excluded >= 1, result.stdout || result.stderr);
+      assert(packet.counts.sourceDrift >= 1, result.stdout || result.stderr);
+      assert(packet.nextActionSummary.action === "claim selected lane", result.stdout || result.stderr);
+      assert(packet.nextActionSummary.sourceDrift >= 1, result.stdout || result.stderr);
       assert(packet.statusCounts.assignable >= 1, result.stdout || result.stderr);
       assert(!packet.blockerStatusCounts.closed, result.stdout || result.stderr);
       assert(packet.excludedStatusCounts.closed >= 1, result.stdout || result.stderr);
@@ -1855,6 +1886,9 @@ try {
       assert(typeof packet.blockersTruncated === "boolean", result.stdout || result.stderr);
       assert(packet.excluded.length <= 10, result.stdout || result.stderr);
       assert(typeof packet.excludedTruncated === "boolean", result.stdout || result.stderr);
+      assert(packet.sourceDrift.length <= 10, result.stdout || result.stderr);
+      assert(packet.sourceDrift.some((entry) => entry.itemId === lowerPriority.slug), result.stdout || result.stderr);
+      assert(typeof packet.sourceDriftTruncated === "boolean", result.stdout || result.stderr);
       assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
       assert(before === after, "claim-next --summary-json mutated workspace manifests");
     } finally {
