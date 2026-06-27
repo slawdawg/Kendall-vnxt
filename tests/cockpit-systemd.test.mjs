@@ -7,7 +7,7 @@ test("renders user systemd units for cockpit supervisor and dashboard", () => {
     repoRoot: "/home/kendall/Kendall_Nxt",
     pnpmPath: "/usr/bin/pnpm",
     uvPath: "/usr/bin/uv",
-    dashboardPort: "3100",
+    dashboardPort: "3000",
     supervisorPort: "8100",
   });
 
@@ -19,6 +19,7 @@ test("renders user systemd units for cockpit supervisor and dashboard", () => {
   assert.match(units["kendall-cockpit-supervisor.service"], /Restart=always/);
 
   assert.match(units["kendall-cockpit-dashboard.service"], /Environment=NEXT_PUBLIC_SUPERVISOR_URL=http:\/\/127\.0\.0\.1:8100/);
-  assert.match(units["kendall-cockpit-dashboard.service"], /ExecStart=\/usr\/bin\/pnpm --filter @kendall\/dashboard exec next dev --hostname 0\.0\.0\.0 --port 3100/);
+  assert.match(units["kendall-cockpit-dashboard.service"], /Environment=KENDALL_PIPELINE_WORKER_EVIDENCE_DIR=\/home\/kendall\/Kendall_Nxt\/.kendall-local\/governed-worker-evidence/);
+  assert.match(units["kendall-cockpit-dashboard.service"], /ExecStart=\/usr\/bin\/pnpm --filter @kendall\/dashboard exec next dev --hostname 0\.0\.0\.0 --port 3000/);
   assert.match(units["kendall-cockpit-dashboard.service"], /Restart=always/);
 });

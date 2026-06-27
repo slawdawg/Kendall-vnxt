@@ -100,9 +100,14 @@ function resolveEvidenceDir({ cwd, env }: { cwd: string; env: Record<string, str
   }
   const tmpRoot = realpathSync("/tmp");
   const realCwd = safeExists(cwd) ? safeRealpath(cwd) ?? cwd : cwd;
+  const dashboardRepoRoot = dashboardRepoRootForRuntimeCwd(cwd);
+  const dashboardRepoEvidenceDir = dashboardRepoRoot
+    ? resolve(/* turbopackIgnore: true */ dashboardRepoRoot, ".kendall-local", "governed-worker-evidence")
+    : null;
   const underDefaultRoot = pathIsUnder(defaultDir, evidenceDir);
+  const underDashboardRepoRoot = dashboardRepoEvidenceDir ? pathIsUnder(dashboardRepoEvidenceDir, evidenceDir) : false;
   const underTmp = pathIsUnder(tmpRoot, evidenceDir);
-  if (!underDefaultRoot && !underTmp) {
+  if (!underDefaultRoot && !underDashboardRepoRoot && !underTmp) {
     warnings.push("evidence_dir_outside_safe_roots");
     return { ok: false, path: null, warnings };
   }
@@ -120,12 +125,33 @@ function resolveEvidenceDir({ cwd, env }: { cwd: string; env: Record<string, str
       warnings.push("evidence_dir_symlink_rejected");
       return { ok: false, path: null, warnings };
     }
+    if (underDashboardRepoRoot) {
+      const realDashboardRepoRoot = dashboardRepoRoot && safeExists(dashboardRepoRoot)
+        ? safeRealpath(dashboardRepoRoot) ?? dashboardRepoRoot
+        : dashboardRepoRoot;
+      if (!realDashboardRepoRoot || !pathIsUnder(realDashboardRepoRoot, realEvidenceDir)) {
+        warnings.push("evidence_dir_realpath_outside_workspace");
+        return { ok: false, path: null, warnings };
+      }
+      if (resolve(evidenceDir) !== realEvidenceDir) {
+        warnings.push("evidence_dir_symlink_rejected");
+        return { ok: false, path: null, warnings };
+      }
+    }
     if (underTmp && !pathIsUnder(tmpRoot, realEvidenceDir)) {
       warnings.push("evidence_dir_realpath_outside_tmp");
       return { ok: false, path: null, warnings };
     }
   }
   return { ok: true, path: evidenceDir, warnings };
+}
+
+function dashboardRepoRootForRuntimeCwd(cwd: string): string | null {
+  const dashboardDir = resolve(/* turbopackIgnore: true */ cwd);
+  if (basename(dashboardDir) !== "dashboard" || basename(dirname(dashboardDir)) !== "apps") {
+    return null;
+  }
+  return resolve(/* turbopackIgnore: true */ dashboardDir, "..", "..");
 }
 
 function isSafeEvidenceFile(file: string, evidenceDir: string, warnings: string[]): boolean {

@@ -1387,6 +1387,55 @@ test("pipeline evidence source loads persisted worker snapshots without live cal
     assert.equal(loaded.evidenceFiles.length, 1);
     assert.ok(loaded.warnings.includes("evidence_file_symlink_rejected"));
 
+    const repoRoot = join(tempDir, "repo-root");
+    const dashboardCwd = join(repoRoot, "apps", "dashboard");
+    const repoEvidenceDir = join(repoRoot, ".kendall-local", "governed-worker-evidence");
+    await mkdir(dashboardCwd, { recursive: true });
+    await mkdir(repoEvidenceDir, { recursive: true });
+    await writeFile(join(repoEvidenceDir, "snapshot.json"), JSON.stringify({
+      schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+      generated_at: "2026-06-27T00:00:00Z",
+      metadata_only: true,
+      raw_payload_retained: false,
+      dashboard_consumption: "no_live_calls",
+      attempts: [
+        {
+          source_id: "copy-exec:claude:execution_observed:repo-root:0",
+          worker: "claude",
+          mode: "copied_worktree_execution",
+          authority_level: "copied_worktree_worker_execution",
+          execution_state: "execution_observed",
+          evidence_ref: "metadata:worker-copied-worktree-execution/claude",
+          status_event_ref: "metadata:worker-copied-worktree-execution/claude:status-event",
+          observed_at: "2026-06-27T00:00:00Z",
+          expected_response: "KENDALL_COPY_EXECUTION_OK",
+          observed_response: "KENDALL_COPY_EXECUTION_OK",
+          exit_code: 0,
+          timed_out: false,
+          command_path: "/usr/local/bin/claude",
+          copied_tracked_files: 7,
+          copy_bytes: 2048,
+          copy_retained: false,
+          network_allowed: true,
+          session_inheritance_allowed: true,
+          source_mutation_allowed: false,
+          tools_allowed: false,
+          raw_output_retained: false,
+          affects_trust: false,
+          affects_routing: false,
+        },
+      ],
+      errors: [],
+    }), "utf8");
+    const loadedFromRepoRoot = loadPersistedGovernedWorkerEvidencePackets({
+      cwd: dashboardCwd,
+      env: { KENDALL_PIPELINE_WORKER_EVIDENCE_DIR: repoEvidenceDir },
+    });
+    assert.equal(loadedFromRepoRoot.packets.length, 1);
+    assert.equal(loadedFromRepoRoot.packets[0].title, "Governed Claude copied-worktree execution completed");
+    assert.deepEqual(loadedFromRepoRoot.warnings, []);
+    assert.equal(loadedFromRepoRoot.evidenceFiles.length, 1);
+
     const packets = pipelinePacketsWithPersistedGovernedWorkerEvidence({ cwd: tempDir, env: {} });
     assert.equal(packets[0].packetId, loaded.packets[0].packetId);
     assert.ok(packets.length > loaded.packets.length);
