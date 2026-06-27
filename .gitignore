@@ -65,6 +65,7 @@ test-results/
 *.tmp
 *.temp
 runtime/.batch_timer_state.json
+.kendall-local/
 
 # OS/editor noise
 .DS_Store
