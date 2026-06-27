@@ -6140,7 +6140,1836 @@ class SupervisorService:
             ],
         )
 
+        # BEGIN BMAD pipeline-default story lanes
+        bmad_1_1_validate_the_pipeline_work_packet_read_contract_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-1-1-validate-the-pipeline-work-packet-read-contract",
+            lane_title="Story 1.1: Validate The Pipeline Work Packet Read Contract",
+            scope=[
+                "Implement BMAD Story Validate The Pipeline Work Packet Read Contract",
+                "FR1, NFR5",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Make /pipeline read from Work Packet contracts without introducing a parallel dashboard model.",
+            ],
+            verification_commands=[
+                "pnpm run test:dashboard-pipeline-fixtures",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_1_2_expose_read_only_supervisor_packet_projections_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-1-2-expose-read-only-supervisor-packet-projections",
+            lane_title="Story 1.2: Expose Read-Only Supervisor Packet Projections",
+            scope=[
+                "Implement BMAD Story Expose Read-Only Supervisor Packet Projections",
+                "FR1, NFR1, NFR2, NFR5",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Make /pipeline read from Work Packet contracts without introducing a parallel dashboard model.",
+            ],
+            verification_commands=[
+                "pnpm run test:dashboard-pipeline-fixtures",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_1_3_render_the_pipeline_cockpit_from_supervisor_packets_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-1-3-render-the-pipeline-cockpit-from-supervisor-packets",
+            lane_title="Story 1.3: Render The Pipeline Cockpit From Supervisor Packets",
+            scope=[
+                "Implement BMAD Story Render The Pipeline Cockpit From Supervisor Packets",
+                "FR2, FR3, NFR6, UX-DR5, UX-DR14, UX-DR15, UX-DR16",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Make /pipeline read from Work Packet contracts without introducing a parallel dashboard model.",
+            ],
+            verification_commands=[
+                "pnpm run test:dashboard-pipeline-fixtures",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_1_4_render_packet_detail_evidence_and_recovery_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-1-4-render-packet-detail-evidence-and-recovery",
+            lane_title="Story 1.4: Render Packet Detail Evidence And Recovery",
+            scope=[
+                "Implement BMAD Story Render Packet Detail Evidence And Recovery",
+                "FR2, FR14, NFR4, UX-DR6, UX-DR9, UX-DR10",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Make /pipeline read from Work Packet contracts without introducing a parallel dashboard model.",
+            ],
+            verification_commands=[
+                "pnpm run test:dashboard-pipeline-fixtures",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_1_5_enforce_cockpit_ux_and_import_boundaries_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-1-5-enforce-cockpit-ux-and-import-boundaries",
+            lane_title="Story 1.5: Enforce Cockpit UX And Import Boundaries",
+            scope=[
+                "Implement BMAD Story Enforce Cockpit UX And Import Boundaries",
+                "FR1, FR2, FR3, NFR6, NFR8, UX-DR1, UX-DR2, UX-DR3, UX-DR4, UX-DR17, UX-DR18, UX-DR19, UX-DR20, UX-DR21, UX-DR22, UX-DR23, UX-DR24",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Make /pipeline read from Work Packet contracts without introducing a parallel dashboard model.",
+            ],
+            verification_commands=[
+                "pnpm run test:dashboard-pipeline-fixtures",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_2_1_import_approved_obsidian_metadata_as_candidate_work_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-2-1-import-approved-obsidian-metadata-as-candidate-work",
+            lane_title="Story 2.1: Import Approved Obsidian Metadata As Candidate Work",
+            scope=[
+                "Implement BMAD Story Import Approved Obsidian Metadata As Candidate Work",
+                "FR4, NFR1, NFR5",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Capture and reconcile sources while keeping Obsidian canonical, approved, and metadata-only.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not write canonical Obsidian memory; prepare proposal or draft-plan evidence only.",
+            ],
+        )
+        bmad_2_2_preserve_source_refs_through_candidate_promotion_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-2-2-preserve-source-refs-through-candidate-promotion",
+            lane_title="Story 2.2: Preserve Source Refs Through Candidate Promotion",
+            scope=[
+                "Implement BMAD Story Preserve Source Refs Through Candidate Promotion",
+                "FR5, FR15, NFR2, NFR4",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Capture and reconcile sources while keeping Obsidian canonical, approved, and metadata-only.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_2_3_inventory_legacy_planning_artifacts_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-2-3-inventory-legacy-planning-artifacts",
+            lane_title="Story 2.3: Inventory Legacy Planning Artifacts",
+            scope=[
+                "Implement BMAD Story Inventory Legacy Planning Artifacts",
+                "FR7, NFR5",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Capture and reconcile sources while keeping Obsidian canonical, approved, and metadata-only.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_2_4_propose_legacy_artifact_dispositions_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-2-4-propose-legacy-artifact-dispositions",
+            lane_title="Story 2.4: Propose Legacy Artifact Dispositions",
+            scope=[
+                "Implement BMAD Story Propose Legacy Artifact Dispositions",
+                "FR8, FR9, NFR1, NFR4",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Capture and reconcile sources while keeping Obsidian canonical, approved, and metadata-only.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_2_5_prepare_user_facing_source_summaries_for_obsidian_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-2-5-prepare-user-facing-source-summaries-for-obsidian",
+            lane_title="Story 2.5: Prepare User-Facing Source Summaries For Obsidian",
+            scope=[
+                "Implement BMAD Story Prepare User-Facing Source Summaries For Obsidian",
+                "FR7, FR8, FR22, NFR4, NFR5",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Capture and reconcile sources while keeping Obsidian canonical, approved, and metadata-only.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not write canonical Obsidian memory; prepare proposal or draft-plan evidence only.",
+            ],
+        )
+        bmad_3_1_define_and_render_human_gate_actions_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-3-1-define-and-render-human-gate-actions",
+            lane_title="Story 3.1: Define And Render Human Gate Actions",
+            scope=[
+                "Implement BMAD Story Define And Render Human Gate Actions",
+                "FR14, FR16, NFR1, NFR6, UX-DR10, UX-DR18",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Keep gates, events, previews, and action requests durable and non-executing unless explicitly authorized.",
+            ],
+            verification_commands=[
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_3_2_record_durable_stage_transition_events_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-3-2-record-durable-stage-transition-events",
+            lane_title="Story 3.2: Record Durable Stage Transition Events",
+            scope=[
+                "Implement BMAD Story Record Durable Stage Transition Events",
+                "FR15, NFR2, NFR4",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Keep gates, events, previews, and action requests durable and non-executing unless explicitly authorized.",
+            ],
+            verification_commands=[
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_3_3_validate_gate_state_against_event_replay_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-3-3-validate-gate-state-against-event-replay",
+            lane_title="Story 3.3: Validate Gate State Against Event Replay",
+            scope=[
+                "Implement BMAD Story Validate Gate State Against Event Replay",
+                "FR15, FR16, NFR2, NFR4",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Keep gates, events, previews, and action requests durable and non-executing unless explicitly authorized.",
+            ],
+            verification_commands=[
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_3_4_submit_action_requests_without_performing_execution_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-3-4-submit-action-requests-without-performing-execution",
+            lane_title="Story 3.4: Submit Action Requests Without Performing Execution",
+            scope=[
+                "Implement BMAD Story Submit Action Requests Without Performing Execution",
+                "FR14, FR16, NFR1, NFR7",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Keep gates, events, previews, and action requests durable and non-executing unless explicitly authorized.",
+            ],
+            verification_commands=[
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+            ],
+        )
+        bmad_4_1_report_assignable_and_blocked_lanes_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-4-1-report-assignable-and-blocked-lanes",
+            lane_title="Story 4.1: Report Assignable And Blocked Lanes",
+            scope=[
+                "Implement BMAD Story Report Assignable And Blocked Lanes",
+                "FR10, NFR3",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Coordinate safe Codex runner assignments without silent takeover or overlapping active lanes.",
+            ],
+            verification_commands=[
+                "pnpm run test:codex-workspace",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_4_2_preview_a_safe_lane_assignment_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-4-2-preview-a-safe-lane-assignment",
+            lane_title="Story 4.2: Preview A Safe Lane Assignment",
+            scope=[
+                "Implement BMAD Story Preview A Safe Lane Assignment",
+                "FR10, FR11, NFR3, NFR7",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Coordinate safe Codex runner assignments without silent takeover or overlapping active lanes.",
+            ],
+            verification_commands=[
+                "pnpm run test:codex-workspace",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_4_3_claim_one_unowned_safe_lane_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-4-3-claim-one-unowned-safe-lane",
+            lane_title="Story 4.3: Claim One Unowned Safe Lane",
+            scope=[
+                "Implement BMAD Story Claim One Unowned Safe Lane",
+                "FR11, FR12, NFR3, NFR4",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Coordinate safe Codex runner assignments without silent takeover or overlapping active lanes.",
+            ],
+            verification_commands=[
+                "pnpm run test:codex-workspace",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_4_4_maintain_heartbeat_and_stale_takeover_evidence_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-4-4-maintain-heartbeat-and-stale-takeover-evidence",
+            lane_title="Story 4.4: Maintain Heartbeat And Stale Takeover Evidence",
+            scope=[
+                "Implement BMAD Story Maintain Heartbeat And Stale Takeover Evidence",
+                "FR12, NFR2, NFR3, UX-DR8",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Coordinate safe Codex runner assignments without silent takeover or overlapping active lanes.",
+            ],
+            verification_commands=[
+                "pnpm run test:codex-workspace",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_4_5_prove_bounded_parallel_session_coordination_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-4-5-prove-bounded-parallel-session-coordination",
+            lane_title="Story 4.5: Prove Bounded Parallel Session Coordination",
+            scope=[
+                "Implement BMAD Story Prove Bounded Parallel Session Coordination",
+                "FR13, NFR3",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Coordinate safe Codex runner assignments without silent takeover or overlapping active lanes.",
+            ],
+            verification_commands=[
+                "pnpm run test:codex-workspace",
+                "pnpm run check:runner-assignment-status",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_5_1_execute_the_safe_runner_loop_contract_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-5-1-execute-the-safe-runner-loop-contract",
+            lane_title="Story 5.1: Execute The Safe Runner Loop Contract",
+            scope=[
+                "Implement BMAD Story Execute The Safe Runner Loop Contract",
+                "FR17, NFR2, NFR4, NFR7",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Record autonomous loop decisions, review escalation, stop states, and tool-churn recovery evidence.",
+            ],
+            verification_commands=[
+                "pnpm run check:runbooks",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_5_2_capture_best_judgment_decisions_as_evidence_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-5-2-capture-best-judgment-decisions-as-evidence",
+            lane_title="Story 5.2: Capture Best-Judgment Decisions As Evidence",
+            scope=[
+                "Implement BMAD Story Capture Best-Judgment Decisions As Evidence",
+                "FR18, NFR1, NFR4",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Record autonomous loop decisions, review escalation, stop states, and tool-churn recovery evidence.",
+            ],
+            verification_commands=[
+                "pnpm run check:runbooks",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_5_3_trigger_bmad_party_mode_and_claude_review_by_policy_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-5-3-trigger-bmad-party-mode-and-claude-review-by-policy",
+            lane_title="Story 5.3: Trigger BMAD Party Mode And Claude Review By Policy",
+            scope=[
+                "Implement BMAD Story Trigger BMAD Party Mode And Claude Review By Policy",
+                "FR19, NFR1, NFR5",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Record autonomous loop decisions, review escalation, stop states, and tool-churn recovery evidence.",
+            ],
+            verification_commands=[
+                "pnpm run check:runbooks",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_5_4_surface_loop_stop_states_in_pipeline_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-5-4-surface-loop-stop-states-in-pipeline",
+            lane_title="Story 5.4: Surface Loop Stop States In Pipeline",
+            scope=[
+                "Implement BMAD Story Surface Loop Stop States In Pipeline",
+                "FR17, FR23, NFR2, NFR4, UX-DR16",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Record autonomous loop decisions, review escalation, stop states, and tool-churn recovery evidence.",
+            ],
+            verification_commands=[
+                "pnpm run check:runbooks",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_6_1_attach_delivery_evidence_to_work_packets_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-6-1-attach-delivery-evidence-to-work-packets",
+            lane_title="Story 6.1: Attach Delivery Evidence To Work Packets",
+            scope=[
+                "Implement BMAD Story Attach Delivery Evidence To Work Packets",
+                "FR20, NFR4, NFR5",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Attach GitHub delivery and cleanup evidence without treating delivery rails as orchestration authority.",
+            ],
+            verification_commands=[
+                "pnpm run check:delivery-readiness",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+                "Do not merge or clean up until exact-head, checks, review-thread, local verification, and rollback evidence are proven.",
+            ],
+        )
+        bmad_6_2_prepare_pr_creation_and_update_as_gated_evidence_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-6-2-prepare-pr-creation-and-update-as-gated-evidence",
+            lane_title="Story 6.2: Prepare PR Creation And Update As Gated Evidence",
+            scope=[
+                "Implement BMAD Story Prepare PR Creation And Update As Gated Evidence",
+                "FR20, FR21, NFR1, NFR4",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Attach GitHub delivery and cleanup evidence without treating delivery rails as orchestration authority.",
+            ],
+            verification_commands=[
+                "pnpm run check:delivery-readiness",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+                "Do not merge or clean up until exact-head, checks, review-thread, local verification, and rollback evidence are proven.",
+            ],
+        )
+        bmad_6_3_prove_checks_review_threads_and_exact_head_state_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-6-3-prove-checks-review-threads-and-exact-head-state",
+            lane_title="Story 6.3: Prove Checks, Review Threads, And Exact-Head State",
+            scope=[
+                "Implement BMAD Story Prove Checks, Review Threads, And Exact-Head State",
+                "FR21, NFR1, NFR4",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Attach GitHub delivery and cleanup evidence without treating delivery rails as orchestration authority.",
+            ],
+            verification_commands=[
+                "pnpm run check:delivery-readiness",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+                "Do not merge or clean up until exact-head, checks, review-thread, local verification, and rollback evidence are proven.",
+            ],
+        )
+        bmad_6_4_gate_merge_and_cleanup_with_rollback_evidence_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-6-4-gate-merge-and-cleanup-with-rollback-evidence",
+            lane_title="Story 6.4: Gate Merge And Cleanup With Rollback Evidence",
+            scope=[
+                "Implement BMAD Story Gate Merge And Cleanup With Rollback Evidence",
+                "FR20, FR21, NFR1, NFR4",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Attach GitHub delivery and cleanup evidence without treating delivery rails as orchestration authority.",
+            ],
+            verification_commands=[
+                "pnpm run check:delivery-readiness",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+                "Do not merge or clean up until exact-head, checks, review-thread, local verification, and rollback evidence are proven.",
+            ],
+        )
+        bmad_6_5_render_delivery_and_cleanup_in_packet_detail_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-6-5-render-delivery-and-cleanup-in-packet-detail",
+            lane_title="Story 6.5: Render Delivery And Cleanup In Packet Detail",
+            scope=[
+                "Implement BMAD Story Render Delivery And Cleanup In Packet Detail",
+                "FR20, FR21, NFR6, UX-DR11",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Attach GitHub delivery and cleanup evidence without treating delivery rails as orchestration authority.",
+            ],
+            verification_commands=[
+                "pnpm run check:delivery-readiness",
+                "pnpm run test:codex-workspace",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+                "Do not merge or clean up until exact-head, checks, review-thread, local verification, and rollback evidence are proven.",
+            ],
+        )
+        bmad_7_1_render_reviewable_memory_proposals_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-7-1-render-reviewable-memory-proposals",
+            lane_title="Story 7.1: Render Reviewable Memory Proposals",
+            scope=[
+                "Implement BMAD Story Render Reviewable Memory Proposals",
+                "FR6, FR22, NFR5, UX-DR12",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Route Learn, memory, documentation, and LLM-Wiki outputs through proposal-first evidence boundaries.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+                "Do not write canonical Obsidian memory; prepare proposal or draft-plan evidence only.",
+            ],
+        )
+        bmad_7_2_route_user_facing_documentation_proposals_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-7-2-route-user-facing-documentation-proposals",
+            lane_title="Story 7.2: Route User-Facing Documentation Proposals",
+            scope=[
+                "Implement BMAD Story Route User-Facing Documentation Proposals",
+                "FR22, NFR4, NFR5",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Route Learn, memory, documentation, and LLM-Wiki outputs through proposal-first evidence boundaries.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+                "Do not write canonical Obsidian memory; prepare proposal or draft-plan evidence only.",
+            ],
+        )
+        bmad_7_3_keep_llm_wiki_derived_and_rebuildable_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-7-3-keep-llm-wiki-derived-and-rebuildable",
+            lane_title="Story 7.3: Keep LLM-Wiki Derived And Rebuildable",
+            scope=[
+                "Implement BMAD Story Keep LLM-Wiki Derived And Rebuildable",
+                "FR6, FR22, NFR5",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Route Learn, memory, documentation, and LLM-Wiki outputs through proposal-first evidence boundaries.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+                "Do not write canonical Obsidian memory; prepare proposal or draft-plan evidence only.",
+            ],
+        )
+        bmad_7_4_deauthorize_unsafe_or_regressing_automation_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-7-4-deauthorize-unsafe-or-regressing-automation",
+            lane_title="Story 7.4: Deauthorize Unsafe Or Regressing Automation",
+            scope=[
+                "Implement BMAD Story Deauthorize Unsafe Or Regressing Automation",
+                "FR23, NFR1, NFR2, NFR7",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Route Learn, memory, documentation, and LLM-Wiki outputs through proposal-first evidence boundaries.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        bmad_7_5_close_the_learn_loop_in_pipeline_lane = self._safe_backlog_next_lane(
+            lane_slug="bmad-7-5-close-the-learn-loop-in-pipeline",
+            lane_title="Story 7.5: Close The Learn Loop In Pipeline",
+            scope=[
+                "Implement BMAD Story Close The Learn Loop In Pipeline",
+                "FR6, FR22, FR23, NFR4, NFR6, UX-DR12",
+                "Preserve metadata-only evidence, explicit stop lines, and supervisor-owned lifecycle state.",
+                "Route Learn, memory, documentation, and LLM-Wiki outputs through proposal-first evidence boundaries.",
+            ],
+            verification_commands=[
+                "pnpm run check:runtime-export",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not perform provider/model calls, worker launch, GitHub mutation, merge, cleanup, branch deletion, credential access, or Obsidian canonical mutation from this queue entry alone.",
+                "Do not mutate another active lane or take over an owned workspace without explicit takeover evidence.",
+                "Keep BMAD generated planning artifacts local unless decisions are rewritten as source-owned docs, tests, scripts, or policy.",
+                "Do not claim a second active lane from the same session while this story lane is active.",
+            ],
+        )
+        # END BMAD pipeline-default story lanes
         items = [
+            # BEGIN BMAD pipeline-default story backlog items
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-1-1-validate-the-pipeline-work-packet-read-contract",
+                label="Story 1.1: Validate The Pipeline Work Packet Read Contract",
+                priority="P0",
+                status="ready",
+                summary="BMAD Story 1.1 from the Pipeline default workflow backlog. FR1, NFR5",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/1-1-validate-the-pipeline-work-packet-read-contract.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 1-1-validate-the-pipeline-work-packet-read-contract -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "1-1-validate-the-pipeline-work-packet-read-contract.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#safe-development-backlog",
+                ],
+                nextLane=bmad_1_1_validate_the_pipeline_work_packet_read_contract_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-1-2-expose-read-only-supervisor-packet-projections",
+                label="Story 1.2: Expose Read-Only Supervisor Packet Projections",
+                priority="P0",
+                status="ready",
+                summary="BMAD Story 1.2 from the Pipeline default workflow backlog. FR1, NFR1, NFR2, NFR5",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/1-2-expose-read-only-supervisor-packet-projections.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 1-2-expose-read-only-supervisor-packet-projections -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "1-2-expose-read-only-supervisor-packet-projections.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#safe-development-backlog",
+                ],
+                nextLane=bmad_1_2_expose_read_only_supervisor_packet_projections_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-1-3-render-the-pipeline-cockpit-from-supervisor-packets",
+                label="Story 1.3: Render The Pipeline Cockpit From Supervisor Packets",
+                priority="P0",
+                status="ready",
+                summary="BMAD Story 1.3 from the Pipeline default workflow backlog. FR2, FR3, NFR6, UX-DR5, UX-DR14, UX-DR15, UX-DR16",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/1-3-render-the-pipeline-cockpit-from-supervisor-packets.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 1-3-render-the-pipeline-cockpit-from-supervisor-packets -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "1-3-render-the-pipeline-cockpit-from-supervisor-packets.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#safe-development-backlog",
+                ],
+                nextLane=bmad_1_3_render_the_pipeline_cockpit_from_supervisor_packets_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-1-4-render-packet-detail-evidence-and-recovery",
+                label="Story 1.4: Render Packet Detail Evidence And Recovery",
+                priority="P0",
+                status="ready",
+                summary="BMAD Story 1.4 from the Pipeline default workflow backlog. FR2, FR14, NFR4, UX-DR6, UX-DR9, UX-DR10",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/1-4-render-packet-detail-evidence-and-recovery.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 1-4-render-packet-detail-evidence-and-recovery -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "1-4-render-packet-detail-evidence-and-recovery.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#safe-development-backlog",
+                ],
+                nextLane=bmad_1_4_render_packet_detail_evidence_and_recovery_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-1-5-enforce-cockpit-ux-and-import-boundaries",
+                label="Story 1.5: Enforce Cockpit UX And Import Boundaries",
+                priority="P0",
+                status="ready",
+                summary="BMAD Story 1.5 from the Pipeline default workflow backlog. FR1, FR2, FR3, NFR6, NFR8, UX-DR1, UX-DR2, UX-DR3, UX-DR4, UX-DR17, UX-DR18, UX-DR19, UX-DR20, UX-DR21, UX-DR22, UX-DR23, UX-DR24",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/1-5-enforce-cockpit-ux-and-import-boundaries.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 1-5-enforce-cockpit-ux-and-import-boundaries -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "1-5-enforce-cockpit-ux-and-import-boundaries.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#safe-development-backlog",
+                ],
+                nextLane=bmad_1_5_enforce_cockpit_ux_and_import_boundaries_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-2-1-import-approved-obsidian-metadata-as-candidate-work",
+                label="Story 2.1: Import Approved Obsidian Metadata As Candidate Work",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 2.1 from the Pipeline default workflow backlog. FR4, NFR1, NFR5",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/2-1-import-approved-obsidian-metadata-as-candidate-work.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 2-1-import-approved-obsidian-metadata-as-candidate-work -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "2-1-import-approved-obsidian-metadata-as-candidate-work.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_2_1_import_approved_obsidian_metadata_as_candidate_work_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-2-2-preserve-source-refs-through-candidate-promotion",
+                label="Story 2.2: Preserve Source Refs Through Candidate Promotion",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 2.2 from the Pipeline default workflow backlog. FR5, FR15, NFR2, NFR4",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/2-2-preserve-source-refs-through-candidate-promotion.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 2-2-preserve-source-refs-through-candidate-promotion -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "2-2-preserve-source-refs-through-candidate-promotion.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_2_2_preserve_source_refs_through_candidate_promotion_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-2-3-inventory-legacy-planning-artifacts",
+                label="Story 2.3: Inventory Legacy Planning Artifacts",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 2.3 from the Pipeline default workflow backlog. FR7, NFR5",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/2-3-inventory-legacy-planning-artifacts.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 2-3-inventory-legacy-planning-artifacts -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "2-3-inventory-legacy-planning-artifacts.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_2_3_inventory_legacy_planning_artifacts_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-2-4-propose-legacy-artifact-dispositions",
+                label="Story 2.4: Propose Legacy Artifact Dispositions",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 2.4 from the Pipeline default workflow backlog. FR8, FR9, NFR1, NFR4",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/2-4-propose-legacy-artifact-dispositions.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 2-4-propose-legacy-artifact-dispositions -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "2-4-propose-legacy-artifact-dispositions.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_2_4_propose_legacy_artifact_dispositions_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-2-5-prepare-user-facing-source-summaries-for-obsidian",
+                label="Story 2.5: Prepare User-Facing Source Summaries For Obsidian",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 2.5 from the Pipeline default workflow backlog. FR7, FR8, FR22, NFR4, NFR5",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/2-5-prepare-user-facing-source-summaries-for-obsidian.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 2-5-prepare-user-facing-source-summaries-for-obsidian -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "2-5-prepare-user-facing-source-summaries-for-obsidian.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_2_5_prepare_user_facing_source_summaries_for_obsidian_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-3-1-define-and-render-human-gate-actions",
+                label="Story 3.1: Define And Render Human Gate Actions",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 3.1 from the Pipeline default workflow backlog. FR14, FR16, NFR1, NFR6, UX-DR10, UX-DR18",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/3-1-define-and-render-human-gate-actions.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 3-1-define-and-render-human-gate-actions -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "3-1-define-and-render-human-gate-actions.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/authority-readiness-matrix-report",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#authority-readiness-matrix",
+                ],
+                nextLane=bmad_3_1_define_and_render_human_gate_actions_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-3-2-record-durable-stage-transition-events",
+                label="Story 3.2: Record Durable Stage Transition Events",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 3.2 from the Pipeline default workflow backlog. FR15, NFR2, NFR4",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/3-2-record-durable-stage-transition-events.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 3-2-record-durable-stage-transition-events -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "3-2-record-durable-stage-transition-events.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/authority-readiness-matrix-report",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#authority-readiness-matrix",
+                ],
+                nextLane=bmad_3_2_record_durable_stage_transition_events_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-3-3-validate-gate-state-against-event-replay",
+                label="Story 3.3: Validate Gate State Against Event Replay",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 3.3 from the Pipeline default workflow backlog. FR15, FR16, NFR2, NFR4",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/3-3-validate-gate-state-against-event-replay.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 3-3-validate-gate-state-against-event-replay -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "3-3-validate-gate-state-against-event-replay.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/authority-readiness-matrix-report",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#authority-readiness-matrix",
+                ],
+                nextLane=bmad_3_3_validate_gate_state_against_event_replay_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-3-4-submit-action-requests-without-performing-execution",
+                label="Story 3.4: Submit Action Requests Without Performing Execution",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 3.4 from the Pipeline default workflow backlog. FR14, FR16, NFR1, NFR7",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/3-4-submit-action-requests-without-performing-execution.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 3-4-submit-action-requests-without-performing-execution -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "3-4-submit-action-requests-without-performing-execution.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/authority-readiness-matrix-report",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#authority-readiness-matrix",
+                ],
+                nextLane=bmad_3_4_submit_action_requests_without_performing_execution_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-4-1-report-assignable-and-blocked-lanes",
+                label="Story 4.1: Report Assignable And Blocked Lanes",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 4.1 from the Pipeline default workflow backlog. FR10, NFR3",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/4-1-report-assignable-and-blocked-lanes.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 4-1-report-assignable-and-blocked-lanes -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "4-1-report-assignable-and-blocked-lanes.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=bmad_4_1_report_assignable_and_blocked_lanes_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-4-2-preview-a-safe-lane-assignment",
+                label="Story 4.2: Preview A Safe Lane Assignment",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 4.2 from the Pipeline default workflow backlog. FR10, FR11, NFR3, NFR7",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/4-2-preview-a-safe-lane-assignment.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 4-2-preview-a-safe-lane-assignment -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "4-2-preview-a-safe-lane-assignment.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=bmad_4_2_preview_a_safe_lane_assignment_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-4-3-claim-one-unowned-safe-lane",
+                label="Story 4.3: Claim One Unowned Safe Lane",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 4.3 from the Pipeline default workflow backlog. FR11, FR12, NFR3, NFR4",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/4-3-claim-one-unowned-safe-lane.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 4-3-claim-one-unowned-safe-lane -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "4-3-claim-one-unowned-safe-lane.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=bmad_4_3_claim_one_unowned_safe_lane_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-4-4-maintain-heartbeat-and-stale-takeover-evidence",
+                label="Story 4.4: Maintain Heartbeat And Stale Takeover Evidence",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 4.4 from the Pipeline default workflow backlog. FR12, NFR2, NFR3, UX-DR8",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/4-4-maintain-heartbeat-and-stale-takeover-evidence.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 4-4-maintain-heartbeat-and-stale-takeover-evidence -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "4-4-maintain-heartbeat-and-stale-takeover-evidence.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=bmad_4_4_maintain_heartbeat_and_stale_takeover_evidence_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-4-5-prove-bounded-parallel-session-coordination",
+                label="Story 4.5: Prove Bounded Parallel Session Coordination",
+                priority="P1",
+                status="ready",
+                summary="BMAD Story 4.5 from the Pipeline default workflow backlog. FR13, NFR3",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/4-5-prove-bounded-parallel-session-coordination.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 4-5-prove-bounded-parallel-session-coordination -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "4-5-prove-bounded-parallel-session-coordination.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=bmad_4_5_prove_bounded_parallel_session_coordination_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-5-1-execute-the-safe-runner-loop-contract",
+                label="Story 5.1: Execute The Safe Runner Loop Contract",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 5.1 from the Pipeline default workflow backlog. FR17, NFR2, NFR4, NFR7",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/5-1-execute-the-safe-runner-loop-contract.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 5-1-execute-the-safe-runner-loop-contract -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "5-1-execute-the-safe-runner-loop-contract.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#verification-readiness-report",
+                ],
+                nextLane=bmad_5_1_execute_the_safe_runner_loop_contract_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-5-2-capture-best-judgment-decisions-as-evidence",
+                label="Story 5.2: Capture Best-Judgment Decisions As Evidence",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 5.2 from the Pipeline default workflow backlog. FR18, NFR1, NFR4",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/5-2-capture-best-judgment-decisions-as-evidence.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 5-2-capture-best-judgment-decisions-as-evidence -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "5-2-capture-best-judgment-decisions-as-evidence.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#verification-readiness-report",
+                ],
+                nextLane=bmad_5_2_capture_best_judgment_decisions_as_evidence_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-5-3-trigger-bmad-party-mode-and-claude-review-by-policy",
+                label="Story 5.3: Trigger BMAD Party Mode And Claude Review By Policy",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 5.3 from the Pipeline default workflow backlog. FR19, NFR1, NFR5",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/5-3-trigger-bmad-party-mode-and-claude-review-by-policy.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 5-3-trigger-bmad-party-mode-and-claude-review-by-policy -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "5-3-trigger-bmad-party-mode-and-claude-review-by-policy.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#verification-readiness-report",
+                ],
+                nextLane=bmad_5_3_trigger_bmad_party_mode_and_claude_review_by_policy_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-5-4-surface-loop-stop-states-in-pipeline",
+                label="Story 5.4: Surface Loop Stop States In Pipeline",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 5.4 from the Pipeline default workflow backlog. FR17, FR23, NFR2, NFR4, UX-DR16",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/5-4-surface-loop-stop-states-in-pipeline.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 5-4-surface-loop-stop-states-in-pipeline -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "5-4-surface-loop-stop-states-in-pipeline.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/runner-assignment-status-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#verification-readiness-report",
+                ],
+                nextLane=bmad_5_4_surface_loop_stop_states_in_pipeline_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-6-1-attach-delivery-evidence-to-work-packets",
+                label="Story 6.1: Attach Delivery Evidence To Work Packets",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 6.1 from the Pipeline default workflow backlog. FR20, NFR4, NFR5",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/6-1-attach-delivery-evidence-to-work-packets.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 6-1-attach-delivery-evidence-to-work-packets -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "6-1-attach-delivery-evidence-to-work-packets.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/delivery-readiness-policy-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                nextLane=bmad_6_1_attach_delivery_evidence_to_work_packets_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-6-2-prepare-pr-creation-and-update-as-gated-evidence",
+                label="Story 6.2: Prepare PR Creation And Update As Gated Evidence",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 6.2 from the Pipeline default workflow backlog. FR20, FR21, NFR1, NFR4",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/6-2-prepare-pr-creation-and-update-as-gated-evidence.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 6-2-prepare-pr-creation-and-update-as-gated-evidence -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "6-2-prepare-pr-creation-and-update-as-gated-evidence.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/delivery-readiness-policy-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                nextLane=bmad_6_2_prepare_pr_creation_and_update_as_gated_evidence_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-6-3-prove-checks-review-threads-and-exact-head-state",
+                label="Story 6.3: Prove Checks, Review Threads, And Exact-Head State",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 6.3 from the Pipeline default workflow backlog. FR21, NFR1, NFR4",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/6-3-prove-checks-review-threads-and-exact-head-state.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 6-3-prove-checks-review-threads-and-exact-head-state -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "6-3-prove-checks-review-threads-and-exact-head-state.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/delivery-readiness-policy-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                nextLane=bmad_6_3_prove_checks_review_threads_and_exact_head_state_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-6-4-gate-merge-and-cleanup-with-rollback-evidence",
+                label="Story 6.4: Gate Merge And Cleanup With Rollback Evidence",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 6.4 from the Pipeline default workflow backlog. FR20, FR21, NFR1, NFR4",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/6-4-gate-merge-and-cleanup-with-rollback-evidence.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 6-4-gate-merge-and-cleanup-with-rollback-evidence -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "6-4-gate-merge-and-cleanup-with-rollback-evidence.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/delivery-readiness-policy-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                nextLane=bmad_6_4_gate_merge_and_cleanup_with_rollback_evidence_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-6-5-render-delivery-and-cleanup-in-packet-detail",
+                label="Story 6.5: Render Delivery And Cleanup In Packet Detail",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 6.5 from the Pipeline default workflow backlog. FR20, FR21, NFR6, UX-DR11",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/6-5-render-delivery-and-cleanup-in-packet-detail.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 6-5-render-delivery-and-cleanup-in-packet-detail -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "6-5-render-delivery-and-cleanup-in-packet-detail.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/delivery-readiness-policy-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#delivery-readiness-policy-report",
+                ],
+                nextLane=bmad_6_5_render_delivery_and_cleanup_in_packet_detail_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-7-1-render-reviewable-memory-proposals",
+                label="Story 7.1: Render Reviewable Memory Proposals",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 7.1 from the Pipeline default workflow backlog. FR6, FR22, NFR5, UX-DR12",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/7-1-render-reviewable-memory-proposals.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 7-1-render-reviewable-memory-proposals -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "7-1-render-reviewable-memory-proposals.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_7_1_render_reviewable_memory_proposals_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-7-2-route-user-facing-documentation-proposals",
+                label="Story 7.2: Route User-Facing Documentation Proposals",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 7.2 from the Pipeline default workflow backlog. FR22, NFR4, NFR5",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/7-2-route-user-facing-documentation-proposals.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 7-2-route-user-facing-documentation-proposals -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "7-2-route-user-facing-documentation-proposals.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_7_2_route_user_facing_documentation_proposals_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-7-3-keep-llm-wiki-derived-and-rebuildable",
+                label="Story 7.3: Keep LLM-Wiki Derived And Rebuildable",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 7.3 from the Pipeline default workflow backlog. FR6, FR22, NFR5",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/7-3-keep-llm-wiki-derived-and-rebuildable.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 7-3-keep-llm-wiki-derived-and-rebuildable -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "7-3-keep-llm-wiki-derived-and-rebuildable.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_7_3_keep_llm_wiki_derived_and_rebuildable_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-7-4-deauthorize-unsafe-or-regressing-automation",
+                label="Story 7.4: Deauthorize Unsafe Or Regressing Automation",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 7.4 from the Pipeline default workflow backlog. FR23, NFR1, NFR2, NFR7",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/7-4-deauthorize-unsafe-or-regressing-automation.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 7-4-deauthorize-unsafe-or-regressing-automation -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "7-4-deauthorize-unsafe-or-regressing-automation.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_7_4_deauthorize_unsafe_or_regressing_automation_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="bmad-7-5-close-the-learn-loop-in-pipeline",
+                label="Story 7.5: Close The Learn Loop In Pipeline",
+                priority="P2",
+                status="ready",
+                summary="BMAD Story 7.5 from the Pipeline default workflow backlog. FR6, FR22, FR23, NFR4, NFR6, UX-DR12",
+                recommendedSliceSize="story",
+                evidence=[
+                    "BMAD story file: _bmad-output/implementation-artifacts/7-5-close-the-learn-loop-in-pipeline.md",
+                    "Epics artifact: _bmad-output/planning-artifacts/epics.md",
+                    "Implementation readiness report status: READY",
+                    "Sprint status entry: 7-5-close-the-learn-loop-in-pipeline -> ready-for-dev",
+                ],
+                sourceEvidenceLabels=[
+                    "7-5-close-the-learn-loop-in-pipeline.md",
+                    "implementation-readiness-report-2026-06-27.md",
+                ],
+                relatedReports=[
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/pipeline",
+                    "/controls#documentation-authority-report",
+                ],
+                nextLane=bmad_7_5_close_the_learn_loop_in_pipeline_lane,
+                nextAction="Dispatch this BMAD story with codex-workspace dispatch-next, then run the story through BMAD dev-story and code-review in the prepared worktree.",
+            ),
+            # END BMAD pipeline-default story backlog items
             SafeDevelopmentBacklogItemView(
                 itemId="safe-backlog-report-alignment",
                 label="Report-aligned backlog governance",
