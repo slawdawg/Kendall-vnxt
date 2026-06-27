@@ -375,6 +375,26 @@ try {
     assert(match[0].includes("samePath(manifest.worktree_path, record.path)"), "rebuildIndex must skip already indexed worktrees");
   });
 
+  test("rebuild-index summary-json reports candidates without creating manifests", () => {
+    const rebuildStateRoot = mkdtempSync(join(tmpdir(), "codex-rebuild-index-summary-json-"));
+    try {
+      const tasksDir = join(rebuildStateRoot, "tasks");
+      const result = run(["rebuild-index", "--summary-json", "--state-root", rebuildStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.tasksDir === tasksDir, result.stdout || result.stderr);
+      assert(Number.isInteger(packet.counts.totalCodexWorktrees), result.stdout || result.stderr);
+      assert(Number.isInteger(packet.counts.planned), result.stdout || result.stderr);
+      assert(Number.isInteger(packet.counts.skipped), result.stdout || result.stderr);
+      assert(packet.counts.planned + packet.counts.skipped === packet.counts.totalCodexWorktrees, result.stdout || result.stderr);
+      assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
+      assert(!existsSync(tasksDir), "rebuild-index summary-json created the tasks directory");
+    } finally {
+      rmSync(rebuildStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("run uses shared workspace command resolution", () => {
     const source = readFileSync(scriptPath, "utf8");
     const match = source.match(/function run\(commandName[\s\S]*?function samePath/);

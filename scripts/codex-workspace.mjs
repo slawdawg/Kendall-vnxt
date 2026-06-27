@@ -218,6 +218,10 @@ cleanup-orphans options:
 repair-manifests options:
   --apply                   Apply closed-manifest repairs. Without this, repair is dry-run.
   --summary-json            Without --apply, print a bounded JSON repair summary.
+
+rebuild-index options:
+  --dry-run                 Preview manifest rebuilds without writing.
+  --summary-json            Print a bounded JSON rebuild summary without writing.
 `);
 }
 
@@ -2538,18 +2542,35 @@ function rebuildIndex(argv) {
     .filter((record) => record.branch.startsWith("refs/heads/codex/"));
 
   if (records.length === 0) {
+    if (options.summaryJson) {
+      console.log(JSON.stringify(buildRebuildIndexSummary({ state, records, planned: [], skipped: [] }), null, 2));
+      return;
+    }
     console.log("No Codex worktrees found to index.");
     return;
   }
 
-  mkdirSync(state.tasksDir, { recursive: true });
+  if (!options.summaryJson) {
+    mkdirSync(state.tasksDir, { recursive: true });
+  }
   const existingManifests = readManifests(state).map(({ manifest }) => manifest);
+  const planned = [];
+  const skipped = [];
   for (const record of records) {
     const branch = record.branch.replace(/^refs\/heads\//, "");
     const existingManifest = existingManifests.find(
       (manifest) => manifest.branch === branch || samePath(manifest.worktree_path, record.path),
     );
     if (existingManifest) {
+      skipped.push({
+        branch,
+        path: record.path,
+        reason: "existing manifest already indexes worktree",
+        taskId: existingManifest.task_id,
+      });
+      if (options.summaryJson) {
+        continue;
+      }
       console.log(`SKIP ${existingManifest.task_id}: manifest already indexes ${record.path}.`);
       continue;
     }
@@ -2558,6 +2579,10 @@ function rebuildIndex(argv) {
     const taskId = uniqueTaskId(state.tasksDir, `${dateStamp()}-${slug}`);
     const manifestPath = join(state.tasksDir, `${taskId}.json`);
     if (existsSync(manifestPath)) {
+      skipped.push({ branch, path: record.path, reason: "manifest path already exists", taskId });
+      if (options.summaryJson) {
+        continue;
+      }
       console.log(`SKIP ${taskId}: manifest already exists.`);
       continue;
     }
@@ -2589,6 +2614,11 @@ function rebuildIndex(argv) {
       events: [taskEvent("rebuilt", "manifest rebuilt from git worktree list")],
     };
     reconcileManifest(manifest, { refreshPr: true });
+    planned.push({ taskId, branch, path: record.path, manifestPath, head: record.head || null });
+
+    if (options.summaryJson) {
+      continue;
+    }
 
     if (options.dryRun) {
       printPlan(`rebuild-index ${taskId}`, [`write ${manifestPath}`]);
@@ -2599,6 +2629,28 @@ function rebuildIndex(argv) {
     withManifestLock(state, taskId, () => writeManifest(manifestPath, manifest));
     console.log(`Rebuilt manifest ${taskId}`);
   }
+
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildRebuildIndexSummary({ state, records, planned, skipped }), null, 2));
+  }
+}
+
+function buildRebuildIndexSummary({ state, records, planned, skipped }) {
+  return {
+    generatedAt: new Date().toISOString(),
+    tasksDir: state.tasksDir,
+    counts: {
+      totalCodexWorktrees: records.length,
+      planned: planned.length,
+      skipped: skipped.length,
+    },
+    skippedReasonCounts: countByField(skipped, "reason"),
+    plannedManifests: planned.slice(0, 10),
+    plannedManifestsTruncated: planned.length > 10,
+    skippedWorktrees: skipped.slice(0, 10),
+    skippedWorktreesTruncated: skipped.length > 10,
+    mutation: "none; summary only",
+  };
 }
 
 function doctor(argv) {

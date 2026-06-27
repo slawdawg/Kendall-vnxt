@@ -161,6 +161,9 @@ cannot be completed without expanded party-mode authority.
    eligible closed-workspace evidence before `--apply`.
    For closed legacy manifest repair, use `repair-manifests --summary-json` to
    inspect repairable and blocked manifests before `--apply`.
+   For missing manifest rebuilds from existing Git worktrees, use
+   `rebuild-index --summary-json` to inspect planned and skipped manifests
+   before writing any index records.
    Stop if the worktree is dirty, no stable repository root is available, owner
    evidence is missing or mismatched, PR merge evidence is missing, or the
    local/remote branch head differs from the recorded PR delivery head.
