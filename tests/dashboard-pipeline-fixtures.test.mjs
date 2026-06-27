@@ -1107,6 +1107,136 @@ test("pipeline action guards reject stale unsafe unknown and boundary cases thro
   }
 });
 
+test("governed copied-worktree evidence projects into pipeline packets without live dashboard authority", async () => {
+  const { projectGovernedCopiedWorktreeExecutionEvidence } = await loadCompiledDashboardFixtures();
+  const baseEvidence = {
+    mode: "copied_worktree_execution",
+    authority_level: "copied_worktree_worker_execution",
+    evidence_ref: "metadata:worker-copied-worktree-execution/claude",
+    status_event_ref: "metadata:worker-copied-worktree-execution/claude:status-event",
+    observed_at: "2026-06-27T00:00:00Z",
+    expected_response: "KENDALL_COPY_EXECUTION_OK",
+    observed_response: "KENDALL_COPY_EXECUTION_OK",
+    exit_code: 0,
+    timed_out: false,
+    command_path: "/usr/local/bin/claude",
+    copied_tracked_files: 7,
+    copy_bytes: 2048,
+    copy_retained: false,
+    network_allowed: true,
+    session_inheritance_allowed: true,
+    source_mutation_allowed: false,
+    tools_allowed: false,
+    raw_output_retained: false,
+    affects_trust: false,
+    affects_routing: false,
+  };
+
+  const [claudePacket] = projectGovernedCopiedWorktreeExecutionEvidence([
+    {
+      ...baseEvidence,
+      source_id: "claude-run-1",
+      worker: "claude",
+      execution_state: "execution_observed",
+    },
+  ]);
+
+  assert.equal(claudePacket.currentStage, "review");
+  assert.equal(claudePacket.currentOwner, "kendall");
+  assert.equal(claudePacket.status, "complete");
+  assert.equal(claudePacket.fixtureKind, "future-real-source");
+  assert.equal(claudePacket.executionAttempts[0].status, "completed");
+  assert.equal(claudePacket.executionAttempts[0].lane, "claude_governed_execution");
+  assert.equal(claudePacket.executionAttempts[0].authorityMode, "copied_worktree_worker_execution");
+  assert.ok(claudePacket.executionAttempts[0].evidenceRefs.includes(baseEvidence.evidence_ref));
+  assert.ok(claudePacket.evidenceRefs.some((ref) => ref.refId === baseEvidence.evidence_ref && ref.rawPayloadRetained === false));
+  assert.match(claudePacket.summary, /metadata only/);
+  assert.match(claudePacket.lastEvent, /not live process liveness/);
+
+  const [hermesPacket] = projectGovernedCopiedWorktreeExecutionEvidence([
+    {
+      ...baseEvidence,
+      source_id: "hermes-run-1",
+      worker: "hermes",
+      execution_state: "unsupported",
+      evidence_ref: "metadata:worker-copied-worktree-execution/hermes",
+      status_event_ref: "metadata:worker-copied-worktree-execution/hermes:status-event",
+      observed_response: null,
+      exit_code: null,
+      command_path: null,
+      copied_tracked_files: 0,
+      copy_bytes: 0,
+    },
+  ]);
+
+  assert.equal(hermesPacket.currentStage, "execute");
+  assert.equal(hermesPacket.currentOwner, "hermes_worker_mock");
+  assert.equal(hermesPacket.status, "blocked");
+  assert.equal(hermesPacket.executionAttempts[0].status, "rejected");
+  assert.equal(hermesPacket.executionAttempts[0].lane, "hermes_governed_execution");
+  assert.equal(hermesPacket.hermesJob.statusLabel, "blocked_containment");
+  assert.match(hermesPacket.lastEvent, /do not infer a hidden worker is running/);
+
+  const unsafePackets = projectGovernedCopiedWorktreeExecutionEvidence([
+    {
+      ...baseEvidence,
+      source_id: "unsafe-run",
+      worker: "claude",
+      execution_state: "execution_observed",
+      raw_output_retained: true,
+    },
+    {
+      ...baseEvidence,
+      source_id: "missing-evidence-ref",
+      worker: "claude",
+      execution_state: "execution_observed",
+      evidence_ref: null,
+    },
+    {
+      ...baseEvidence,
+      source_id: "bad-status-event-ref",
+      worker: "claude",
+      execution_state: "execution_observed",
+      status_event_ref: 42,
+    },
+    {
+      ...baseEvidence,
+      source_id: "bad-execution-state",
+      worker: "claude",
+      execution_state: "running_live_worker",
+    },
+    {
+      ...baseEvidence,
+      source_id: "success-without-command",
+      worker: "claude",
+      execution_state: "execution_observed",
+      command_path: null,
+    },
+    {
+      ...baseEvidence,
+      source_id: "success-without-copy",
+      worker: "claude",
+      execution_state: "execution_observed",
+      copied_tracked_files: 0,
+    },
+    {
+      ...baseEvidence,
+      source_id: "unsupported-with-success-response",
+      worker: "hermes",
+      execution_state: "unsupported",
+      evidence_ref: "metadata:worker-copied-worktree-execution/hermes",
+      status_event_ref: "metadata:worker-copied-worktree-execution/hermes:status-event",
+    },
+    {
+      ...baseEvidence,
+      source_id: "raw_prompt sk-proj-123456789",
+      worker: "claude",
+      execution_state: "execution_observed",
+    },
+  ]);
+  assert.deepEqual(unsafePackets, []);
+});
+
 async function loadCompiledDashboardFixtures() {
   const outDir = await mkdtemp(join(tmpdir(), "dashboard-fixtures-"));
   await writeFile(join(outDir, "package.json"), '{"type":"module"}\n');

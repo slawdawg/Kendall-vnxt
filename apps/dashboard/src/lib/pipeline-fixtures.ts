@@ -62,6 +62,44 @@ type GovernedWorkerAttemptFixtureInput = {
   rejectionReason?: string;
 };
 
+type GovernedWorkerAttemptFixtureOptions = Omit<GovernedWorkerAttemptFixtureInput, "packetId" | "evidenceRef" | "eventRef"> & {
+  sourceEvidenceRef?: string;
+  sourceEventRef?: string;
+};
+
+export type GovernedCopiedWorktreeExecutionEvidenceV0 = {
+  source_id: string;
+  worker: "claude" | "hermes";
+  mode: "copied_worktree_execution";
+  authority_level: "copied_worktree_worker_execution";
+  execution_state:
+    | "missing"
+    | "unsupported"
+    | "copy_failed"
+    | "execution_observed"
+    | "failed"
+    | "timed_out"
+    | "invalid_output";
+  evidence_ref: string;
+  status_event_ref?: string | null;
+  observed_at: string;
+  expected_response: "KENDALL_COPY_EXECUTION_OK";
+  observed_response: "KENDALL_COPY_EXECUTION_OK" | null;
+  exit_code: number | null;
+  timed_out: boolean;
+  command_path: string | null;
+  copied_tracked_files: number;
+  copy_bytes: number;
+  copy_retained: false;
+  network_allowed: boolean;
+  session_inheritance_allowed: boolean;
+  source_mutation_allowed: false;
+  tools_allowed: false;
+  raw_output_retained: false;
+  affects_trust: false;
+  affects_routing: false;
+};
+
 export type LocalModelHealthV0 = {
   provider: "ollama";
   endpointUrl: string | null;
@@ -1019,6 +1057,23 @@ export const pipelineCockpitPackets: PipelineFixturePacket[] = [
 
 export const selectedPipelinePacket = requireSelectedPipelinePacket(pipelineCockpitPackets);
 
+export function projectGovernedCopiedWorktreeExecutionEvidence(
+  evidence: readonly GovernedCopiedWorktreeExecutionEvidenceV0[]
+): PipelineFixturePacket[] {
+  return evidence.flatMap((entry) => {
+    if (!isSafeGovernedCopiedWorktreeEvidence(entry)) {
+      return [];
+    }
+    if (entry.worker === "claude" && entry.execution_state === "execution_observed") {
+      return [projectClaudeCopiedWorktreeSuccess(entry)];
+    }
+    if (entry.worker === "claude") {
+      return [projectClaudeCopiedWorktreeFailure(entry)];
+    }
+    return [projectHermesCopiedWorktreeUnavailable(entry)];
+  });
+}
+
 export function evaluateFixtureActionDecision(
   packet: PipelineFixturePacket,
   actionId: string,
@@ -1187,6 +1242,197 @@ function goldenSnapshot(
   };
 }
 
+function isSafeGovernedCopiedWorktreeEvidence(entry: GovernedCopiedWorktreeExecutionEvidenceV0): boolean {
+  const allowedExecutionStates = new Set([
+    "missing",
+    "unsupported",
+    "copy_failed",
+    "execution_observed",
+    "failed",
+    "timed_out",
+    "invalid_output",
+  ]);
+  const expectedEvidenceRef = entry && (entry.worker === "claude" || entry.worker === "hermes")
+    ? `metadata:worker-copied-worktree-execution/${entry.worker}`
+    : null;
+  return Boolean(
+    entry
+      && typeof entry.source_id === "string"
+      && entry.source_id.trim().length > 0
+      && !hasUnsafeCopiedWorktreeMarker(entry.source_id)
+      && entry.mode === "copied_worktree_execution"
+      && entry.authority_level === "copied_worktree_worker_execution"
+      && (entry.worker === "claude" || entry.worker === "hermes")
+      && allowedExecutionStates.has(entry.execution_state)
+      && Number.isFinite(Date.parse(entry.observed_at))
+      && typeof entry.evidence_ref === "string"
+      && entry.evidence_ref === expectedEvidenceRef
+      && !hasUnsafeCopiedWorktreeMarker(entry.evidence_ref)
+      && (entry.status_event_ref === undefined || entry.status_event_ref === null || (typeof entry.status_event_ref === "string" && entry.status_event_ref === `${expectedEvidenceRef}:status-event` && !hasUnsafeCopiedWorktreeMarker(entry.status_event_ref)))
+      && entry.expected_response === "KENDALL_COPY_EXECUTION_OK"
+      && (entry.observed_response === "KENDALL_COPY_EXECUTION_OK" || entry.observed_response === null)
+      && (entry.exit_code === null || Number.isInteger(entry.exit_code))
+      && typeof entry.timed_out === "boolean"
+      && (entry.command_path === null || (typeof entry.command_path === "string" && entry.command_path.startsWith("/") && entry.command_path.split("/").at(-1) === entry.worker))
+      && Number.isInteger(entry.copied_tracked_files)
+      && entry.copied_tracked_files >= 0
+      && Number.isInteger(entry.copy_bytes)
+      && entry.copy_bytes >= 0
+      && entry.copy_retained === false
+      && typeof entry.network_allowed === "boolean"
+      && typeof entry.session_inheritance_allowed === "boolean"
+      && entry.source_mutation_allowed === false
+      && entry.tools_allowed === false
+      && entry.raw_output_retained === false
+      && entry.affects_trust === false
+      && entry.affects_routing === false
+      && copiedWorktreeStateShapeIsSafe(entry)
+  );
+}
+
+function copiedWorktreeStateShapeIsSafe(entry: GovernedCopiedWorktreeExecutionEvidenceV0): boolean {
+  if (entry.execution_state === "execution_observed") {
+    return entry.worker === "claude"
+      && entry.observed_response === "KENDALL_COPY_EXECUTION_OK"
+      && entry.exit_code === 0
+      && entry.timed_out === false
+      && entry.command_path !== null
+      && entry.copied_tracked_files >= 1;
+  }
+  if (["missing", "unsupported"].includes(entry.execution_state)) {
+    return entry.observed_response === null
+      && entry.exit_code === null
+      && entry.timed_out === false
+      && entry.command_path === null;
+  }
+  if (entry.execution_state === "copy_failed") {
+    return entry.observed_response === null && entry.exit_code === null && entry.timed_out === false;
+  }
+  if (entry.execution_state === "failed") {
+    return entry.command_path !== null
+      && Number.isInteger(entry.exit_code)
+      && entry.exit_code !== 0
+      && entry.timed_out === false
+      && entry.observed_response === null;
+  }
+  if (entry.execution_state === "timed_out") {
+    return entry.command_path !== null && entry.timed_out === true && entry.observed_response === null;
+  }
+  if (entry.execution_state === "invalid_output") {
+    return entry.command_path !== null
+      && entry.exit_code === 0
+      && entry.timed_out === false
+      && entry.observed_response === null;
+  }
+  return false;
+}
+
+function hasUnsafeCopiedWorktreeMarker(value: string): boolean {
+  return /raw_prompt|provider_payload|authorization|bearer|token|secret|password|credential|sk-[a-z0-9_-]+/i.test(value);
+}
+
+function projectClaudeCopiedWorktreeSuccess(entry: GovernedCopiedWorktreeExecutionEvidenceV0): PipelineFixturePacket {
+  return packetFixture({
+    packetId: `evidence:governed-claude-copied-worktree:${safeEvidencePacketSuffix(entry.source_id)}`,
+    title: "Governed Claude copied-worktree execution completed",
+    requestedOutcome: "Render retained Claude copied-worktree execution metadata as completed review evidence without treating it as process liveness.",
+    currentStage: "review",
+    currentOwner: "kendall",
+    status: "complete",
+    riskLevel: "high",
+    priority: "high",
+    fixtureId: "codex_active_claude_pending",
+    matrixRowIds: ["execution_attempt.completed"],
+    fixtureKind: "future-real-source",
+    summary: `Claude copied-worktree execution returned ${entry.expected_response}; retained evidence is metadata only with ${entry.copied_tracked_files} tracked files copied and no retained source copy.`,
+    nextAction: "Review governed Claude execution metadata",
+    confidenceLabel: "Real worker evidence retained",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    claudeReviewState: "pending",
+    lastEvent: "Retained copied-worktree execution evidence completed; this is not live process liveness.",
+    riskFlags: ["worker network/session allowed", "source mutation forbidden", "raw output not retained", "delivery blocked"],
+    governedWorkerAttempt: governedCopiedWorktreeAttempt(entry, "completed", "real copied-worktree execution"),
+  });
+}
+
+function projectClaudeCopiedWorktreeFailure(entry: GovernedCopiedWorktreeExecutionEvidenceV0): PipelineFixturePacket {
+  return packetFixture({
+    packetId: `evidence:governed-claude-copied-worktree:${safeEvidencePacketSuffix(entry.source_id)}`,
+    title: "Governed Claude copied-worktree execution failed",
+    requestedOutcome: "Render failed Claude copied-worktree execution metadata without raw output retention or retry authority.",
+    currentStage: "execute",
+    currentOwner: "blocked",
+    status: "failed",
+    riskLevel: "high",
+    priority: "high",
+    fixtureId: "partial_worker_evidence",
+    matrixRowIds: ["execution_attempt.failed"],
+    fixtureKind: "future-real-source",
+    summary: `Claude copied-worktree execution ended as ${entry.execution_state}; raw output is not retained and retry requires normal recovery review.`,
+    nextAction: "Review failure metadata",
+    confidenceLabel: "Real worker failure retained",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    lastEvent: "Retained copied-worktree failure metadata is visible; no raw worker output is retained.",
+    riskFlags: ["worker execution failed", "raw output not retained", "retry not automatic"],
+    governedWorkerAttempt: governedCopiedWorktreeAttempt(entry, "failed", "real copied-worktree failure", entry.execution_state),
+  });
+}
+
+function projectHermesCopiedWorktreeUnavailable(entry: GovernedCopiedWorktreeExecutionEvidenceV0): PipelineFixturePacket {
+  return packetFixture({
+    packetId: `evidence:governed-hermes-copied-worktree:${safeEvidencePacketSuffix(entry.source_id)}`,
+    title: "Governed Hermes real execution unavailable",
+    requestedOutcome: "Render Hermes as unavailable until a runnable command and containment boundary are proven.",
+    currentStage: "execute",
+    currentOwner: "hermes_worker_mock",
+    status: "blocked",
+    riskLevel: "high",
+    priority: "high",
+    fixtureId: "governed_hermes_real_execution_unavailable",
+    matrixRowIds: ["governed_worker.hermes_real_execution_unavailable"],
+    fixtureKind: "future-real-source",
+    summary: `Hermes copied-worktree execution is ${entry.execution_state}; dashboard visibility must show blocked metadata, not hidden liveness.`,
+    nextAction: "Prove Hermes binary and containment",
+    confidenceLabel: "Real worker blocked",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    hermesJobState: "blocked_containment",
+    lastEvent: "Hermes copied-worktree evidence remains unavailable; do not infer a hidden worker is running.",
+    riskFlags: ["Hermes missing", "containment unproven", "real launch blocked"],
+    governedWorkerAttempt: governedCopiedWorktreeAttempt(entry, "rejected", "real execution unavailable", undefined, "hermes_binary_or_containment_not_proven"),
+  });
+}
+
+function governedCopiedWorktreeAttempt(
+  entry: GovernedCopiedWorktreeExecutionEvidenceV0,
+  status: GovernedWorkerAttemptFixtureInput["status"],
+  label: string,
+  failureReason?: string,
+  rejectionReason?: string
+): GovernedWorkerAttemptFixtureOptions {
+  return {
+    worker: entry.worker,
+    status,
+    authorityMode: "copied_worktree_worker_execution",
+    lane: entry.worker === "claude" ? "claude_governed_execution" : "hermes_governed_execution",
+    label,
+    failureReason,
+    rejectionReason,
+    sourceEvidenceRef: entry.evidence_ref,
+    sourceEventRef: entry.status_event_ref ?? `${entry.evidence_ref}:status-event`,
+  };
+}
+
+function safeEvidencePacketSuffix(value: string): string {
+  const suffix = value.toLowerCase().replace(/[^a-z0-9._:-]+/g, "-").replace(/^-+|-+$/g, "");
+  return suffix.length > 0 ? suffix.slice(0, 80) : "unknown";
+}
+
 function packetFixture(input: {
   packetId: string;
   title: string;
@@ -1213,7 +1459,7 @@ function packetFixture(input: {
   hermesJobState?: HermesJobPacketV0["statusLabel"];
   codexWorkerState?: CodexWorkerPacketV0["readiness"];
   claudeReviewState?: ClaudeReviewPacketV0["statusLabel"];
-  governedWorkerAttempt?: Omit<GovernedWorkerAttemptFixtureInput, "packetId" | "evidenceRef" | "eventRef">;
+  governedWorkerAttempt?: GovernedWorkerAttemptFixtureOptions;
   }): PipelineFixturePacket {
   const fixture = requireCatalogEntry(input.fixtureId);
   const rows = requireMatrixRows(input.matrixRowIds);
@@ -1284,10 +1530,10 @@ function packetFixture(input: {
   const codexWorker = input.codexWorkerState ? codexWorkerFixture(input.codexWorkerState, input.packetId) : null;
   const claudeReview = input.claudeReviewState ? claudeReviewFixture(input.claudeReviewState, input.packetId) : null;
   const governedAttemptEvidenceRef = input.governedWorkerAttempt
-    ? `${input.packetId}:evidence:governed-${input.governedWorkerAttempt.worker}-attempt`
+    ? input.governedWorkerAttempt.sourceEvidenceRef ?? `${input.packetId}:evidence:governed-${input.governedWorkerAttempt.worker}-attempt`
     : null;
   const governedAttemptEventRef = input.governedWorkerAttempt
-    ? `${input.packetId}:evidence:governed-${input.governedWorkerAttempt.worker}-status-event`
+    ? input.governedWorkerAttempt.sourceEventRef ?? `${input.packetId}:evidence:governed-${input.governedWorkerAttempt.worker}-status-event`
     : null;
   const governedWorkerAttempt = input.governedWorkerAttempt && governedAttemptEvidenceRef && governedAttemptEventRef
     ? governedWorkerAttemptFixture({
