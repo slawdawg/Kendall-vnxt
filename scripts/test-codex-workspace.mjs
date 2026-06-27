@@ -669,6 +669,32 @@ try {
     }
   });
 
+  test("cleanup-branches summary-json reports safe and skipped branches without mutation", () => {
+    const fixture = createBranchCleanupFixture();
+    try {
+      const result = runFixtureScript(fixture, ["cleanup-branches", "--base", "origin/main", "--summary-json"]);
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.baseRef === "origin/main", result.stdout || result.stderr);
+      assert(packet.counts.total === 5, result.stdout || result.stderr);
+      assert(packet.counts.safe === 2, result.stdout || result.stderr);
+      assert(packet.counts.skipped === 3, result.stdout || result.stderr);
+      assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
+      assert(packet.safeBranches.some((entry) => entry.branch === "codex/merged"), result.stdout || result.stderr);
+      assert(packet.safeBranches.some((entry) => entry.branch === "codex/equivalent"), result.stdout || result.stderr);
+      assert(
+        packet.skippedBranches.some((entry) => entry.branch === "codex/active" && entry.reason === "branch is checked out in a worktree"),
+        result.stdout || result.stderr,
+      );
+      assert(packet.skippedReasonCounts["branch is checked out in a worktree"] === 1, result.stdout || result.stderr);
+      for (const branch of ["codex/merged", "codex/equivalent", "codex/diverged", "codex/similar", "codex/active"]) {
+        assert(branchExists(fixture.root, branch), `${branch} was deleted during summary-json`);
+      }
+    } finally {
+      cleanupBranchCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-branches fails closed when the base ref is missing", () => {
     const fixture = createBranchCleanupFixture();
     try {
