@@ -177,6 +177,9 @@ cannot be completed without expanded party-mode authority.
    branches whose current remote SHA exactly matches a merged PR `headRefOid`
    and that have no open PR, no closed-unmerged PR, and no active workspace
    owner.
+   Use `start --dry-run --summary-json` when automation needs a bounded preview
+   of a planned task id, branch, worktree, and manifest path before workspace
+   creation.
 
 ## Lane Ownership
 

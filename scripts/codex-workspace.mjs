@@ -131,6 +131,7 @@ start options:
   --branch <branch>         Override generated branch name.
   --mode <pr|experiment>    Task mode. Defaults to pr.
   --no-fetch                Do not fetch origin before creating the branch.
+  --summary-json            With --dry-run, print a bounded JSON start plan.
   --task-id <id>            Override generated task id.
   --worktree <path>         Override generated worktree path.
 
@@ -271,6 +272,9 @@ function startWorkspace(argv) {
   if (!description) {
     throw new Error("start requires a task description.");
   }
+  if (options.summaryJson && !options.dryRun) {
+    throw new Error("start --summary-json is only supported with --dry-run.");
+  }
 
   const usingDefaultBase = !options.base;
   const baseBranch = String(options.base || defaultBaseBranch);
@@ -337,12 +341,19 @@ function startWorkspace(argv) {
   };
 
   if (options.dryRun) {
-    printPlan("start", [
+    const plan = [
       shouldFetch ? `git fetch origin ${baseBranch}` : "skip fetch",
       `mkdir ${state.tasksDir}`,
       `mkdir ${state.worktreesDir}`,
       `git worktree add -b ${branch} ${worktreePath} ${baseRef}`,
       `write ${manifestPath}`,
+    ];
+    if (options.summaryJson) {
+      console.log(JSON.stringify(buildStartDryRunSummary({ state, manifest, manifestPath, plan, shouldFetch }), null, 2));
+      return;
+    }
+    printPlan("start", [
+      ...plan,
     ]);
     printManifestSummary(manifest);
     return;
@@ -357,6 +368,31 @@ function startWorkspace(argv) {
 
   console.log(`Created Codex workspace ${taskId}`);
   printManifestSummary(manifest);
+}
+
+function buildStartDryRunSummary({ state, manifest, manifestPath, plan, shouldFetch }) {
+  return {
+    generatedAt: new Date().toISOString(),
+    stateRoot: state.root,
+    taskId: manifest.task_id,
+    title: manifest.title,
+    description: manifest.description,
+    mode: manifest.mode,
+    owner: manifest.owner || null,
+    branch: manifest.branch,
+    baseBranch: manifest.base_branch || null,
+    baseRef: manifest.base_ref || null,
+    worktreePath: manifest.worktree_path,
+    manifestPath,
+    shouldFetch,
+    plan,
+    plannedWrites: {
+      manifest: manifestPath,
+      worktree: manifest.worktree_path,
+      branch: manifest.branch,
+    },
+    mutation: "none; dry-run summary only",
+  };
 }
 
 function listWorkspaces(argv) {

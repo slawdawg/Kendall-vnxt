@@ -300,6 +300,57 @@ try {
     }
   });
 
+  test("start dry-run summary-json emits bounded plan without mutation", () => {
+    const fixture = createWorkspaceDefaultBaseFixture({ withDev: true });
+    try {
+      const taskId = "summary-json-lane";
+      const branch = "codex/summary-json-lane";
+      const worktreePath = join(fixture.stateRoot, "worktrees", taskId);
+      const manifestPath = join(fixture.stateRoot, "tasks", `${taskId}.json`);
+      const branchBefore = branchExists(fixture.root, branch);
+
+      const result = runFixtureScript(fixture, [
+        "start",
+        "summary json lane",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--task-id",
+        taskId,
+        "--branch",
+        branch,
+        "--worktree",
+        worktreePath,
+        "--state-root",
+        fixture.stateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!result.stdout.includes("DRY RUN:"), "start --summary-json stdout must not include text plan output");
+      const packet = JSON.parse(result.stdout);
+      assert(packet.stateRoot === fixture.stateRoot, result.stdout || result.stderr);
+      assert(packet.taskId === taskId, result.stdout || result.stderr);
+      assert(packet.title === "Summary json lane", result.stdout || result.stderr);
+      assert(packet.mode === "pr", result.stdout || result.stderr);
+      assert(packet.owner === "runner-a", result.stdout || result.stderr);
+      assert(packet.branch === branch, result.stdout || result.stderr);
+      assert(packet.baseBranch === "dev", result.stdout || result.stderr);
+      assert(packet.baseRef === "origin/dev", result.stdout || result.stderr);
+      assert(packet.worktreePath === worktreePath, result.stdout || result.stderr);
+      assert(packet.manifestPath === manifestPath, result.stdout || result.stderr);
+      assert(packet.shouldFetch === true, result.stdout || result.stderr);
+      assert(packet.plan.includes(`git worktree add -b ${branch} ${worktreePath} origin/dev`), result.stdout || result.stderr);
+      assert(packet.plannedWrites.manifest === manifestPath, result.stdout || result.stderr);
+      assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
+      assert(!existsSync(manifestPath), "start dry-run summary-json wrote a manifest");
+      assert(!existsSync(worktreePath), "start dry-run summary-json created a worktree");
+      assert(branchExists(fixture.root, branch) === branchBefore, "start dry-run summary-json changed branch state");
+    } finally {
+      cleanupWorkspaceDefaultBaseFixture(fixture);
+    }
+  });
+
   test("start dry-run fails closed when default dev branch is missing", () => {
     const fixture = createWorkspaceDefaultBaseFixture({ withDev: false });
     try {
