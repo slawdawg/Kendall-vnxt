@@ -121,6 +121,43 @@ Stop lines:
 - Do not read GitHub tokens, browser sessions, SSH keys, cloud credentials, or provider credentials.
 - Do not deliver PRs, merge, delete branches, delete worktrees, clean filesystem residue, sync issues, or bypass failed checks from worker-launch authority.
 
+## Claude Read-Only Review Contract
+
+Status: durable approved read-only review lane
+
+Authority family: `external-review-readonly`
+
+Operation candidate: one bounded Claude Code CLI review of local repo artifacts
+or a bounded diff/spec packet.
+
+Allowed when the operator asks for Claude review, or an active end-to-end lane
+explicitly calls for independent Claude critique.
+
+Required controls:
+
+- Use non-interactive review mode, such as `claude -p`.
+- Limit Claude tools to read/search only, such as `Read` and `Grep`.
+- Set a per-run spend cap with `--max-budget-usd`; default cap is `1` unless the
+  operator approves a larger cap.
+- Scope the prompt to named files, a named diff, or a named artifact packet.
+- Ask for findings and recommendations only.
+- Retain only summarized findings, file paths, line references, command
+  metadata, budget cap, verification results, and follow-up decisions.
+
+Stop lines:
+
+- Do not allow Claude edit, write, shell, GitHub mutation, browser, credential,
+  secret, cleanup, PR delivery, merge, or filesystem mutation tools under this
+  contract.
+- Do not send secrets, credentials, browser profiles, SSH keys, cloud tokens,
+  provider tokens, raw provider payloads, or unnecessary source copies.
+- Do not retain raw prompts, raw completions, reasoning traces, provider
+  payloads, or full copied source unless the operator separately approves that
+  retention.
+- Do not treat this repo policy as an override for system, tenant, provider, or
+  sandbox policy. If a higher-level policy blocks the external review call,
+  record the veto and use local BMAD review as the fallback.
+
 ## Cleanup Automation Contract
 
 Status: approval-required, non-executing packet

@@ -32,7 +32,7 @@ function DeliveryPackageEvidence({ event }: { event: WorkflowEventView }) {
   const packageKind = payloadString(event.payload, "localDeliveryPackageKind") ?? "local evidence";
 
   return (
-    <div className="mt-4 rounded-[1rem] border border-[var(--accent)]/30 bg-[var(--panel)] p-4">
+    <div className="mt-4 rounded-[0.5rem] border border-[var(--accent)]/30 bg-[var(--panel)] p-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">Delivery package</p>
@@ -55,7 +55,7 @@ function DeliveryPackageEvidence({ event }: { event: WorkflowEventView }) {
         </div>
       </div>
       {diffStat ? (
-        <pre className="mt-3 max-h-32 overflow-auto whitespace-pre-wrap rounded-[0.75rem] bg-[var(--surface)] p-3 font-mono text-xs text-[var(--muted)]">
+        <pre className="mt-3 max-h-32 overflow-auto whitespace-pre-wrap rounded-[0.5rem] bg-[var(--surface)] p-3 font-mono text-xs text-[var(--muted)]">
           {diffStat}
         </pre>
       ) : null}
@@ -66,7 +66,7 @@ function DeliveryPackageEvidence({ event }: { event: WorkflowEventView }) {
 
 export function WorkItemHistory({ events }: { events: WorkflowEventView[] }) {
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex flex-col gap-2">
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Workflow history</p>
@@ -81,7 +81,7 @@ export function WorkItemHistory({ events }: { events: WorkflowEventView[] }) {
           <p className="text-sm text-[var(--muted)]">No workflow events recorded yet.</p>
         ) : (
           events.map((event) => (
-            <article key={event.id} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <article key={event.id} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">

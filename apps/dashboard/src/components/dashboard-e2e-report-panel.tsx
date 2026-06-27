@@ -6,7 +6,7 @@ function formatTimestamp(value: string): string {
 
 function RunnerCard({ runner }: { runner: DashboardE2ERunnerView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{runner.status}</p>
@@ -17,7 +17,7 @@ function RunnerCard({ runner }: { runner: DashboardE2ERunnerView }) {
         </span>
       </div>
       <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{runner.target}</p>
-      <p className="mt-3 break-all rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+      <p className="mt-3 break-all rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
         {runner.command}
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -30,7 +30,7 @@ function RunnerCard({ runner }: { runner: DashboardE2ERunnerView }) {
       </div>
       <div className="mt-3 space-y-2">
         {runner.evidence.map((item, itemIndex) => (
-          <p key={`${runner.runnerId}:evidence:${item}:${itemIndex}`} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+          <p key={`${runner.runnerId}:evidence:${item}:${itemIndex}`} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
             {item}
           </p>
         ))}
@@ -55,7 +55,7 @@ export function DashboardE2EReportPanel({ report }: { report: DashboardE2EReport
   const ownedLifecycleCount = report.runners.filter((runner) => runner.ownsServerLifecycle).length;
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Dashboard e2e</p>
@@ -73,7 +73,7 @@ export function DashboardE2EReportPanel({ report }: { report: DashboardE2EReport
           ["Owned lifecycle", String(ownedLifecycleCount)],
           ["Authority", report.executionAuthorityApproved ? "approved" : "not approved"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -81,7 +81,7 @@ export function DashboardE2EReportPanel({ report }: { report: DashboardE2EReport
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Runner catalog</h4>
           <div className="mt-3 grid gap-3 lg:grid-cols-3">
             {report.runners.map((runner) => (
@@ -91,7 +91,7 @@ export function DashboardE2EReportPanel({ report }: { report: DashboardE2EReport
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Setup commands</h4>
             <div className="mt-3 space-y-3">
               {report.setupCommands.map((command) => (
@@ -100,7 +100,7 @@ export function DashboardE2EReportPanel({ report }: { report: DashboardE2EReport
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Browser stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -111,7 +111,7 @@ export function DashboardE2EReportPanel({ report }: { report: DashboardE2EReport
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (

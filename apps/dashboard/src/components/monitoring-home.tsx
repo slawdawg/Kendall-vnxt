@@ -107,7 +107,7 @@ function Panel({
   action?: ReactNode;
 }) {
   return (
-    <section className="rounded-[0.75rem] border bg-[var(--panel)] p-5 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--accent)]">{eyebrow}</p>
@@ -184,7 +184,7 @@ export function MonitoringHome({ status, items }: { status: RunStatusView; items
 
   return (
     <div className="space-y-4">
-      <section className="rounded-[0.75rem] border bg-[var(--panel)] p-4 shadow-sm">
+      <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           {[
             ["Active", String(status.activeCount)],
@@ -202,7 +202,7 @@ export function MonitoringHome({ status, items }: { status: RunStatusView; items
         <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{status.summary}</p>
       </section>
 
-      <section className="rounded-[0.75rem] border bg-[var(--panel)] p-5 shadow-sm">
+      <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--info)]">Operations Brief</p>
@@ -233,7 +233,7 @@ export function MonitoringHome({ status, items }: { status: RunStatusView; items
         </div>
       </section>
 
-      <section className="rounded-[0.75rem] border bg-[var(--panel)] p-5 shadow-sm">
+      <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--info)]">Scan Order</p>

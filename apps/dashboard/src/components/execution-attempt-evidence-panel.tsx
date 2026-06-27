@@ -64,7 +64,7 @@ function AttemptCard({ attempt }: { attempt: ExecutionAttemptView }) {
   const plan = attempt.workspaceIsolationPlan;
 
   return (
-    <article className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+    <article className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{attempt.workerId}</p>
@@ -83,7 +83,7 @@ function AttemptCard({ attempt }: { attempt: ExecutionAttemptView }) {
           ["Updated", formatTimestamp(attempt.updatedAt)],
           ["Completed", formatTimestamp(attempt.completedAt)],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
             <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -91,12 +91,12 @@ function AttemptCard({ attempt }: { attempt: ExecutionAttemptView }) {
       </div>
 
       {attempt.cancelReason || attempt.rejectionReason || attempt.failureReason ? (
-        <div className="mt-4 rounded-[1rem] border border-[color-mix(in_srgb,var(--warn)_28%,transparent)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] p-3">
+        <div className="mt-4 rounded-[0.5rem] border border-[color-mix(in_srgb,var(--warn)_28%,transparent)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] p-3">
           <p className="text-sm font-semibold text-[var(--warn)]">{attempt.cancelReason ?? attempt.rejectionReason ?? attempt.failureReason}</p>
         </div>
       ) : null}
 
-      <div className="mt-4 rounded-[1rem] border bg-[var(--panel)] p-3">
+      <div className="mt-4 rounded-[0.5rem] border bg-[var(--panel)] p-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Workspace isolation</p>
@@ -149,7 +149,7 @@ export function ExecutionAttemptEvidencePanel({ attempts }: { attempts: Executio
   const latest = attempts[0] ?? null;
 
   return (
-    <section id="execution-attempts" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="execution-attempts" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Execution attempts</p>
@@ -171,7 +171,7 @@ export function ExecutionAttemptEvidencePanel({ attempts }: { attempts: Executio
             ["Lane", titleCase(latest.lane)],
             ["Mutation", latest.workspaceIsolationPlan.sourceMutationAllowed ? "Allowed" : "Disabled"],
           ].map(([label, value]) => (
-            <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
               <p className="mt-2 text-sm font-semibold">{value}</p>
             </div>
@@ -181,7 +181,7 @@ export function ExecutionAttemptEvidencePanel({ attempts }: { attempts: Executio
 
       <div className="mt-5 space-y-3">
         {attempts.length === 0 ? (
-          <p className="rounded-[1.25rem] border bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+          <p className="rounded-[0.5rem] border bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
             No execution attempts have been recorded for this work item.
           </p>
         ) : (

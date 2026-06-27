@@ -165,6 +165,21 @@ narrow `rg`/file reads over dumping large artifacts into chat.
   provider payload retention, paid-usage expansion, GitHub mutation, cleanup,
   worker launch, or any platform/tool policy that still requires explicit
   approval.
+- Claude Code CLI read-only review is a durable approved review lane when all
+  of these are true: the operator asks for Claude review or the active
+  end-to-end lane explicitly calls for independent Claude critique; the command
+  uses `claude -p` or an equivalent non-interactive read-only mode; tools are
+  limited to file reads/searches and no edit, shell, network-expanding, secret,
+  credential, browser profile, GitHub mutation, or filesystem mutation tools are
+  allowed; the prompt names a bounded review scope; a per-run spend cap is set
+  with `--max-budget-usd` and should default to `1` unless the operator approves
+  more; retained evidence is limited to summarized findings, file paths,
+  line references, command metadata, and verification results, not raw provider
+  payloads, reasoning traces, secrets, or unnecessary source copies. Record the
+  purpose, scope, command shape, budget cap, result, and any platform-level
+  veto in the lane evidence. This repo policy authorizes the attempt but does
+  not override system, tenant, provider, or sandbox policy if that layer blocks
+  the external review call.
 
 ## Alpha Slice Operating Model
 

@@ -16,7 +16,7 @@ function statusClass(status: string): string {
 
 function CheckCard({ check }: { check: CodexReadinessCheckView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{check.checkId}</p>
@@ -29,7 +29,7 @@ function CheckCard({ check }: { check: CodexReadinessCheckView }) {
         {check.evidence.map((evidence, evidenceIndex) => (
           <p
             key={`${check.checkId}:evidence:${evidence}:${evidenceIndex}`}
-            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
+            className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
           >
             {evidence}
           </p>
@@ -41,7 +41,7 @@ function CheckCard({ check }: { check: CodexReadinessCheckView }) {
 
 export function CodexReadinessReportPanel({ report }: { report: CodexReadinessReportView }) {
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Codex readiness</p>
@@ -60,7 +60,7 @@ export function CodexReadinessReportPanel({ report }: { report: CodexReadinessRe
           ["Tasks", report.workerTaskExecutionApproved ? "approved" : "blocked"],
           ["Source changes", report.sourceMutationApproved ? "approved" : "blocked"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 break-words text-sm font-semibold">{value}</p>
           </div>
@@ -68,7 +68,7 @@ export function CodexReadinessReportPanel({ report }: { report: CodexReadinessRe
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Readiness checks</h4>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             {report.checks.map((check) => (
@@ -78,7 +78,7 @@ export function CodexReadinessReportPanel({ report }: { report: CodexReadinessRe
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -88,7 +88,7 @@ export function CodexReadinessReportPanel({ report }: { report: CodexReadinessRe
               ))}
             </div>
           </div>
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (

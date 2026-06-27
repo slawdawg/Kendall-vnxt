@@ -8,7 +8,7 @@ function formatTimestamp(value: string): string {
 
 function TrackCard({ track }: { track: MaintenanceReadinessTrackView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{track.status}</p>
@@ -21,32 +21,32 @@ function TrackCard({ track }: { track: MaintenanceReadinessTrackView }) {
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{track.summary}</p>
       <div className="mt-3 space-y-2">
         {track.evidence.map((item, itemIndex) => (
-          <p key={`${track.trackId}:evidence:${item}:${itemIndex}`} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+          <p key={`${track.trackId}:evidence:${item}:${itemIndex}`} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
             {item}
           </p>
         ))}
       </div>
-      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+      <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related reports</p>
         <div className="mt-2 grid gap-2">
           {track.relatedReports.map((report) => (
             <Link
               key={report}
               href={reportShortcutHref(report)}
-              className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+              className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
               {report}
             </Link>
           ))}
         </div>
       </div>
-      <div className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+      <div className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
         <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Related docs</p>
         <div className="mt-2 grid gap-2">
           {track.relatedDocs.map((doc, docIndex) => (
             <span
               key={`${track.trackId}:doc:${doc}:${docIndex}`}
-              className="break-all rounded-[0.75rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+              className="break-all rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
             >
               {doc}
             </span>
@@ -69,7 +69,7 @@ export function MaintenanceReadinessReportPanel({ report }: { report: Maintenanc
   const blockedTracks = report.tracks.filter((track) => track.status.includes("blocked")).length;
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Maintenance readiness</p>
@@ -87,7 +87,7 @@ export function MaintenanceReadinessReportPanel({ report }: { report: Maintenanc
           ["Blocked", String(blockedTracks)],
           ["Authority", report.executionAuthorityApproved ? "approved" : "not approved"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -95,7 +95,7 @@ export function MaintenanceReadinessReportPanel({ report }: { report: Maintenanc
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Maintenance tracks</h4>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             {report.tracks.map((track) => (
@@ -105,7 +105,7 @@ export function MaintenanceReadinessReportPanel({ report }: { report: Maintenanc
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -116,7 +116,7 @@ export function MaintenanceReadinessReportPanel({ report }: { report: Maintenanc
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (

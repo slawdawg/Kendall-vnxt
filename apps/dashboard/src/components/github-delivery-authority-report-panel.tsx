@@ -10,7 +10,7 @@ function formatTimestamp(value: string): string {
 
 function StepCard({ step }: { step: GitHubDeliveryAuthorityStepView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{step.stepId}</p>
@@ -21,14 +21,14 @@ function StepCard({ step }: { step: GitHubDeliveryAuthorityStepView }) {
         </span>
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{step.summary}</p>
-      <p className="mt-3 rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+      <p className="mt-3 rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
         {step.requiredApproval}
       </p>
       <div className="mt-3 space-y-2">
         {step.evidence.map((evidence, evidenceIndex) => (
           <p
             key={`${step.stepId}:evidence:${evidence}:${evidenceIndex}`}
-            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
+            className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
           >
             {evidence}
           </p>
@@ -40,7 +40,7 @@ function StepCard({ step }: { step: GitHubDeliveryAuthorityStepView }) {
 
 function ListPanel({ title, items, warn = false }: { title: string; items: string[]; warn?: boolean }) {
   return (
-    <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+    <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
       <h4 className="text-base font-semibold">{title}</h4>
       <div className="mt-3 space-y-2">
         {items.map((item, index) => (
@@ -70,7 +70,7 @@ function InlineList({ title, items, warn = false }: { title: string; items: stri
 
 function EligibilityCard({ stage }: { stage: GitHubDeliveryEligibilityStageView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{stage.stageId}</p>
@@ -93,7 +93,7 @@ function EligibilityCard({ stage }: { stage: GitHubDeliveryEligibilityStageView 
 
 export function GitHubDeliveryAuthorityReportPanel({ report }: { report: GitHubDeliveryAuthorityReportView }) {
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">GitHub delivery</p>
@@ -105,7 +105,7 @@ export function GitHubDeliveryAuthorityReportPanel({ report }: { report: GitHubD
         </span>
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Approval text</p>
         <p className="mt-2 text-sm leading-6">{report.approvalPrompt}</p>
       </div>
@@ -120,7 +120,7 @@ export function GitHubDeliveryAuthorityReportPanel({ report }: { report: GitHubD
           ["Cleanup", report.remoteCleanupApproved ? "approved" : "blocked"],
           ["Auto", report.automaticDeliveryApproved ? "approved" : "blocked"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 break-words text-sm font-semibold">{value}</p>
           </div>

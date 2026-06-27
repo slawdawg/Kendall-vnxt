@@ -25,7 +25,7 @@ export function WorkGrid({ items }: { items: WorkItemView[] }) {
       {columns.map((column) => {
         const matches = items.filter((item) => column.states.includes(item.state));
         return (
-          <section key={column.title} className="rounded-[1.75rem] border bg-[var(--panel)] p-5 shadow-sm">
+          <section key={column.title} className="rounded-[0.5rem] border bg-[var(--panel)] p-5 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">{column.title}</h2>
@@ -40,7 +40,7 @@ export function WorkGrid({ items }: { items: WorkItemView[] }) {
                 <p className="text-sm text-[var(--muted)]">No items in this lane.</p>
               ) : (
                 matches.map((item) => (
-                  <article key={item.id} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+                  <article key={item.id} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
                     <div className="flex items-start justify-between gap-3">
                       <Link href={`/work-items/${item.id}`} className="block min-w-0 flex-1 transition hover:text-[var(--accent)]">
                         <div className="flex flex-wrap items-center gap-2">

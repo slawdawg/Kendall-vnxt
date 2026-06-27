@@ -1,17 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { PipelineStage } from "@kendall/contracts";
-import type {
-  PipelineFixturePacket,
-  PipelineFixtureScenario,
-  PipelineGoldenPathSnapshot,
-  SourceBoundaryDeclarationV0,
-  PipelineSourceRailItem,
-} from "../../lib/pipeline-fixtures";
-import { evaluateFixtureActionDecision } from "../../lib/pipeline-fixtures";
-import { StageLane } from "./stage-lane";
+import type { PipelineFixturePacket } from "../../lib/pipeline-fixtures";
 
 const pipelineStages: PipelineStage[] = [
   "capture",
@@ -26,49 +19,54 @@ const pipelineStages: PipelineStage[] = [
   "learn",
 ];
 
-const drawerTabs = [
-  { id: "intent", label: "5 Whys" },
-  { id: "sources", label: "Sources" },
-  { id: "route", label: "Route" },
-  { id: "stage", label: "Status" },
-  { id: "gates", label: "Decision" },
-  { id: "evidence", label: "Proof" },
-  { id: "worker", label: "Workers" },
-  { id: "memory", label: "Memory" },
-  { id: "alpha", label: "Safety" },
-  { id: "recovery", label: "Recovery" },
-] as const;
+const codexUsageVisibleKey = "kendall.dashboard.usage.codex.visible";
+const claudeUsageVisibleKey = "kendall.dashboard.usage.claude.visible";
 
-type DrawerTabId = (typeof drawerTabs)[number]["id"];
+function readStoredUsageVisible(key: string) {
+  try {
+    return window.localStorage.getItem(key) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+const priorityRank: Record<PipelineFixturePacket["priority"], number> = {
+  urgent: 4,
+  high: 3,
+  normal: 2,
+  low: 1,
+};
+
+type SelectedMapItem =
+  | { type: "packet"; id: string }
+  | { type: "stage"; id: PipelineStage }
+  | null;
+
+type ConnectorPath = {
+  d: string;
+  id: string;
+};
 
 export function PipelineCockpit({
   fixtureMode,
-  goldenPathSnapshots,
   packets,
-  scenarios,
   selectedPacket,
-  sourceBoundaries,
-  sources,
 }: {
   fixtureMode: { label: string; summary: string; matrixRows: number; fixtureCatalogEntries: number };
-  goldenPathSnapshots: PipelineGoldenPathSnapshot[];
   packets: PipelineFixturePacket[];
-  scenarios: PipelineFixtureScenario[];
   selectedPacket: PipelineFixturePacket;
-  sourceBoundaries: SourceBoundaryDeclarationV0[];
-  sources: PipelineSourceRailItem[];
 }) {
-  const [selectedPacketId, setSelectedPacketId] = useState(selectedPacket.packetId);
-  const [selectedGateActionId, setSelectedGateActionId] = useState<string | null>(null);
-  const [selectedGateFixtureEventId, setSelectedGateFixtureEventId] = useState<string | null>(null);
-  const [expandedGateActionId, setExpandedGateActionId] = useState<string | null>(null);
-  const [selectedRecoveryActionId, setSelectedRecoveryActionId] = useState<string | null>(null);
-  const [selectedRecoveryFixtureEventId, setSelectedRecoveryFixtureEventId] = useState<string | null>(null);
-  const [expandedRecoveryActionId, setExpandedRecoveryActionId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<DrawerTabId>("intent");
+  const [selectedItem, setSelectedItem] = useState<SelectedMapItem>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const packetCardRefs = useRef(new Map<string, HTMLElement>());
+  const [focusedStage, setFocusedStage] = useState<PipelineStage>("capture");
+  const [compactRouteMap, setCompactRouteMap] = useState(false);
+  const [usageVisibility, setUsageVisibility] = useState({ claude: true, codex: true });
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const routeMapRef = useRef<HTMLElement | null>(null);
+  const routeRowRef = useRef<HTMLDivElement | null>(null);
+  const stageButtonRefs = useRef(new Map<PipelineStage, HTMLButtonElement>());
+  const stageStationRefs = useRef(new Map<PipelineStage, HTMLDivElement>());
+  const [connectorPaths, setConnectorPaths] = useState<ConnectorPath[]>([]);
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const visiblePackets = useMemo(
     () =>
@@ -77,85 +75,19 @@ export function PipelineCockpit({
         : packets.filter((packet) => searchablePacketText(packet).includes(normalizedSearchQuery)),
     [normalizedSearchQuery, packets]
   );
-  const orderedPacketIds = useMemo(
-    () => pipelineStages.flatMap((stage) => visiblePackets.filter((packet) => packet.currentStage === stage).map((packet) => packet.packetId)),
-    [visiblePackets]
-  );
-  const visibleSelectedPacketId = orderedPacketIds.includes(selectedPacketId) ? selectedPacketId : orderedPacketIds[0] ?? selectedPacketId;
-  const activePacket = useMemo(
-    () => packets.find((packet) => packet.packetId === visibleSelectedPacketId) ?? selectedPacket,
-    [packets, selectedPacket, visibleSelectedPacketId]
-  );
-  const activeGoldenSnapshot = useMemo(
-    () => goldenPathSnapshots.find((snapshot) => snapshot.packetId === activePacket.packetId) ?? null,
-    [activePacket.packetId, goldenPathSnapshots]
-  );
-  const activeSelectedGateActionId = activePacket.humanGateActions.some((action) => action.actionId === selectedGateActionId)
-    ? selectedGateActionId
+  const selectedMapPacket = selectedItem?.type === "packet"
+    ? packets.find((packet) => packet.packetId === selectedItem.id) ?? null
     : null;
-  const activeSelectedGateFixtureEventId = activePacket.humanGateFixtureEvents.some((event) => event.eventId === selectedGateFixtureEventId)
-    ? selectedGateFixtureEventId
-    : null;
-  const activeExpandedGateActionId = activePacket.humanGateActions.some((action) => action.actionId === expandedGateActionId)
-    ? expandedGateActionId
-    : null;
-  const activeSelectedRecoveryActionId = activePacket.recoveryActions.some((action) => action.actionId === selectedRecoveryActionId)
-    ? selectedRecoveryActionId
-    : null;
-  const activeSelectedRecoveryFixtureEventId = activePacket.recoveryFixtureEvents.some((event) => event.eventId === selectedRecoveryFixtureEventId)
-    ? selectedRecoveryFixtureEventId
-    : null;
-  const activeExpandedRecoveryActionId = activePacket.recoveryActions.some((action) => action.actionId === expandedRecoveryActionId)
-    ? expandedRecoveryActionId
-    : null;
-  const activeCount = packets.filter((packet) => packet.status === "active").length;
   const blockedGateCount = packets.filter((packet) => packet.currentStage === "human_gate").length;
   const topBlockedPacket = findTopBlockedPacket(packets);
-  const globalRecoveryCount = packets.flatMap((packet) => packet.recoveryActions).filter((action) => action.availability === "available").length;
-  const primaryLocalModelHealth = packets.find((packet) => packet.localModelHealth !== null)?.localModelHealth ?? null;
-  const registerPacketCard = useCallback((packetId: string, node: HTMLElement | null) => {
-    if (node) {
-      packetCardRefs.current.set(packetId, node);
-      return;
-    }
-    packetCardRefs.current.delete(packetId);
-  }, []);
-  const focusPacketCard = useCallback((packetId: string) => {
-    requestAnimationFrame(() => {
-      packetCardRefs.current.get(packetId)?.focus();
-    });
-  }, []);
-  const movePacketFocus = useCallback(
-    (packetId: string, direction: "previous" | "next") => {
-      const currentIndex = orderedPacketIds.indexOf(packetId);
-      if (currentIndex === -1 || orderedPacketIds.length === 0) {
-        return;
-      }
-      const offset = direction === "next" ? 1 : -1;
-      const nextIndex = (currentIndex + offset + orderedPacketIds.length) % orderedPacketIds.length;
-      const nextPacketId = orderedPacketIds[nextIndex];
-      setSelectedPacketId(nextPacketId);
-      focusPacketCard(nextPacketId);
-    },
-    [focusPacketCard, orderedPacketIds]
-  );
-  const returnFocusToSelectedPacket = useCallback(() => {
-    setActiveTab("intent");
-    focusPacketCard(visibleSelectedPacketId);
-  }, [focusPacketCard, visibleSelectedPacketId]);
+  const topAttentionPacket = findTopAttentionPacket(packets);
+  const attentionPacket = topAttentionPacket ?? packets.find((packet) => packet.status === "active") ?? selectedPacket;
+  const stagePacketLimit = compactRouteMap ? 3 : 4;
   const handleSearchChange = useCallback(
     (value: string) => {
       setSearchQuery(value);
-      const nextQuery = value.trim().toLowerCase();
-      if (nextQuery.length === 0) {
-        return;
-      }
-      const nextVisiblePackets = packets.filter((packet) => searchablePacketText(packet).includes(nextQuery));
-      if (nextVisiblePackets.length > 0 && !nextVisiblePackets.some((packet) => packet.packetId === selectedPacketId)) {
-        setSelectedPacketId(nextVisiblePackets[0].packetId);
-      }
     },
-    [packets, selectedPacketId]
+    []
   );
   const focusSearchFromShortcut = useCallback((event: {
     code: string;
@@ -175,7 +107,82 @@ export function PipelineCockpit({
   }, []);
   const handleCockpitKeyDown = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
     focusSearchFromShortcut(event);
-  }, [focusSearchFromShortcut]);
+    if (event.key !== "Escape") {
+      return;
+    }
+    const target = event.target as HTMLElement | null;
+    if (target === searchInputRef.current) {
+      event.preventDefault();
+      if (searchQuery.length > 0) {
+        setSearchQuery("");
+      } else {
+        searchInputRef.current?.blur();
+      }
+      return;
+    }
+    if (selectedItem !== null) {
+      event.preventDefault();
+      setSelectedItem(null);
+    }
+  }, [focusSearchFromShortcut, searchQuery.length, selectedItem]);
+  const registerStageButton = useCallback((stage: PipelineStage, node: HTMLButtonElement | null) => {
+    if (node) {
+      stageButtonRefs.current.set(stage, node);
+      return;
+    }
+    stageButtonRefs.current.delete(stage);
+  }, []);
+  const registerStageStation = useCallback((stage: PipelineStage, node: HTMLDivElement | null) => {
+    if (node) {
+      stageStationRefs.current.set(stage, node);
+      return;
+    }
+    stageStationRefs.current.delete(stage);
+  }, []);
+  const focusStage = useCallback((stage: PipelineStage) => {
+    setFocusedStage(stage);
+    stageButtonRefs.current.get(stage)?.focus();
+  }, []);
+  const moveStageFocus = useCallback((key: string) => {
+    const currentStageIndex = pipelineStages.indexOf(focusedStage);
+    const safeStageIndex = currentStageIndex >= 0 ? currentStageIndex : 0;
+    const routeRow = routeRowRef.current;
+    const columnCount = routeRow
+      ? window.getComputedStyle(routeRow).gridTemplateColumns.trim().split(/\s+/).length
+      : (compactRouteMap ? 2 : 4);
+    const offsetByKey: Record<string, number> = {
+      ArrowDown: columnCount,
+      ArrowLeft: -1,
+      ArrowRight: 1,
+      ArrowUp: -columnCount,
+    };
+    const nextStageIndex = Math.max(0, Math.min(pipelineStages.length - 1, safeStageIndex + offsetByKey[key]));
+    focusStage(pipelineStages[nextStageIndex]);
+  }, [compactRouteMap, focusStage, focusedStage]);
+  const handleRouteMapKeyDown = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".pipeline-mini-packet")) {
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setSelectedItem(null);
+      return;
+    }
+    if (event.key === "Enter") {
+      const stationButton = target?.closest(".pipeline-stage-station") as HTMLElement | null;
+      const stage = stationButton?.dataset.stage;
+      if (isPipelineStage(stage)) {
+        event.preventDefault();
+        setSelectedItem({ type: "stage", id: stage });
+      }
+      return;
+    }
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+      event.preventDefault();
+      moveStageFocus(event.key);
+    }
+  }, [moveStageFocus]);
 
   useEffect(() => {
     const handleDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -185,1676 +192,806 @@ export function PipelineCockpit({
     return () => document.removeEventListener("keydown", handleDocumentKeyDown);
   }, [focusSearchFromShortcut]);
 
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 720px)");
+    const updateCompactRouteMap = () => setCompactRouteMap(mediaQuery.matches);
+    updateCompactRouteMap();
+    mediaQuery.addEventListener("change", updateCompactRouteMap);
+    return () => mediaQuery.removeEventListener("change", updateCompactRouteMap);
+  }, []);
+
+  useEffect(() => {
+    if (selectedItem?.type !== "packet") {
+      return;
+    }
+    if (!visiblePackets.some((packet) => packet.packetId === selectedItem.id)) {
+      setSelectedItem(null);
+    }
+  }, [selectedItem, visiblePackets]);
+
+  const updateConnectorPaths = useCallback(() => {
+    const routeMap = routeMapRef.current;
+    if (!routeMap) {
+      setConnectorPaths([]);
+      return;
+    }
+    const mapRect = routeMap.getBoundingClientRect();
+    const nextPaths = pipelineStages.slice(0, -1).flatMap((stage, index) => {
+      const nextStage = pipelineStages[index + 1];
+      const currentNode = stageStationRefs.current.get(stage);
+      const nextNode = stageStationRefs.current.get(nextStage);
+      if (!currentNode || !nextNode) {
+        return [];
+      }
+      const currentRect = currentNode.getBoundingClientRect();
+      const nextRect = nextNode.getBoundingClientRect();
+      const start = {
+        x: currentRect.right - mapRect.left,
+        y: currentRect.top - mapRect.top + currentRect.height * 0.76,
+      };
+      const end = {
+        x: nextRect.left - mapRect.left,
+        y: nextRect.top - mapRect.top + nextRect.height * 0.24,
+      };
+      const sameRow = Math.abs(currentRect.top - nextRect.top) < 24;
+      const schematicGutter = Math.min(42, Math.max(24, mapRect.width * 0.045));
+      const schematicBusX = Math.min(mapRect.width - 2, start.x + schematicGutter);
+      const entryStubX = Math.max(2, end.x - schematicGutter);
+      const rowGutterY = end.y > start.y
+        ? (currentRect.bottom - mapRect.top + nextRect.top - mapRect.top) / 2
+        : (nextRect.bottom - mapRect.top + currentRect.top - mapRect.top) / 2;
+      const cornerRadius = 12;
+      const verticalDirection = end.y > start.y ? 1 : -1;
+      const sameRowDirection = end.y > start.y ? 1 : -1;
+      const sameRowJogX = start.x + Math.max(22, Math.min(42, (end.x - start.x) * 0.42));
+      const d = sameRow
+        ? [
+            `M ${start.x} ${start.y}`,
+            `H ${sameRowJogX - cornerRadius}`,
+            `Q ${sameRowJogX} ${start.y} ${sameRowJogX} ${start.y + cornerRadius * sameRowDirection}`,
+            `V ${end.y - cornerRadius * sameRowDirection}`,
+            `Q ${sameRowJogX} ${end.y} ${sameRowJogX + cornerRadius} ${end.y}`,
+            `H ${end.x}`,
+          ].join(" ")
+        : [
+            `M ${start.x} ${start.y}`,
+            `H ${schematicBusX - cornerRadius}`,
+            `Q ${schematicBusX} ${start.y} ${schematicBusX} ${start.y + cornerRadius * verticalDirection}`,
+            `V ${rowGutterY - cornerRadius * verticalDirection}`,
+            `Q ${schematicBusX} ${rowGutterY} ${schematicBusX - cornerRadius} ${rowGutterY}`,
+            `H ${entryStubX + cornerRadius}`,
+            `Q ${entryStubX} ${rowGutterY} ${entryStubX} ${rowGutterY + cornerRadius * verticalDirection}`,
+            `V ${end.y - cornerRadius * verticalDirection}`,
+            `Q ${entryStubX} ${end.y} ${entryStubX + cornerRadius} ${end.y}`,
+            `H ${end.x}`,
+          ].join(" ");
+      return [{ d, id: `${stage}-${nextStage}` }];
+    });
+    setConnectorPaths((currentPaths) => {
+      const samePaths =
+        currentPaths.length === nextPaths.length &&
+        currentPaths.every((path, index) => path.id === nextPaths[index]?.id && path.d === nextPaths[index]?.d);
+      return samePaths ? currentPaths : nextPaths;
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    updateConnectorPaths();
+  }, [compactRouteMap, updateConnectorPaths, visiblePackets.length]);
+
+  useEffect(() => {
+    const routeMap = routeMapRef.current;
+    if (!routeMap) {
+      return;
+    }
+    const observer = new ResizeObserver(() => updateConnectorPaths());
+    observer.observe(routeMap);
+    stageStationRefs.current.forEach((node) => observer.observe(node));
+    window.addEventListener("resize", updateConnectorPaths);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateConnectorPaths);
+    };
+  }, [updateConnectorPaths, visiblePackets.length]);
+
+  useEffect(() => {
+    const readUsageVisibility = () => {
+      setUsageVisibility({
+        claude: readStoredUsageVisible(claudeUsageVisibleKey),
+        codex: readStoredUsageVisible(codexUsageVisibleKey),
+      });
+    };
+    readUsageVisibility();
+    window.addEventListener("storage", readUsageVisibility);
+    window.addEventListener("kendall-usage-visibility-change", readUsageVisibility);
+    return () => {
+      window.removeEventListener("storage", readUsageVisibility);
+      window.removeEventListener("kendall-usage-visibility-change", readUsageVisibility);
+    };
+  }, []);
+
   return (
-    <main className="grid max-w-full min-w-0 gap-4 overflow-x-hidden" aria-label="Pipeline cockpit" onKeyDown={handleCockpitKeyDown}>
-      <section aria-label="Refined pipeline cockpit frame" className="grid max-w-full min-w-0 gap-3">
+    <main
+      aria-label="Pipeline cockpit"
+      className="grid box-border max-w-full min-w-0 gap-4 overflow-x-hidden"
+      onKeyDown={handleCockpitKeyDown}
+    >
+      <section
+        aria-label="Refined pipeline cockpit frame"
+        className="grid box-border w-full max-w-full min-w-0 gap-2 overflow-visible"
+      >
         <section
           aria-label="Cockpit first-frame hierarchy"
-          className="grid min-h-[34rem] max-w-full min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[0.5rem] border bg-[var(--surface)] p-3"
+          className="pipeline-nohype-shell grid box-border w-full max-w-full min-w-0 gap-3 overflow-visible rounded-[0.5rem] border p-3"
         >
           <section
             aria-label="Pipeline command strip"
-            className="grid max-w-full min-w-0 gap-3 rounded-[0.5rem] border bg-[var(--panel)] p-3 lg:grid-cols-[minmax(0,1.35fr)_repeat(5,minmax(8.5rem,0.7fr))]"
+            className="pipeline-command-bar pipeline-video-card box-border w-full max-w-full min-w-0 overflow-visible rounded-[0.5rem] border p-2"
           >
             <div aria-label="Operator command center" className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-xs font-semibold text-[var(--accent)]">Chief-of-Staff cockpit</p>
-                <span className="inline-flex rounded-full bg-[var(--background-elevated)] px-2 py-0.5 text-xs text-[var(--muted)]">
-                  Current mode
-                </span>
-                <span className="inline-flex rounded-full bg-[var(--background-elevated)] px-2 py-0.5 text-xs text-[var(--muted)]">
-                  Refined first frame
-                </span>
-                <span className="inline-flex rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">
-                  {fixtureMode.label}
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h1 className="min-w-0 text-balance text-xl font-semibold leading-tight text-[var(--foreground)]">
+                  Pipeline
+                </h1>
+                <span className="kendall-info-tip inline-flex items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--muted)_38%,var(--line))] px-2 py-0.5 text-[0.68rem] font-medium text-[var(--muted)]" tabIndex={0}>
+                  <span className="sr-only">{fixtureMode.label}: {fixtureMode.summary}</span>
+                  <span aria-hidden="true">{fixtureMode.label}</span>
+                  <span aria-hidden="true" className="kendall-info-tip-bubble">{fixtureMode.summary}</span>
                 </span>
               </div>
-              <h1 className="mt-1 text-2xl font-semibold tracking-normal">Pipeline cockpit</h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-                {fixtureMode.summary}
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-                <span className="rounded-[0.375rem] bg-[var(--surface-strong)] px-2 py-1">Decision queue</span>
-                <span className="rounded-[0.375rem] bg-[var(--surface-strong)] px-2 py-1">Source intelligence</span>
-                <span className="rounded-[0.375rem] bg-[var(--surface-strong)] px-2 py-1">Stage board</span>
-                <span className="rounded-[0.375rem] bg-[var(--surface-strong)] px-2 py-1">Active packet</span>
-                <span className="rounded-[0.375rem] bg-[var(--surface-strong)] px-2 py-1">Worker / review / memory / recovery</span>
-              </div>
-              <label className="mt-3 block text-xs font-medium text-[var(--muted)]" htmlFor="pipeline-packet-search">
-                Packet search
-              </label>
-              <input
-                aria-label="Packet search"
-                className="mt-1 w-full min-w-0 rounded-[0.375rem] border bg-[var(--surface)] px-2 py-1.5 text-sm outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
-                id="pipeline-packet-search"
-                onChange={(event) => handleSearchChange(event.target.value)}
-                placeholder="Search packets"
-                ref={searchInputRef}
-                type="search"
-                value={searchQuery}
-              />
+              <span aria-label={`Top blocked packet: ${topBlockedPacket?.title ?? "None"}`} className="sr-only">
+                top block: {topBlockedPacket?.title ?? "none"}
+              </span>
             </div>
-            <Metric label="Active packets" value={String(activeCount)} />
-            <Metric label="Blocked gates" value={String(blockedGateCount)} />
-            <Metric label="Provider approval" value="disabled" />
-            <Metric label="Top blocked packet" value={topBlockedPacket?.title ?? "None"} />
-            <Metric label="Global recovery" value={`${globalRecoveryCount} fixture-only`} />
+            <label className="sr-only" htmlFor="pipeline-packet-search">
+              Packet search
+            </label>
+            <input
+              aria-label="Packet search"
+              className="h-8 min-w-[12rem] rounded-[0.375rem] border border-[color-mix(in_srgb,var(--info)_34%,var(--line))] bg-[color-mix(in_srgb,var(--surface)_88%,transparent)] px-2 text-sm shadow-[0_0_1rem_color-mix(in_srgb,var(--info)_10%,transparent)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
+              id="pipeline-packet-search"
+              onChange={(event) => handleSearchChange(event.target.value)}
+              placeholder="Search packets"
+              ref={searchInputRef}
+              type="search"
+              value={searchQuery}
+            />
           </section>
 
-      {primaryLocalModelHealth ? (
-        <section aria-label="Local GPU health" className="max-w-full min-w-0">
-          <LocalGpuCard health={primaryLocalModelHealth} />
-        </section>
-      ) : null}
-
-      <FixtureScenarioSelector scenarios={scenarios} />
-
-      <GoldenPathLifecycle
-        activePacketId={activePacket.packetId}
-        onSelectPacket={setSelectedPacketId}
-        snapshots={goldenPathSnapshots}
-      />
-
-      <section className="grid max-w-full min-w-0 gap-4 lg:grid-cols-[13.75rem_minmax(0,1fr)] xl:grid-cols-[13.75rem_minmax(0,1fr)_22.5rem]">
-        <details aria-label="Pipeline source rail collapsed" className="min-w-0 rounded-[0.5rem] border bg-[var(--surface)] p-3 xl:hidden">
-          <summary className="cursor-pointer text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">
-            Source rail collapsed
-          </summary>
-          <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
-            {sources.length} sources available. Open to inspect source trust, evidence notes, and canonical roles.
-          </p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {sources.map((source) => (
-              <article key={source.id} className="min-w-0 rounded-[0.5rem] border bg-[var(--panel)] p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <h3 className="break-words text-sm font-medium">{source.label}</h3>
-                  <span className="shrink-0 rounded-full bg-[var(--background-elevated)] px-2 py-0.5 text-xs text-[var(--muted)]">
-                    {source.state}
-                  </span>
+          <section
+            aria-label="Pipeline board"
+            className="pipeline-board-surface max-w-full min-w-0"
+          >
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                <p className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-[var(--accent)]">Route map</p>
+                <InfoTooltip text="Each stage shows packets currently sitting there. Color marks state; order puts urgent work first." />
+                <p className="max-w-2xl text-sm leading-5 text-[var(--muted)]">
+                  See what is being worked on and where each packet sits in the process.
+                </p>
+              </div>
+            </div>
+            <OperationalStrip packets={packets} usageVisibility={usageVisibility} />
+            <MissionControlStrip attentionPacket={attentionPacket} blockedGateCount={blockedGateCount} />
+            <div className="pipeline-map-layout mt-3">
+              <section
+                aria-label="Pipeline route map"
+                className="pipeline-route-map min-w-0"
+                onKeyDown={handleRouteMapKeyDown}
+                ref={routeMapRef}
+              >
+                <svg aria-hidden="true" className="pipeline-route-connectors">
+                  {connectorPaths.map((path) => (
+                    <g key={path.id}>
+                      <path className="pipeline-route-connector-line" d={path.d} />
+                      <path className="pipeline-route-connector-pulse" d={path.d} />
+                    </g>
+                  ))}
+                </svg>
+                <div className="pipeline-route-row" ref={routeRowRef}>
+                  {pipelineStages.map((stage, stageIndex) => (
+                    <RouteStation
+                      key={stage}
+                      isLast={stageIndex === pipelineStages.length - 1}
+                      onFocusStage={() => setFocusedStage(stage)}
+                      onSelectStage={() => setSelectedItem({ type: "stage", id: stage })}
+                      onSelectPacket={(packetId) =>
+                        setSelectedItem((currentItem) =>
+                          currentItem?.type === "packet" && currentItem.id === packetId
+                            ? null
+                            : { type: "packet", id: packetId }
+                        )
+                      }
+                      packets={visiblePackets.filter((packet) => packet.currentStage === stage)}
+                      registerStageButton={registerStageButton}
+                      registerStageStation={registerStageStation}
+                      selectedItem={selectedItem}
+                      stage={stage}
+                      visibleLimit={stagePacketLimit}
+                    />
+                  ))}
                 </div>
-                <p className="mt-2 break-words text-xs leading-5 text-[var(--muted)]">{source.summary}</p>
-              </article>
-            ))}
-          </div>
-        </details>
-
-        <aside aria-label="Pipeline source rail" className="hidden min-w-0 rounded-[0.5rem] border bg-[var(--surface)] p-3 xl:block">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold">Source rail</h2>
-            <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{sources.length}</span>
-          </div>
-          <div className="mt-3 space-y-2">
-            {sources.map((source) => (
-              <article key={source.id} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <h3 className="text-sm font-medium">{source.label}</h3>
-                  <span className="rounded-full bg-[var(--background-elevated)] px-2 py-0.5 text-xs text-[var(--muted)]">
-                    {source.state}
-                  </span>
-                </div>
-                <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{source.summary}</p>
-                <dl className="mt-3 grid gap-2 text-xs">
-                  <SourceField label="Packet refs" value={source.packetRefs.length > 0 ? source.packetRefs.join(", ") : "none"} />
-                  <SourceField label="Evidence" value={source.evidenceNote} />
-                  <SourceField label="Role" value={source.canonicalRole} />
-                </dl>
-              </article>
-            ))}
-          </div>
-        </aside>
-
-        <section
-          aria-label="Pipeline board"
-          className="max-w-full min-w-0 overflow-x-auto overscroll-x-contain rounded-[0.5rem] border bg-[var(--background-elevated)] p-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
-          tabIndex={0}
-        >
-          <div className="flex min-w-max snap-x snap-mandatory gap-3">
-            {pipelineStages.map((stage) => (
-              <StageLane
-                key={stage}
-                name={stage}
-                packets={visiblePackets.filter((packet) => packet.currentStage === stage)}
-                selectedPacketId={activePacket.packetId}
-                registerPacketCard={registerPacketCard}
-                onMovePacketFocus={movePacketFocus}
-                onReturnFocus={returnFocusToSelectedPacket}
-                onSelectPacket={setSelectedPacketId}
-              />
-            ))}
-          </div>
-        </section>
-
-        <div aria-label="Worker review memory recovery rail" className="grid min-w-0 gap-3 lg:col-span-2 xl:col-span-1">
-          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
-            <p className="text-xs font-semibold text-[var(--accent)]">Worker / review / memory / recovery</p>
-            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-              Active packet context keeps worker state, Claude review, memory proposal, Human Gate, and recovery evidence in one rail.
-            </p>
-          </div>
-          <ActivePacketDrawer
-            activeTab={activeTab}
-            expandedGateActionId={activeExpandedGateActionId}
-            expandedRecoveryActionId={activeExpandedRecoveryActionId}
-            onReturnFocus={returnFocusToSelectedPacket}
-            packet={activePacket}
-            snapshot={activeGoldenSnapshot}
-            selectedGateActionId={activeSelectedGateActionId}
-            selectedGateFixtureEventId={activeSelectedGateFixtureEventId}
-            selectedRecoveryActionId={activeSelectedRecoveryActionId}
-            selectedRecoveryFixtureEventId={activeSelectedRecoveryFixtureEventId}
-            setExpandedGateActionId={setExpandedGateActionId}
-            setExpandedRecoveryActionId={setExpandedRecoveryActionId}
-            setSelectedGateActionId={setSelectedGateActionId}
-            setSelectedGateFixtureEventId={setSelectedGateFixtureEventId}
-            setSelectedRecoveryActionId={setSelectedRecoveryActionId}
-            setSelectedRecoveryFixtureEventId={setSelectedRecoveryFixtureEventId}
-            setActiveTab={setActiveTab}
-          />
-        </div>
-      </section>
-
-      <section aria-label="Pipeline evidence strip" className="grid gap-3 rounded-[0.5rem] border bg-[var(--panel)] p-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="md:col-span-2 xl:col-span-4">
-          <p className="text-xs font-semibold text-[var(--accent)]">Evidence runway</p>
-        </div>
-        <EvidenceGroup title="Evidence" values={activePacket.evidenceRefs.map((ref) => ref.label)} />
-        <EvidenceGroup title="Artifacts" values={activePacket.artifactRefs.map((ref) => ref.label)} />
-        <EvidenceGroup title="Lane cards" values={activePacket.laneCards.map((lane) => `${lane.label}: ${lane.status}`)} />
-        <EvidenceGroup
-          title="Memory"
-          values={
-            packets.flatMap((packet) =>
-              packet.memoryProposals.map((proposal) => `${proposal.label}: ${proposal.status}; write-back blocked`)
-            )
-          }
-        />
-      </section>
-
-      <section aria-label="Source Boundary Checklist" className="rounded-[0.5rem] border bg-[var(--panel)] p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold text-[var(--accent)]">Source Boundary Checklist</p>
-            <h2 className="mt-1 text-lg font-semibold">Canonicality and blocked operations</h2>
-          </div>
-          <span className="rounded-full bg-[var(--background-elevated)] px-2 py-1 text-xs text-[var(--muted)]">fixture-only</span>
-        </div>
-        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {sourceBoundaries.map((boundary) => <SourceBoundaryCard boundary={boundary} key={boundary.boundaryId} />)}
-        </div>
-      </section>
+              </section>
+              {selectedMapPacket && <PacketInspection packet={selectedMapPacket} />}
+            </div>
+          </section>
         </section>
       </section>
     </main>
   );
 }
 
-function FixtureScenarioSelector({ scenarios }: { scenarios: PipelineFixtureScenario[] }) {
+function MissionControlStrip({
+  attentionPacket,
+  blockedGateCount,
+}: {
+  attentionPacket: PipelineFixturePacket;
+  blockedGateCount: number;
+}) {
+  const state = attentionPacket.currentStage === "human_gate"
+    ? "Needs your decision"
+    : attentionPacket.status === "blocked" || attentionPacket.status === "failed"
+      ? "Blocked"
+      : attentionPacket.status === "active"
+        ? "In motion"
+        : "Watching";
   return (
-    <section aria-label="Fixture scenario selector" className="min-w-0 rounded-[0.5rem] border bg-[var(--panel)] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold text-[var(--accent)]">Static fixture selector</p>
-          <h2 className="mt-1 text-lg font-semibold">Failure and prototype scenarios</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-            Read-only static import mode. Scenario switching is validation context only; it does not mutate supervisor state or imply live execution.
-            Mocked, synthetic, prototype-only, and bounded states stay labeled before any real runtime expansion.
-          </p>
-        </div>
-        <span className="rounded-full bg-[var(--background-elevated)] px-2 py-1 text-xs text-[var(--muted)]">
-          {scenarios.length} scenarios
-        </span>
-      </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-        {scenarios.map((scenario) => (
-          <article className="min-w-0 rounded-[0.5rem] border bg-[var(--surface)] p-3" key={scenario.scenarioId}>
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="break-words text-sm font-semibold">{scenario.label}</h3>
-              <span className="max-w-[8rem] shrink rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-right text-xs text-[var(--muted)]" style={{ overflowWrap: "anywhere" }}>
-                {scenario.fixtureLabel}
+    <div aria-label="Mission control focus strip" className="pipeline-mission-strip">
+      <span className="pipeline-mission-chip pipeline-mission-chip-attention">
+        <span className="pipeline-mission-label">Most urgent</span>
+        <span className="pipeline-mission-value">{miniCardLabel(attentionPacket)}</span>
+      </span>
+      <span className="pipeline-mission-chip">
+        <span className="pipeline-mission-label">State</span>
+        <span className="pipeline-mission-value">{state}</span>
+      </span>
+      <span className="pipeline-mission-chip">
+        <span className="pipeline-mission-label">Gate</span>
+        <span className="pipeline-mission-value">{blockedGateCount > 0 ? `${blockedGateCount} waiting` : "Clear"}</span>
+      </span>
+    </div>
+  );
+}
+
+function OperationalStrip({
+  packets,
+  usageVisibility,
+}: {
+  packets: PipelineFixturePacket[];
+  usageVisibility: { claude: boolean; codex: boolean };
+}) {
+  const usageItems = globalUsageItems(packets).filter((item) => usageVisibility[item.providerKey]);
+  return (
+    <div aria-label="Pipeline operational strip" className="pipeline-operational-strip">
+      <StatusKey />
+      {usageItems.length > 0 ? (
+        <div aria-label="Pipeline capacity strip" className="pipeline-capacity-strip">
+          {usageItems.map((item) => (
+            <span key={item.provider} className={`pipeline-usage-meter pipeline-usage-meter-${item.tone}`}>
+              <span className="pipeline-usage-provider-row">
+                <span className="pipeline-usage-provider">{item.provider}</span>
+                <span className="pipeline-usage-warning" role="note" tabIndex={0}>
+                  <span aria-hidden="true" className="pipeline-usage-warning-icon">!</span>
+                  <span className="sr-only">{item.detail}</span>
+                  <span aria-hidden="true" className="pipeline-usage-warning-bubble">{item.detail}</span>
+                </span>
               </span>
-            </div>
-            <dl className="mt-3 grid gap-2 text-xs">
-              <ScenarioField label="Selected packet" value={scenario.selectedPacketId ?? "none"} />
-              <ScenarioField label="Current owner" value={scenario.currentOwner} />
-              <ScenarioField label="Blocked reason" value={scenario.blockedReason} />
-              <ScenarioField label="Next operator option" value={scenario.nextOperatorOption} />
-              <ScenarioField label="Evidence refs" value={scenario.evidenceRefs.length > 0 ? scenario.evidenceRefs.join(", ") : "none"} />
-              <ScenarioField label="Stop-line" value={scenario.stopLine} />
-              <ScenarioField label="Rollback path" value={scenario.rollbackPath} />
-            </dl>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function ScenarioField({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[var(--muted)]">{label}</dt>
-      <dd className="mt-0.5 break-words" style={{ overflowWrap: "anywhere" }}>{value}</dd>
-    </div>
-  );
-}
-
-function GoldenPathLifecycle({
-  activePacketId,
-  onSelectPacket,
-  snapshots,
-}: {
-  activePacketId: string;
-  onSelectPacket: (packetId: string) => void;
-  snapshots: PipelineGoldenPathSnapshot[];
-}) {
-  return (
-    <section aria-label="Golden path lifecycle" className="min-w-0 rounded-[0.5rem] border bg-[var(--panel)] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold text-[var(--accent)]">Read-only golden path</p>
-          <h2 className="mt-1 text-lg font-semibold">Packet lifecycle snapshots</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-            Local fixture selection only. Snapshot stepping updates the active drawer locally and does not mutate backend state, Work Packet persistence, providers, workers, GitHub, or Obsidian.
-          </p>
-        </div>
-        <span className="rounded-full bg-[var(--background-elevated)] px-2 py-1 text-xs text-[var(--muted)]">
-          {snapshots.length} snapshots
-        </span>
-      </div>
-      <div className="mt-3 flex max-w-full min-w-0 gap-2 overflow-x-auto pb-1">
-        {snapshots.map((snapshot) => (
-          <button
-            aria-label={`Golden path snapshot: ${snapshot.label}`}
-            aria-pressed={activePacketId === snapshot.packetId}
-            className={`w-[13rem] shrink-0 rounded-[0.5rem] border p-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)] ${activePacketId === snapshot.packetId ? "border-[var(--accent)] bg-[var(--panel-strong)]" : "bg-[var(--surface)]"}`}
-            key={snapshot.snapshotId}
-            onClick={() => onSelectPacket(snapshot.packetId)}
-            type="button"
-          >
-            <span className="text-xs font-semibold text-[var(--accent)]">{snapshot.label}</span>
-            <span className="mt-1 block break-words text-sm font-semibold">{snapshot.whatPacketIs}</span>
-            <span className="mt-2 block text-xs text-[var(--muted)]" style={{ overflowWrap: "anywhere" }}>Stage: {snapshot.currentStage}</span>
-            <span className="mt-1 block text-xs text-[var(--muted)]" style={{ overflowWrap: "anywhere" }}>Owner: {snapshot.currentOwner}</span>
-            <span className="mt-1 block break-words text-xs text-[var(--muted)]">Evidence: {snapshot.evidenceRef}</span>
-            <span className="mt-1 block break-words text-xs text-[var(--muted)]">Next: {snapshot.nextAction}</span>
-            <span className="mt-2 block break-words rounded-[0.375rem] bg-[var(--background-elevated)] px-2 py-1 text-xs">
-              Decision consequence: {snapshot.decisionConsequence}
+              {item.meters.map((meter) => (
+                <span key={meter.label} className="pipeline-usage-bar-row">
+                  <span className="pipeline-usage-meter-label">{meter.label}</span>
+                  <span aria-hidden="true" className="pipeline-usage-meter-track">
+                    <span className="pipeline-usage-meter-fill" style={{ width: `${meter.percent}%` }} />
+                  </span>
+                </span>
+              ))}
             </span>
-            <span className="mt-2 block break-words text-xs text-[var(--muted)]">Why here: {snapshot.whyHere}</span>
-            <span className="mt-1 block break-words text-xs text-[var(--muted)]">Needs operator: {snapshot.whatNeedsOperator}</span>
-            <span className="mt-1 block break-words text-xs text-[var(--muted)]">What happens next: {snapshot.whatHappensNext}</span>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function ActivePacketDrawer({
-  activeTab,
-  expandedGateActionId,
-  expandedRecoveryActionId,
-  onReturnFocus,
-  packet,
-  snapshot,
-  selectedGateActionId,
-  selectedGateFixtureEventId,
-  selectedRecoveryActionId,
-  selectedRecoveryFixtureEventId,
-  setExpandedGateActionId,
-  setExpandedRecoveryActionId,
-  setSelectedGateActionId,
-  setSelectedGateFixtureEventId,
-  setSelectedRecoveryActionId,
-  setSelectedRecoveryFixtureEventId,
-  setActiveTab,
-}: {
-  activeTab: DrawerTabId;
-  expandedGateActionId: string | null;
-  expandedRecoveryActionId: string | null;
-  onReturnFocus: () => void;
-  packet: PipelineFixturePacket;
-  snapshot: PipelineGoldenPathSnapshot | null;
-  selectedGateActionId: string | null;
-  selectedGateFixtureEventId: string | null;
-  selectedRecoveryActionId: string | null;
-  selectedRecoveryFixtureEventId: string | null;
-  setExpandedGateActionId: (actionId: string | null) => void;
-  setExpandedRecoveryActionId: (actionId: string | null) => void;
-  setSelectedGateActionId: (actionId: string | null) => void;
-  setSelectedGateFixtureEventId: (eventId: string | null) => void;
-  setSelectedRecoveryActionId: (actionId: string | null) => void;
-  setSelectedRecoveryFixtureEventId: (eventId: string | null) => void;
-  setActiveTab: (tab: DrawerTabId) => void;
-}) {
-  const focusDrawerTab = useCallback((tabId: DrawerTabId) => {
-    requestAnimationFrame(() => {
-      document.getElementById(`packet-drawer-tab-${tabId}`)?.focus();
-    });
-  }, []);
-  const moveDrawerTab = useCallback(
-    (tabId: DrawerTabId, direction: "previous" | "next" | "first" | "last") => {
-      const currentIndex = drawerTabs.findIndex((tab) => tab.id === tabId);
-      const nextIndex =
-        direction === "first"
-          ? 0
-          : direction === "last"
-            ? drawerTabs.length - 1
-            : (currentIndex + (direction === "next" ? 1 : -1) + drawerTabs.length) % drawerTabs.length;
-      const nextTab = drawerTabs[nextIndex];
-      setActiveTab(nextTab.id);
-      focusDrawerTab(nextTab.id);
-    },
-    [focusDrawerTab, setActiveTab]
-  );
-
-  return (
-    <aside
-      aria-label="Active packet drawer"
-      className="min-w-0 rounded-[0.5rem] border bg-[var(--panel)] p-4 lg:col-span-2 xl:col-span-1"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          onReturnFocus();
-        }
-      }}
-    >
-      <p className="text-xs font-semibold text-[var(--accent-2)]">Active packet drawer</p>
-      <h2 className="mt-1 break-words text-lg font-semibold">{packet.title}</h2>
-      <p className="mt-2 break-words text-sm leading-6 text-[var(--muted)]">{snapshot?.whatPacketIs ?? packet.summary}</p>
-      <div aria-label="Packet drawer tabs" className="mt-4 flex flex-wrap gap-2" role="tablist">
-        {drawerTabs.map((tab) => (
-          <button
-            aria-controls={`packet-drawer-${tab.id}`}
-            aria-selected={activeTab === tab.id}
-            className={`rounded-[0.375rem] border px-2 py-1 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)] ${activeTab === tab.id ? "border-[var(--accent)] bg-[var(--panel-strong)]" : "bg-[var(--surface)] text-[var(--muted)]"}`}
-            id={`packet-drawer-tab-${tab.id}`}
-            key={tab.id}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-                event.preventDefault();
-                moveDrawerTab(tab.id, "next");
-              }
-              if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-                event.preventDefault();
-                moveDrawerTab(tab.id, "previous");
-              }
-              if (event.key === "Home") {
-                event.preventDefault();
-                moveDrawerTab(tab.id, "first");
-              }
-              if (event.key === "End") {
-                event.preventDefault();
-                moveDrawerTab(tab.id, "last");
-              }
-            }}
-            onClick={() => setActiveTab(tab.id)}
-            role="tab"
-            tabIndex={activeTab === tab.id ? 0 : -1}
-            type="button"
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-      <section
-        aria-labelledby={`packet-drawer-tab-${activeTab}`}
-        className="mt-4 rounded-[0.5rem] border bg-[var(--surface)] p-3"
-        id={`packet-drawer-${activeTab}`}
-        role="tabpanel"
-      >
-        {renderDrawerTab(
-          activeTab,
-          packet,
-          snapshot,
-          expandedGateActionId,
-          expandedRecoveryActionId,
-          selectedGateActionId,
-          selectedGateFixtureEventId,
-          selectedRecoveryActionId,
-          selectedRecoveryFixtureEventId,
-          setExpandedGateActionId,
-          setExpandedRecoveryActionId,
-          setSelectedGateActionId,
-          setSelectedGateFixtureEventId,
-          setSelectedRecoveryActionId,
-          setSelectedRecoveryFixtureEventId
-        )}
-      </section>
-    </aside>
-  );
-}
-
-function renderDrawerTab(
-  activeTab: DrawerTabId,
-  packet: PipelineFixturePacket,
-  snapshot: PipelineGoldenPathSnapshot | null,
-  expandedGateActionId: string | null,
-  expandedRecoveryActionId: string | null,
-  selectedGateActionId: string | null,
-  selectedGateFixtureEventId: string | null,
-  selectedRecoveryActionId: string | null,
-  selectedRecoveryFixtureEventId: string | null,
-  setExpandedGateActionId: (actionId: string | null) => void,
-  setExpandedRecoveryActionId: (actionId: string | null) => void,
-  setSelectedGateActionId: (actionId: string | null) => void,
-  setSelectedGateFixtureEventId: (eventId: string | null) => void,
-  setSelectedRecoveryActionId: (actionId: string | null) => void,
-  setSelectedRecoveryFixtureEventId: (eventId: string | null) => void
-) {
-  switch (activeTab) {
-    case "intent":
-      return <PacketFiveWhysPanel packet={packet} snapshot={snapshot} />;
-    case "sources":
-      return (
-        <DrawerSection title="Sources">
-          <p className="break-words text-xs leading-5 text-[var(--muted)]">{packet.sourceTrustSummary}</p>
-          <RefList values={packet.sourceRefs.map((ref) => `${ref.label}; ${ref.sourceType}; ${ref.freshness}; ${ref.accessState}; summary-only ${String(ref.summaryOnly)}`)} />
-        </DrawerSection>
-      );
-    case "route":
-      return <RouteForkPanel packet={packet} />;
-    case "stage":
-      return (
-        <DrawerSection title="Current stage">
-          <FieldGrid
-            fields={[
-              ["Stage", packet.currentStage],
-              ["Owner", packet.currentOwner],
-              ["Source trust", packet.sourceTrustStates.join(", ")],
-              ["Confidence", packet.confidenceLabel],
-              ["Freshness", packet.freshnessLabel],
-            ]}
-          />
-        </DrawerSection>
-      );
-    case "gates":
-      return (
-        <DrawerSection title="Human Gate context">
-          <HumanGateConsequencePanel
-            expandedGateActionId={expandedGateActionId}
-            packet={packet}
-            selectedGateActionId={selectedGateActionId}
-            selectedGateFixtureEventId={selectedGateFixtureEventId}
-            setExpandedGateActionId={setExpandedGateActionId}
-            setSelectedGateActionId={setSelectedGateActionId}
-            setSelectedGateFixtureEventId={setSelectedGateFixtureEventId}
-          />
-        </DrawerSection>
-      );
-    case "evidence":
-      return (
-        <DrawerSection title="Evidence links">
-          <EvidenceDetailList
-            items={[
-              ...packet.sourceRefs.map((ref) => ({
-                key: ref.refId,
-                whatExists: ref.label,
-                whyItMatters: sourceRefImportance(ref.sourceType, packet),
-                whereFrom: `${ref.sourceType}; ${sourcePathLabel(ref)}`,
-                retention: ref.summaryOnly ? "summary-only source ref" : "metadata source ref",
-                state: `${ref.freshness}; ${ref.accessState}; ${packet.sourceTrustStates.join(", ")}`,
-              })),
-              ...packet.evidenceRefs.map((ref) => ({
-                key: ref.refId,
-                whatExists: ref.label,
-                whyItMatters: evidenceRefImportance(ref.evidenceType, packet),
-                whereFrom: ref.artifactPath ?? "fixture evidence ref",
-                retention: ref.retentionClass,
-                state: `payload retained ${String(ref.rawPayloadRetained)}; ${packet.fixtureKind}`,
-              })),
-              ...packet.artifactRefs.map((ref) => ({
-                key: ref.refId,
-                whatExists: ref.label,
-                whyItMatters: artifactRefImportance(ref.artifactType, packet),
-                whereFrom: ref.pathOrUrl ?? "artifact ref only",
-                retention: "artifact metadata ref",
-                state: ref.status,
-              })),
-            ]}
-          />
-          <h4 className="mt-4 text-xs font-semibold">Artifacts</h4>
-          <RefList values={packet.artifactRefs.map((ref) => `${ref.label}; ${ref.artifactType}; ${ref.status}`)} />
-        </DrawerSection>
-      );
-    case "worker":
-      return (
-        <DrawerSection title="Worker activity">
-          {packet.localModelHealth ? <LocalGpuCard health={packet.localModelHealth} /> : null}
-          {packet.hermesJob ? <HermesWorkerCard job={packet.hermesJob} /> : null}
-          {packet.codexWorker ? <CodexWorkerCard worker={packet.codexWorker} /> : null}
-          {packet.claudeReview ? <ClaudeReviewerCard review={packet.claudeReview} /> : null}
-          <RefList values={packet.laneCards.map((lane) => `${lane.label}; ${lane.status}; ${lane.summary}`)} />
-          <h4 className="mt-4 text-xs font-semibold">Review</h4>
-          <RefList values={packet.reviewSummaries.map((review) => `${review.reviewer}; ${review.status}; ${review.summary}`)} />
-        </DrawerSection>
-      );
-    case "memory":
-      return (
-        <DrawerSection title="Memory proposal">
-          {packet.memoryProposals.length > 0 ? (
-            <div className="grid gap-3">
-              {packet.memoryProposals.map((proposal) => <MemoryProposalCard key={proposal.proposalId} packet={packet} proposal={proposal} />)}
-            </div>
-          ) : (
-            <p className="text-xs leading-5 text-[var(--muted)]">No memory proposal for this packet. Obsidian is canonical and human-owned; LLM-Wiki is derived, disposable, and rebuildable.</p>
-          )}
-        </DrawerSection>
-      );
-    case "alpha":
-      return (
-        <DrawerSection title="Alpha action status">
-          <AlphaMemorySourceStatusPanel packet={packet} />
-        </DrawerSection>
-      );
-    case "recovery":
-      return (
-        <DrawerSection title="Recovery availability">
-          <RecoveryDrawerPanel
-            expandedRecoveryActionId={expandedRecoveryActionId}
-            packet={packet}
-            selectedRecoveryActionId={selectedRecoveryActionId}
-            selectedRecoveryFixtureEventId={selectedRecoveryFixtureEventId}
-            setExpandedRecoveryActionId={setExpandedRecoveryActionId}
-            setSelectedRecoveryActionId={setSelectedRecoveryActionId}
-            setSelectedRecoveryFixtureEventId={setSelectedRecoveryFixtureEventId}
-          />
-        </DrawerSection>
-      );
-  }
-}
-
-function PacketFiveWhysPanel({
-  packet,
-  snapshot,
-}: {
-  packet: PipelineFixturePacket;
-  snapshot: PipelineGoldenPathSnapshot | null;
-}) {
-  const fiveWhys = buildPacketFiveWhys(packet, snapshot);
-  return (
-    <DrawerSection title="5 Whys">
-      <div className="grid gap-3">
-        <section aria-label="Packet at a glance" className="rounded-[0.5rem] bg-[var(--background-elevated)] p-3">
-          <p className="text-xs font-semibold text-[var(--accent)]">At a glance</p>
-          <p className="mt-1 break-words text-sm leading-6">{fiveWhys.nextMove}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <PlainChip label="Stage" value={plainStageLabel(packet.currentStage)} />
-            <PlainChip label="State" value={plainStatusLabel(packet.status)} />
-            <PlainChip label="Owner" value={plainOwnerLabel(packet.currentOwner)} />
-            <PlainChip label="Confidence" value={packet.confidenceLabel} />
-          </div>
-        </section>
-
-        <dl className="grid gap-2">
-          {fiveWhys.answers.map((answer) => (
-            <div className="rounded-[0.5rem] border bg-[var(--panel)] p-3" key={answer.label}>
-              <dt className="text-xs font-semibold text-[var(--muted)]">{answer.label}</dt>
-              <dd className="mt-1 break-words text-sm leading-6" style={{ overflowWrap: "anywhere" }}>{answer.value}</dd>
-            </div>
           ))}
-        </dl>
-
-        <details className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
-          <summary className="cursor-pointer text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">
-            Technical details
-          </summary>
-          <FieldGrid
-            fields={[
-              ["Packet ID", packet.packetId],
-              ["Raw stage", packet.currentStage],
-              ["Raw owner", packet.currentOwner],
-              ["Raw status", packet.status],
-              ["Priority", packet.priority],
-              ["Last event", packet.lastEvent],
-              ["Next allowed actions", allowedActionSummary(packet)],
-              ["Risk flags", packet.riskFlags.join(", ")],
-            ]}
-          />
-        </details>
-      </div>
-    </DrawerSection>
-  );
-}
-
-function AlphaMemorySourceStatusPanel({ packet }: { packet: PipelineFixturePacket }) {
-  const status = packet.alphaMemorySourceStatus;
-  if (!status) {
-    return (
-      <p className="break-words text-xs leading-5 text-[var(--muted)]">
-        No alpha memory/source status is attached to this packet. The cockpit remains fixture-backed and does not call live memory, source, provider, worker, GitHub, or mutation paths.
-      </p>
-    );
-  }
-  const authorityFlags = [
-    ["Canonical mutation", status.canonicalMutationAllowed],
-    ["Source mutation", status.sourceMutationAllowed],
-    ["Provider calls", status.providerCallsAllowed],
-    ["Worker launch", status.workerLaunchAllowed],
-    ["GitHub calls", status.githubCallsAllowed],
-    ["Network egress", status.networkEgressAllowed],
-  ] as const;
-  return (
-    <div className="grid gap-3">
-      <div className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-        <p className="text-xs font-semibold text-[var(--accent)]">Supervisor-owned alpha status</p>
-        <FieldGrid
-          fields={[
-            ["Status id", status.statusId],
-            ["Mode", status.operationMode],
-            ["Decision", status.decisionState],
-            ["Authority family", status.authorityFamily],
-            ["Retention", status.retentionClass],
-            ["Target", String(status.targetMetadata.targetKind ?? "not recorded")],
-            ["Backup", status.backupPath],
-            ["Rollback", status.rollbackPath],
-            ["Audit summary", status.auditEventSummary],
-          ]}
-        />
-      </div>
-      <div className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-        <p className="text-xs font-semibold text-[var(--accent)]">Action consequence</p>
-        <FieldGrid
-          fields={[
-            ["What would run", "dry-run or read-only preview only"],
-            ["Destination state", status.decisionState === "blocked" ? "remain blocked for operator review" : "ready for Human Gate preview"],
-            ["Resulting owner", status.decisionState === "blocked" ? "blocked" : "operator"],
-            ["Evidence required", status.evidenceRefs.length > 0 ? status.evidenceRefs.join(", ") : "metadata status only"],
-            ["Stop lines", "no canonical Obsidian write; no source mutation; no provider; no worker; no GitHub; no network"],
-            ["Blocked reasons", status.blockedReasons.length > 0 ? status.blockedReasons.join(", ") : "none"],
-          ]}
-        />
-      </div>
-      <div className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-        <p className="text-xs font-semibold text-[var(--accent)]">Authority flags</p>
-        <RefList values={authorityFlags.map(([label, allowed]) => `${label}: ${allowed ? "allowed" : "blocked"}`)} />
-      </div>
-      {status.llmWikiReadiness ? (
-        <div className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-          <p className="text-xs font-semibold text-[var(--accent)]">LLM-Wiki derived readiness</p>
-          <FieldGrid
-            fields={[
-              ["Decision", status.llmWikiReadiness.decisionState],
-              ["Canonicality", status.llmWikiReadiness.canonicality],
-              ["Retention", status.llmWikiReadiness.retentionClass],
-              ["Boundary", status.llmWikiReadiness.boundarySummary],
-              ["Allowed inputs", status.llmWikiReadiness.allowedInputs.length > 0 ? status.llmWikiReadiness.allowedInputs.join(", ") : "none"],
-              ["Blocked reasons", status.llmWikiReadiness.blockedReasons.length > 0 ? status.llmWikiReadiness.blockedReasons.join(", ") : "none"],
-              ["Next action", status.llmWikiReadiness.nextActions.join(" ")],
-              ["Dry-run plan", status.llmWikiReadiness.rebuildDryRunPlan ? status.llmWikiReadiness.rebuildDryRunPlan.planId : "not available"],
-              ["Planned sections", status.llmWikiReadiness.rebuildDryRunPlan ? status.llmWikiReadiness.rebuildDryRunPlan.plannedDerivedSections.join(", ") : "none"],
-              ["Disposable target", status.llmWikiReadiness.rebuildDryRunPlan ? status.llmWikiReadiness.rebuildDryRunPlan.disposableTargetNamespace : "not allocated"],
-              ["Stop lines", status.llmWikiReadiness.rebuildDryRunPlan ? status.llmWikiReadiness.rebuildDryRunPlan.stopLines.join(" ") : "none"],
-              ["Durable writes", status.llmWikiReadiness.durableWriteAllowed ? "allowed" : "blocked"],
-            ]}
-          />
         </div>
       ) : null}
-      <div className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-        <p className="text-xs font-semibold text-[var(--accent)]">Source and recovery</p>
-        <RefList values={[...status.sourceRefs.map((ref) => `source ref: ${ref}`), ...status.recoveryOptions.map((option) => `recovery: ${option}`)]} />
-      </div>
-      <button
-        aria-disabled="true"
-        className="cursor-not-allowed rounded-[0.375rem] border bg-[var(--panel)] px-2 py-1.5 text-left text-xs font-semibold opacity-70"
-        disabled
-        type="button"
-      >
-        Preview dry-run evidence
-      </button>
     </div>
   );
 }
 
-function RouteForkPanel({ packet }: { packet: PipelineFixturePacket }) {
-  const routeSummary = packet.routeSummary;
+function StatusKey() {
+  const items = [
+    { label: "Active", className: "pipeline-status-active" },
+    { label: "Waiting", className: "pipeline-status-waiting" },
+    { label: "Needs approval", className: "pipeline-status-approval" },
+    { label: "Blocked", className: "pipeline-status-blocked" },
+    { label: "Complete", className: "pipeline-status-complete" },
+  ];
   return (
-    <DrawerSection title="Route Fork Panel">
-      <FieldGrid
-        fields={[
-          ["Selected route", packet.routeFork.selectedRoute],
-          ["Recommended stage", routeSummary?.recommendation ?? packet.currentStage],
-          ["Confidence", `${routeSummary?.confidenceScore ?? "unknown"} ${routeSummary?.confidenceBand ?? packet.confidenceLabel}`],
-          ["Rejected routes", packet.routeFork.rejectedRoutes.join(", ")],
-          ["Tags", packet.routeFork.tags.join(", ")],
-          ["Source context", packet.routeFork.sourceContext],
-          ["Reason codes", (routeSummary?.reasonCodes ?? packet.matrixRowIds).join(", ")],
-        ]}
-      />
-      {packet.routeFork.lowConfidenceActions.length > 0 ? (
-        <div className="mt-4">
-          <h4 className="text-xs font-semibold">Low-confidence route actions</h4>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {packet.routeFork.lowConfidenceActions.map((action) => (
-              <button
-                aria-disabled="true"
-                disabled
-                key={action}
-                className="cursor-not-allowed rounded-[0.375rem] border bg-[var(--background-elevated)] px-2 py-1 text-xs text-[var(--muted)] disabled:opacity-75"
-                type="button"
-              >
-                {action}
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </DrawerSection>
-  );
-}
-
-function HumanGateConsequencePanel({
-  expandedGateActionId,
-  packet,
-  selectedGateActionId,
-  selectedGateFixtureEventId,
-  setExpandedGateActionId,
-  setSelectedGateActionId,
-  setSelectedGateFixtureEventId,
-}: {
-  expandedGateActionId: string | null;
-  packet: PipelineFixturePacket;
-  selectedGateActionId: string | null;
-  selectedGateFixtureEventId: string | null;
-  setExpandedGateActionId: (actionId: string | null) => void;
-  setSelectedGateActionId: (actionId: string | null) => void;
-  setSelectedGateFixtureEventId: (eventId: string | null) => void;
-}) {
-  const selectedEvent =
-    packet.humanGateFixtureEvents.find((event) => event.eventId === selectedGateFixtureEventId && event.actionId === selectedGateActionId) ?? null;
-
-  return (
-    <div className="grid gap-3">
-      {packet.humanGateActions.map((action) => {
-        const fixtureEvent = packet.humanGateFixtureEvents.find((event) => event.actionId === action.actionId);
-        const actionDecision = evaluateFixtureActionDecision(packet, action.actionId, "human_gate");
-        const actionGuard = actionDecision.guard;
-        const missingEvidenceRefs = missingHumanGateEvidenceRefs(packet, action);
-        const canActivate = canActivateHumanGateAction(packet, action);
-        const expanded = expandedGateActionId === action.actionId || selectedGateActionId === action.actionId;
-
-        return (
-          <details
-            aria-expanded={expanded}
-            className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3"
-            key={action.actionId}
-            onToggle={(event) => {
-              setExpandedGateActionId(event.currentTarget.open ? action.actionId : null);
-            }}
-            open={expanded}
-          >
-            <summary className="cursor-pointer break-words text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">
-              Typed action {action.family}: {action.type} - {action.status}
-            </summary>
-            <div className="mt-3 grid gap-3">
-              <div>
-                <p className="text-xs font-semibold text-[var(--accent)]">Consequence preview</p>
-                <FieldGrid
-                  fields={[
-                    ["Current state", `${packet.currentStage} / ${packet.currentOwner}`],
-                    ["Proposed action", `${action.actionId}; ${action.label}; ${action.uiCopy}`],
-                    ["Action family", action.family],
-                    ["Authority level", authorityLevelLabel(action.authorityFamily)],
-                    ["Authority family", action.authorityFamily],
-                    ["Required evidence", action.requiredEvidenceRefs.join(", ")],
-                    ["Missing evidence", missingEvidenceRefs.length > 0 ? missingEvidenceRefs.join(", ") : "none"],
-                    ["Stop lines", action.stopLines.join(" | ")],
-                    ["Destination stage", action.resultingStage],
-                    ["Resulting owner", action.resultingOwner],
-                    ["Rollback path", action.rollbackPath],
-                    ["Audit event", action.auditEventType],
-                    ["Fixture event", fixtureEvent ? `${fixtureEvent.eventId}; ${fixtureEvent.eventType}; ${fixtureEvent.summary}` : "missing fixture event"],
-                    ["Guard classification", actionGuard?.classification ?? "none"],
-                    ["Expected state", actionGuard?.expectedState ?? `${packet.currentStage}/${packet.currentOwner}/${packet.status}`],
-                    ["Actual state", actionGuard?.actualState ?? `${packet.currentStage}/${packet.currentOwner}/${packet.status}`],
-                    ["Primary risk prevented", actionGuard?.primaryRisk ?? "none"],
-                    ["Safe next option", actionGuard?.safeNextOption ?? "none"],
-                    ["Disabled reason", actionGuard?.disabledReason ?? action.disabledReason ?? gateEvidenceReason(packet, action.status)],
-                  ]}
-                />
-              </div>
-              {actionGuard ? <ActionGuardPanel guard={actionGuard} /> : null}
-              <button
-                aria-disabled={!canActivate}
-                className="w-full rounded-[0.375rem] border bg-[var(--panel)] px-2 py-1.5 text-left text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
-                disabled={!canActivate}
-                onClick={() => {
-                  if (canActivate && fixtureEvent) {
-                    setExpandedGateActionId(action.actionId);
-                    setSelectedGateActionId(action.actionId);
-                    setSelectedGateFixtureEventId(fixtureEvent.eventId);
-                  }
-                }}
-                type="button"
-              >
-                Preview fixture event
-              </button>
-            </div>
-          </details>
-        );
-      })}
-
-      {selectedEvent ? (
-        <div className="rounded-[0.5rem] border border-[var(--accent)] bg-[var(--panel-strong)] p-3">
-          <p className="text-xs font-semibold text-[var(--accent)]">Fixture event</p>
-          <FieldGrid
-            fields={[
-              ["Event", `${selectedEvent.eventId}; ${selectedEvent.eventType}`],
-              ["Summary", selectedEvent.summary],
-              ["Preview transition", `${selectedEvent.fromStage}/${selectedEvent.fromOwner} -> ${selectedEvent.toStage}/${selectedEvent.toOwner}`],
-              ["Evidence refs", selectedEvent.evidenceRefs.join(", ")],
-              ["Audit event", selectedEvent.auditEventType],
-            ]}
-          />
-        </div>
-      ) : (
-        <p className="break-words text-xs leading-5 text-[var(--muted)]">
-          Preview fixture event by selecting an available action. Disabled, blocked, stale, complete, unknown, or missing-evidence actions cannot be activated.
-        </p>
-      )}
-      <ActionGuardSummary guards={packet.actionGuardFixtures.filter((guard) => guard.actionSurface === "human_gate")} />
-    </div>
-  );
-}
-
-function RecoveryDrawerPanel({
-  expandedRecoveryActionId,
-  packet,
-  selectedRecoveryActionId,
-  selectedRecoveryFixtureEventId,
-  setExpandedRecoveryActionId,
-  setSelectedRecoveryActionId,
-  setSelectedRecoveryFixtureEventId,
-}: {
-  expandedRecoveryActionId: string | null;
-  packet: PipelineFixturePacket;
-  selectedRecoveryActionId: string | null;
-  selectedRecoveryFixtureEventId: string | null;
-  setExpandedRecoveryActionId: (actionId: string | null) => void;
-  setSelectedRecoveryActionId: (actionId: string | null) => void;
-  setSelectedRecoveryFixtureEventId: (eventId: string | null) => void;
-}) {
-  const selectedEvent =
-    packet.recoveryFixtureEvents.find((event) => event.eventId === selectedRecoveryFixtureEventId && event.actionId === selectedRecoveryActionId) ?? null;
-
-  if (packet.recoveryActions.length === 0) {
-    return <p className="break-words text-xs leading-5 text-[var(--muted)]">No matrix-backed recovery actions are relevant for this fixture state.</p>;
-  }
-
-  return (
-    <div className="grid gap-3">
-      {packet.recoveryActions.map((action) => {
-        const fixtureEvent = packet.recoveryFixtureEvents.find((event) => event.actionId === action.actionId);
-        const actionDecision = evaluateFixtureActionDecision(packet, action.actionId, "recovery");
-        const actionGuard = actionDecision.guard;
-        const missingEvidenceRefs = missingRecoveryEvidenceRefs(packet, action);
-        const humanGateAction = packet.humanGateActions.find((gateAction) => gateAction.actionId === fixtureEvent?.humanGateActionId) ?? null;
-        const requiresHumanGate = recoveryRequiresHumanGate(fixtureEvent);
-        const canSelect = canSelectRecoveryAction(packet, action);
-        const expanded = expandedRecoveryActionId === action.actionId || selectedRecoveryActionId === action.actionId;
-
-        return (
-          <details
-            aria-expanded={expanded}
-            className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3"
-            key={action.actionId}
-            onToggle={(event) => {
-              setExpandedRecoveryActionId(event.currentTarget.open ? action.actionId : null);
-            }}
-            open={expanded}
-          >
-            <summary className="cursor-pointer break-words text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]">
-              Recovery action {action.label}: {action.actionType} - {action.availability}
-            </summary>
-            <div className="mt-3 grid gap-3">
-              <div>
-                <p className="text-xs font-semibold text-[var(--accent)]">Recovery consequence</p>
-                <FieldGrid
-                  fields={[
-                    ["Current state", `${packet.currentStage} / ${packet.currentOwner}`],
-                    ["Known stage", packet.currentStage],
-                    ["Recovery action", `${action.actionId}; ${action.actionType}; ${action.label}`],
-                    ["Availability", action.availability],
-                    ["Consequence", action.consequence],
-                    ["Required evidence", action.evidenceRefs.join(", ")],
-                    ["Missing evidence", missingEvidenceRefs.length > 0 ? missingEvidenceRefs.join(", ") : "none"],
-                    ["Resulting stage", action.resultingStage],
-                    ["Resulting owner", action.resultingOwner],
-                    ["Audit event", fixtureEvent?.auditEventType ?? "missing fixture event"],
-                    ["Recovery fixture event", fixtureEvent ? `${fixtureEvent.eventId}; ${fixtureEvent.eventType}; ${fixtureEvent.summary}` : "missing fixture event"],
-                    ["Authority requirement", requiresHumanGate ? `Human Gate required${humanGateAction ? `: ${humanGateAction.type}` : ""}` : "none"],
-                    ["Guard classification", actionGuard?.classification ?? "none"],
-                    ["Expected state", actionGuard?.expectedState ?? `${packet.currentStage}/${packet.currentOwner}/${packet.status}`],
-                    ["Actual state", actionGuard?.actualState ?? `${packet.currentStage}/${packet.currentOwner}/${packet.status}`],
-                    ["Primary risk prevented", actionGuard?.primaryRisk ?? "none"],
-                    ["Safe next option", actionGuard?.safeNextOption ?? "none"],
-                    ["Disabled reason", actionGuard?.disabledReason ?? recoveryDisabledReason(packet, action, fixtureEvent, requiresHumanGate)],
-                  ]}
-                />
-              </div>
-              {actionGuard ? <ActionGuardPanel guard={actionGuard} /> : null}
-              {requiresHumanGate ? (
-                <div className="rounded-[0.375rem] border border-[var(--warning)] bg-[var(--panel)] px-2 py-1.5 text-xs">
-                  <p className="font-semibold">Human Gate reference</p>
-                  <p className="mt-1 break-words text-[var(--muted)]">
-                    {humanGateAction
-                      ? `${humanGateAction.family}: ${humanGateAction.type}; ${humanGateAction.uiCopy}`
-                      : "Recovery requires Human Gate authority, but no matching typed action is present in this fixture."}
-                  </p>
-                </div>
-              ) : null}
-              <button
-                aria-disabled={!canSelect}
-                className="w-full rounded-[0.375rem] border bg-[var(--panel)] px-2 py-1.5 text-left text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
-                disabled={!canSelect}
-                onClick={() => {
-                  if (canSelect && fixtureEvent) {
-                    setExpandedRecoveryActionId(action.actionId);
-                    setSelectedRecoveryActionId(action.actionId);
-                    setSelectedRecoveryFixtureEventId(fixtureEvent.eventId);
-                  }
-                }}
-                type="button"
-              >
-                Preview recovery event
-              </button>
-            </div>
-          </details>
-        );
-      })}
-
-      {selectedEvent ? (
-        <div className="rounded-[0.5rem] border border-[var(--accent)] bg-[var(--panel-strong)] p-3">
-          <p className="text-xs font-semibold text-[var(--accent)]">Recovery fixture event</p>
-          <FieldGrid
-            fields={[
-              ["Event", `${selectedEvent.eventId}; ${selectedEvent.eventType}`],
-              ["Summary", selectedEvent.summary],
-              ["Preview transition", `${selectedEvent.fromStage}/${selectedEvent.fromOwner} -> ${selectedEvent.toStage}/${selectedEvent.toOwner}`],
-              ["Evidence refs", selectedEvent.evidenceRefs.join(", ")],
-              ["Audit event", selectedEvent.auditEventType],
-            ]}
-          />
-        </div>
-      ) : (
-        <p className="break-words text-xs leading-5 text-[var(--muted)]">
-          Preview recovery event by selecting an available fixture action. Authority-required selections show their Human Gate reference and guard metadata; blocked, stale, complete, missing-event, or missing or unavailable evidence actions stay visible but cannot execute recovery.
-        </p>
-      )}
-      <ActionGuardSummary guards={packet.actionGuardFixtures.filter((guard) => guard.actionSurface === "recovery")} />
-    </div>
-  );
-}
-
-function ActionGuardPanel({ guard }: { guard: PipelineFixturePacket["actionGuardFixtures"][number] }) {
-  return (
-    <div className="rounded-[0.375rem] border border-[var(--warning)] bg-[var(--panel)] px-2 py-1.5 text-xs">
-      <p className="font-semibold">Stale or unsafe action guard</p>
-      <FieldGrid
-        fields={[
-          ["Guard", `${guard.guardId}; ${guard.classification}; ${guard.unsafeClass}`],
-          ["Packet binding", `${guard.expectedPacketId} -> ${guard.actualPacketId}`],
-          ["Action binding", `${guard.expectedActionId} -> ${guard.actualActionId}`],
-          ["State changed", `${guard.expectedState} -> ${guard.actualState}`],
-          ["Stop line", guard.stopLine],
-          ["Safe next option", guard.safeNextOption],
-          ["Known stage", `${guard.resultingStage} / ${guard.resultingOwner}`],
-          ["Evidence refs", guard.evidenceRefs.join(", ")],
-          ["Fixture event", guard.fixtureEventId ?? "none"],
-          ["Primary risk prevented", guard.primaryRisk],
-        ]}
-      />
-    </div>
-  );
-}
-
-function ActionGuardSummary({ guards }: { guards: PipelineFixturePacket["actionGuardFixtures"] }) {
-  if (guards.length === 0) {
-    return null;
-  }
-  return (
-    <div className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-      <p className="text-xs font-semibold text-[var(--accent)]">Deterministic guard cases</p>
-      <RefList
-        values={guards.map((guard) =>
-          `${guard.classification}; ${guard.actionType}; ${guard.disabledReason}; state changed: ${guard.expectedState} -> ${guard.actualState}; stop line: ${guard.stopLine}; safe next option: ${guard.safeNextOption}; known stage: ${guard.resultingStage}/${guard.resultingOwner}; evidence refs: ${guard.evidenceRefs.join(", ")}; fixture event: ${guard.fixtureEventId ?? "none"}; primary risk: ${guard.primaryRisk}`
-        )}
-      />
-    </div>
-  );
-}
-
-function LocalGpuCard({ health }: { health: NonNullable<PipelineFixturePacket["localModelHealth"]> }) {
-  const latency = health.lastLatencyMs === null || health.lastLatencyMs === undefined ? "unknown" : `${health.lastLatencyMs} ms`;
-  const reachable = health.reachable === null ? "unknown" : health.reachable ? "reachable" : "unreachable";
-  return (
-    <article className="mb-3 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-[var(--accent)]">Local GPU Card</p>
-          <h4 className="mt-1 break-words text-sm font-semibold">Local model readiness</h4>
-        </div>
-        <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{localModelStatusLabel(health.statusLabel)}</span>
-      </div>
-      <FieldGrid
-        fields={[
-          ["Provider", health.provider],
-          ["Configured endpoint", health.endpointUrl ?? "not configured"],
-          ["Approved endpoint", health.approvedEndpointUrl],
-          ["Endpoint approval", health.endpointApproved ? "match" : "mismatch"],
-          ["Configured model", health.modelId ?? "not configured"],
-          ["Approved model", health.approvedModelId],
-          ["Model approval", health.modelApproved ? "match" : "mismatch"],
-          ["Reachability", reachable],
-          ["Busy state", health.busyState],
-          ["Allowed caller", health.allowedCaller],
-          ["Latency", latency],
-          ["Last failure", health.lastFailure ?? "none"],
-          ["Call authority", `${health.callAuthorityState}; ${health.authoritySummary}`],
-          ["Retention policy", health.retentionPolicy],
-          ["Fallback path", health.fallbackPath],
-          ["Boundary", health.noProbeBoundary],
-        ]}
-      />
-    </article>
-  );
-}
-
-function localModelStatusLabel(status: NonNullable<PipelineFixturePacket["localModelHealth"]>["statusLabel"]) {
-  switch (status) {
-    case "healthy":
-      return "Healthy";
-    case "unavailable":
-      return "Unavailable";
-    case "busy":
-      return "Busy";
-    case "model_mismatch":
-      return "Model mismatch";
-    case "endpoint_mismatch":
-      return "Endpoint mismatch";
-    case "approval_required":
-      return "Approval required";
-  }
-}
-
-function HermesWorkerCard({ job }: { job: NonNullable<PipelineFixturePacket["hermesJob"]> }) {
-  return (
-    <article className="mb-3 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-[var(--accent)]">Hermes Worker Card</p>
-          <h4 className="mt-1 break-words text-sm font-semibold">Mocked worker containment</h4>
-        </div>
-        <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{hermesStatusLabel(job.statusLabel)}</span>
-      </div>
-      <FieldGrid
-        fields={[
-          ["Job id", job.jobId],
-          ["Packet id", job.packetId],
-          ["Worker profile", job.workerProfile],
-          ["Input refs", job.inputRefs.join(", ")],
-          ["Allowed mounts", job.allowedMounts.join(", ")],
-          ["Writable output dir", job.writableOutputDir],
-          ["Network policy", job.networkPolicy],
-          ["Credential policy", job.credentialPolicy],
-          ["Source mutation policy", job.sourceMutationPolicy],
-          ["Timeout", `${job.timeoutSeconds} seconds`],
-          ["Expected output schema", job.expectedOutputSchema],
-          ["Cleanup policy", job.cleanupPolicy],
-          ["Kill switch", job.killSwitch],
-          ["Execution mode", job.executionMode],
-          ["Containment", job.containmentSummary],
-          ["Boundary", job.boundarySummary],
-        ]}
-      />
-    </article>
-  );
-}
-
-function hermesStatusLabel(status: NonNullable<PipelineFixturePacket["hermesJob"]>["statusLabel"]) {
-  switch (status) {
-    case "mocked_ready":
-      return "Mocked ready";
-    case "mocked_timeout":
-      return "Mocked timeout";
-    case "blocked_containment":
-      return "Blocked containment";
-  }
-}
-
-function CodexWorkerCard({ worker }: { worker: NonNullable<PipelineFixturePacket["codexWorker"]> }) {
-  return (
-    <article className="mb-3 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-[var(--accent)]">Codex Worker Card</p>
-          <h4 className="mt-1 break-words text-sm font-semibold">Implementation worker lane</h4>
-        </div>
-        <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{codexReadinessLabel(worker.readiness)}</span>
-      </div>
-      <FieldGrid
-        fields={[
-          ["Worker id", worker.workerId],
-          ["Packet id", worker.packetId],
-          ["Implementation role", worker.role],
-          ["Readiness", worker.readiness],
-          ["Attempt refs", worker.attemptRefs.join(", ")],
-          ["Current state", worker.currentState],
-          ["Blocked state", worker.blockedState],
-          ["Retention policy", worker.retentionPolicy],
-          ["Evidence ref", worker.evidenceRef],
-          ["Reviewer boundary", worker.boundarySummary],
-        ]}
-      />
-    </article>
-  );
-}
-
-function ClaudeReviewerCard({ review }: { review: NonNullable<PipelineFixturePacket["claudeReview"]> }) {
-  return (
-    <article className="mb-3 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-[var(--accent)]">Claude Reviewer Card</p>
-          <h4 className="mt-1 break-words text-sm font-semibold">Reviewer / second opinion</h4>
-        </div>
-        <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{claudeReviewStatusLabel(review.statusLabel)}</span>
-      </div>
-      <FieldGrid
-        fields={[
-          ["Review id", review.reviewId],
-          ["Packet id", review.packetId],
-          ["Review purpose", review.purpose],
-          ["Allowed context", review.allowedContextRefs.join(", ")],
-          ["Excluded context", review.excludedContextRefs.join(", ")],
-          ["Retention policy", review.retentionPolicy],
-          ["Expected findings schema", review.expectedFindingsSchema],
-          ["Independence marker", review.independenceMarker],
-          ["Cost/scarcity", review.costScarcity],
-          ["Approval requirement", review.approvalRequirement],
-          ["Execution mode", review.executionMode],
-          ["Review status", review.statusLabel],
-          ["Evidence ref", review.evidenceRef],
-          ["Implementation boundary", review.boundarySummary],
-        ]}
-      />
-    </article>
-  );
-}
-
-function MemoryProposalCard({
-  packet,
-  proposal,
-}: {
-  packet: PipelineFixturePacket;
-  proposal: PipelineFixturePacket["memoryProposals"][number];
-}) {
-  const decisionContext = proposal.decisionNeededContext ?? "none; proposal can remain review-gated";
-  const contradictionBoundary = proposal.contradictionStatus === "confirmed" ? "Obsidian wins by default; proposal stays decision-needed and cannot auto-promote." : "No confirmed contradiction auto-promotes memory.";
-  return (
-    <article className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-[var(--accent)]">Memory Proposal Card</p>
-          <h4 className="mt-1 break-words text-sm font-semibold">{proposal.label}</h4>
-        </div>
-        <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5 text-xs">{memoryProposalStatusLabel(proposal.status)}</span>
-      </div>
-      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{proposal.summary}</p>
-      <FieldGrid
-        fields={[
-          ["Proposal id", proposal.proposalId],
-          ["Packet id", proposal.packetId],
-          ["Target path", proposal.targetVaultPath ?? "not selected"],
-          ["Target folder", proposal.targetVaultFolder ?? "not selected"],
-          ["Proposal type", proposal.proposalType],
-          ["Source refs", proposal.sourceRefs.join(", ")],
-          ["Source boundary labels", proposal.sourceRefs.map((refId) => memoryProposalSourceBoundaryLabel(refId, packet)).join(" | ")],
-          ["Evidence refs", proposal.evidenceRefs.join(", ")],
-          ["Suggested content", proposal.suggestedContentSummary],
-          ["Patch summary", proposal.patchSummary ?? "summary only"],
-          ["Sensitivity", proposal.sensitivity],
-          ["Freshness", proposal.freshness],
-          ["Contradiction", proposal.contradictionStatus],
-          ["Confidence", proposal.confidence],
-          ["Operator action", proposal.operatorAction],
-          ["Decision context", decisionContext],
-          ["Contradiction boundary", contradictionBoundary],
-          ["Backup / recovery", proposal.backupRecoveryPath],
-          ["Write-back status", `${proposal.writeBackStatus}; write-back allowed: ${proposal.writeBackAllowed ? "true" : "false"}`],
-          ["Proposal-only boundary", "Obsidian is canonical and human-owned; LLM-Wiki is derived, disposable, and rebuildable; no durable vault update occurs in fixture mode."],
-        ]}
-      />
-    </article>
-  );
-}
-
-function memoryProposalSourceBoundaryLabel(refId: string, packet: PipelineFixturePacket) {
-  const sourceRef = packet.sourceRefs.find((ref) => ref.refId === refId);
-  if (!sourceRef) {
-    return `${refId}; unresolved source boundary`;
-  }
-  return `${sourceRef.label}; ${sourceRefImportance(sourceRef.sourceType, packet)}; ${sourceRef.freshness}; ${sourceRef.accessState}; summary-only ${String(sourceRef.summaryOnly)}`;
-}
-
-function SourceBoundaryCard({ boundary }: { boundary: SourceBoundaryDeclarationV0 }) {
-  return (
-    <article className="rounded-[0.5rem] border bg-[var(--background-elevated)] p-3 text-xs">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="font-semibold text-[var(--accent)]">Boundary id</p>
-          <h3 className="mt-1 break-words text-sm font-semibold">{boundary.label}</h3>
-        </div>
-        <span className="rounded-full bg-[var(--panel-strong)] px-2 py-0.5">{boundary.boundaryId}</span>
-      </div>
-      <FieldGrid
-        fields={[
-          ["Canonicality", boundary.canonicality],
-          ["Allowed reads", boundary.allowedReads.join(", ")],
-          ["Allowed writes", boundary.allowedWrites.join(", ")],
-          ["Retention class", boundary.retentionClass],
-          ["Blocked operations", boundary.blockedOperations.join(", ")],
-          ["Boundary summary", boundary.boundarySummary],
-        ]}
-      />
-    </article>
-  );
-}
-
-function memoryProposalStatusLabel(status: PipelineFixturePacket["memoryProposals"][number]["status"]) {
-  switch (status) {
-    case "not_applicable":
-      return "Not applicable";
-    case "proposed":
-      return "Proposed";
-    case "pending_human_approval":
-      return "Pending review";
-    case "approved":
-      return "Approved";
-    case "rejected":
-      return "Rejected";
-    case "deferred":
-      return "Deferred";
-    case "edit_needed":
-      return "Edit needed";
-    case "stale":
-      return "Stale";
-    case "contradictory":
-      return "Contradictory";
-    case "blocked":
-      return "Blocked";
-  }
-}
-
-function codexReadinessLabel(readiness: NonNullable<PipelineFixturePacket["codexWorker"]>["readiness"]) {
-  switch (readiness) {
-    case "ready":
-      return "Ready";
-    case "active":
-      return "Active";
-    case "blocked":
-      return "Blocked";
-  }
-}
-
-function claudeReviewStatusLabel(status: NonNullable<PipelineFixturePacket["claudeReview"]>["statusLabel"]) {
-  switch (status) {
-    case "pending":
-      return "Pending";
-    case "skipped":
-      return "Skipped";
-    case "blocked":
-      return "Blocked";
-  }
-}
-
-function DrawerSection({ children, title }: { children: ReactNode; title: string }) {
-  return (
-    <div>
-      <h3 className="text-sm font-semibold">{title}</h3>
-      <div className="mt-3">{children}</div>
-    </div>
-  );
-}
-
-function FieldGrid({ fields }: { fields: [string, string][] }) {
-  return (
-    <dl className="mt-3 grid grid-cols-1 gap-3 text-xs sm:grid-cols-2 xl:grid-cols-1">
-      {fields.map(([label, value]) => (
-        <div className="min-w-0" key={label}>
-          <dt className="text-[var(--muted)]">{label}</dt>
-          <dd className="mt-1 break-words" style={{ overflowWrap: "anywhere" }}>{value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-function RefList({ values }: { values: string[] }) {
-  if (values.length === 0) {
-    return <p className="text-xs text-[var(--muted)]">No fixture refs available.</p>;
-  }
-  return (
-    <ul className="grid gap-2 text-xs">
-      {values.map((value, index) => (
-        <li className="break-words rounded-[0.375rem] bg-[var(--background-elevated)] px-2 py-1" key={`${index}:${value}`}>
-          {value}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function canActivateHumanGateAction(
-  packet: PipelineFixturePacket,
-  action: PipelineFixturePacket["humanGateActions"][number]
-) {
-  const fixtureEvent = packet.humanGateFixtureEvents.find((event) => event.actionId === action.actionId);
-  return (
-    action.status === "available" &&
-    action.requiredEvidenceRefs.length > 0 &&
-    action.payload.packetId === packet.packetId &&
-    action.payload.actionId === action.actionId &&
-    evaluateFixtureActionDecision(packet, action.actionId, "human_gate").submitCapable &&
-    missingHumanGateEvidenceRefs(packet, action).length === 0 &&
-    fixtureEvent !== undefined &&
-    fixtureEvent.toStage === action.resultingStage &&
-    fixtureEvent.toOwner === action.resultingOwner &&
-    fixtureEvent.evidenceRefs.length > 0 &&
-    fixtureEvent.evidenceRefs.every((ref) => packet.evidenceRefs.some((evidenceRef) => evidenceRef.refId === ref))
-  );
-}
-
-function authorityLevelLabel(authorityFamily: string) {
-  return authorityFamily.split(".")[0] ?? authorityFamily;
-}
-
-function canSelectRecoveryAction(
-  packet: PipelineFixturePacket,
-  action: PipelineFixturePacket["recoveryActions"][number]
-) {
-  const fixtureEvent = packet.recoveryFixtureEvents.find((event) => event.actionId === action.actionId);
-  return (
-    action.availability === "available" &&
-    missingRecoveryEvidenceRefs(packet, action).length === 0 &&
-    fixtureEvent !== undefined &&
-    fixtureEvent.toStage === action.resultingStage &&
-    fixtureEvent.toOwner === action.resultingOwner &&
-    fixtureEvent.evidenceRefs.length > 0 &&
-    fixtureEvent.evidenceRefs.every((ref) => packet.evidenceRefs.some((evidenceRef) => evidenceRef.refId === ref))
-  );
-}
-
-function blockingActionGuard(
-  packet: PipelineFixturePacket,
-  actionId: string,
-  actionSurface: PipelineFixturePacket["actionGuardFixtures"][number]["actionSurface"]
-) {
-  return evaluateFixtureActionDecision(packet, actionId, actionSurface).guard;
-}
-
-function recoveryRequiresHumanGate(event: PipelineFixturePacket["recoveryFixtureEvents"][number] | null | undefined) {
-  return Boolean(event?.requiresHumanGate);
-}
-
-function missingRecoveryEvidenceRefs(
-  packet: PipelineFixturePacket,
-  action: PipelineFixturePacket["recoveryActions"][number]
-) {
-  const packetEvidenceRefs = new Set(packet.evidenceRefs.map((ref) => ref.refId));
-  return action.evidenceRefs.filter((ref) => !packetEvidenceRefs.has(ref));
-}
-
-function recoveryDisabledReason(
-  packet: PipelineFixturePacket,
-  action: PipelineFixturePacket["recoveryActions"][number],
-  fixtureEvent: PipelineFixturePacket["recoveryFixtureEvents"][number] | undefined,
-  requiresHumanGate: boolean
-) {
-  if (requiresHumanGate) {
-    return "requires Human Gate authority before recovery execution";
-  }
-  if (!fixtureEvent) {
-    return "missing recovery fixture event";
-  }
-  if (action.availability !== "available") {
-    return recoveryEvidenceReason(packet, action.availability);
-  }
-  const missingEvidence = missingRecoveryEvidenceRefs(packet, action);
-  if (missingEvidence.length > 0) {
-    return `missing evidence: ${missingEvidence.join(", ")}`;
-  }
-  return "none";
-}
-
-function missingHumanGateEvidenceRefs(
-  packet: PipelineFixturePacket,
-  action: PipelineFixturePacket["humanGateActions"][number]
-) {
-  const packetEvidenceRefs = new Set(packet.evidenceRefs.map((ref) => ref.refId));
-  return action.requiredEvidenceRefs.filter((ref) => !packetEvidenceRefs.has(ref));
-}
-
-function EvidenceDetailList({
-  items,
-}: {
-  items: {
-    key: string;
-    whatExists: string;
-    whyItMatters: string;
-    whereFrom: string;
-    retention: string;
-    state: string;
-  }[];
-}) {
-  return (
-    <div className="grid gap-2">
+    <div aria-label="Pipeline status key" className="pipeline-status-key flex min-w-0 flex-wrap gap-2 rounded-[0.375rem] border px-2 py-1.5">
       {items.map((item) => (
-        <article className="rounded-[0.375rem] bg-[var(--background-elevated)] p-2 text-xs" key={item.key}>
-          <dl className="grid gap-2">
-            <EvidenceField label="What exists" value={item.whatExists} />
-            <EvidenceField label="Why it matters" value={item.whyItMatters} />
-            <EvidenceField label="Where it came from" value={item.whereFrom} />
-            <EvidenceField label="Retention" value={item.retention} />
-            <EvidenceField label="Evidence state" value={item.state} />
-          </dl>
-        </article>
+        <span key={item.label} className="inline-flex items-center gap-1.5 text-xs text-[var(--muted)]">
+          <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${item.className}`} />
+          {item.label}
+        </span>
       ))}
     </div>
   );
 }
 
-function EvidenceField({ label, value }: { label: string; value: string }) {
+function InfoTooltip({ focusable = true, text }: { focusable?: boolean; text: string }) {
   return (
-    <div className="min-w-0">
-      <dt className="text-[var(--muted)]">{label}</dt>
-      <dd className="mt-0.5 break-words" style={{ overflowWrap: "anywhere" }}>{value}</dd>
-    </div>
-  );
-}
-
-function sourceRefImportance(sourceType: string, packet: PipelineFixturePacket) {
-  if (sourceType === "obsidian") {
-    return "Obsidian is canonical and human-owned; it wins by default over derived memory.";
-  }
-  if (sourceType === "llm_wiki") {
-    return "LLM-Wiki is derived, disposable, and rebuildable; it never overrules Obsidian.";
-  }
-  if (sourceType === "research" || packet.sourceTrustStates.includes("stale")) {
-    return "Names source freshness so Kendall does not treat stale context as trusted memory.";
-  }
-  return "Anchors the packet decision to a summary-only source reference.";
-}
-
-function sourcePathLabel(ref: PipelineFixturePacket["sourceRefs"][number]) {
-  if ("pathOrUrl" in ref && ref.pathOrUrl) {
-    return ref.pathOrUrl;
-  }
-  return "summary ref only";
-}
-
-function evidenceRefImportance(evidenceType: string, packet: PipelineFixturePacket) {
-  if (evidenceType === "fixture") {
-    return `Proves the ${packet.fixtureKind} cockpit state without live runtime access.`;
-  }
-  return "Supports the recommended next action without exposing payload content.";
-}
-
-function artifactRefImportance(artifactType: string, packet: PipelineFixturePacket) {
-  if (artifactType === "fixture") {
-    return `Links the ${packet.currentStage} stage to the fixture catalog or matrix evidence.`;
-  }
-  return "Keeps generated work inspectable through an artifact reference.";
-}
-
-function gateEvidenceReason(packet: PipelineFixturePacket, availability: string) {
-  if (availability === "available") {
-    return "none; required fixture evidence is present";
-  }
-  return `active Human Gate authority is unavailable for ${packet.currentStage}; required fixture evidence remains visible`;
-}
-
-function recoveryEvidenceReason(packet: PipelineFixturePacket, availability: string) {
-  if (availability === "available") {
-    return "none; blocked packet evidence is present";
-  }
-  return `blocked or failed packet evidence is not present while status is ${packet.status}`;
-}
-
-function allowedActionSummary(packet: PipelineFixturePacket) {
-  const actions = packet.humanGateActions.filter((action) => action.status === "available");
-  if (actions.length === 0) {
-    return "No available mutation; fixture inspection only.";
-  }
-  return actions.map((action) => `${action.family}: ${action.type}`).join(", ");
-}
-
-function buildPacketFiveWhys(packet: PipelineFixturePacket, snapshot: PipelineGoldenPathSnapshot | null) {
-  const nextMove = snapshot?.whatNeedsOperator ?? packet.nextAction;
-  return {
-    nextMove,
-    answers: [
-      ["What is this?", snapshot?.whatPacketIs ?? packet.summary],
-      ["Why is it here?", snapshot?.whyHere ?? plainStageReason(packet)],
-      ["Why does it matter?", snapshot?.decisionConsequence ?? packet.requestedOutcome],
-      ["Why does it need me?", snapshot?.whatNeedsOperator ?? plainOperatorNeed(packet)],
-      ["What happens next?", snapshot?.whatHappensNext ?? packet.nextAction],
-    ].map(([label, value]) => ({ label, value })),
-  };
-}
-
-function plainStageReason(packet: PipelineFixturePacket) {
-  if (packet.currentStage === "human_gate") {
-    return "Kendall is waiting because a human decision is required before it can continue.";
-  }
-  if (packet.status === "blocked") {
-    return `Kendall stopped here because ${packet.nextAction.toLowerCase()} is needed before the packet can move forward.`;
-  }
-  if (packet.sourceTrustStates.some((state) => state === "stale" || state === "contradictory" || state === "excluded")) {
-    return "The packet is here because its sources need review before Kendall should trust the context.";
-  }
-  return `Kendall placed it in ${plainStageLabel(packet.currentStage)} because that is the next visible step in the workflow.`;
-}
-
-function plainOperatorNeed(packet: PipelineFixturePacket) {
-  const availableAction = packet.humanGateActions.find((action) => action.status === "available");
-  if (availableAction) {
-    return `Choose whether to ${availableAction.label.toLowerCase()} after checking the proof.`;
-  }
-  if (packet.memoryProposals.length > 0) {
-    return "Review the memory proposal before anything writes back to human-owned memory.";
-  }
-  if (packet.sourceTrustStates.some((state) => state === "stale" || state === "contradictory" || state === "excluded")) {
-    return "Resolve the source trust issue so Kendall does not act on stale or conflicting context.";
-  }
-  return packet.nextAction;
-}
-
-function plainStageLabel(stage: PipelineStage) {
-  const labels: Record<PipelineStage, string> = {
-    capture: "Capture",
-    classify: "Classify",
-    route: "Route",
-    shape: "Shape",
-    human_gate: "Needs decision",
-    execute: "Working",
-    review: "Review",
-    promote: "Promote",
-    deliver: "Deliver",
-    learn: "Learn",
-  };
-  return labels[stage];
-}
-
-function plainStatusLabel(status: PipelineFixturePacket["status"]) {
-  const labels: Record<PipelineFixturePacket["status"], string> = {
-    waiting: "Waiting",
-    active: "In progress",
-    blocked: "Needs help",
-    complete: "Done",
-    failed: "Failed",
-    deferred: "Deferred",
-  };
-  return labels[status];
-}
-
-function plainOwnerLabel(owner: PipelineFixturePacket["currentOwner"]) {
-  const labels: Record<PipelineFixturePacket["currentOwner"], string> = {
-    kendall: "Kendall",
-    operator: "You",
-    hermes_worker_mock: "Hermes",
-    codex_worker: "Codex",
-    claude_reviewer: "Claude",
-    github: "GitHub",
-    memory_review: "Memory review",
-    local_model: "Local model",
-    blocked: "Blocked",
-  };
-  return labels[owner];
-}
-
-function PlainChip({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="inline-flex min-w-0 max-w-full rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">
-      <span className="shrink-0">{label}: </span>
-      <span className="min-w-0 break-words" style={{ overflowWrap: "anywhere" }}>{value}</span>
+    <span className="kendall-info-tip" tabIndex={focusable ? 0 : undefined}>
+      <span aria-hidden="true" className="kendall-info-tip-icon">i</span>
+      <span className="sr-only">{text}</span>
+      <span aria-hidden="true" className="kendall-info-tip-bubble">{text}</span>
     </span>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function RouteStation({
+  isLast,
+  onFocusStage,
+  onSelectPacket,
+  onSelectStage,
+  packets,
+  registerStageButton,
+  registerStageStation,
+  selectedItem,
+  stage,
+  visibleLimit,
+}: {
+  isLast: boolean;
+  onFocusStage: () => void;
+  onSelectPacket: (packetId: string) => void;
+  onSelectStage: () => void;
+  packets: PipelineFixturePacket[];
+  registerStageButton: (stage: PipelineStage, node: HTMLButtonElement | null) => void;
+  registerStageStation: (stage: PipelineStage, node: HTMLDivElement | null) => void;
+  selectedItem: SelectedMapItem;
+  stage: PipelineStage;
+  visibleLimit: number;
+}) {
+  const sortedPackets = sortPacketsForMap(packets);
+  const selected = selectedItem?.type === "stage" && selectedItem.id === stage;
+  const selectedPacketInStage = selectedItem?.type === "packet" && sortedPackets.some((packet) => packet.packetId === selectedItem.id);
+  const expanded = selected || selectedPacketInStage;
+  const visiblePackets = expanded ? sortedPackets : sortedPackets.slice(0, visibleLimit);
+  const hiddenPacketSummary = expanded ? null : overflowSummary(sortedPackets.slice(visibleLimit));
+  const stageTone = stageToneForPackets(sortedPackets);
+  const stagePurposeId = `pipeline-stage-purpose-${stage}`;
+
   return (
-    <div aria-label={`${label}: ${value}`} className="min-w-0 rounded-[0.5rem] border bg-[var(--surface)] p-3">
-      <p className="text-xs text-[var(--muted)]">{label}</p>
-      <p className="mt-1 break-words text-xl font-semibold">{value}</p>
+    <div
+      className={`pipeline-route-station pipeline-route-station-${stageTone} ${isLast ? "pipeline-route-station-last" : ""}`}
+      ref={(node) => registerStageStation(stage, node)}
+    >
+      <button
+        aria-describedby={stagePurposeId}
+        aria-pressed={selected}
+        className={`pipeline-stage-station ${selected ? "pipeline-stage-station-selected" : ""}`}
+        data-stage={stage}
+        onClick={onSelectStage}
+        onFocus={onFocusStage}
+        ref={(node) => registerStageButton(stage, node)}
+        title={stagePurpose(stage)}
+        type="button"
+      >
+        <span aria-hidden="true" className="pipeline-stage-code">{stageCode(stage)}</span>
+        <span className="pipeline-stage-label">{formatStageName(stage)}</span>
+        <span aria-hidden="true" className="pipeline-stage-info-icon">i</span>
+        <span aria-hidden="true" className="pipeline-stage-info-bubble">{stagePurpose(stage)}</span>
+      </button>
+      <span className="sr-only" id={stagePurposeId}>{stagePurpose(stage)}</span>
+      <div className="mt-2 grid min-h-[6.75rem] content-start gap-1.5">
+        {visiblePackets.length === 0 ? (
+          <span aria-hidden="true" className="pipeline-empty-station min-h-[2.1rem]" />
+        ) : (
+          visiblePackets.map((packet) => (
+            <PacketMiniCard
+              key={packet.packetId}
+              onSelect={() => onSelectPacket(packet.packetId)}
+              packet={packet}
+              selected={selectedItem?.type === "packet" && selectedItem.id === packet.packetId}
+            />
+          ))
+        )}
+        {hiddenPacketSummary ? (
+          <button
+            aria-label={`${hiddenPacketSummary} in ${formatStageName(stage)}`}
+            className="pipeline-more-packets rounded-[0.375rem] border border-dashed px-2 py-1 text-left text-xs text-[var(--muted)]"
+            onClick={onSelectStage}
+            type="button"
+          >
+            {hiddenPacketSummary}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
 
-function SourceField({ label, value }: { label: string; value: string }) {
+function PacketMiniCard({
+  onSelect,
+  packet,
+  selected,
+}: {
+  onSelect: () => void;
+  packet: PipelineFixturePacket;
+  selected: boolean;
+}) {
+  const statusClass = statusClassForPacket(packet);
   return (
-    <div>
-      <dt className="text-[var(--muted)]">{label}</dt>
-          <dd className="mt-0.5 break-words" style={{ overflowWrap: "anywhere" }}>{value}</dd>
+    <button
+      aria-label={`Inspect packet: ${packet.title}`}
+      aria-pressed={selected}
+      className={`pipeline-mini-packet ${statusClass} ${selected ? "pipeline-mini-packet-selected" : ""}`}
+      onClick={onSelect}
+      title={`${packet.title} - ${plainStageLabel(packet.currentStage)}`}
+      type="button"
+    >
+      <span aria-hidden="true" className="pipeline-mini-packet-dot" />
+      <span className="pipeline-mini-packet-label">{miniCardLabel(packet)}</span>
+      {packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate" ? (
+        <span aria-hidden="true" className="pipeline-mini-packet-alert">!</span>
+      ) : null}
+    </button>
+  );
+}
+
+function PacketInspection({ packet }: { packet: PipelineFixturePacket }) {
+  return (
+    <aside aria-label="Packet inspection panel" className="pipeline-inspection-panel rounded-[0.5rem] border p-3">
+      <p className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-[var(--accent)]">Selected packet</p>
+      <h2 className="mt-1 text-lg font-semibold leading-6">{packet.title}</h2>
+      <div aria-label="Packet plain-language summary" className="pipeline-packet-summary mt-3">
+        <span className="pipeline-packet-summary-state">{plainStatusLabel(packet)}</span>
+        <span>{packet.summary}</span>
+      </div>
+      <dl className="mt-3 grid gap-2 text-sm">
+        <InspectionRow label="Where" value={plainStageLabel(packet.currentStage)} />
+        <InspectionRow label="Came from" value={originLabel(packet)} />
+        <InspectionRow label="Got here" value="From the current fixture state" />
+        <InspectionRow label="Next" value={plainNextStageLabel(packet)} />
+        <InspectionRow label="Blocked by" value={blockerLabel(packet)} />
+      </dl>
+      <Link
+        className="mt-3 inline-flex rounded-[0.375rem] border border-[color-mix(in_srgb,var(--accent)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-1.5 text-sm font-semibold text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
+        href={`/pipeline/packets/${encodeURIComponent(packet.packetId)}`}
+      >
+        Open full packet
+      </Link>
+    </aside>
+  );
+}
+
+function InspectionRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-0.5">
+      <dt className="font-mono text-[0.62rem] uppercase tracking-[0.14em] text-[var(--muted)]">{label}</dt>
+      <dd className="text-[var(--foreground)]">{value}</dd>
     </div>
   );
+}
+
+function sortPacketsForMap(packets: PipelineFixturePacket[]) {
+  return [...packets].sort((left, right) => {
+    return (
+      packetUrgencyRank(right) - packetUrgencyRank(left)
+      || priorityRank[right.priority] - priorityRank[left.priority]
+      || left.title.localeCompare(right.title)
+    );
+  });
+}
+
+function packetUrgencyRank(packet: PipelineFixturePacket) {
+  if (packet.currentStage === "human_gate") {
+    return 60;
+  }
+  if (packet.status === "blocked" || packet.status === "failed") {
+    return 50;
+  }
+  if (packet.status === "active") {
+    return 40;
+  }
+  if (isSourceRiskPacket(packet)) {
+    return 30;
+  }
+  if (packet.status === "waiting") {
+    return 20;
+  }
+  if (packet.status === "complete") {
+    return 10;
+  }
+  return 0;
+}
+
+function isSourceRiskPacket(packet: PipelineFixturePacket) {
+  return (
+    packet.sourceTrustStates.some((state) => state === "stale" || state === "contradictory" || state === "unavailable")
+    || packet.confidenceLabel.toLowerCase().includes("low")
+  );
+}
+
+function overflowSummary(packets: PipelineFixturePacket[]) {
+  if (packets.length === 0) {
+    return null;
+  }
+  const approvalCount = packets.filter((packet) => packet.currentStage === "human_gate").length;
+  if (approvalCount > 0) {
+    return approvalCount === 1 ? "1 needs approval" : `${approvalCount} need approval`;
+  }
+  const blockedCount = packets.filter((packet) => packet.status === "blocked" || packet.status === "failed").length;
+  if (blockedCount > 0) {
+    return blockedCount === 1 ? "1 blocked" : `${blockedCount} blocked`;
+  }
+  const sourceRiskCount = packets.filter(isSourceRiskPacket).length;
+  if (sourceRiskCount > 0) {
+    return sourceRiskCount === 1 ? "1 stale source" : `${sourceRiskCount} stale sources`;
+  }
+  const activeCount = packets.filter((packet) => packet.status === "active").length;
+  if (activeCount > 0) {
+    return activeCount === 1 ? "1 active" : `${activeCount} active`;
+  }
+  const waitingCount = packets.filter((packet) => packet.status === "waiting").length;
+  if (waitingCount > 0) {
+    return waitingCount === 1 ? "1 waiting" : `${waitingCount} waiting`;
+  }
+  return packets.length === 1 ? "1 low-risk packet" : `${packets.length} low-risk packets`;
+}
+
+function stageToneForPackets(packets: PipelineFixturePacket[]) {
+  const topPacket = packets[0];
+  if (!topPacket) {
+    return "empty";
+  }
+  if (topPacket.currentStage === "human_gate") {
+    return "approval";
+  }
+  if (topPacket.status === "blocked" || topPacket.status === "failed") {
+    return "blocked";
+  }
+  if (topPacket.status === "active") {
+    return "active";
+  }
+  if (topPacket.status === "complete") {
+    return "complete";
+  }
+  return "waiting";
+}
+
+function globalUsageItems(_packets: PipelineFixturePacket[]) {
+  const disconnectedUsageDetail = "Usage source is not connected. Configure a read-only source in Settings.";
+  return [
+    {
+      detail: disconnectedUsageDetail,
+      meters: [
+        { label: "5h", percent: 0 },
+        { label: "Weekly", percent: 0 },
+      ],
+      provider: "Codex",
+      providerKey: "codex" as const,
+      tone: "codex",
+    },
+    {
+      detail: disconnectedUsageDetail,
+      meters: [
+        { label: "5h", percent: 0 },
+        { label: "Weekly", percent: 0 },
+      ],
+      provider: "Claude",
+      providerKey: "claude" as const,
+      tone: "claude",
+    },
+  ];
+}
+
+function statusClassForPacket(packet: PipelineFixturePacket) {
+  if (packet.currentStage === "human_gate") {
+    return "pipeline-mini-packet-approval";
+  }
+  if (packet.status === "blocked" || packet.status === "failed") {
+    return "pipeline-mini-packet-blocked";
+  }
+  if (packet.status === "complete") {
+    return "pipeline-mini-packet-complete";
+  }
+  if (packet.status === "active") {
+    return "pipeline-mini-packet-active";
+  }
+  return "pipeline-mini-packet-waiting";
+}
+
+function miniCardLabel(packet: PipelineFixturePacket) {
+  const reasonLabel = miniCardReasonLabel(packet);
+  if (reasonLabel) {
+    return reasonLabel;
+  }
+  const stopWords = new Set(["a", "an", "and", "before", "for", "from", "in", "of", "or", "the", "to", "with"]);
+  const words = packet.title
+    .replace(/^Density \d+:\s*/, "")
+    .replace(/[^\w\s-]/g, " ")
+    .split(/\s+/)
+    .map((word) => word.toLowerCase())
+    .filter((word) => word.length > 1 && !stopWords.has(word));
+  return words.slice(0, 3).join(" ") || packet.packetId;
+}
+
+function miniCardReasonLabel(packet: PipelineFixturePacket) {
+  const normalizedTitle = packet.title.toLowerCase();
+  if (packet.currentStage === "human_gate") {
+    return normalizedTitle.includes("approve") ? "approve cockpit" : "approval needed";
+  }
+  if (packet.status === "failed" || packet.status === "blocked") {
+    if (normalizedTitle.includes("worker")) {
+      return "worker failed";
+    }
+    if (normalizedTitle.includes("review")) {
+      return "review blocked";
+    }
+    if (packet.hermesJob?.statusLabel === "blocked_containment") {
+      return "hermes blocked";
+    }
+    return packet.status === "failed" ? "needs recovery" : "blocked";
+  }
+  if (packet.localModelHealth?.statusLabel === "model_mismatch") {
+    return "model mismatch";
+  }
+  if (packet.localModelHealth?.statusLabel === "endpoint_mismatch") {
+    return "endpoint mismatch";
+  }
+  if (packet.localModelHealth?.statusLabel === "unavailable") {
+    return "model unavailable";
+  }
+  if (packet.localModelHealth?.statusLabel === "busy") {
+    return "gpu busy";
+  }
+  if (isSourceRiskPacket(packet)) {
+    return "stale source";
+  }
+  if (packet.claudeReview?.statusLabel === "pending") {
+    return "review pending";
+  }
+  if (packet.codexWorker?.readiness === "active") {
+    return "codex active";
+  }
+  if (packet.memoryProposals.length > 0) {
+    return "memory proposal";
+  }
+  if (packet.currentStage === "promote") {
+    return "promote candidate";
+  }
+  return null;
+}
+
+function isPipelineStage(value: string | undefined): value is PipelineStage {
+  return pipelineStages.includes(value as PipelineStage);
+}
+
+function formatStageName(stage: PipelineStage) {
+  if (stage === "human_gate") {
+    return "Needs approval";
+  }
+  return stage
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function stageCode(stage: PipelineStage) {
+  const codes: Record<PipelineStage, string> = {
+    capture: "CAP",
+    classify: "CLS",
+    route: "RTE",
+    shape: "SHP",
+    human_gate: "APP",
+    execute: "EXE",
+    review: "REV",
+    promote: "PRO",
+    deliver: "DLV",
+    learn: "LRN",
+  };
+  return codes[stage];
+}
+
+function stagePurpose(stage: PipelineStage) {
+  const purposes: Record<PipelineStage, string> = {
+    capture: "New ideas and requests land here before Kendall decides what they are.",
+    classify: "Kendall sorts the packet so it can move through the right path.",
+    route: "Kendall chooses whether the packet needs planning, approval, execution, or review.",
+    shape: "The packet is turned into clear work with enough context to act on.",
+    human_gate: "Work waits here when you need to approve, reject, or send it back.",
+    execute: "Approved work is actively being built, checked, or run.",
+    review: "Completed work is inspected before it can move forward.",
+    promote: "Reviewed work is prepared to become the accepted version.",
+    deliver: "Finished work and its evidence are handed back for use.",
+    learn: "Useful lessons or memory updates are reviewed before being kept.",
+  };
+  return purposes[stage];
+}
+
+function plainStageLabel(stage: PipelineStage) {
+  const labels: Record<PipelineStage, string> = {
+    capture: "Captured intake",
+    classify: "Being sorted",
+    route: "Choosing the path",
+    shape: "Planning the work",
+    human_gate: "Needs your approval",
+    execute: "Being worked",
+    review: "Under review",
+    promote: "Ready to promote",
+    deliver: "Delivery and evidence",
+    learn: "Learning and memory review",
+  };
+  return labels[stage];
+}
+
+function plainNextStageLabel(packet: PipelineFixturePacket) {
+  if (packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate") {
+    return packet.nextAction;
+  }
+  const currentIndex = pipelineStages.indexOf(packet.currentStage);
+  if (packet.status === "complete" || currentIndex === pipelineStages.length - 1) {
+    return "Done for now";
+  }
+  const nextStage = pipelineStages[currentIndex + 1];
+  return nextStage ? plainStageLabel(nextStage) : "Next step not named yet";
+}
+
+function originLabel(packet: PipelineFixturePacket) {
+  if (packet.sourceTrustStates.includes("stale")) {
+    return "Research or source review";
+  }
+  if (packet.fixtureKind === "local-readiness") {
+    return "Local readiness check";
+  }
+  if (packet.fixtureKind === "future-real-source") {
+    return "Future real-source boundary";
+  }
+  return packet.fixtureLabel;
+}
+
+function blockerLabel(packet: PipelineFixturePacket) {
+  if (packet.currentStage === "human_gate") {
+    return "Approval required before work can move forward";
+  }
+  if (packet.status === "blocked" || packet.status === "failed") {
+    return packet.riskFlags[0] ?? packet.nextAction;
+  }
+  if (packet.sourceTrustStates.includes("stale")) {
+    return "Source freshness needs review";
+  }
+  return "No blocker named";
+}
+
+function plainStatusLabel(packet: PipelineFixturePacket) {
+  if (packet.currentStage === "human_gate") {
+    return "Needs approval";
+  }
+  if (packet.status === "active") {
+    return "In motion";
+  }
+  if (packet.status === "blocked") {
+    return "Blocked";
+  }
+  if (packet.status === "failed") {
+    return "Needs recovery";
+  }
+  if (packet.status === "complete") {
+    return "Complete";
+  }
+  return "Waiting";
 }
 
 function findTopBlockedPacket(packets: PipelineFixturePacket[]) {
-  const priorityRank: Record<PipelineFixturePacket["priority"], number> = {
-    urgent: 4,
-    high: 3,
-    normal: 2,
-    low: 1,
-  };
   return packets
     .filter((packet) => packet.status === "blocked" || packet.currentStage === "human_gate")
+    .sort((left, right) => priorityRank[right.priority] - priorityRank[left.priority])[0];
+}
+
+function findTopAttentionPacket(packets: PipelineFixturePacket[]) {
+  return packets
+    .filter((packet) => packet.status === "blocked" || packet.status === "failed" || packet.currentStage === "human_gate")
     .sort((left, right) => priorityRank[right.priority] - priorityRank[left.priority])[0];
 }
 
 function searchablePacketText(packet: PipelineFixturePacket) {
   return [
     packet.title,
+    miniCardLabel(packet),
     packet.packetId,
     packet.summary,
     packet.requestedOutcome,
@@ -1870,19 +1007,4 @@ function searchablePacketText(packet: PipelineFixturePacket) {
     packet.sourceTrustStates.join(" "),
     packet.laneCards.map((lane) => `${lane.label} ${lane.status}`).join(" "),
   ].join(" ").toLowerCase();
-}
-
-function EvidenceGroup({ title, values }: { title: string; values: string[] }) {
-  return (
-    <div>
-      <h2 className="text-sm font-semibold">{title}</h2>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {values.map((value, index) => (
-          <span key={`${index}:${value}`} className="break-words rounded-full bg-[var(--background-elevated)] px-2 py-1 text-xs text-[var(--muted)]">
-            {value}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
 }

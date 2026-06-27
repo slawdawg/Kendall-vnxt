@@ -91,7 +91,7 @@ export function GreenGateReadinessPanel({
         : "blocked";
 
   return (
-    <section id="green-gate-readiness" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="green-gate-readiness" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Green gate</p>
@@ -103,7 +103,7 @@ export function GreenGateReadinessPanel({
         <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${statusClass(overallStatus)}`}>{titleCase(overallStatus)}</span>
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] px-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] px-4">
         <ReadinessRow
           label="Scope"
           status={pushStage?.status ?? "not_recorded"}

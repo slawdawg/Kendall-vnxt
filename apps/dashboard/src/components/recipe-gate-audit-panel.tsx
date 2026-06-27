@@ -47,7 +47,7 @@ export function RecipeGateAuditPanel({ audit, workItemId }: { audit: WorkItemRec
   }
 
   return (
-    <section id="recipe-gate-audit" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="recipe-gate-audit" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Gate audit</p>
@@ -58,7 +58,7 @@ export function RecipeGateAuditPanel({ audit, workItemId }: { audit: WorkItemRec
         </span>
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Next managed action</p>
@@ -116,7 +116,7 @@ export function RecipeGateAuditPanel({ audit, workItemId }: { audit: WorkItemRec
           ["Pending", audit.pendingCount],
           ["Blocked", audit.blockedCount],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-2xl font-semibold">{value}</p>
           </div>
@@ -125,7 +125,7 @@ export function RecipeGateAuditPanel({ audit, workItemId }: { audit: WorkItemRec
 
       <div className="mt-5 space-y-3">
         {audit.gates.map((gate) => (
-          <div key={gate.gateId} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={gate.gateId} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="text-sm font-semibold">{gate.label}</p>

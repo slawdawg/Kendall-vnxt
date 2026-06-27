@@ -36,7 +36,7 @@ function ListBlock({ title, items, warn = false }: { title: string; items: strin
 
 export function TrustedDeliveryEligibilityReportPanel({ report }: { report: TrustedDeliveryEligibilityReportView }) {
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Trusted delivery</p>
@@ -57,14 +57,14 @@ export function TrustedDeliveryEligibilityReportPanel({ report }: { report: Trus
           ["Ahead", String(report.commitsAhead)],
           ["Auto", report.automaticDeliveryApproved ? "approved" : "blocked"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 break-words text-sm font-semibold">{value}</p>
           </div>
         ))}
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <h4 className="text-base font-semibold">Committed diff</h4>
         <pre className="mt-3 overflow-auto whitespace-pre-wrap rounded-[0.85rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs leading-5 text-[var(--muted)]">
           {report.diffStat}
@@ -73,7 +73,7 @@ export function TrustedDeliveryEligibilityReportPanel({ report }: { report: Trus
 
       <div className="mt-5 grid gap-3 xl:grid-cols-2">
         {report.stages.map((stage) => (
-          <article key={stage.stageId} className="rounded-[1rem] border bg-[var(--surface)] p-4">
+          <article key={stage.stageId} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{stage.stageId}</p>
@@ -103,10 +103,10 @@ export function TrustedDeliveryEligibilityReportPanel({ report }: { report: Trus
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <ListBlock title="Hard stops" items={report.hardStops} warn />
         </div>
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <ListBlock title="Next safe actions" items={report.nextSafeActions} />
         </div>
       </div>

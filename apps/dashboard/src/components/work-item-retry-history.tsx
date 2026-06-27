@@ -58,7 +58,7 @@ export function WorkItemRetryHistory({ events }: { events: WorkflowEventView[] }
   const retryCount = Math.max(0, attempts.length - 1);
 
   return (
-    <section id="retry-history" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="retry-history" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex flex-col gap-2">
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Retry history</p>
@@ -73,7 +73,7 @@ export function WorkItemRetryHistory({ events }: { events: WorkflowEventView[] }
           <p className="text-sm text-[var(--muted)]">No retries recorded yet. This work item is still on its first implementation attempt.</p>
         ) : (
           attempts.map((attempt) => (
-            <article key={`${attempt.number}-${attempt.startedAt}`} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <article key={`${attempt.number}-${attempt.startedAt}`} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">

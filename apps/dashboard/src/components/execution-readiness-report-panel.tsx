@@ -20,7 +20,7 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
   const subscriptionTargets = subscriptionTargetCheck?.launchTargets ?? [];
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Execution readiness</p>
@@ -39,7 +39,7 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
           ["Attempts", `${report.currentAttempts.length} recent`],
           ["Outcomes", `${report.latestOutcomes.length} reported`],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -47,11 +47,11 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Provider enablement ladder</h4>
           <div className="mt-3 space-y-3">
             {report.providerEnablementPolicy.map((step) => (
-              <article key={step.stepId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+              <article key={step.stepId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{step.status}</p>
@@ -69,11 +69,11 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
         </div>
 
         {subscriptionTargets.length > 0 ? (
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Subscription target registry</h4>
             <div className="mt-3 space-y-3">
               {subscriptionTargets.map((target) => (
-                <article key={String(target.targetId)} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                <article key={String(target.targetId)} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">
@@ -99,11 +99,11 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
         ) : null}
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Provider no-call proofs</h4>
             <div className="mt-3 space-y-3">
               {report.disabledProviderProofs.map((proof) => (
-                <article key={proof.workerId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                <article key={proof.workerId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{proof.workerId}</p>
@@ -122,7 +122,7 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
                       ["Model id", proof.modelIdConfigured ? "configured" : "missing"],
                       ["Adapter", proof.adapterReady ? "ready no-call" : "not ready"],
                     ].map(([label, value]) => (
-                      <p key={label} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 text-[11px] leading-5 text-[var(--muted)]">
+                      <p key={label} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-[11px] leading-5 text-[var(--muted)]">
                         <span className="font-semibold text-[var(--text)]">{label}:</span> {value}
                       </p>
                     ))}
@@ -162,14 +162,14 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Current attempts</h4>
             <div className="mt-3 space-y-3">
               {report.currentAttempts.length === 0 ? (
                 <p className="text-sm text-[var(--muted)]">No recent execution attempts are recorded.</p>
               ) : (
                 report.currentAttempts.slice(0, 4).map((attempt) => (
-                  <article key={attempt.attemptId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                  <article key={attempt.attemptId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{attempt.workerId}</p>
@@ -187,14 +187,14 @@ export function ExecutionReadinessReportPanel({ report }: { report: ExecutionRea
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Outcome evidence</h4>
             <div className="mt-3 space-y-3">
               {report.latestOutcomes.length === 0 ? (
                 <p className="text-sm text-[var(--muted)]">No routing outcome evidence is recorded yet.</p>
               ) : (
                 report.latestOutcomes.slice(0, 4).map((outcome) => (
-                  <article key={outcome.eventId} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                  <article key={outcome.eventId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">

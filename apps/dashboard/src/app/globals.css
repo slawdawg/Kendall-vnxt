@@ -2,18 +2,20 @@
 
 :root {
   color-scheme: dark;
-  --background: #111417;
-  --background-elevated: #171d21;
+  --background: #071017;
+  --background-elevated: #0c1a25;
   --foreground: #edf2ee;
-  --panel: #191f23;
-  --panel-strong: #242c31;
-  --surface: #12171b;
-  --surface-strong: #20282d;
-  --line: #334047;
-  --accent: #74d6b3;
-  --accent-2: #f2a766;
-  --info: #87bfff;
-  --muted: #a9b2af;
+  --panel: #0d1b27;
+  --panel-strong: #142a3c;
+  --surface: #08141f;
+  --surface-strong: #112637;
+  --line: #1f4d61;
+  --accent: #41f1d0;
+  --accent-2: #f2b45f;
+  --info: #3aa7ff;
+  --muted: #9bb2bc;
+  --review: #ff5c9a;
+  --success: #8ee86f;
   --warn: #ff8d6a;
   --font-display: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
   --font-code: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -60,7 +62,1212 @@ button {
   color: inherit;
 }
 
+.dashboard-page-menu-nav {
+  position: fixed;
+  right: 1rem;
+  top: 1rem;
+  z-index: 80;
+}
+
+.dashboard-page-menu {
+  position: relative;
+}
+
+.dashboard-page-menu-summary {
+  align-items: center;
+  appearance: none;
+  background: color-mix(in srgb, var(--background-elevated) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 28%, var(--line));
+  border-radius: 0.375rem;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 0.55rem;
+  height: 2.35rem;
+  justify-content: center;
+  list-style: none;
+  padding: 0;
+  user-select: none;
+  width: 2.35rem;
+}
+
+.dashboard-page-menu-summary::marker {
+  content: "";
+  display: none;
+}
+
+.dashboard-page-menu-summary::-webkit-details-marker {
+  display: none;
+}
+
+.dashboard-page-menu-icon {
+  display: inline-grid;
+  gap: 0.18rem;
+}
+
+.dashboard-page-menu-icon span {
+  background: var(--accent);
+  border-radius: 999px;
+  display: block;
+  height: 0.11rem;
+  width: 0.9rem;
+}
+
+.dashboard-page-menu-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.dashboard-page-menu-current {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.dashboard-page-menu-links {
+  background: color-mix(in srgb, #03101a 96%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 28%, var(--line));
+  border-radius: 0.5rem;
+  box-shadow: 0 1rem 2.5rem color-mix(in srgb, #000 42%, transparent);
+  display: grid;
+  gap: 0.65rem;
+  left: auto;
+  max-width: min(32rem, calc(100vw - 3rem));
+  min-width: min(22rem, calc(100vw - 3rem));
+  padding: 0.55rem;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  z-index: 90;
+}
+
+.dashboard-page-menu-group {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.dashboard-page-menu-group-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 0.65rem;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.dashboard-page-menu-group-heading h2 {
+  color: var(--foreground);
+  font-family: var(--font-code);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.dashboard-page-menu-group-heading p {
+  color: var(--muted);
+  font-size: 0.7rem;
+  margin: 0;
+}
+
+.dashboard-page-menu-group-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
 input::placeholder,
 textarea::placeholder {
   color: color-mix(in srgb, var(--muted) 80%, transparent);
+}
+
+.kendall-graph-background {
+  background:
+    radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--info) 18%, transparent), transparent 22rem),
+    radial-gradient(circle at 72% 14%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 24rem),
+    radial-gradient(circle at 50% 78%, color-mix(in srgb, var(--review) 8%, transparent), transparent 26rem),
+    linear-gradient(145deg, #06131f 0%, var(--background) 48%, #03070c 100%);
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  z-index: 0;
+}
+
+.kendall-graph-background::after {
+  background:
+    radial-gradient(circle, color-mix(in srgb, var(--info) 62%, transparent) 0 1px, transparent 1.4px),
+    radial-gradient(circle, color-mix(in srgb, var(--accent) 42%, transparent) 0 1px, transparent 1.3px);
+  background-position:
+    0 0,
+    2.4rem 1.8rem;
+  background-size:
+    5.5rem 5.5rem,
+    8rem 8rem;
+  content: "";
+  inset: 0;
+  opacity: 0.1;
+  position: absolute;
+}
+
+.kendall-graph-background__map {
+  animation: kendall-graph-drift 72s ease-in-out infinite alternate;
+  height: 112%;
+  left: -6%;
+  opacity: 0.46;
+  position: absolute;
+  top: -6%;
+  width: 112%;
+}
+
+.kendall-graph-background__links path {
+  animation: kendall-link-flow 30s linear infinite;
+  fill: none;
+  stroke: color-mix(in srgb, var(--info) 18%, transparent);
+  stroke-dasharray: 8 34;
+  stroke-linecap: round;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.kendall-graph-background__nodes circle {
+  animation: kendall-node-pulse 15s ease-in-out infinite;
+  fill: color-mix(in srgb, var(--accent) 44%, transparent);
+  filter: drop-shadow(0 0 0.32rem color-mix(in srgb, var(--accent) 28%, transparent));
+}
+
+.kendall-graph-background__pulses circle {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 0.55rem color-mix(in srgb, var(--accent) 62%, transparent));
+  opacity: 0.36;
+}
+
+.kendall-graph-background__pulses circle:nth-child(2) {
+  fill: var(--info);
+}
+
+.kendall-graph-background__pulses circle:nth-child(3) {
+  fill: var(--review);
+  opacity: 0.42;
+}
+
+.pipeline-nohype-shell {
+  overflow: visible !important;
+  position: relative;
+  background:
+    radial-gradient(circle at 24% 38%, color-mix(in srgb, var(--info) 22%, transparent), transparent 22rem),
+    radial-gradient(circle at 78% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 18rem),
+    linear-gradient(145deg, color-mix(in srgb, #071a2a 82%, transparent) 0%, color-mix(in srgb, #07111c 82%, transparent) 52%, color-mix(in srgb, #050a10 88%, transparent) 100%),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 28%, color-mix(in srgb, var(--info) 8%, transparent));
+  border-color: color-mix(in srgb, var(--info) 40%, var(--line));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent),
+    0 1.5rem 5rem color-mix(in srgb, #001a30 68%, transparent);
+}
+
+.pipeline-nohype-shell::before {
+  animation: pipeline-shell-drift 60s linear infinite;
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle, color-mix(in srgb, var(--info) 68%, transparent) 0 1px, transparent 1.4px),
+    linear-gradient(115deg, transparent 0 42%, color-mix(in srgb, var(--accent) 18%, transparent) 42.2% 42.5%, transparent 43%),
+    linear-gradient(24deg, transparent 0 58%, color-mix(in srgb, var(--info) 14%, transparent) 58.2% 58.5%, transparent 59%),
+    linear-gradient(156deg, transparent 0 31%, color-mix(in srgb, var(--review) 10%, transparent) 31.2% 31.45%, transparent 32%);
+  background-position:
+    0 0,
+    0 0,
+    0 0;
+  background-size:
+    3.25rem 3.25rem,
+    28rem 22rem,
+    32rem 18rem,
+    24rem 20rem;
+  opacity: 0.14;
+}
+
+.pipeline-nohype-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.pipeline-command-bar {
+  align-items: center;
+  display: grid;
+  gap: 0.55rem 0.75rem;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 18rem);
+}
+
+.pipeline-video-card {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #0b2538 58%, transparent), color-mix(in srgb, #06131f 70%, transparent)),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%, color-mix(in srgb, var(--review) 10%, transparent));
+  border-color: color-mix(in srgb, var(--info) 34%, var(--line));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent),
+    0 0 1.5rem color-mix(in srgb, var(--info) 10%, transparent);
+}
+
+.kendall-info-tip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.kendall-info-tip-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 44%, var(--line));
+  border-radius: 999px;
+  color: var(--info);
+  display: inline-flex;
+  font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  height: 1rem;
+  justify-content: center;
+  line-height: 1;
+  width: 1rem;
+}
+
+.kendall-info-tip-bubble {
+  background: color-mix(in srgb, #03101a 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 34%, var(--line));
+  border-radius: 0.375rem;
+  box-shadow: 0 0.8rem 2rem color-mix(in srgb, #000 42%, transparent);
+  color: var(--foreground);
+  font-size: 0.74rem;
+  left: 50%;
+  line-height: 1.35;
+  max-width: min(16rem, calc(100vw - 2rem));
+  opacity: 0;
+  padding: 0.45rem 0.55rem;
+  pointer-events: none;
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  transform: translateX(-50%) translateY(-0.2rem);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+  visibility: hidden;
+  width: max-content;
+  z-index: 20;
+}
+
+.kendall-info-tip:hover .kendall-info-tip-bubble,
+.kendall-info-tip:focus-within .kendall-info-tip-bubble {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  visibility: visible;
+}
+
+.pipeline-board-surface {
+  background: transparent;
+  position: relative;
+}
+
+.pipeline-board-flow {
+  animation: pipeline-board-sweep 4.8s linear infinite;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent), transparent);
+  height: 1px;
+  left: 0.75rem;
+  pointer-events: none;
+  position: absolute;
+  right: 0.75rem;
+  top: 7.15rem;
+  opacity: 0.36;
+  z-index: 0;
+}
+
+.pipeline-status-key {
+  background: color-mix(in srgb, #04111c 68%, transparent);
+  border-color: color-mix(in srgb, var(--info) 24%, var(--line));
+}
+
+.pipeline-operational-strip {
+  align-items: center;
+  background: color-mix(in srgb, #03101a 42%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 22%, var(--line));
+  border-radius: 0.375rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0.35rem;
+}
+
+.pipeline-mission-strip {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.pipeline-mission-chip {
+  align-items: baseline;
+  background: color-mix(in srgb, #04111c 58%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 18%, var(--line));
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 0.35rem;
+  min-height: 1.65rem;
+  padding: 0.18rem 0.6rem;
+}
+
+.pipeline-mission-chip-attention {
+  border-color: color-mix(in srgb, var(--review) 42%, var(--line));
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--review) 10%, transparent);
+}
+
+.pipeline-mission-label {
+  color: var(--muted);
+  font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.58rem;
+  text-transform: uppercase;
+}
+
+.pipeline-mission-value {
+  color: var(--foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.pipeline-operational-strip .pipeline-status-key {
+  border: 0;
+  padding: 0;
+}
+
+.pipeline-capacity-strip {
+  display: flex;
+  flex: 1 1 16rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.pipeline-usage-meter {
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  border-radius: 0.375rem;
+  display: grid;
+  gap: 0.35rem;
+  min-width: min(100%, 12.5rem);
+  padding: 0.35rem 0.5rem;
+}
+
+.pipeline-usage-provider-row,
+.pipeline-usage-bar-row {
+  align-items: baseline;
+  display: flex;
+  gap: 0.45rem;
+}
+
+.pipeline-usage-provider-row {
+  justify-content: space-between;
+}
+
+.pipeline-usage-provider {
+  color: var(--foreground);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.pipeline-usage-meter-label {
+  color: var(--muted);
+  flex: 0 0 3.1rem;
+  font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+}
+
+.pipeline-usage-meter-track {
+  background: color-mix(in srgb, #02070c 78%, transparent);
+  border-radius: 999px;
+  display: block;
+  flex: 1 1 auto;
+  height: 0.35rem;
+  overflow: hidden;
+}
+
+.pipeline-usage-meter-fill {
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--info) 82%, var(--accent)));
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+
+.pipeline-usage-meter-claude .pipeline-usage-meter-fill {
+  background: linear-gradient(90deg, var(--review), color-mix(in srgb, var(--accent-2) 72%, var(--review)));
+}
+
+.pipeline-usage-warning {
+  display: inline-flex;
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.pipeline-usage-warning-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 62%, var(--line));
+  border-radius: 999px;
+  color: var(--warn);
+  display: inline-flex;
+  font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 800;
+  height: 1rem;
+  justify-content: center;
+  line-height: 1;
+  width: 1rem;
+}
+
+.pipeline-usage-warning-bubble {
+  background: color-mix(in srgb, #03101a 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 38%, var(--line));
+  border-radius: 0.375rem;
+  box-shadow: 0 0.8rem 2rem color-mix(in srgb, #000 42%, transparent);
+  color: var(--foreground);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  max-width: min(14rem, calc(100vw - 2rem));
+  opacity: 0;
+  padding: 0.45rem 0.55rem;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  transform: translateY(-0.2rem);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+  visibility: hidden;
+  width: max-content;
+  z-index: 50;
+}
+
+.pipeline-usage-warning:hover .pipeline-usage-warning-bubble,
+.pipeline-usage-warning:focus-within .pipeline-usage-warning-bubble {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.pipeline-status-active {
+  background: var(--accent);
+  box-shadow: 0 0 0.8rem color-mix(in srgb, var(--accent) 78%, transparent);
+}
+
+.pipeline-status-waiting {
+  background: var(--info);
+  opacity: 0.72;
+}
+
+.pipeline-status-approval {
+  background: var(--review);
+  box-shadow: 0 0 0.8rem color-mix(in srgb, var(--review) 78%, transparent);
+}
+
+.pipeline-status-blocked {
+  background: var(--warn);
+  box-shadow: 0 0 0.8rem color-mix(in srgb, var(--warn) 72%, transparent);
+}
+
+.pipeline-status-complete {
+  background: var(--success);
+}
+
+.pipeline-map-layout {
+  align-items: stretch;
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pipeline-route-map {
+  border: 0 !important;
+  box-sizing: border-box;
+  overflow: visible;
+  padding: 0.15rem clamp(1.25rem, 3vw, 2.75rem) 0.35rem;
+  position: relative;
+}
+
+.pipeline-route-map::before {
+  content: none;
+}
+
+.pipeline-route-connectors {
+  height: 100%;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+  width: 100%;
+  z-index: 0;
+}
+
+.pipeline-route-connector-line,
+.pipeline-route-connector-pulse {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+}
+
+.pipeline-route-connector-line {
+  stroke: color-mix(in srgb, var(--accent) 42%, transparent);
+  stroke-dasharray: 0.42rem 0.38rem;
+}
+
+.pipeline-route-connector-pulse {
+  animation: pipeline-route-flow 9s linear infinite;
+  stroke: color-mix(in srgb, var(--accent-2) 92%, transparent);
+  stroke-dasharray: 0.35rem 4rem;
+  stroke-width: 3.5;
+}
+
+.pipeline-route-row {
+  box-sizing: border-box;
+  display: grid;
+  gap: clamp(3.1rem, 7vw, 4.6rem) clamp(2rem, 4vw, 3.25rem);
+  grid-template-columns: repeat(auto-fit, minmax(min(12.5rem, 100%), 1fr));
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.pipeline-route-station {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #061625 80%, transparent), color-mix(in srgb, #030910 88%, transparent)),
+    repeating-linear-gradient(135deg, color-mix(in srgb, var(--info) 8%, transparent) 0 1px, transparent 1px 5rem);
+  border: 1px solid color-mix(in srgb, var(--info) 28%, var(--line));
+  border-radius: 0.5rem;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent),
+    0 0.75rem 2rem color-mix(in srgb, #000 24%, transparent);
+  min-width: min(12.5rem, 100%);
+  padding: 0.55rem;
+  position: relative;
+  z-index: 1;
+}
+
+.pipeline-route-station::after {
+  content: none;
+}
+
+.pipeline-stage-station {
+  align-items: center;
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 34%, var(--line));
+  border-radius: 0.375rem;
+  color: var(--foreground);
+  cursor: pointer;
+  display: flex;
+  gap: 0.35rem;
+  height: 2rem;
+  justify-content: flex-start;
+  padding: 0 0.55rem;
+  position: relative;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease,
+    background-color 160ms ease;
+  width: 100%;
+  z-index: 1;
+}
+
+.pipeline-stage-code {
+  align-items: center;
+  background: color-mix(in srgb, #dff9ff 88%, var(--accent));
+  border: 1px solid color-mix(in srgb, #ffffff 70%, var(--accent));
+  border-radius: 0.25rem;
+  color: #06131f;
+  display: inline-flex;
+  font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.56rem;
+  font-weight: 800;
+  justify-content: center;
+  min-height: 1.1rem;
+  min-width: 1.85rem;
+  padding: 0 0.22rem;
+}
+
+.pipeline-stage-label {
+  flex: 0 0 auto;
+  min-width: max-content;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.pipeline-stage-info-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 44%, var(--line));
+  border-radius: 999px;
+  color: var(--info);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  height: 1rem;
+  justify-content: center;
+  line-height: 1;
+  margin-left: auto;
+  opacity: 0;
+  transform: translateX(0.15rem);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+  width: 1rem;
+}
+
+.pipeline-stage-info-bubble {
+  background: color-mix(in srgb, #03101a 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 34%, var(--line));
+  border-radius: 0.375rem;
+  box-shadow: 0 0.8rem 2rem color-mix(in srgb, #000 42%, transparent);
+  color: var(--foreground);
+  font-size: 0.74rem;
+  left: auto;
+  line-height: 1.35;
+  max-width: min(13rem, calc(100vw - 2rem));
+  opacity: 0;
+  padding: 0.45rem 0.55rem;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  transform: translateY(-0.2rem);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+  visibility: hidden;
+  white-space: normal;
+  width: min(13rem, calc(100vw - 2rem));
+  z-index: 40;
+}
+
+.pipeline-stage-station:hover .pipeline-stage-info-icon,
+.pipeline-stage-station:focus .pipeline-stage-info-icon,
+.pipeline-stage-station:focus-visible .pipeline-stage-info-icon,
+.pipeline-stage-station-selected .pipeline-stage-info-icon {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.pipeline-stage-station:hover .pipeline-stage-info-bubble,
+.pipeline-stage-station:focus .pipeline-stage-info-bubble,
+.pipeline-stage-station:focus-visible .pipeline-stage-info-bubble,
+.pipeline-stage-station-selected .pipeline-stage-info-bubble {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.pipeline-route-station-active .pipeline-stage-station {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+}
+
+.pipeline-route-station-approval .pipeline-stage-station {
+  border-color: color-mix(in srgb, var(--review) 58%, var(--line));
+}
+
+.pipeline-route-station-blocked .pipeline-stage-station {
+  border-color: color-mix(in srgb, var(--warn) 52%, var(--line));
+}
+
+.pipeline-route-station-complete .pipeline-stage-station {
+  border-color: color-mix(in srgb, var(--success) 38%, var(--line));
+}
+
+.pipeline-stage-station:hover,
+.pipeline-stage-station:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  box-shadow: 0 0 1.4rem color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.pipeline-stage-station-selected {
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-strong));
+  border-color: color-mix(in srgb, var(--accent) 74%, var(--line));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 42%, transparent),
+    0 0 1.8rem color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.pipeline-more-packets {
+  background: color-mix(in srgb, #030910 54%, transparent);
+  border-color: color-mix(in srgb, var(--info) 20%, var(--line));
+  min-height: 1.7rem;
+}
+
+.pipeline-empty-station {
+  display: block;
+}
+
+.pipeline-mini-packet {
+  align-items: center;
+  background: color-mix(in srgb, #071523 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 24%, var(--line));
+  border-radius: 0.375rem;
+  color: var(--foreground);
+  cursor: pointer;
+  display: grid;
+  gap: 0.32rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 1.85rem;
+  padding: 0.28rem 0.45rem;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease,
+    background-color 160ms ease;
+}
+
+.pipeline-mini-packet:hover,
+.pipeline-mini-packet:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.pipeline-mini-packet-dot {
+  border-radius: 999px;
+  height: 0.45rem;
+  width: 0.45rem;
+}
+
+.pipeline-mini-packet-label {
+  display: block;
+  font-size: 0.68rem;
+  line-height: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-mini-packet-active .pipeline-mini-packet-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0.8rem color-mix(in srgb, var(--accent) 78%, transparent);
+}
+
+.pipeline-mini-packet-waiting .pipeline-mini-packet-dot {
+  background: var(--info);
+  opacity: 0.72;
+}
+
+.pipeline-mini-packet-approval {
+  border-color: color-mix(in srgb, var(--review) 58%, var(--line));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--review) 30%, transparent);
+}
+
+.pipeline-mini-packet-approval .pipeline-mini-packet-dot {
+  background: var(--review);
+  box-shadow: 0 0 0.9rem color-mix(in srgb, var(--review) 78%, transparent);
+}
+
+.pipeline-mini-packet-blocked {
+  border-color: color-mix(in srgb, var(--warn) 58%, var(--line));
+}
+
+.pipeline-mini-packet-blocked .pipeline-mini-packet-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0.9rem color-mix(in srgb, var(--warn) 70%, transparent);
+}
+
+.pipeline-mini-packet-complete .pipeline-mini-packet-dot {
+  background: var(--success);
+}
+
+.pipeline-mini-packet-selected {
+  background: color-mix(in srgb, var(--accent) 13%, #071523);
+  border-color: color-mix(in srgb, var(--accent) 78%, var(--line));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 48%, transparent),
+    0 0 1.6rem color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.pipeline-mini-packet-alert {
+  align-items: center;
+  background: color-mix(in srgb, var(--review) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--review) 50%, transparent);
+  border-radius: 999px;
+  color: var(--review);
+  display: inline-flex;
+  font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  height: 1rem;
+  justify-content: center;
+  width: 1rem;
+}
+
+.pipeline-inspection-panel {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 74%, transparent), color-mix(in srgb, #04101b 86%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent),
+    0 0 1.7rem color-mix(in srgb, var(--info) 12%, transparent);
+}
+
+.pipeline-stage-facts,
+.pipeline-packet-summary {
+  background: color-mix(in srgb, #04111c 48%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 18%, var(--line));
+  border-radius: 0.375rem;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.55rem;
+}
+
+.pipeline-stage-facts div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.pipeline-stage-facts dt,
+.pipeline-packet-summary-state {
+  color: var(--muted);
+  font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.58rem;
+  text-transform: uppercase;
+}
+
+.pipeline-stage-facts dd,
+.pipeline-packet-summary {
+  color: var(--foreground);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.pipeline-stage-packet-row {
+  background: color-mix(in srgb, #071523 66%, transparent);
+  border-color: color-mix(in srgb, var(--info) 22%, var(--line));
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease,
+    background-color 160ms ease;
+}
+
+.pipeline-stage-packet-row:hover,
+.pipeline-stage-packet-row:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  transform: translateY(-1px);
+}
+
+.pipeline-neon-card {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
+    0 0 1.4rem color-mix(in srgb, var(--info) 12%, transparent);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease,
+    background-color 180ms ease;
+}
+
+.pipeline-neon-card:hover,
+.pipeline-neon-card:focus-within {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 44%, transparent),
+    0 0 2rem color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.pipeline-neon-card-selected {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 76%, transparent),
+    0 0 2.6rem color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.pipeline-stage-module {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 78%, transparent), color-mix(in srgb, #05111b 90%, transparent));
+}
+
+.pipeline-stage-module:not(:first-child)::before {
+  animation: pipeline-flow 3.8s linear infinite;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 72%, transparent), color-mix(in srgb, var(--info) 54%, transparent));
+  content: "";
+  height: 1px;
+  left: -0.75rem;
+  opacity: 0.82;
+  pointer-events: none;
+  position: absolute;
+  top: 5.35rem;
+  width: 0.75rem;
+}
+
+.pipeline-stage-flow {
+  border-color: color-mix(in srgb, var(--info) 50%, var(--line));
+}
+
+.pipeline-stage-gate {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--review) 10%, var(--panel)), color-mix(in srgb, #05111b 88%, transparent));
+  border-color: color-mix(in srgb, var(--review) 82%, var(--line));
+  box-shadow:
+    inset 0 2px 0 color-mix(in srgb, var(--review) 88%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--review) 62%, transparent),
+    0 0 3rem color-mix(in srgb, var(--review) 24%, transparent);
+}
+
+.pipeline-stage-review {
+  border-color: color-mix(in srgb, var(--review) 58%, var(--line));
+}
+
+.pipeline-stage-promote {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+}
+
+.pipeline-packet-link:hover,
+.pipeline-packet-link:focus-within {
+  transform: translateY(-1px);
+}
+
+.pipeline-flow-line {
+  position: relative;
+}
+
+.pipeline-flow-line::after {
+  animation: pipeline-flow 3.8s linear infinite;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 68%, transparent), transparent);
+  content: "";
+  height: 1px;
+  left: 0.75rem;
+  opacity: 0.7;
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+}
+
+.pipeline-review-stack {
+  animation: pipeline-stack-reveal 220ms ease-out both;
+}
+
+@keyframes pipeline-flow {
+  0% {
+    background-position: -12rem 0;
+  }
+  100% {
+    background-position: 12rem 0;
+  }
+}
+
+@keyframes pipeline-board-sweep {
+  0% {
+    background-position: -18rem 0;
+  }
+  100% {
+    background-position: 18rem 0;
+  }
+}
+
+@keyframes pipeline-stack-reveal {
+  from {
+    opacity: 0.74;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pipeline-route-flow {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -4.35rem;
+  }
+}
+
+@keyframes pipeline-map-signal-sweep {
+  0% {
+    background-position:
+      -18rem 0,
+      0 0;
+    transform: translateX(-10%);
+  }
+  100% {
+    background-position:
+      calc(100% + 18rem) 0,
+      3rem 1.5rem;
+    transform: translateX(10%);
+  }
+}
+
+@keyframes pipeline-shell-drift {
+  0% {
+    background-position:
+      0 0,
+      0 0,
+      0 0;
+  }
+  100% {
+    background-position:
+      0.65rem 0.65rem,
+      0.8rem 0.4rem,
+      -0.55rem 0.45rem;
+  }
+}
+
+@keyframes kendall-link-flow {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -24;
+  }
+}
+
+@keyframes kendall-node-pulse {
+  0%,
+  100% {
+    opacity: 0.34;
+    transform: scale(0.99);
+  }
+  50% {
+    opacity: 0.58;
+    transform: scale(1.025);
+  }
+}
+
+@keyframes kendall-graph-drift {
+  0% {
+    transform: translate3d(-0.32rem, -0.18rem, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(0.32rem, 0.2rem, 0) scale(1.006);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .pipeline-nohype-shell::before,
+  .pipeline-route-map::before,
+  .pipeline-route-connector-pulse,
+  .kendall-graph-background__links path,
+  .kendall-graph-background__map,
+  .kendall-graph-background__nodes circle,
+  .pipeline-board-flow,
+  .pipeline-stage-module:not(:first-child)::before,
+  .pipeline-route-station::after,
+  .pipeline-flow-line::after,
+  .pipeline-review-stack {
+    animation: none;
+  }
+
+  .pipeline-neon-card,
+  .pipeline-stage-station,
+  .pipeline-mini-packet,
+  .pipeline-stage-packet-row,
+  .kendall-info-tip-bubble,
+  .pipeline-usage-warning-bubble,
+  .pipeline-stage-info-icon,
+  .pipeline-stage-info-bubble {
+    transition: none;
+  }
+
+  .pipeline-neon-card:hover,
+  .pipeline-neon-card:focus-within,
+  .pipeline-mini-packet:hover,
+  .pipeline-mini-packet:focus-visible,
+  .pipeline-stage-packet-row:hover,
+  .pipeline-stage-packet-row:focus-visible {
+    transform: none;
+  }
+
+  .kendall-graph-background__pulses {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .dashboard-page-menu-nav {
+    bottom: 1rem;
+    left: 1rem;
+    right: auto;
+    top: auto;
+  }
+
+  .dashboard-page-menu-links {
+    bottom: calc(100% + 0.4rem);
+    left: 0;
+    right: auto;
+    top: auto;
+  }
+
+  .pipeline-command-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pipeline-command-bar input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .pipeline-capacity-strip {
+    justify-content: flex-start;
+  }
+
+  .pipeline-map-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pipeline-route-map {
+    padding: 0.1rem 1.1rem 0.3rem;
+  }
+
+  .pipeline-route-row {
+    gap: 3.15rem 0.9rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(12.5rem, 100%), 1fr));
+  }
+
+  .pipeline-route-station::after {
+    left: calc(100% + 0.07rem);
+    opacity: 0.42;
+    width: 0.62rem;
+  }
+
+  .pipeline-stage-station {
+    font-size: 0.72rem;
+    gap: 0.35rem;
+    height: 2.05rem;
+    padding: 0 0.55rem;
+  }
+
+  .pipeline-stage-info-bubble {
+    left: 0;
+    right: auto;
+    width: min(13rem, calc(100vw - 3rem));
+  }
+
+  .pipeline-mini-packet {
+    gap: 0.22rem;
+    min-height: 1.72rem;
+    padding: 0.2rem 0.3rem;
+  }
+
+  .pipeline-mini-packet-label {
+    font-size: 0.58rem;
+  }
+
+  .pipeline-mini-packet-dot {
+    height: 0.36rem;
+    width: 0.36rem;
+  }
+
+  .pipeline-mini-packet-alert {
+    height: 0.85rem;
+    width: 0.85rem;
+  }
 }

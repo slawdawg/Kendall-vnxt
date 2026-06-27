@@ -78,14 +78,14 @@ export default async function WorkItemDetailPage({
 
   return (
     <Shell navStats={navStats}>
-      <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+      <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
           {item.needsAttention ? <AttentionBadge reason={item.attentionReason} /> : null}
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">
             {formatWorkflowState(item.state)}
           </p>
         </div>
-        <h2 className="mt-3 text-3xl font-semibold">{item.title}</h2>
+        <h2 className="mt-2 text-2xl font-semibold">{item.title}</h2>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--muted)]">{item.requestedOutcome}</p>
         <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {[
@@ -99,24 +99,24 @@ export default async function WorkItemDetailPage({
             ["Audit mode", item.auditMode],
             ["Last updated", new Date(item.updatedAt).toLocaleString()],
           ].map(([label, value]) => (
-            <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+            <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
               <p className="mt-2 text-base font-semibold sm:text-lg">{value}</p>
             </div>
           ))}
         </div>
         {item.attentionReason ? (
-          <div className="mt-6 rounded-[1.25rem] border border-[var(--warn)]/30 bg-[var(--warn)]/8 p-4 text-sm text-[var(--warn)]">
+          <div className="mt-6 rounded-[0.5rem] border border-[var(--warn)]/30 bg-[var(--warn)]/8 p-4 text-sm text-[var(--warn)]">
             {item.attentionReason}
           </div>
         ) : null}
         {item.blockedReason ? (
-          <div className="mt-6 rounded-[1.25rem] border border-[var(--warn)]/30 bg-[var(--warn)]/8 p-4 text-sm text-[var(--warn)]">
+          <div className="mt-6 rounded-[0.5rem] border border-[var(--warn)]/30 bg-[var(--warn)]/8 p-4 text-sm text-[var(--warn)]">
             {item.blockedReason}
           </div>
         ) : null}
       </section>
-      <section className="sticky top-3 z-10 rounded-[1.5rem] border bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] p-4 shadow-sm backdrop-blur">
+      <section className="sticky top-3 z-10 rounded-[0.5rem] border bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] p-4 shadow-sm backdrop-blur">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Next action</p>
@@ -211,7 +211,7 @@ export default async function WorkItemDetailPage({
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.9fr)] xl:items-start">
         <div className="space-y-4">
           {item.details ? (
-            <section id="request-detail" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+            <section id="request-detail" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                 <div className="flex flex-col gap-2">
                   <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Request detail</p>

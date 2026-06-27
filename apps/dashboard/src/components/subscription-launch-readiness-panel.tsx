@@ -119,7 +119,7 @@ function nextSafeAction(missingFields: string[], rejectedFields: Record<string, 
 
 function EvidenceList({ title, items }: { title: string; items: string[] }) {
   return (
-    <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+    <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
       <h4 className="text-base font-semibold">{title}</h4>
       <div className="mt-3 space-y-2">
         {items.length > 0 ? (
@@ -146,7 +146,7 @@ function MissingEvidenceState({
   nextAction?: string;
 }) {
   return (
-    <section id="subscription-launch-readiness" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="subscription-launch-readiness" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Readiness only</p>
@@ -155,7 +155,7 @@ function MissingEvidenceState({
         </div>
         <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${statusClass("missing_evidence")}`}>{badge}</span>
       </div>
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <h4 className="text-base font-semibold">Next safe action</h4>
         <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{nextAction}</p>
       </div>
@@ -223,7 +223,7 @@ export function SubscriptionLaunchReadinessPanel({
   ];
 
   return (
-    <section id="subscription-launch-readiness" className="scroll-mt-28 rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="subscription-launch-readiness" className="scroll-mt-28 rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Readiness only</p>
@@ -250,7 +250,7 @@ export function SubscriptionLaunchReadinessPanel({
           ["Output contract", asString(payload.outputContractId)],
           ["Next action", asString(payload.nextSafeAction, nextSafeAction(missingEnvelopeFields, rejectedEnvelopeFields, staleEnvelopeFields))],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 break-words text-sm font-semibold">{value}</p>
           </div>
@@ -269,7 +269,7 @@ export function SubscriptionLaunchReadinessPanel({
       </div>
 
       {Object.keys(verificationEvidence).length > 0 ? (
-        <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Verification and recovery</h4>
           <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {([
@@ -289,7 +289,7 @@ export function SubscriptionLaunchReadinessPanel({
         </div>
       ) : null}
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <h4 className="text-base font-semibold">Output artifacts</h4>
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
           <div className="space-y-2">
@@ -317,7 +317,7 @@ export function SubscriptionLaunchReadinessPanel({
         <p className="mt-3 text-xs leading-5 text-[var(--muted)]">Raw stdout, stderr, and generated patch contents remain excluded.</p>
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border bg-[var(--surface)] p-4">
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
         <h4 className="text-base font-semibold">Authority flags</h4>
         <div className="mt-3 flex flex-wrap gap-2">
           {[

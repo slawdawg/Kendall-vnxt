@@ -18,7 +18,7 @@ export function ActiveWorkBrowser({ items, savedViews }: { items: WorkItemView[]
   return (
     <>
       {browser.controls}
-      <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+      <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
         <div className="flex items-end justify-between gap-4">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Execution board</p>
@@ -33,7 +33,7 @@ export function ActiveWorkBrowser({ items, savedViews }: { items: WorkItemView[]
             <p className="text-sm text-[var(--muted)]">No work matches the current filter set.</p>
           ) : (
             browser.filtered.map((item) => (
-              <article key={item.id} className="rounded-[1.25rem] border bg-[var(--surface)] p-5">
+              <article key={item.id} className="rounded-[0.5rem] border bg-[var(--surface)] p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div className="max-w-3xl">
                     <div className="flex flex-wrap items-center gap-2">

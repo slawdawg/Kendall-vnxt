@@ -31,7 +31,7 @@ function laneTotal(profile: RoutingLaneEvidenceProfileView): number {
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[1rem] border bg-[var(--surface)] p-4">
+    <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
       <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
       <p className="mt-2 text-lg font-semibold">{value}</p>
     </div>
@@ -51,7 +51,7 @@ export function RoutingFleetPanel({
   const premiumRequests = laneProfiles.reduce((sum, profile) => sum + profile.premiumApprovalRequestCount, 0);
 
   return (
-    <section id="routing-fleet" className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section id="routing-fleet" className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Routing</p>
@@ -71,7 +71,7 @@ export function RoutingFleetPanel({
       </div>
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="overflow-hidden rounded-[1.25rem] border bg-[var(--surface)]">
+        <div className="overflow-hidden rounded-[0.5rem] border bg-[var(--surface)]">
           <div className="border-b px-4 py-3">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Worker registry</p>
           </div>
@@ -103,7 +103,7 @@ export function RoutingFleetPanel({
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-[1.25rem] border bg-[var(--surface)]">
+        <div className="overflow-hidden rounded-[0.5rem] border bg-[var(--surface)]">
           <div className="border-b px-4 py-3">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Lane evidence</p>
           </div>

@@ -12,6 +12,10 @@ type FeedLine = {
   tone?: "default" | "warn" | "accent";
 };
 
+function createFeedLineId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `feed-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function titleize(value: string): string {
   return value.replaceAll(".", " ");
 }
@@ -55,13 +59,13 @@ export function LiveFeed() {
         const parsed = JSON.parse(event.data) as SupervisorEvent;
         setLines((current) => [formatFeedLine(parsed), ...current].slice(0, 8));
       } catch {
-        setLines((current) => [{ id: crypto.randomUUID(), text: event.data }, ...current].slice(0, 8));
+        setLines((current) => [{ id: createFeedLineId(), text: event.data }, ...current].slice(0, 8));
       }
     };
     source.onerror = () => {
       setLines((current) => [
         {
-          id: crypto.randomUUID(),
+          id: createFeedLineId(),
           text: "Event stream disconnected. Reconnecting...",
         },
         ...current,
@@ -71,7 +75,7 @@ export function LiveFeed() {
   }, []);
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--surface)] p-6 text-[var(--foreground)] shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--surface)] p-6 text-[var(--foreground)] shadow-sm">
       <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Live activity</p>
       <div className="mt-4 space-y-3 font-mono text-xs leading-5">
         {lines.map((line) => (

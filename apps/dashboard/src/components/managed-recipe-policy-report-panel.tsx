@@ -6,7 +6,7 @@ function formatTimestamp(value: string): string {
 
 function RecipeCard({ recipe }: { recipe: WorkItemExecutionRecipeView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{recipe.id}</p>
@@ -18,18 +18,18 @@ function RecipeCard({ recipe }: { recipe: WorkItemExecutionRecipeView }) {
       </div>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{recipe.summary}</p>
       <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Branch prefix</p>
           <p className="mt-1 font-mono text-xs">{recipe.branchPrefix}</p>
         </div>
-        <div className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2">
           <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">Policy gates</p>
           <p className="mt-1 text-xs font-semibold">{recipe.policyGates.length}</p>
         </div>
       </div>
       <div className="mt-3 space-y-2">
         {recipe.verificationCommands.map((command) => (
-          <p key={command} className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
+          <p key={command} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
             {command}
           </p>
         ))}
@@ -44,7 +44,7 @@ export function ManagedRecipePolicyReportPanel({ report }: { report: ManagedReci
   const totalGates = report.recipes.reduce((sum, recipe) => sum + recipe.policyGates.length, 0);
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Managed recipes</p>
@@ -62,7 +62,7 @@ export function ManagedRecipePolicyReportPanel({ report }: { report: ManagedReci
           ["Policy gates", String(totalGates)],
           ["Remote automation", report.remoteAutomationApproved ? "approved" : "blocked"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 text-sm font-semibold">{value}</p>
           </div>
@@ -70,7 +70,7 @@ export function ManagedRecipePolicyReportPanel({ report }: { report: ManagedReci
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+        <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Recipe policies</h4>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             {report.recipes.map((recipe) => (
@@ -80,7 +80,7 @@ export function ManagedRecipePolicyReportPanel({ report }: { report: ManagedReci
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -91,7 +91,7 @@ export function ManagedRecipePolicyReportPanel({ report }: { report: ManagedReci
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (

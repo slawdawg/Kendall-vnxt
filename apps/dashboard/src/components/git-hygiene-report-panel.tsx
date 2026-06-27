@@ -16,7 +16,7 @@ function statusClass(status: string): string {
 
 function SignalCard({ signal }: { signal: GitHygieneSignalView }) {
   return (
-    <article className="rounded-[1rem] border bg-[var(--panel)] p-3">
+    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{signal.signalId}</p>
@@ -29,7 +29,7 @@ function SignalCard({ signal }: { signal: GitHygieneSignalView }) {
         {signal.evidence.map((evidence, evidenceIndex) => (
           <p
             key={`${signal.signalId}:evidence:${evidence}:${evidenceIndex}`}
-            className="rounded-[0.75rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
+            className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--muted)]"
           >
             {evidence}
           </p>
@@ -43,7 +43,7 @@ export function GitHygieneReportPanel({ report }: { report: GitHygieneReportView
   const changedCount = Object.values(report.statusCounts).reduce((total, value) => total + value, 0);
 
   return (
-    <section className="rounded-[1.75rem] border bg-[var(--panel)] p-6 shadow-sm">
+    <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-[var(--accent)]">Git hygiene</p>
@@ -62,7 +62,7 @@ export function GitHygieneReportPanel({ report }: { report: GitHygieneReportView
           ["Worktrees", String(report.worktrees.length)],
           ["Remote checks", "not queried"],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
             <p className="mt-2 break-words text-sm font-semibold">{value}</p>
           </div>
@@ -71,7 +71,7 @@ export function GitHygieneReportPanel({ report }: { report: GitHygieneReportView
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Local snapshot</h4>
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
               {report.localSignals.map((signal) => (
@@ -80,14 +80,14 @@ export function GitHygieneReportPanel({ report }: { report: GitHygieneReportView
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <h4 className="text-base font-semibold">Worktrees</h4>
               <span className="w-fit rounded-full bg-[var(--panel)] px-3 py-1 text-xs text-[var(--muted)]">read-only inventory</span>
             </div>
             <div className="mt-3 grid gap-3">
               {report.worktrees.slice(0, 6).map((worktree) => (
-                <article key={worktree.path} className="rounded-[1rem] border bg-[var(--panel)] p-3">
+                <article key={worktree.path} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                   <p className="break-words text-sm font-semibold">{worktree.branch ?? "Detached worktree"}</p>
                   <p className="mt-1 break-all font-mono text-xs text-[var(--muted)]">{worktree.path}</p>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
@@ -102,7 +102,7 @@ export function GitHygieneReportPanel({ report }: { report: GitHygieneReportView
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">PR and CI</h4>
             <div className="mt-3 grid gap-3">
               {report.remoteSignals.map((signal) => (
@@ -111,7 +111,7 @@ export function GitHygieneReportPanel({ report }: { report: GitHygieneReportView
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Stop lines</h4>
             <div className="mt-3 space-y-2">
               {report.stopLines.map((stopLine) => (
@@ -122,7 +122,7 @@ export function GitHygieneReportPanel({ report }: { report: GitHygieneReportView
             </div>
           </div>
 
-          <div className="rounded-[1.25rem] border bg-[var(--surface)] p-4">
+          <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <h4 className="text-base font-semibold">Next safe actions</h4>
             <div className="mt-3 space-y-2">
               {report.nextSafeActions.map((action) => (
