@@ -219,6 +219,18 @@ metadata rather than granting availability or execution authority. These limits
 bound the invocation mechanics; they are not a claim that an arbitrary worker
 binary is sandboxed from all operating-system side effects.
 
+The local smoke command `pnpm run worker:smoke:execute` is the first bounded
+worker task execution surface. It may execute Claude only, using `--print`, JSON
+output, safe mode, no session persistence, no built-in tools, `dontAsk`
+permissions, a small budget cap, an isolated `/tmp` working directory, and an
+exact fixed prompt whose only accepted response is `KENDALL_SMOKE_OK`. It may
+inherit the operator's normal Claude auth/session and use network for the model
+call, but it must not read or mutate the repo, enable tools, retain raw output,
+affect trust, affect routing, deliver code, merge, clean up, or imply broader
+worker task authority. CLI parse errors must stop before launch, unsupported
+workers such as Hermes must not launch, and any timeout, non-zero exit, or
+unexpected/unsafe output must remain metadata-only evidence.
+
 Environment allowlist entries are names-only model data. The inherited
 environment is default-empty. Secret-like names or values are denied, including
 tokens, credentials, passwords, keys, browser/session variables, SSH/GitHub/cloud
