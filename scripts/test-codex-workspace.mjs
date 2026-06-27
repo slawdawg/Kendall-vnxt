@@ -1117,6 +1117,195 @@ try {
     }
   });
 
+  test("close-assignments dry-run previews completed workspace assignment closeout without mutation", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-dry-run-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-audit-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-audit-lane",
+            branch: "codex/dispatcher-queue-handoff-audit-refresh",
+            worktree_path: rootDir,
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-a",
+            source_assignment_id: "dispatcher-queue-handoff-audit-refresh",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "dispatcher-queue-handoff-audit-refresh.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "dispatcher-queue-handoff-audit-refresh",
+            task_id: "closed-audit-lane",
+            branch: "codex/dispatcher-queue-handoff-audit-refresh",
+            status: "active",
+            owner: "runner-a",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "dispatcher-queue-handoff-audit-refresh",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("DRY RUN: close-assignments"), result.stdout || result.stderr);
+      assert(result.stdout.includes("close dispatcher-queue-handoff-audit-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("closed workspace evidence closed-audit-lane"), result.stdout || result.stderr);
+      assert(taskSnapshot(tasksDir) === beforeTasks, "close-assignments dry-run mutated manifests");
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "close-assignments dry-run mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("close-assignments apply closes only assignments backed by closed workspace evidence", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-apply-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-audit-export-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-audit-export-lane",
+            branch: "codex/dispatcher-queue-handoff-audit-export-refresh",
+            worktree_path: rootDir,
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-a",
+            source_assignment_id: "dispatcher-queue-handoff-audit-export-refresh",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "dispatcher-queue-handoff-audit-export-refresh.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "dispatcher-queue-handoff-audit-export-refresh",
+            task_id: "closed-audit-export-lane",
+            branch: "codex/dispatcher-queue-handoff-audit-export-refresh",
+            status: "active",
+            owner: "runner-a",
+            phase: "handoff",
+            events: [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "dispatcher-queue-handoff-audit-export-refresh",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--apply",
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("APPLY: close-assignments"), result.stdout || result.stderr);
+      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "dispatcher-queue-handoff-audit-export-refresh.json"), "utf8"));
+      const manifest = JSON.parse(readFileSync(join(tasksDir, "closed-audit-export-lane.json"), "utf8"));
+      assert(assignment.status === "closed", JSON.stringify(assignment));
+      assert(assignment.phase === "closed", JSON.stringify(assignment));
+      assert(assignment.current_command === null, JSON.stringify(assignment));
+      assert(assignment.last_result === "closed from completed workspace closed-audit-export-lane", JSON.stringify(assignment));
+      assert(typeof assignment.closed_at === "string", JSON.stringify(assignment));
+      assert(manifest.source_assignment_closed_at === assignment.closed_at, JSON.stringify(manifest));
+      assert(manifest.events.some((event) => event.type === "assignment_closed"), JSON.stringify(manifest));
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("close-assignments apply fails closed on owner mismatch", () => {
+    const closeoutStateRoot = mkdtempSync(join(tmpdir(), "codex-assignment-closeout-owner-"));
+    try {
+      const tasksDir = join(closeoutStateRoot, "tasks");
+      const assignmentsDir = join(closeoutStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      mkdirSync(assignmentsDir, { recursive: true });
+      writeFileSync(
+        join(tasksDir, "closed-audit-json-lane.json"),
+        `${JSON.stringify(
+          {
+            task_id: "closed-audit-json-lane",
+            branch: "codex/dispatcher-queue-handoff-audit-json-refresh",
+            worktree_path: rootDir,
+            base_branch: "dev",
+            status: "closed",
+            owner: "runner-b",
+            source_assignment_id: "dispatcher-queue-handoff-audit-json-refresh",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "dispatcher-queue-handoff-audit-json-refresh.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "dispatcher-queue-handoff-audit-json-refresh",
+            task_id: "closed-audit-json-lane",
+            branch: "codex/dispatcher-queue-handoff-audit-json-refresh",
+            status: "active",
+            owner: "runner-b",
+            phase: "handoff",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run([
+        "close-assignments",
+        "--ids",
+        "dispatcher-queue-handoff-audit-json-refresh",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        closeoutStateRoot,
+        "--apply",
+      ]);
+
+      assert(result.code !== 0, result.stdout || result.stderr);
+      assert(result.stderr.includes("Refusing to close blocked assignments"), result.stdout || result.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "owner mismatch closeout mutated assignments");
+    } finally {
+      rmSync(closeoutStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next dry-run previews the next safe backlog lane without mutation", () => {
     const tasksDir = join(stateRoot, "tasks");
     mkdirSync(tasksDir, { recursive: true });
