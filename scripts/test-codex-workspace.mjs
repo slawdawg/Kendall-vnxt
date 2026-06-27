@@ -3134,13 +3134,28 @@ try {
   test("cleanup-orphans lists orphan directories without deleting by default", () => {
     const orphanPath = join(stateRoot, "worktrees", "orphan-story");
     mkdirSync(join(orphanPath, "services", "supervisor", ".pytest_cache"), { recursive: true });
+    const metadataPath = join(stateRoot, "worktrees", ".git");
+    mkdirSync(metadataPath, { recursive: true });
 
     const result = run(["cleanup-orphans", "--state-root", stateRoot]);
 
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("orphan directory:"));
+    assert(!result.stdout.includes(metadataPath), "cleanup-orphans listed hidden workspace metadata");
     assert(result.stdout.includes("Pass a query to target one orphan"));
     assert(existsSync(orphanPath), "cleanup-orphans unexpectedly deleted without --apply");
+    assert(existsSync(metadataPath), "cleanup-orphans unexpectedly deleted hidden workspace metadata");
+  });
+
+  test("cleanup-orphans refuses hidden workspace metadata even when queried", () => {
+    const metadataPath = join(stateRoot, "worktrees", ".codex");
+    mkdirSync(metadataPath, { recursive: true });
+
+    const result = run(["cleanup-orphans", ".codex", "--apply", "--state-root", stateRoot]);
+
+    assert(result.code === 0, result.stderr || result.stdout);
+    assert(result.stdout.includes("No orphan worktree directories matched"), result.stdout || result.stderr);
+    assert(existsSync(metadataPath), "cleanup-orphans removed hidden workspace metadata");
   });
 
   test("cleanup-orphans removes targeted orphan directory when applied", () => {
