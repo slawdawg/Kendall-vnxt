@@ -1566,6 +1566,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert {command["commandId"] for command in report["requiredCommands"]} == {
         "preflight",
         "check-docs",
+        "check-governed-worker-execution-dry-run",
         "check-documentation-authority",
         "check-verification-readiness",
         "check-pipeline-implementation-readiness",
@@ -1652,6 +1653,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "optional-remote-bootstrap",
     }
     static_group = next(group for group in report["commandGroups"] if group["groupId"] == "static-drift-chain")
+    assert "check-governed-worker-execution-dry-run" in static_group["commandIds"]
     assert "check-runtime-review" in static_group["commandIds"]
     assert "check-pipeline-implementation-readiness" in static_group["commandIds"]
     assert "test-pipeline-implementation-readiness" in static_group["commandIds"]

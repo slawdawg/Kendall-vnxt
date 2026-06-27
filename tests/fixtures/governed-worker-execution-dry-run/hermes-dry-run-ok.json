@@ -1,0 +1,123 @@
+{
+  "packet_id": "dryrun-hermes-001",
+  "worker": "hermes",
+  "mode": "dry_run",
+  "task_class": "validator_foundation",
+  "authority_level": "non_executing",
+  "base_sha": "279c9a17db590bb78460197fd30413a4c6ba4f18",
+  "worktree_path": ".",
+  "allowed_file_scopes": [
+    "scripts/lib/governed-worker-execution-dry-run.mjs",
+    "tests/governed-worker-execution-dry-run.test.mjs",
+    "tests/fixtures/governed-worker-execution-dry-run/"
+  ],
+  "blocked_file_scopes": [
+    ".git/",
+    ".env",
+    "node_modules/",
+    "services/supervisor/",
+    "apps/dashboard/"
+  ],
+  "command_allowlist": [
+    {
+      "argv": [
+        "/usr/bin/node",
+        "--test",
+        "tests/governed-worker-execution-dry-run.test.mjs"
+      ],
+      "model_only": true,
+      "transitive_effects": []
+    }
+  ],
+  "environment_allowlist": [],
+  "network_policy": {
+    "requested": false,
+    "authority_family": "worker-network-or-session"
+  },
+  "session_policy": {
+    "inheritance_requested": false,
+    "authority_family": "session-inheritance"
+  },
+  "evidence_policy": {
+    "retention": "metadata_only",
+    "raw_payload_retained": false
+  },
+  "timeout_policy": {
+    "run_timeout_ms": 30000,
+    "cancellation_timeout_ms": 5000
+  },
+  "diff_limits": {
+    "max_files": 4,
+    "max_added_lines": 800
+  },
+  "retry_policy": {
+    "max_attempts": 0,
+    "rca_required": true
+  },
+  "review_requirement": "codex_review_required",
+  "status_policy": {
+    "allowed_states": [
+      "queued",
+      "validating",
+      "dry_run_complete",
+      "blocked",
+      "failed",
+      "awaiting_codex_review",
+      "unknown"
+    ]
+  },
+  "stop_lines": [
+    "no Claude/Hermes/Codex launch",
+    "no provider calls",
+    "no network calls",
+    "no session inheritance",
+    "no credential reads",
+    "no worker source mutation",
+    "no PR creation or delivery",
+    "no merge",
+    "no cleanup or deletion",
+    "no raw prompt/completion/transcript/provider payload retention",
+    "no adaptive trust effects"
+  ],
+  "rollback_or_recovery_path": "discard dry-run packet and revise source contract or fixture metadata",
+  "expiry_or_review_point": "2026-06-27T00:00:00Z",
+  "blocked_operations": [
+    "worker-process-launch",
+    "subscription-agent-launch",
+    "local-provider-execution",
+    "premium-execution",
+    "worker-network-or-session",
+    "session-inheritance",
+    "worker-command-execution",
+    "worker-source-mutation",
+    "raw-failure-retention",
+    "github-delivery",
+    "merge",
+    "cleanup-automation",
+    "adaptive-scoring"
+  ],
+  "evidence_refs": [
+    "contract:docs/workflows/governed-worker-execution-dry-run.md",
+    "fixture:hermes-dry-run-ok"
+  ],
+  "status_events": [
+    {
+      "run_id": "run-hermes-001",
+      "packet_id": "dryrun-hermes-001",
+      "worker": "hermes",
+      "lane": "governed-worker-execution-dry-run",
+      "sequence": 1,
+      "timestamp": "2026-06-26T00:00:00Z",
+      "state": "dry_run_complete",
+      "authority_level": "non_executing",
+      "mode": "dry_run",
+      "evidence_ref": "fixture:hermes-dry-run-ok",
+      "blocked_operations": [
+        "worker-process-launch",
+        "worker-network-or-session",
+        "worker-source-mutation"
+      ],
+      "next_action": "codex_review"
+    }
+  ]
+}

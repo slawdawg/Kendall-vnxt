@@ -1445,6 +1445,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-governed-worker-execution-dry-run",
+                label="Governed worker execution dry-run gate",
+                command="pnpm run check:governed-worker-execution-dry-run",
+                status="required",
+                requiredFor=["Claude/Hermes dry-run packet changes", "worker execution guard changes", "governed worker evidence fixtures"],
+                evidence=[
+                    "Validates Claude and Hermes dry-run packets, stop lines, metadata-only evidence, command allowlists, and blocked authority families fail closed.",
+                    "Runs as part of the static and full local verification commands without launching workers.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="check-documentation-authority",
                 label="Documentation authority report drift",
                 command="pnpm run check:documentation-authority",
@@ -2278,6 +2289,7 @@ class SupervisorService:
                 summary="Run documentation, report, runtime evidence, safe backlog, runbook, and policy drift checks before browser or full test work.",
                 commandIds=[
                     "check-docs",
+                    "check-governed-worker-execution-dry-run",
                     "check-documentation-authority",
                     "check-verification-readiness",
                     "check-pipeline-implementation-readiness",
