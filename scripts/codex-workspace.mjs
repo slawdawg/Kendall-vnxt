@@ -161,6 +161,7 @@ heartbeat options:
 takeover options:
   --dry-run                 Print takeover packet without mutation.
   --apply                   Apply takeover after evidence gates pass.
+  --summary-json            With --dry-run, print a compact JSON takeover summary.
   --takeover-reason <text>  Required. Explains takeover in at least 10 non-whitespace characters.
   --approval <text>         Required with --apply. Operator approval evidence.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
@@ -1027,6 +1028,9 @@ function takeover(argv) {
   if (!options.apply && !options.dryRun) {
     throw new Error("takeover requires either --dry-run or --apply.");
   }
+  if (options.summaryJson && !options.dryRun) {
+    throw new Error("takeover --summary-json is only supported with --dry-run.");
+  }
   const query = positional.join(" ").trim();
   if (!query) {
     throw new Error("takeover requires an assignment or task query.");
@@ -1052,6 +1056,10 @@ function takeover(argv) {
   });
 
   if (options.dryRun) {
+    if (options.summaryJson) {
+      console.log(JSON.stringify(buildTakeoverSummary(packet), null, 2));
+      return;
+    }
     printTakeoverPacket("DRY RUN", packet);
     return;
   }
@@ -3983,6 +3991,50 @@ function takeoverPacket(target, context) {
     allowed: blockers.length === 0,
     blockers,
     generated_at: context.generatedAt.toISOString(),
+  };
+}
+
+function buildTakeoverSummary(packet) {
+  return {
+    schemaVersion: packet.schema_version,
+    targetKind: packet.target_kind,
+    targetId: packet.target_id,
+    previousOwner: packet.previous_owner,
+    requestingOwner: packet.requesting_owner,
+    decision: packet.decision,
+    allowed: packet.allowed,
+    reason: packet.reason,
+    generatedAt: packet.generated_at,
+    heartbeat: {
+      source: packet.heartbeat_evidence.source,
+      timestamp: packet.heartbeat_evidence.timestamp,
+      ageSeconds: packet.heartbeat_evidence.age_seconds,
+      staleAfterSeconds: packet.heartbeat_evidence.stale_after_seconds,
+      isStale: packet.heartbeat_evidence.is_stale,
+    },
+    worktree: {
+      path: packet.worktree_evidence.path,
+      exists: packet.worktree_evidence.exists,
+      required: packet.worktree_evidence.required,
+      status: packet.worktree_evidence.status,
+    },
+    branch: {
+      branch: packet.branch_evidence.branch,
+      status: packet.branch_evidence.status,
+      localSha: packet.branch_evidence.local_sha,
+      remoteSha: packet.branch_evidence.remote_sha,
+    },
+    pr: packet.pr_evidence,
+    dirtyState: {
+      status: packet.dirty_state_evidence.status,
+      dirty: packet.dirty_state_evidence.dirty,
+      dirtyLineCount: packet.dirty_state_evidence.lines?.length || 0,
+    },
+    approval: {
+      present: Boolean(packet.approval_evidence),
+    },
+    blockers: packet.blockers,
+    mutation: "none; dry-run summary only",
   };
 }
 
