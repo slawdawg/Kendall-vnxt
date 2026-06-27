@@ -6139,6 +6139,28 @@ class SupervisorService:
                 "Keep runtime gates disabled by default and rollback by reverting this PR or leaving the gates disabled.",
             ],
         )
+        queue_zero_source_lane = self._safe_backlog_next_lane(
+            lane_slug="queue-zero-dispatch-continuity-refresh",
+            lane_title="Queue-zero dispatch continuity refresh",
+            scope=[
+                "safe backlog source metadata for the next dispatchable lane",
+                "development runway next-lane evidence",
+                "runner assignment status continuity expectations",
+                "focused drift and workspace runner tests",
+            ],
+            verification_commands=[
+                "node ./scripts/check-safe-development-backlog.mjs",
+                "node ./scripts/check-development-runway-report.mjs",
+                "node ./scripts/check-runner-assignment-status-report.mjs",
+                "node ./scripts/test-codex-workspace.mjs",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not reopen, requeue, or mutate closed backlog source-completion evidence.",
+                "Do not launch subscription-agent, Codex CLI, Claude CLI, worker processes, provider calls, or premium execution.",
+            ],
+        )
 
         items = [
             SafeDevelopmentBacklogItemView(
@@ -7456,6 +7478,36 @@ class SupervisorService:
                 ],
                 nextLane=None,
                 nextAction="Use this completed authority approval scope readiness evidence only; do not requeue codex/authority-blocked-approval-scope-readiness without a successor runtime approval packet.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="queue-zero-dispatch-continuity-refresh",
+                label="Queue-zero dispatch continuity refresh",
+                priority="P2",
+                status="ready",
+                summary="Seed one source-owned metadata lane so the end-to-end lane runner can continue after all generated safe backlog candidates are closed.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Dispatch-next currently reports zero dispatchable safe backlog lanes after completed closed-source and authority readiness work.",
+                    "The seed lane is metadata-only and restores runner continuity without launching workers, providers, premium execution, or process commands.",
+                    "Closed backlog items remain closed evidence and must not be requeued as part of this seed.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=queue_zero_source_lane,
+                nextAction="Dispatch queue-zero-dispatch-continuity-refresh as the next metadata-only lane; keep all closed backlog candidates closed and do not perform runtime execution.",
             ),
         ]
 
