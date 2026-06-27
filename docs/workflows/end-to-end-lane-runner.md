@@ -100,6 +100,12 @@ cannot be completed without expanded party-mode authority.
 1. **Start or resume lane.** Use `node ./scripts/codex-workspace.mjs` as the
    lifecycle authority. Record the worktree, branch, base, PR mode, current
    status, and lane owner.
+   If `list`, `claim-next`, or `dispatch-next` reports malformed retained
+   workspace manifests before a lane is selected, run
+   `node ./scripts/codex-workspace.mjs repair-manifests --dry-run` from a clean
+   checkout. Apply repair only when the plan is limited to closed legacy
+   manifests and inert validation fields such as `worktree_path` or
+   `base_branch`; stop for active, unreadable, or identity-missing manifests.
 2. **Discover.** Inspect the smallest relevant docs and source first. Expand
    only when the objective crosses a product, architecture, safety, or external
    behavior boundary.
