@@ -2120,6 +2120,61 @@ try {
     }
   });
 
+  test("heartbeat json emits written assignment lease evidence", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-assignment-json-"));
+    try {
+      const expected = expectedClaimCandidate();
+      seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
+      const tasksDir = join(claimStateRoot, "tasks");
+      const beforeTasks = taskSnapshot(tasksDir);
+
+      const result = run([
+        "heartbeat",
+        expected.slug,
+        "--json",
+        "--owner",
+        "runner-a",
+        "--phase",
+        "verification",
+        "--runner-kind",
+        "codex-cli",
+        "--current-command",
+        "pnpm run check",
+        "--last-result",
+        "running",
+        "--stale-after-seconds",
+        "120",
+        "--state-root",
+        claimStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!result.stdout.includes("APPLY:"), "heartbeat --json stdout must not include text output");
+      const packet = JSON.parse(result.stdout);
+      assert(packet.targetKind === "assignment", result.stdout || result.stderr);
+      assert(packet.target === expected.slug, result.stdout || result.stderr);
+      assert(packet.owner === "runner-a", result.stdout || result.stderr);
+      assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
+      assert(packet.ownerMatches === true, result.stdout || result.stderr);
+      assert(packet.status === "claimed", result.stdout || result.stderr);
+      assert(packet.branch === expected.branch, result.stdout || result.stderr);
+      assert(packet.phase === "verification", result.stdout || result.stderr);
+      assert(packet.runnerKind === "codex-cli", result.stdout || result.stderr);
+      assert(packet.currentCommand === "pnpm run check", result.stdout || result.stderr);
+      assert(packet.lastResult === "running", result.stdout || result.stderr);
+      assert(Boolean(packet.lastHeartbeatAt), result.stdout || result.stderr);
+      assert(packet.staleAfterSeconds === 120, result.stdout || result.stderr);
+      assert(packet.heartbeatCount === 1, result.stdout || result.stderr);
+      assert(
+        packet.mutation === "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
+        result.stdout || result.stderr,
+      );
+      assert(taskSnapshot(tasksDir) === beforeTasks, "assignment heartbeat json mutated workspace manifests");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("heartbeat refuses assignment owned by another runner without mutation", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-owned-assignment-"));
     try {
@@ -2983,6 +3038,62 @@ try {
       assert(Boolean(manifest.last_heartbeat_at), "workspace heartbeat timestamp missing");
       assert(manifest.owner_updated_at === manifest.last_heartbeat_at, "workspace owner timestamp not refreshed");
       assert(manifest.events.some((event) => event.type === "heartbeat"), "workspace heartbeat event missing");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("heartbeat json emits written workspace lease evidence", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-manifest-json-"));
+    try {
+      const tasksDir = join(claimStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const manifestPath = join(tasksDir, "owned-safe-backlog.json");
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            task_id: "owned-safe-backlog",
+            branch: "codex/verification-surface-hardening",
+            worktree_path: rootDir,
+            base_branch: "main",
+            status: "active",
+            owner: "runner-a",
+            owner_updated_at: "2026-06-21T00:00:00.000Z",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const result = run([
+        "heartbeat",
+        "owned-safe-backlog",
+        "--json",
+        "--owner",
+        "runner-a",
+        "--phase",
+        "active",
+        "--runner-kind",
+        "codex-cli",
+        "--last-result",
+        "tests passed",
+        "--state-root",
+        claimStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.targetKind === "workspace", result.stdout || result.stderr);
+      assert(packet.target === "owned-safe-backlog", result.stdout || result.stderr);
+      assert(packet.path === manifestPath, result.stdout || result.stderr);
+      assert(packet.owner === "runner-a", result.stdout || result.stderr);
+      assert(packet.status === "active", result.stdout || result.stderr);
+      assert(packet.branch === "codex/verification-surface-hardening", result.stdout || result.stderr);
+      assert(packet.phase === "active", result.stdout || result.stderr);
+      assert(packet.lastResult === "tests passed", result.stdout || result.stderr);
+      assert(packet.heartbeatCount === 1, result.stdout || result.stderr);
+      assert(!existsSync(join(claimStateRoot, "assignments")), "manifest heartbeat json created assignment metadata");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }

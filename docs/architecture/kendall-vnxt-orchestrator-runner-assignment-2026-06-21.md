@@ -244,6 +244,7 @@ Initial CLI implementation:
 - `node ./scripts/codex-workspace.mjs heartbeat <task-or-assignment>`
 - updates only the current owner's assignment or workspace manifest,
 - records `last_heartbeat_at`, `stale_after_seconds`, `phase`, `runner_kind`, `current_command`, `last_result`, and heartbeat event evidence,
+- supports `--json` to return the written lease evidence packet for automation,
 - surfaces phase, heartbeat, and runner metadata in `assignment-report`,
 - rejects unowned lanes and lanes owned by another runner, even when takeover flags are provided,
 - does not change branch, PR, cleanup, delivery, or ownership state.
