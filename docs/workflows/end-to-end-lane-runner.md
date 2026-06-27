@@ -207,6 +207,69 @@ takeover or cleanup decision.
 Use `resume --json` when an automation runner needs the matched worktree,
 branch, owner, PR, and owner-warning evidence without parsing human text.
 
+## Parallel Tmux Smoke Waves
+
+When the operator asks to run multiple Codex workers in visible tmux sessions,
+use a staged smoke wave before allowing a continuous loop.
+
+The purpose of the smoke wave is to prove the control plane, not to hide six
+independent autonomous delivery loops behind one opaque command. Each worker
+session should be visible, named, owner-scoped, and limited to one lane loop
+unless the operator explicitly expands the run.
+
+Use session names and owners that match:
+
+```text
+codex-1
+codex-2
+codex-3
+codex-4
+codex-5
+codex-6
+```
+
+Before launching workers:
+
+- Verify the main `dev` checkout is clean.
+- Push the current `dev` baseline when workers will open PRs against GitHub.
+- Run `dispatch-next --dry-run --summary-json --readiness doctor` from `dev`
+  and record the queue counts and first selected lane.
+- Check for existing `codex-#` tmux sessions and do not overwrite an active
+  operator-visible session.
+- Decide whether the smoke wave is claim-only, one-loop delivery, or continuous
+  loop. Default to one-loop delivery for the first run.
+- Keep a local launch ledger with session name, owner, selected lane, worktree,
+  branch, PR, status, and blocker summary.
+
+Worker launch prompts must make the stop lines explicit:
+
+- Set `CODEX_WORKSPACE_OWNER` to the matching `codex-#` value.
+- Claim exactly one lane with `dispatch-next --apply`.
+- Use the returned worktree and follow this end-to-end lane workflow.
+- Merge is default-authorized for normal low-risk lane delivery, but only after
+  exact-head, check, review-thread, and cleanup evidence is collected.
+- Stop for secrets, credential changes, destructive migrations, unsafe provider
+  or worker authority expansion, failed checks the worker cannot fix,
+  unresolved requested changes, ambiguous exact-head merge state, unsafe
+  cleanup, or scope outside the assigned lane.
+- Do not claim a second lane during a smoke wave unless the operator explicitly
+  expands the run to continuous mode.
+
+If the platform or approval layer rejects launching multiple unsandboxed Codex
+workers in one command, do not retry with a wrapper or workaround. Record the
+rejection as an authority-boundary lesson and move to a safer launch plan:
+
+1. Launch one tmux worker first and prove one complete loop.
+2. Then launch the remaining workers individually or in smaller batches with
+   the same prompt, ledger, and stop lines.
+3. Keep merge, PR, cleanup, and provider authority visible in the launch
+   command and evidence packet rather than relying on inherited chat context.
+
+During the wave, the supervisor session should poll panes sparingly and record
+state changes rather than streaming raw output. Relay only blockers, questions,
+failed checks, PR links, merge results, cleanup results, and extreme-risk
+findings to the operator.
+
 ## Low-Risk Merge Checklist
 
 Merge under `standard-delivery` only when current evidence proves all of these:
