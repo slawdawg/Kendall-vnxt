@@ -984,6 +984,67 @@ try {
     }
   });
 
+  test("list summary-json emits bounded inventory counts without mutation", () => {
+    const summaryStateRoot = mkdtempSync(join(tmpdir(), "codex-list-summary-json-"));
+    try {
+      const tasksDir = join(summaryStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const missingWorktreePath = join(summaryStateRoot, "worktrees", "missing-summary-lane");
+      const activePath = join(tasksDir, "active-summary-lane.json");
+      const closedPath = join(tasksDir, "closed-summary-lane.json");
+      writeFileSync(
+        activePath,
+        `${JSON.stringify({
+          task_id: "active-summary-lane",
+          branch: "codex/active-summary-lane",
+          worktree_path: rootDir,
+          base_branch: "dev",
+          status: "active",
+          pr_url: "https://github.com/slawdawg/Kendall-vnxt/pull/321",
+          owner: "runner-summary",
+        }, null, 2)}\n`,
+      );
+      writeFileSync(
+        closedPath,
+        `${JSON.stringify({
+          task_id: "closed-summary-lane",
+          branch: "codex/closed-summary-lane",
+          worktree_path: missingWorktreePath,
+          base_branch: "dev",
+          status: "closed",
+          owner: "runner-summary",
+        }, null, 2)}\n`,
+      );
+
+      const beforeActive = readFileSync(activePath, "utf8");
+      const beforeClosed = readFileSync(closedPath, "utf8");
+      const result = run(["list", "--summary-json", "--state-root", summaryStateRoot, "--owner", "runner-summary"]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.stateRoot === summaryStateRoot, result.stdout || result.stderr);
+      assert(packet.tasksDir === tasksDir, result.stdout || result.stderr);
+      assert(packet.filters.active === false, result.stdout || result.stderr);
+      assert(packet.filters.owner === "runner-summary", result.stdout || result.stderr);
+      assert(packet.counts.total === 2, result.stdout || result.stderr);
+      assert(packet.counts.statuses.active === 1, result.stdout || result.stderr);
+      assert(packet.counts.statuses.closed === 1, result.stdout || result.stderr);
+      assert(packet.counts.owners["runner-summary"] === 2, result.stdout || result.stderr);
+      assert(packet.counts.worktrees.present === 1, result.stdout || result.stderr);
+      assert(packet.counts.worktrees.missing === 1, result.stdout || result.stderr);
+      assert(packet.counts.prs.withPr === 1, result.stdout || result.stderr);
+      assert(packet.counts.prs.withoutPr === 1, result.stdout || result.stderr);
+      assert(packet.rows.length === 2, result.stdout || result.stderr);
+      assert(packet.rows.some((row) => row.taskId === "active-summary-lane"), result.stdout || result.stderr);
+      assert(packet.rowsTruncated === false, result.stdout || result.stderr);
+      assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
+      assert(readFileSync(activePath, "utf8") === beforeActive, "list summary-json mutated active manifest");
+      assert(readFileSync(closedPath, "utf8") === beforeClosed, "list summary-json mutated closed manifest");
+    } finally {
+      rmSync(summaryStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("list and resume preserve existing main-targeting manifests", () => {
     const legacyStateRoot = mkdtempSync(join(tmpdir(), "codex-legacy-main-manifest-"));
     try {

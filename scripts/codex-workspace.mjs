@@ -139,6 +139,7 @@ list options:
   --owned                   Show only workspaces owned by the current runner.
   --owner <id>              Show only workspaces owned by the given owner.
   --json                    Print matching workspaces as JSON for automation.
+  --summary-json            Print bounded inventory counts and a row sample.
 
 coordination-report options:
   --json                    Print the coordination packet as JSON for automation.
@@ -387,6 +388,11 @@ function listWorkspaces(argv) {
     },
   }));
 
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildListSummary({ state, listRows, filters: { active: Boolean(options.active), owner: ownerFilter || null } }), null, 2));
+    return;
+  }
+
   if (options.json) {
     console.log(JSON.stringify(listRows, null, 2));
     return;
@@ -409,6 +415,36 @@ function listWorkspaces(argv) {
       ].join(" | "),
     );
   }
+}
+
+function buildListSummary({ state, listRows, filters }) {
+  const statusCounts = countByField(listRows, "status");
+  const ownerCounts = countByField(listRows.map((row) => ({ ...row, owner: row.owner || "unowned" })), "owner");
+  const worktreeCounts = {
+    present: listRows.filter((row) => row.worktreeExists).length,
+    missing: listRows.filter((row) => !row.worktreeExists).length,
+  };
+  const prCounts = {
+    withPr: listRows.filter((row) => row.prNumber || row.prUrl).length,
+    withoutPr: listRows.filter((row) => !row.prNumber && !row.prUrl).length,
+  };
+
+  return {
+    generatedAt: new Date().toISOString(),
+    stateRoot: state.root,
+    tasksDir: state.tasksDir,
+    filters,
+    counts: {
+      total: listRows.length,
+      statuses: statusCounts,
+      owners: ownerCounts,
+      worktrees: worktreeCounts,
+      prs: prCounts,
+    },
+    rows: listRows.slice(0, 10),
+    rowsTruncated: listRows.length > 10,
+    mutation: "none; summary only",
+  };
 }
 
 function coordinationReport(argv) {
