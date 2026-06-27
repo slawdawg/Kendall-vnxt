@@ -2,7 +2,7 @@
 
 Status: source-owned policy plus bounded dry-run/read-only live proof.
 
-Last updated: 2026-06-26.
+Last updated: 2026-06-27.
 
 ## Purpose
 
@@ -202,6 +202,41 @@ source refs, evidence refs, sensitivity, freshness, contradiction status,
 confidence, target queue metadata, recovery text, and `writeBackAllowed=false`.
 It is still a review proposal only; persisting it to the supervisor does not
 authorize an Obsidian write-back.
+
+## Live Dogfood Evidence: 2026-06-27
+
+The first operator-approved live dogfood check used
+`/tmp/kendall-obsidian-live.json` and the smoke note
+`00 Inbox/kendall-readiness-smoke.md`.
+
+Evidence summary:
+
+- `live-readiness` returned `status=ready` and config validation `PASS`.
+- Sync mechanism was `obsidian-sync`.
+- Sync health was `healthy`.
+- Allowed read folders were explicit.
+- `01 Dashboard Queue`, `09 Archive`, `Private`, `Personal`, and `Journal`
+  remained excluded from reads.
+- `live-read-only-proof` returned `status=PASS`.
+- The proof produced a metadata-only dashboard proposal preview.
+- No Obsidian write was performed.
+- No supervisor proposal was persisted.
+- No backup was created because the operation was read-only.
+- No raw payload or source copy was retained.
+- Provider calls, worker launch, GitHub calls, and network egress were not
+  allowed.
+
+The no-write live handoff and end-to-end memory plan were also ready. Their next
+actions remain gated:
+
+- persist the supervisor request only after explicit operator approval for
+  supervisor state mutation;
+- run `write-approved-draft --apply` only after the dashboard proposal remains
+  approved and backup/recovery evidence is accepted.
+
+The planned draft target from that dry run was inside the dashboard queue:
+`01 Dashboard Queue/AI Drafts/kendall-readiness-smoke-mp-20260627T004109Z.md`.
+This target is a review-gated AI draft path, not a canonical note path.
 
 To preview the exact supervisor persistence request without network egress or
 persistence, run:
