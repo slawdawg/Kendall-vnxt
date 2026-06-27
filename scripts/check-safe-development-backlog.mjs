@@ -28,6 +28,7 @@ const supervisorTests = readWorkspaceFile("services/supervisor/tests/integration
 const workspaceProtocolTests = readWorkspaceFile("scripts/test-codex-workspace.mjs");
 const storyIndex = readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md");
 const reconciliation = readWorkspaceFile("docs/architecture/kendall-vnxt-implementation-gap-reconciliation-2026-06-08.md");
+const runnerAssignmentSpec = readWorkspaceFile("docs/architecture/kendall-vnxt-orchestrator-runner-assignment-2026-06-21.md");
 
 const failures = [];
 
@@ -538,6 +539,9 @@ assertCondition(
     supervisorTests.includes('node ./scripts/codex-workspace.mjs start "dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh"') &&
     supervisorTests.includes("pnpm run check:runner-assignment-status") &&
     workspaceProtocolTests.includes("claim-next advances to closed source guard filter empty state shortcut reason keyboard loop after completed reason focus lane") &&
+    workspaceProtocolTests.includes("claim-next summary-json previews a bounded queue summary without mutation") &&
+    runnerAssignmentSpec.includes("node ./scripts/codex-workspace.mjs claim-next --dry-run --summary-json") &&
+    runnerAssignmentSpec.includes("bounded summary JSON with selected lane, status counts, blocker status counts, and a truncated blocker sample") &&
     supervisorTests.includes('handoff_item["status"] == "closed"') &&
     supervisorTests.includes('handoff_item["nextLane"] is None') &&
     supervisorTests.includes("do not requeue lane-handoff-evidence-refresh") &&

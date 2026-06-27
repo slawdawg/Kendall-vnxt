@@ -1048,6 +1048,39 @@ try {
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
   });
 
+  test("claim-next summary-json previews a bounded queue summary without mutation", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-summary-json-"));
+    try {
+      const tasksDir = join(claimStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const expected = expectedClaimCandidate();
+      seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      if (branchExists(rootDir, expected.branch)) {
+        seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug);
+      }
+      const before = taskSnapshot(tasksDir);
+
+      const result = run(["claim-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      const after = taskSnapshot(tasksDir);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
+      assert(packet.selected.itemId === expected.slug, result.stdout || result.stderr);
+      assert(packet.selected.branch === expected.branch, result.stdout || result.stderr);
+      assert(packet.counts.total > 0, result.stdout || result.stderr);
+      assert(packet.counts.claimable >= 1, result.stdout || result.stderr);
+      assert(packet.statusCounts.assignable >= 1, result.stdout || result.stderr);
+      assert(packet.blockerStatusCounts.closed >= 1, result.stdout || result.stderr);
+      assert(packet.blockers.length <= 10, result.stdout || result.stderr);
+      assert(typeof packet.blockersTruncated === "boolean", result.stdout || result.stderr);
+      assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
+      assert(before === after, "claim-next --summary-json mutated workspace manifests");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next advances to closed source guard filter empty state shortcut reason keyboard loop after completed reason focus lane", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-generated-queue-"));
     try {
