@@ -394,6 +394,13 @@ and containment authority are proven. The dashboard must not launch workers,
 probe commands, read live process state, fetch provider output, infer trust, or
 trigger routing/retry decisions from these retained metadata packets.
 
+The `/pipeline` cockpit may read persisted copied-worktree evidence snapshots
+from `.kendall-local/governed-worker-evidence/` or a safe `/tmp` evidence
+directory. This read is local file metadata consumption only: it must reject raw
+markers, source worktree paths, unsafe realpath escapes, oversized evidence
+files, and malformed snapshots; it must not call workers, providers,
+supervisor APIs, GitHub, network endpoints, or process launch primitives.
+
 A UI label such as `running` may describe an active non-executing dry-run
 attempt only when the same packet also displays the dry-run authority mode and
 metadata-only evidence boundary. It is not process liveness evidence and must

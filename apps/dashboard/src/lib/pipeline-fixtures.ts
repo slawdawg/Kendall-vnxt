@@ -100,6 +100,52 @@ export type GovernedCopiedWorktreeExecutionEvidenceV0 = {
   affects_routing: false;
 };
 
+export type GovernedCopiedWorktreeExecutionEvidenceSnapshotV0 = {
+  schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0";
+  generated_at: string;
+  metadata_only: true;
+  raw_payload_retained: false;
+  dashboard_consumption: "no_live_calls";
+  attempts: GovernedCopiedWorktreeExecutionEvidenceV0[];
+  errors: unknown[];
+};
+
+const GOVERNED_COPIED_WORKTREE_SNAPSHOT_FIELDS = new Set([
+  "schema_version",
+  "generated_at",
+  "metadata_only",
+  "raw_payload_retained",
+  "dashboard_consumption",
+  "attempts",
+  "errors",
+]);
+
+const GOVERNED_COPIED_WORKTREE_EVIDENCE_FIELDS = new Set([
+  "source_id",
+  "worker",
+  "mode",
+  "authority_level",
+  "execution_state",
+  "command_path",
+  "expected_response",
+  "observed_response",
+  "exit_code",
+  "timed_out",
+  "observed_at",
+  "evidence_ref",
+  "status_event_ref",
+  "copied_tracked_files",
+  "copy_bytes",
+  "copy_retained",
+  "network_allowed",
+  "session_inheritance_allowed",
+  "source_mutation_allowed",
+  "tools_allowed",
+  "raw_output_retained",
+  "affects_trust",
+  "affects_routing",
+]);
+
 export type LocalModelHealthV0 = {
   provider: "ollama";
   endpointUrl: string | null;
@@ -1074,6 +1120,15 @@ export function projectGovernedCopiedWorktreeExecutionEvidence(
   });
 }
 
+export function projectGovernedCopiedWorktreeExecutionEvidenceSnapshot(
+  snapshot: GovernedCopiedWorktreeExecutionEvidenceSnapshotV0
+): PipelineFixturePacket[] {
+  if (!isSafeGovernedCopiedWorktreeEvidenceSnapshot(snapshot)) {
+    return [];
+  }
+  return projectGovernedCopiedWorktreeExecutionEvidence(snapshot.attempts);
+}
+
 export function evaluateFixtureActionDecision(
   packet: PipelineFixturePacket,
   actionId: string,
@@ -1288,6 +1343,54 @@ function isSafeGovernedCopiedWorktreeEvidence(entry: GovernedCopiedWorktreeExecu
       && entry.affects_routing === false
       && copiedWorktreeStateShapeIsSafe(entry)
   );
+}
+
+function isSafeGovernedCopiedWorktreeEvidenceSnapshot(snapshot: GovernedCopiedWorktreeExecutionEvidenceSnapshotV0): boolean {
+  return Boolean(
+    snapshot
+      && typeof snapshot === "object"
+      && !Array.isArray(snapshot)
+      && snapshot.schema_version === "governed_worker_copied_worktree_evidence_snapshot.v0"
+      && Number.isFinite(Date.parse(snapshot.generated_at))
+      && snapshot.metadata_only === true
+      && snapshot.raw_payload_retained === false
+      && snapshot.dashboard_consumption === "no_live_calls"
+      && Object.keys(snapshot).every((key) => GOVERNED_COPIED_WORKTREE_SNAPSHOT_FIELDS.has(key))
+      && !Object.hasOwn(snapshot, "source_worktree")
+      && !hasForbiddenCopiedWorktreeEvidenceField(snapshot)
+      && Array.isArray(snapshot.attempts)
+      && snapshot.attempts.every((entry) => Object.keys(entry).every((key) => GOVERNED_COPIED_WORKTREE_EVIDENCE_FIELDS.has(key)))
+      && Array.isArray(snapshot.errors)
+      && !hasUnsafeCopiedWorktreeMarkerInValue(snapshot)
+  );
+}
+
+function hasForbiddenCopiedWorktreeEvidenceField(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasForbiddenCopiedWorktreeEvidenceField(entry));
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value).some(([key, entry]) => {
+      if (["source_worktree", "execution_cwd", "command_args", "shell_used"].includes(key)) {
+        return true;
+      }
+      return hasForbiddenCopiedWorktreeEvidenceField(entry);
+    });
+  }
+  return false;
+}
+
+function hasUnsafeCopiedWorktreeMarkerInValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return hasUnsafeCopiedWorktreeMarker(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasUnsafeCopiedWorktreeMarkerInValue(entry));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some((entry) => hasUnsafeCopiedWorktreeMarkerInValue(entry));
+  }
+  return false;
 }
 
 function copiedWorktreeStateShapeIsSafe(entry: GovernedCopiedWorktreeExecutionEvidenceV0): boolean {
