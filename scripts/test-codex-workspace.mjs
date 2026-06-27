@@ -1835,9 +1835,9 @@ try {
 
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("DRY RUN: claim-next"), result.stdout || result.stderr);
-    assert(result.stdout.includes("claim candidate queue-zero-dispatch-continuity-refresh"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- branch codex/queue-zero-dispatch-continuity-refresh"), result.stdout || result.stderr);
-    assert(result.stdout.includes('start command node ./scripts/codex-workspace.mjs start "queue zero dispatch continuity refresh"'), result.stdout || result.stderr);
+    assert(result.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- branch codex/queue-zero-runway-continuity-refresh"), result.stdout || result.stderr);
+    assert(result.stdout.includes('start command node ./scripts/codex-workspace.mjs start "queue zero runway continuity refresh"'), result.stdout || result.stderr);
     assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | closed"), result.stdout || result.stderr);
@@ -1867,14 +1867,14 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       const packet = JSON.parse(result.stdout);
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
-      assert(packet.selected?.itemId === "queue-zero-dispatch-continuity-refresh", result.stdout || result.stderr);
-      assert(packet.selected?.branch === "codex/queue-zero-dispatch-continuity-refresh", result.stdout || result.stderr);
+      assert(packet.selected?.itemId === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
+      assert(packet.selected?.branch === "codex/queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
       assert(packet.counts.claimable === 1, result.stdout || result.stderr);
       assert(packet.counts.excluded >= 1, result.stdout || result.stderr);
       assert(packet.counts.sourceDrift === 0, result.stdout || result.stderr);
       assert(packet.nextActionSummary.action === "claim selected lane", result.stdout || result.stderr);
-      assert(packet.nextActionSummary.itemId === "queue-zero-dispatch-continuity-refresh", result.stdout || result.stderr);
+      assert(packet.nextActionSummary.itemId === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
       assert(packet.nextActionSummary.sourceDrift === 0, result.stdout || result.stderr);
       assert(packet.statusCounts.assignable === 1, result.stdout || result.stderr);
       assert(!packet.blockerStatusCounts.closed, result.stdout || result.stderr);
@@ -1924,8 +1924,8 @@ try {
       const after = taskSnapshot(assignmentsDir);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("claim candidate queue-zero-dispatch-continuity-refresh"), result.stdout || result.stderr);
-      assert(result.stdout.includes("claimable=1 blocked=0 excluded=43 sourceDrift=0"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claimable=1 blocked=0 excluded=44 sourceDrift=0"), result.stdout || result.stderr);
       assert(result.stdout.includes("- authority-blocked-work | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
@@ -1972,16 +1972,16 @@ try {
       assert(report.stdout.includes(`- ${expected.slug} | closed`), report.stdout || report.stderr);
       assert(report.stdout.includes("reason=safe backlog item is already complete and must not be requeued"), report.stdout || report.stderr);
       assert(claim.code === 0, claim.stderr || claim.stdout);
-      assert(claim.stdout.includes("claim candidate queue-zero-dispatch-continuity-refresh"), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${expected.slug} | closed`), claim.stdout || claim.stderr);
       assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
-      assert(dispatch.stdout.includes("- selected lane queue-zero-dispatch-continuity-refresh"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes("- selected lane queue-zero-runway-continuity-refresh"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes("- allowed true"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${expected.slug} | closed`), dispatch.stdout || dispatch.stderr);
       assert(dispatchSummary.code === 0, dispatchSummary.stderr || dispatchSummary.stdout);
       const packet = JSON.parse(dispatchSummary.stdout);
       assert(packet.dispatch.allowed === true, dispatchSummary.stdout);
-      assert(packet.dispatch.selectedLane === "queue-zero-dispatch-continuity-refresh", dispatchSummary.stdout);
+      assert(packet.dispatch.selectedLane === "queue-zero-runway-continuity-refresh", dispatchSummary.stdout);
       assert(beforeTasks === taskSnapshot(tasksDir), "closed source guard dry-runs mutated task manifests");
       assert(beforeAssignments === taskSnapshot(assignmentsDir), "closed source guard dry-runs mutated assignments");
     } finally {
@@ -2004,11 +2004,11 @@ try {
       const dispatch = run(["dispatch-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
 
       assert(claim.code === 0, claim.stderr || claim.stdout);
-      assert(claim.stdout.includes("claim candidate queue-zero-dispatch-continuity-refresh"), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${completedKeyboardLoop.slug} | closed`), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${completedAuthority.slug} | closed`), claim.stdout || claim.stderr);
       assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
-      assert(dispatch.stdout.includes("- selected lane queue-zero-dispatch-continuity-refresh"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes("- selected lane queue-zero-runway-continuity-refresh"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes("- allowed true"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${completedKeyboardLoop.slug} | closed`), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${completedAuthority.slug} | closed`), dispatch.stdout || dispatch.stderr);
@@ -2035,11 +2035,11 @@ try {
       const dispatch = run(["dispatch-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
 
       assert(claim.code === 0, claim.stderr || claim.stdout);
-      assert(claim.stdout.includes("claim candidate queue-zero-dispatch-continuity-refresh"), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${owned.slug} | closed`), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${completedAuthority.slug} | closed`), claim.stdout || claim.stderr);
       assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
-      assert(dispatch.stdout.includes("- selected lane queue-zero-dispatch-continuity-refresh"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes("- selected lane queue-zero-runway-continuity-refresh"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${owned.slug} | closed`), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${completedAuthority.slug} | closed`), dispatch.stdout || dispatch.stderr);
       assert(beforeTasks === taskSnapshot(tasksDir), "owned lane priority dry-runs mutated task manifests");
@@ -2161,13 +2161,13 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("APPLY: claim-next"), result.stdout || result.stderr);
-      assert(result.stdout.includes("claimed ready lane queue-zero-dispatch-continuity-refresh for runner-a"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claimed ready lane queue-zero-runway-continuity-refresh for runner-a"), result.stdout || result.stderr);
       assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next --apply created worktrees");
       assert(taskSnapshot(tasksDir) === beforeTasks, "failed claim-next --apply mutated workspace task manifests");
       assert(taskSnapshot(assignmentsDir) !== beforeAssignments, "claim-next --apply did not write assignment evidence");
-      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "queue-zero-dispatch-continuity-refresh.json"), "utf8"));
-      assert(assignment.assignment_id === "queue-zero-dispatch-continuity-refresh", result.stdout || result.stderr);
-      assert(assignment.branch === "codex/queue-zero-dispatch-continuity-refresh", result.stdout || result.stderr);
+      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "queue-zero-runway-continuity-refresh.json"), "utf8"));
+      assert(assignment.assignment_id === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
+      assert(assignment.branch === "codex/queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
       assert(assignment.owner === "runner-a", result.stdout || result.stderr);
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
@@ -2182,15 +2182,15 @@ try {
       const beforeAssignments = taskSnapshot(assignmentsDir);
       const first = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       assert(first.code === 0, first.stderr || first.stdout);
-      assert(first.stdout.includes("claimed ready lane queue-zero-dispatch-continuity-refresh for runner-a"), first.stdout || first.stderr);
+      assert(first.stdout.includes("claimed ready lane queue-zero-runway-continuity-refresh for runner-a"), first.stdout || first.stderr);
       const afterFirst = taskSnapshot(assignmentsDir);
       assert(afterFirst !== beforeAssignments, "first claim-next --apply did not write seed assignment evidence");
       const second = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       assert(second.code === 0, second.stderr || second.stdout);
-      assert(second.stdout.includes("refreshed existing assignment queue-zero-dispatch-continuity-refresh for runner-a"), second.stdout || second.stderr);
-      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "queue-zero-dispatch-continuity-refresh.json"), "utf8"));
-      assert(assignment.assignment_id === "queue-zero-dispatch-continuity-refresh", second.stdout || second.stderr);
-      assert(assignment.branch === "codex/queue-zero-dispatch-continuity-refresh", second.stdout || second.stderr);
+      assert(second.stdout.includes("refreshed existing assignment queue-zero-runway-continuity-refresh for runner-a"), second.stdout || second.stderr);
+      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "queue-zero-runway-continuity-refresh.json"), "utf8"));
+      assert(assignment.assignment_id === "queue-zero-runway-continuity-refresh", second.stdout || second.stderr);
+      assert(assignment.branch === "codex/queue-zero-runway-continuity-refresh", second.stdout || second.stderr);
       assert(assignment.owner === "runner-a", second.stdout || second.stderr);
       assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next --apply idempotency created worktrees");
     } finally {
@@ -2708,7 +2708,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
-      assert(result.stdout.includes("- selected lane queue-zero-dispatch-continuity-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- selected lane queue-zero-runway-continuity-refresh"), result.stdout || result.stderr);
       assert(result.stdout.includes("- workspace action claim_and_create_workspace"), result.stdout || result.stderr);
       assert(result.stdout.includes("- allowed true"), result.stdout || result.stderr);
       assert(result.stdout.includes("- blockers none"), result.stdout || result.stderr);
@@ -2743,9 +2743,9 @@ try {
       const packet = JSON.parse(result.stdout);
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
       assert(packet.readinessProfile === "doctor", result.stdout || result.stderr);
-      assert(packet.selected?.itemId === "queue-zero-dispatch-continuity-refresh", result.stdout || result.stderr);
+      assert(packet.selected?.itemId === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
       assert(packet.dispatch.allowed === true, result.stdout || result.stderr);
-      assert(packet.dispatch.selectedLane === "queue-zero-dispatch-continuity-refresh", result.stdout || result.stderr);
+      assert(packet.dispatch.selectedLane === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
       assert(packet.dispatch.workspaceAction === "claim_and_create_workspace", result.stdout || result.stderr);
       assert(packet.dispatch.nextActionGuidance.includes("dispatch-next --apply"), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
@@ -2808,7 +2808,7 @@ try {
       const manifestPath = join(tasksDir, "dispatch-workspace.json");
       const expected = expectedAuthorityClaimCandidate();
       seedClaimedSafeBacklogAssignment(dispatchStateRoot, "read-only-evidence-polish", "runner-b");
-      seedClaimedSafeBacklogAssignment(dispatchStateRoot, "queue-zero-dispatch-continuity-refresh", "runner-b", "codex/queue-zero-dispatch-continuity-refresh");
+      seedClaimedSafeBacklogAssignment(dispatchStateRoot, "queue-zero-runway-continuity-refresh", "runner-b", "codex/queue-zero-runway-continuity-refresh");
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
@@ -2905,7 +2905,7 @@ try {
         "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
         "codex/authority-blocked-approval-scope-readiness",
-        "codex/queue-zero-dispatch-continuity-refresh",
+        "codex/queue-zero-runway-continuity-refresh",
       ];
       const manifestPaths = blockedBranches.map((branchName, index) => {
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
@@ -3009,7 +3009,7 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
         "authority-blocked-work",
-        "queue-zero-dispatch-continuity-refresh",
+        "queue-zero-runway-continuity-refresh",
       ]) {
         const branch = laneSlug === "authority-blocked-work" ? "codex/authority-blocked-approval-scope-readiness" : `codex/${laneSlug}`;
         writeFileSync(
@@ -3064,7 +3064,7 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
         "authority-blocked-work",
-        "queue-zero-dispatch-continuity-refresh",
+        "queue-zero-runway-continuity-refresh",
       ].map((laneSlug) => join(assignmentsDir, `${laneSlug}.json`));
       const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
@@ -3091,7 +3091,7 @@ try {
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
       const expected = expectedAuthorityClaimCandidate();
       seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
-      seedClaimedSafeBacklogAssignment(claimStateRoot, "queue-zero-dispatch-continuity-refresh", "runner-b", "codex/queue-zero-dispatch-continuity-refresh");
+      seedClaimedSafeBacklogAssignment(claimStateRoot, "queue-zero-runway-continuity-refresh", "runner-b", "codex/queue-zero-runway-continuity-refresh");
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
@@ -3128,7 +3128,7 @@ try {
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
       const expected = expectedAuthorityClaimCandidate();
       seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
-      seedClaimedSafeBacklogAssignment(claimStateRoot, "queue-zero-dispatch-continuity-refresh", "runner-b", "codex/queue-zero-dispatch-continuity-refresh");
+      seedClaimedSafeBacklogAssignment(claimStateRoot, "queue-zero-runway-continuity-refresh", "runner-b", "codex/queue-zero-runway-continuity-refresh");
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
@@ -3487,7 +3487,7 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
         "authority-blocked-work",
-        "queue-zero-dispatch-continuity-refresh",
+        "queue-zero-runway-continuity-refresh",
       ].map((laneSlug) => {
         const branch = laneSlug === "authority-blocked-work" ? "codex/authority-blocked-approval-scope-readiness" : `codex/${laneSlug}`;
         const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
