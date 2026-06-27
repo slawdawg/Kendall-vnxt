@@ -1847,10 +1847,14 @@ try {
       assert(packet.selected.branch === expected.branch, result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
       assert(packet.counts.claimable >= 1, result.stdout || result.stderr);
+      assert(packet.counts.excluded >= 1, result.stdout || result.stderr);
       assert(packet.statusCounts.assignable >= 1, result.stdout || result.stderr);
-      assert(packet.blockerStatusCounts.closed >= 1, result.stdout || result.stderr);
+      assert(!packet.blockerStatusCounts.closed, result.stdout || result.stderr);
+      assert(packet.excludedStatusCounts.closed >= 1, result.stdout || result.stderr);
       assert(packet.blockers.length <= 10, result.stdout || result.stderr);
       assert(typeof packet.blockersTruncated === "boolean", result.stdout || result.stderr);
+      assert(packet.excluded.length <= 10, result.stdout || result.stderr);
+      assert(typeof packet.excludedTruncated === "boolean", result.stdout || result.stderr);
       assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
       assert(before === after, "claim-next --summary-json mutated workspace manifests");
     } finally {

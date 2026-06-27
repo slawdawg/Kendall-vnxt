@@ -1040,12 +1040,13 @@ function claimNext(argv) {
     ]);
   }
 
-  console.log("Blocker evidence:");
+  console.log("Queue evidence:");
   printClaimBlockers(evaluations, selected);
 }
 
 function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selected, evaluations }) {
-  const blockers = evaluations.filter((evaluation) => !evaluation.claimable);
+  const blockers = evaluations.filter((evaluation) => claimEvaluationIsBlocker(evaluation));
+  const excluded = evaluations.filter((evaluation) => claimEvaluationIsExcluded(evaluation));
   return {
     currentOwner,
     stateRoot: state.root,
@@ -1055,13 +1056,25 @@ function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selecte
       total: evaluations.length,
       claimable: evaluations.filter((evaluation) => evaluation.claimable).length,
       blocked: blockers.length,
+      excluded: excluded.length,
     },
     statusCounts: countByField(evaluations, "status"),
     blockerStatusCounts: countByField(blockers, "status"),
     blockers: blockers.slice(0, 10).map(summarizeClaimEvaluation),
     blockersTruncated: blockers.length > 10,
+    excludedStatusCounts: countByField(excluded, "status"),
+    excluded: excluded.slice(0, 10).map(summarizeClaimEvaluation),
+    excludedTruncated: excluded.length > 10,
     mutation: "none; dry-run summary only",
   };
+}
+
+function claimEvaluationIsExcluded(evaluation) {
+  return evaluation.status === "closed";
+}
+
+function claimEvaluationIsBlocker(evaluation) {
+  return !evaluation.claimable && !claimEvaluationIsExcluded(evaluation);
 }
 
 function summarizeClaimEvaluation(evaluation) {
