@@ -196,9 +196,18 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
     "Cleanup policy",
     "Governed Hermes dry-run attempt active",
     "Governed Claude dry-run attempt active",
+    "Governed Claude copied-worktree execution running",
+    "Governed Hermes real execution unavailable",
+    "copied_worktree_worker_execution",
+    "real copied-worktree execution",
+    "real execution unavailable",
     "governed.dry_run",
+    "governed.copied_worktree_worker_execution",
     "governed_worker.claude_dry_run_running",
+    "governed_worker.claude_real_execution_running",
+    "governed_worker.hermes_real_execution_unavailable",
     "non_executing_dry_run",
+    "KENDALL_COPY_EXECUTION_OK",
     "Selected route",
     "Rejected routes",
     "Source context",
@@ -844,8 +853,10 @@ test("pipeline Codex and Claude lane fixtures stay distinct and metadata-only", 
     assert.ok(packet.reviewSummaries.some((review) => review.reviewer === "claude_reviewer" && review.evidenceRefs.includes(packet.claudeReview.evidenceRef)));
     if (packet.claudeReview.statusLabel === "pending") {
       assert.ok(
-        packet.matrixRowIds.includes("mock.claude_pending_skipped") || packet.matrixRowIds.includes("governed_worker.claude_dry_run_running"),
-        `${packet.packetId} should link either the Claude pending/skipped row or the governed Claude dry-run row`
+        packet.matrixRowIds.includes("mock.claude_pending_skipped") ||
+          packet.matrixRowIds.includes("governed_worker.claude_dry_run_running") ||
+          packet.matrixRowIds.includes("governed_worker.claude_real_execution_running"),
+        `${packet.packetId} should link a Claude pending/skipped, governed dry-run, or governed real-execution row`
       );
       assert.equal(packet.currentOwner, "claude_reviewer");
     }

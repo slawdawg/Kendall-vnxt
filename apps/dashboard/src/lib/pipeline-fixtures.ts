@@ -55,6 +55,9 @@ type GovernedWorkerAttemptFixtureInput = {
   evidenceRef: string;
   eventRef: string;
   packetId: string;
+  authorityMode?: "non_executing_dry_run" | "version_probe" | "smoke_execution" | "copied_worktree_worker_execution";
+  lane?: "claude_execution_dry_run" | "hermes_execution_dry_run" | "claude_governed_execution" | "hermes_governed_execution";
+  label?: string;
   failureReason?: string;
   rejectionReason?: string;
 };
@@ -807,6 +810,65 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
     governedWorkerAttempt: { worker: "claude", status: "running" },
   }),
   packetFixture({
+    packetId: "fixture:governed-claude-real-execution-active",
+    title: "Governed Claude copied-worktree execution running",
+    requestedOutcome: "Show real Claude execution state in the cockpit while preserving copied-worktree isolation and metadata-only evidence.",
+    currentStage: "execute",
+    currentOwner: "claude_reviewer",
+    status: "active",
+    riskLevel: "high",
+    priority: "urgent",
+    fixtureId: "governed_claude_real_execution_active",
+    matrixRowIds: ["governed_worker.claude_real_execution_running"],
+    fixtureKind: "future-real-source",
+    summary: "Claude real execution is visible as a governed copied-worktree attempt: safe mode, no built-in tools, no source mutation, no delivery authority, and no raw output retention.",
+    nextAction: "Inspect governed Claude execution",
+    confidenceLabel: "Real worker execution visible",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    claudeReviewState: "pending",
+    lastEvent: "Claude copied-worktree execution evidence was observed with KENDALL_COPY_EXECUTION_OK and retained as metadata only.",
+    riskFlags: ["worker network/session allowed", "source mutation forbidden", "raw output not retained", "delivery blocked"],
+    governedWorkerAttempt: {
+      worker: "claude",
+      status: "running",
+      authorityMode: "copied_worktree_worker_execution",
+      lane: "claude_governed_execution",
+      label: "real copied-worktree execution",
+    },
+  }),
+  packetFixture({
+    packetId: "fixture:governed-hermes-real-execution-unavailable",
+    title: "Governed Hermes real execution unavailable",
+    requestedOutcome: "Show Hermes in the cockpit as explicitly unavailable until the binary and containment authority are proven.",
+    currentStage: "execute",
+    currentOwner: "hermes_worker_mock",
+    status: "blocked",
+    riskLevel: "high",
+    priority: "high",
+    fixtureId: "governed_hermes_real_execution_unavailable",
+    matrixRowIds: ["governed_worker.hermes_real_execution_unavailable"],
+    fixtureKind: "future-real-source",
+    summary: "Hermes real execution is visible as blocked because the governed proof has not found a runnable Hermes command or approved containment boundary.",
+    nextAction: "Prove Hermes binary and containment",
+    confidenceLabel: "Real worker blocked",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    hermesJobState: "blocked_containment",
+    lastEvent: "Hermes real execution remains unavailable; do not infer a hidden worker is running.",
+    riskFlags: ["Hermes missing", "containment unproven", "real launch blocked"],
+    governedWorkerAttempt: {
+      worker: "hermes",
+      status: "rejected",
+      authorityMode: "copied_worktree_worker_execution",
+      lane: "hermes_governed_execution",
+      label: "real execution unavailable",
+      rejectionReason: "hermes_binary_or_containment_not_proven",
+    },
+  }),
+  packetFixture({
     packetId: "fixture:claude-pending",
     title: "Claude review pending under scarce review policy",
     requestedOutcome: "Show Claude as an independent reviewer lane without starting provider automation.",
@@ -1276,14 +1338,14 @@ function packetFixture(input: {
       {
         refId: governedWorkerAttempt.evidenceRefs[0],
         evidenceType: "attempt",
-        label: `Governed ${input.governedWorkerAttempt?.worker} dry-run attempt: ${governedWorkerAttempt.status}`,
+        label: `Governed ${input.governedWorkerAttempt?.worker} ${input.governedWorkerAttempt?.label ?? "dry-run attempt"}: ${governedWorkerAttempt.status}`,
         retentionClass: "metadata_only",
         rawPayloadRetained: false,
       },
       {
         refId: governedWorkerAttempt.evidenceRefs[1],
         evidenceType: "event",
-        label: `Governed ${input.governedWorkerAttempt?.worker} dry-run status event`,
+        label: `Governed ${input.governedWorkerAttempt?.worker} ${input.governedWorkerAttempt?.label ?? "dry-run"} status event`,
         retentionClass: "metadata_only",
         rawPayloadRetained: false,
       }
@@ -1680,13 +1742,18 @@ function claudeReviewFixture(statusLabel: ClaudeReviewPacketV0["statusLabel"], p
 function governedWorkerAttemptFixture(input: GovernedWorkerAttemptFixtureInput): WorkPacketExecutionAttemptSummary {
   const timestamp = "2026-06-27T00:00:00.000Z";
   const isActive = input.status === "running";
+  const workerId = input.authorityMode === "copied_worktree_worker_execution"
+    ? `${input.worker}.governed.copied_worktree_worker_execution`
+    : input.authorityMode
+      ? `${input.worker}.governed.${input.authorityMode}`
+      : `${input.worker}.governed.dry_run`;
   return {
     attemptId: `${input.packetId}:attempt:governed-${input.worker}`,
     workItemId: `${input.packetId}:work-item`,
     routeDecisionId: `${input.packetId}:route:governed-${input.worker}`,
-    workerId: `${input.worker}.governed.dry_run`,
-    lane: `${input.worker}_execution_dry_run`,
-    authorityMode: "non_executing_dry_run",
+    workerId,
+    lane: input.lane ?? `${input.worker}_execution_dry_run`,
+    authorityMode: input.authorityMode ?? "non_executing_dry_run",
     status: input.status,
     requestedById: "operator.fixture",
     requestedByLabel: "Pipeline fixture operator",

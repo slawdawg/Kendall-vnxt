@@ -80,6 +80,10 @@ test("Work Packet stage mapper covers canonical source states and review guardra
     "operator",
     "local_model",
     "hermes_worker_mock",
+    "hermes_execution_dry_run",
+    "hermes_governed_execution",
+    "claude_execution_dry_run",
+    "claude_governed_execution",
     "codex_worker",
     "claude_reviewer",
     "github",
@@ -195,6 +199,36 @@ test("Work Packet stage mapper handles precedence and ambiguous source state beh
         reasonCodes: ["execution_attempt.running", "execution_lane.local_patch_draft_kendall_owned"]
       },
       ambiguity: "Kendall-owned until a worker is selected"
+    },
+    {
+      name: "governed Claude execution maps visibly to Claude reviewer lane",
+      input: { executionAttemptStatus: "running", executionAttemptLane: "claude_governed_execution" },
+      expected: {
+        currentStage: "execute",
+        currentOwner: "claude_reviewer",
+        status: "active",
+        reasonCodes: ["execution_attempt.running", "execution_lane.claude_governed_execution"]
+      }
+    },
+    {
+      name: "governed Hermes execution maps visibly to Hermes lane when active",
+      input: { executionAttemptStatus: "running", executionAttemptLane: "hermes_governed_execution" },
+      expected: {
+        currentStage: "execute",
+        currentOwner: "hermes_worker_mock",
+        status: "active",
+        reasonCodes: ["execution_attempt.running", "execution_lane.hermes_governed_execution"]
+      }
+    },
+    {
+      name: "governed Hermes rejected execution maps visibly to blocked Hermes lane",
+      input: { executionAttemptStatus: "rejected", executionAttemptLane: "hermes_governed_execution" },
+      expected: {
+        currentStage: "execute",
+        currentOwner: "hermes_worker_mock",
+        status: "blocked",
+        reasonCodes: ["execution_attempt.rejected", "execution_lane.hermes_governed_execution"]
+      }
     }
   ];
 

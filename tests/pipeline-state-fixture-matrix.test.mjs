@@ -59,6 +59,8 @@ test("Pipeline State/Evidence Matrix covers required rows, stages, actions, and 
     "execution_attempt.running",
     "governed_worker.hermes_dry_run_running",
     "governed_worker.claude_dry_run_running",
+    "governed_worker.claude_real_execution_running",
+    "governed_worker.hermes_real_execution_unavailable",
     "execution_attempt.failed",
     "execution_attempt.completed",
     "execution_attempt.review_rejected",
@@ -81,8 +83,11 @@ test("Pipeline State/Evidence Matrix covers required rows, stages, actions, and 
   assert.deepEqual(matrixRowById.get("execution_attempt.completed").recoveryActions, []);
   assert.deepEqual(matrixRowById.get("governed_worker.hermes_dry_run_running").allowedActions, []);
   assert.deepEqual(matrixRowById.get("governed_worker.claude_dry_run_running").allowedActions, []);
+  assert.deepEqual(matrixRowById.get("governed_worker.claude_real_execution_running").allowedActions, []);
+  assert.ok(matrixRowById.get("governed_worker.hermes_real_execution_unavailable").recoveryActions.includes("reroute"));
   assert.deepEqual(matrixRowById.get("governed_worker.hermes_dry_run_running").requiredEvidence, ["attempt", "event"]);
   assert.deepEqual(matrixRowById.get("governed_worker.claude_dry_run_running").requiredEvidence, ["attempt", "review"]);
+  assert.deepEqual(matrixRowById.get("governed_worker.claude_real_execution_running").requiredEvidence, ["attempt", "event", "review"]);
   assert.deepEqual(matrixRowById.get("mock.hermes_unavailable").recoveryActions, ["retry_smaller", "reroute", "send_back_to_shape"]);
   assert.deepEqual(matrixRowById.get("execution_attempt.review_rejected").recoveryActions, ["discard_result", "send_back_to_shape", "mark_blocked"]);
   assert.ok(matrixRowById.get("memory.pending_human_approval").recoveryActions.includes("reopen_human_gate"));
