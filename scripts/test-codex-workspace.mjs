@@ -967,6 +967,41 @@ try {
     }
   });
 
+  test("dispatch-next dry-run surfaces delivery-first next action guidance", () => {
+    const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-delivery-guidance-"));
+    try {
+      const expected = expectedClaimCandidate();
+      seedGeneratedSuccessorPrerequisites(queueStateRoot);
+      seedOpenDeliveryManifest(queueStateRoot, expected);
+      const tasksDir = join(queueStateRoot, "tasks");
+      const assignmentsDir = join(queueStateRoot, "assignments");
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run(["dispatch-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- selected lane none"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- queue states "), result.stdout || result.stderr);
+      assert(result.stdout.includes("blocked_authority=1"), result.stdout || result.stderr);
+      assert(result.stdout.includes("closed="), result.stdout || result.stderr);
+      assert(result.stdout.includes("delivery=1"), result.stdout || result.stderr);
+      assert(
+        result.stdout.includes(
+          "- next action guidance finish open delivery lanes first: verify PR checks, review threads, exact head, merge evidence, then run merged-lane cleanup",
+        ),
+        result.stdout || result.stderr,
+      );
+      assert(result.stdout.includes("- blocker no dispatchable safe backlog lane found"), result.stdout || result.stderr);
+      assert(result.stdout.includes(`- ${expected.slug} | delivery`), result.stdout || result.stderr);
+      assert(beforeTasks === taskSnapshot(tasksDir), "delivery guidance dry-run mutated task manifests");
+      assert(beforeAssignments === taskSnapshot(assignmentsDir), "delivery guidance dry-run mutated assignments");
+    } finally {
+      rmSync(queueStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next apply claims the next lane without creating a branch or worktree", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-apply-"));
     try {
@@ -2977,6 +3012,32 @@ function seedClosedSourceCompletion(stateRootPath, candidate) {
         closed_at: closedAt,
         source_assignment_id: candidate.slug,
         source_backlog_item: sourceBacklogItem,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+function seedOpenDeliveryManifest(stateRootPath, candidate) {
+  const tasksDir = join(stateRootPath, "tasks");
+  mkdirSync(tasksDir, { recursive: true });
+  writeFileSync(
+    join(tasksDir, `${candidate.slug}.json`),
+    `${JSON.stringify(
+      {
+        task_id: candidate.slug,
+        title: candidate.title,
+        branch: candidate.branch,
+        worktree_path: rootDir,
+        base_branch: "dev",
+        status: "pr_open",
+        pr_url: "https://example.test/pull/282",
+        pr_number: 282,
+        owner: "runner-a",
+        created_at: "2026-06-27T00:00:00.000Z",
+        updated_at: "2026-06-27T00:00:00.000Z",
+        events: [],
       },
       null,
       2,
