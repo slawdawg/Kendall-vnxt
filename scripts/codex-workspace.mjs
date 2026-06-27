@@ -217,6 +217,7 @@ cleanup-orphans options:
 
 repair-manifests options:
   --apply                   Apply closed-manifest repairs. Without this, repair is dry-run.
+  --summary-json            Without --apply, print a bounded JSON repair summary.
 `);
 }
 
@@ -2698,6 +2699,10 @@ function repairManifests(argv) {
   const { options } = parseOptions(argv);
   const state = workspaceState(options);
   const apply = Boolean(options.apply);
+  if (options.summaryJson && apply) {
+    throw new Error("repair-manifests --summary-json is only supported without --apply.");
+  }
+
   const records = readManifestRecords(state);
   const plans = [];
   const blocked = [];
@@ -2709,6 +2714,11 @@ function repairManifests(argv) {
     } else if (plan.reason) {
       blocked.push(plan);
     }
+  }
+
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildRepairManifestsSummary({ state, records, plans, blocked }), null, 2));
+    return;
   }
 
   const lines = [];
@@ -2749,6 +2759,34 @@ function repairManifests(argv) {
   }
 
   printApplied("repair-manifests", lines);
+}
+
+function buildRepairManifestsSummary({ state, records, plans, blocked }) {
+  return {
+    generatedAt: new Date().toISOString(),
+    tasksDir: state.tasksDir,
+    counts: {
+      total: records.length,
+      repairable: plans.length,
+      blocked: blocked.length,
+    },
+    blockedReasonCounts: countByField(blocked, "reason"),
+    repairableManifests: plans.slice(0, 10).map((plan) => ({
+      taskId: plan.taskId,
+      name: plan.name,
+      path: plan.path,
+      fields: plan.fields,
+    })),
+    repairableManifestsTruncated: plans.length > 10,
+    blockedManifests: blocked.slice(0, 10).map((plan) => ({
+      taskId: plan.taskId || null,
+      name: plan.name,
+      path: plan.path,
+      reason: plan.reason,
+    })),
+    blockedManifestsTruncated: blocked.length > 10,
+    mutation: "none; summary only",
+  };
 }
 
 function closedManifestRepairPlan(record, state) {

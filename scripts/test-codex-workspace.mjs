@@ -788,6 +788,55 @@ try {
     }
   });
 
+  test("repair-manifests summary-json reports repairable and blocked manifests without mutation", () => {
+    const repairStateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-repair-summary-json-"));
+    try {
+      const tasksDir = join(repairStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      const closedPath = join(tasksDir, "closed-legacy.json");
+      const activePath = join(tasksDir, "active-legacy.json");
+      writeFileSync(
+        closedPath,
+        `${JSON.stringify({
+          task_id: "closed-legacy",
+          branch: "codex/closed-legacy",
+          status: "closed",
+        }, null, 2)}\n`,
+      );
+      writeFileSync(
+        activePath,
+        `${JSON.stringify({
+          task_id: "active-legacy",
+          branch: "codex/active-legacy",
+          status: "active",
+        }, null, 2)}\n`,
+      );
+
+      const beforeClosed = readFileSync(closedPath, "utf8");
+      const beforeActive = readFileSync(activePath, "utf8");
+      const result = run(["repair-manifests", "--summary-json", "--state-root", repairStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.tasksDir === tasksDir, result.stdout || result.stderr);
+      assert(packet.counts.total === 2, result.stdout || result.stderr);
+      assert(packet.counts.repairable === 1, result.stdout || result.stderr);
+      assert(packet.counts.blocked === 1, result.stdout || result.stderr);
+      assert(packet.repairableManifests.some((entry) => entry.taskId === "closed-legacy"), result.stdout || result.stderr);
+      assert(packet.repairableManifests[0].fields.includes("worktree_path"), result.stdout || result.stderr);
+      assert(
+        packet.blockedManifests.some((entry) => entry.name === "active-legacy.json" && entry.reason === "only closed legacy manifests can be repaired"),
+        result.stdout || result.stderr,
+      );
+      assert(packet.blockedReasonCounts["only closed legacy manifests can be repaired"] === 1, result.stdout || result.stderr);
+      assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
+      assert(readFileSync(closedPath, "utf8") === beforeClosed, "repair summary-json mutated closed manifest");
+      assert(readFileSync(activePath, "utf8") === beforeActive, "repair summary-json mutated active manifest");
+    } finally {
+      rmSync(repairStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("repair-manifests apply fills closed legacy manifest validation fields", () => {
     const repairStateRoot = mkdtempSync(join(tmpdir(), "codex-workspace-repair-apply-"));
     try {
