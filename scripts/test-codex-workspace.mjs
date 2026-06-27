@@ -3318,6 +3318,29 @@ try {
     assert(existsSync(metadataPath), "cleanup-orphans unexpectedly deleted hidden workspace metadata");
   });
 
+  test("cleanup-orphans summary-json reports orphans without deleting", () => {
+    const orphanPath = join(stateRoot, "worktrees", "orphan-summary-story");
+    mkdirSync(join(orphanPath, "services", "supervisor", ".pytest_cache"), { recursive: true });
+    const metadataPath = join(stateRoot, "worktrees", ".codex");
+    mkdirSync(metadataPath, { recursive: true });
+
+    const result = run(["cleanup-orphans", "--summary-json", "--state-root", stateRoot]);
+
+    assert(result.code === 0, result.stderr || result.stdout);
+    const packet = JSON.parse(result.stdout);
+    assert(packet.worktreesDir === join(stateRoot, "worktrees"), result.stdout || result.stderr);
+    assert(packet.query === null, result.stdout || result.stderr);
+    assert(packet.all === false, result.stdout || result.stderr);
+    assert(packet.counts.matchedOrphans >= 1, result.stdout || result.stderr);
+    assert(packet.counts.hiddenMetadataSkipped >= 1, result.stdout || result.stderr);
+    assert(packet.orphanDirectories.some((entry) => entry.name === "orphan-summary-story"), result.stdout || result.stderr);
+    assert(!packet.orphanDirectories.some((entry) => entry.path === metadataPath), result.stdout || result.stderr);
+    assert(packet.requiresTarget === true, result.stdout || result.stderr);
+    assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
+    assert(existsSync(orphanPath), "cleanup-orphans summary-json removed an orphan directory");
+    assert(existsSync(metadataPath), "cleanup-orphans summary-json removed hidden metadata");
+  });
+
   test("cleanup-orphans refuses hidden workspace metadata even when queried", () => {
     const metadataPath = join(stateRoot, "worktrees", ".codex");
     mkdirSync(metadataPath, { recursive: true });

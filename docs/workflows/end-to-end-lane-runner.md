@@ -152,7 +152,9 @@ cannot be completed without expanded party-mode authority.
    before branch deletion or manifest closure, rerun the same cleanup command
    from a stable worktree.
    Orphan cleanup is for stale lane directories only; hidden workspace metadata
-   under the worktrees root is outside the cleanup surface.
+   under the worktrees root is outside the cleanup surface. Use
+   `cleanup-orphans --summary-json` to inspect matched orphan directories before
+   applying removal.
    For local codex branch cleanup, use `cleanup-branches --summary-json` to
    inspect safe and skipped branches before any delete apply.
    For assignment closeout, use `close-assignments --summary-json` to inspect

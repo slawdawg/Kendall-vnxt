@@ -210,6 +210,11 @@ cleanup-branches options:
   --base <ref>              Ref to compare against. Defaults to origin/main.
                             Missing base refs fail closed; no fetch is performed.
 
+cleanup-orphans options:
+  --apply                   Apply cleanup. Without this, cleanup is dry-run.
+  --all                     Include every orphan directory without a query.
+  --summary-json            Without --apply, print a bounded JSON orphan cleanup summary.
+
 repair-manifests options:
   --apply                   Apply closed-manifest repairs. Without this, repair is dry-run.
 `);
@@ -2325,18 +2330,43 @@ function cleanupOrphans(argv) {
   const state = workspaceState(options);
   const query = positional.join(" ").trim().toLowerCase();
   const apply = Boolean(options.apply);
+  if (options.summaryJson && apply) {
+    throw new Error("cleanup-orphans --summary-json is only supported without --apply.");
+  }
 
   if (!existsSync(state.worktreesDir)) {
+    if (options.summaryJson) {
+      console.log(
+        JSON.stringify(
+          buildCleanupOrphansSummary({ state, query, all: Boolean(options.all), directories: [], hiddenMetadataSkipped: 0 }),
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     console.log(`No managed worktree directory exists: ${state.worktreesDir}`);
     return;
   }
 
-  const directories = readdirSync(state.worktreesDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+  const directoryEntries = readdirSync(state.worktreesDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+  const hiddenMetadataSkipped = directoryEntries.filter((entry) => hiddenWorkspaceMetadataEntry(entry.name)).length;
+  const directories = directoryEntries
     .filter((entry) => !hiddenWorkspaceMetadataEntry(entry.name))
     .map((entry) => join(state.worktreesDir, entry.name))
     .filter((worktreePath) => !worktreeListed(worktreePath))
     .filter((worktreePath) => !query || basename(worktreePath).toLowerCase().includes(query));
+
+  if (options.summaryJson) {
+    console.log(
+      JSON.stringify(
+        buildCleanupOrphansSummary({ state, query, all: Boolean(options.all), directories, hiddenMetadataSkipped }),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
 
   if (directories.length === 0) {
     console.log(query ? `No orphan worktree directories matched: ${query}` : "No orphan worktree directories found.");
@@ -2366,6 +2396,26 @@ function cleanupOrphans(argv) {
     removeManagedDirectory(worktreePath, state);
     console.log(`Removed orphan directory ${worktreePath}`);
   }
+}
+
+function buildCleanupOrphansSummary({ state, query, all, directories, hiddenMetadataSkipped }) {
+  return {
+    generatedAt: new Date().toISOString(),
+    worktreesDir: state.worktreesDir,
+    query: query || null,
+    all,
+    counts: {
+      matchedOrphans: directories.length,
+      hiddenMetadataSkipped,
+    },
+    orphanDirectories: directories.slice(0, 10).map((worktreePath) => ({
+      name: basename(worktreePath),
+      path: worktreePath,
+    })),
+    orphanDirectoriesTruncated: directories.length > 10,
+    requiresTarget: directories.length > 0 && !query && !all,
+    mutation: "none; summary only",
+  };
 }
 
 function hiddenWorkspaceMetadataEntry(name) {
