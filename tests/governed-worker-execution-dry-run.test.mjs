@@ -18,11 +18,17 @@ import {
 } from "../scripts/lib/governed-worker-execution-dry-run.mjs";
 import { precheckGovernedWorkerExecutionDryRun } from "../scripts/check-governed-worker-execution-dry-run.mjs";
 import { collectToolReadinessProbes } from "../scripts/governed-worker-readiness-collect.mjs";
+import {
+  collectToolVersionProbeAttempts,
+  validateToolVersionProbeAttempt,
+} from "../scripts/governed-worker-version-probe.mjs";
 
 const fixtureBase = new URL("./fixtures/governed-worker-execution-dry-run/", import.meta.url);
 const validatorSourcePath = new URL("../scripts/lib/governed-worker-execution-dry-run.mjs", import.meta.url);
 const readinessCollectorSourcePath = new URL("../scripts/governed-worker-readiness-collect.mjs", import.meta.url);
 const readinessCollectorPath = fileURLToPath(readinessCollectorSourcePath);
+const versionProbeSourcePath = new URL("../scripts/governed-worker-version-probe.mjs", import.meta.url);
+const versionProbePath = fileURLToPath(versionProbeSourcePath);
 const packageJsonPath = new URL("../package.json", import.meta.url);
 const checkWrapperPath = new URL("../scripts/check-governed-worker-execution-dry-run.mjs", import.meta.url);
 
@@ -377,6 +383,263 @@ test("collector ignores relative PATH entries and does not expose launch authori
     /\bWebSocket\b/,
     /\bgh\s+/,
     /\brm\s+/,
+    /\bwriteFile\b/,
+  ]) {
+    assert.doesNotMatch(source, forbiddenPattern);
+  }
+});
+
+test("governed worker version probe launches only --version without shell or task authority", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-version-probe-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    await writeFile(
+      claudePath,
+      "#!/bin/sh\nif [ \"$1\" != \"--version\" ]; then echo bad-args; exit 9; fi\necho 'Claude Code 2.1.179'\n",
+      "utf8",
+    );
+    await chmod(claudePath, 0o755);
+
+    const [result] = collectToolVersionProbeAttempts({
+      env: { PATH: tempDir },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 500,
+      workers: ["claude"],
+    });
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.attempt.worker, "claude");
+    assert.equal(result.attempt.mode, "version_probe");
+    assert.equal(result.attempt.authority_level, "worker_version_probe");
+    assert.equal(result.attempt.probe_state, "version_observed");
+    assert.equal(result.attempt.command_path, claudePath);
+    assert.deepEqual(result.attempt.command_args, ["--version"]);
+    assert.equal(result.attempt.command_version, "Claude Code 2.1.179");
+    assert.equal(result.attempt.exit_code, 0);
+    assert.equal(result.attempt.shell_used, false);
+    assert.equal(result.attempt.task_execution_allowed, false);
+    assert.equal(result.attempt.network_required, false);
+    assert.equal(result.attempt.safe_cwd, "/tmp");
+    assert.equal(result.attempt.source_mutation_allowed, false);
+    assert.equal(result.attempt.raw_output_retained, false);
+    assert.equal(result.attempt.affects_trust, false);
+    assert.equal(result.attempt.affects_routing, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("version probe records missing failed timeout and unsafe-output states as metadata", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-version-probe-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    const hermesPath = join(tempDir, "hermes");
+    await writeFile(claudePath, "#!/bin/sh\necho 'Claude Code 2.1.179'\necho 'raw_prompt sk-proj-123456789'\n", "utf8");
+    await writeFile(hermesPath, "#!/bin/sh\nexit 7\n", "utf8");
+    await chmod(claudePath, 0o755);
+    await chmod(hermesPath, 0o755);
+
+    const results = collectToolVersionProbeAttempts({
+      env: { PATH: tempDir },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 500,
+      workers: ["claude", "hermes"],
+    });
+
+    const claude = results.find((result) => result.attempt.worker === "claude");
+    const hermes = results.find((result) => result.attempt.worker === "hermes");
+    assert.equal(claude.validation.ok, true);
+    assert.equal(claude.attempt.probe_state, "invalid_output");
+    assert.equal(claude.attempt.command_version, null);
+    assert.doesNotMatch(JSON.stringify(claude), /sk-proj-123456789/);
+    assert.equal(hermes.validation.ok, true);
+    assert.equal(hermes.attempt.probe_state, "failed");
+    assert.equal(hermes.attempt.exit_code, 7);
+
+    const missing = collectToolVersionProbeAttempts({
+      env: { PATH: tempDir },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 500,
+      workers: ["missing-worker"],
+    })[0];
+    assert.equal(missing.validation.ok, false);
+    assert.equal(missing.validation.worker, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("version probe validator fails closed for task shell trust routing or raw retention effects", () => {
+  const baseAttempt = {
+    probe_id: "probe:claude-version",
+    worker: "claude",
+    mode: "version_probe",
+    authority_level: "worker_version_probe",
+    probe_state: "version_observed",
+    command_path: "/usr/local/bin/claude",
+    command_args: ["--version"],
+    command_version: "Claude Code 2.1.179",
+    exit_code: 0,
+    timed_out: false,
+    timeout_ms: 500,
+    observed_at: "2026-06-27T00:00:00Z",
+    evidence_ref: "metadata:worker-version-probe/claude",
+    shell_used: false,
+    task_execution_allowed: false,
+    network_required: false,
+    safe_cwd: "/tmp",
+    source_mutation_allowed: false,
+    raw_output_retained: false,
+    affects_trust: false,
+    affects_routing: false,
+  };
+
+  assert.equal(validateToolVersionProbeAttempt(baseAttempt).ok, true);
+
+  for (const [field, value] of [
+    ["mode", "dry_run"],
+    ["authority_level", "worker_task_execution"],
+    ["probe_state", "task_complete"],
+    ["command_path", "claude"],
+    ["command_args", ["--print", "hello"]],
+    ["command_version", "raw_prompt sk-proj-123456789"],
+    ["timeout_ms", 5000],
+    ["shell_used", true],
+    ["task_execution_allowed", true],
+    ["network_required", true],
+    ["safe_cwd", process.cwd()],
+    ["source_mutation_allowed", true],
+    ["raw_output_retained", true],
+    ["affects_trust", true],
+    ["affects_routing", true],
+  ]) {
+    const result = validateToolVersionProbeAttempt({ ...baseAttempt, [field]: value });
+    assert.equal(result.ok, false, `${field} should fail version-probe validation`);
+    assert.ok(result.field_reasons.some((reason) => reason.field === field || reason.field === "probe_state"));
+  }
+});
+
+test("version probe CLI rejects unknown workers invalid timeout and invalid timestamps", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-version-probe-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    const sentinelPath = join(tempDir, "sentinel");
+    await writeFile(claudePath, `#!/bin/sh\ntouch '${sentinelPath}'\necho 'Claude Code 2.1.179'\n`, "utf8");
+    await chmod(claudePath, 0o755);
+
+    const unknownWorker = spawnSync(process.execPath, [versionProbePath, "--workers", "claud"], { encoding: "utf8" });
+    assert.notEqual(unknownWorker.status, 0);
+    const unknownWorkerOutput = JSON.parse(unknownWorker.stdout);
+    assert.deepEqual(unknownWorkerOutput.results, []);
+    assert.ok(unknownWorkerOutput.errors.some((error) => error.reason === "unknown_worker"));
+    assert.ok(unknownWorkerOutput.errors.some((error) => error.reason === "empty_worker_selection"));
+
+    const invalidTimeout = spawnSync(
+      process.execPath,
+      [versionProbePath, "--workers", "claude", "--timeout-ms", "5000"],
+      { encoding: "utf8", env: { ...process.env, PATH: tempDir } },
+    );
+    assert.notEqual(invalidTimeout.status, 0);
+    const invalidTimeoutOutput = JSON.parse(invalidTimeout.stdout);
+    assert.deepEqual(invalidTimeoutOutput.results, []);
+    assert.ok(invalidTimeoutOutput.errors.some((error) => error.reason === "invalid_timeout"));
+    assert.equal(existsSync(sentinelPath), false);
+
+    const invalidTimestamp = spawnSync(
+      process.execPath,
+      [versionProbePath, "--workers", "claude", "--observed-at", "not-a-date"],
+      { encoding: "utf8", env: { ...process.env, PATH: tempDir } },
+    );
+    assert.notEqual(invalidTimestamp.status, 0);
+    const invalidTimestampOutput = JSON.parse(invalidTimestamp.stdout);
+    assert.deepEqual(invalidTimestampOutput.results, []);
+    assert.ok(invalidTimestampOutput.errors.some((error) => error.reason === "invalid_observed_at"));
+    assert.equal(existsSync(sentinelPath), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("version probe skips workspace PATH entries and never launches unknown direct-call workers", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-version-probe-"));
+  try {
+    const workspaceBin = join(tempDir, "workspace", "bin");
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(workspaceBin, { recursive: true });
+    await mkdir(safeBin, { recursive: true });
+    const workspaceSentinel = join(tempDir, "workspace-sentinel");
+    const unknownSentinel = join(tempDir, "unknown-sentinel");
+    await writeFile(join(workspaceBin, "claude"), `#!/bin/sh\ntouch '${workspaceSentinel}'\necho bad\n`, "utf8");
+    await writeFile(join(safeBin, "missing-worker"), `#!/bin/sh\ntouch '${unknownSentinel}'\necho bad\n`, "utf8");
+    await chmod(join(workspaceBin, "claude"), 0o755);
+    await chmod(join(safeBin, "missing-worker"), 0o755);
+
+    const skippedWorkspace = collectToolVersionProbeAttempts({
+      env: { PATH: [workspaceBin, safeBin].join(":"), PWD: join(tempDir, "workspace") },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 500,
+      workers: ["claude"],
+    })[0];
+    assert.equal(skippedWorkspace.validation.ok, true);
+    assert.equal(skippedWorkspace.attempt.probe_state, "missing");
+    assert.equal(existsSync(workspaceSentinel), false);
+
+    const unknownWorker = collectToolVersionProbeAttempts({
+      env: { PATH: safeBin, PWD: tempDir },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 500,
+      workers: ["missing-worker"],
+    })[0];
+    assert.equal(unknownWorker.validation.ok, false);
+    assert.equal(unknownWorker.validation.worker, null);
+    assert.equal(unknownWorker.attempt.command_path, null);
+    assert.equal(existsSync(unknownSentinel), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("version probe uses SIGKILL timeout for workers that trap TERM", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-version-probe-"));
+  try {
+    const claudePath = join(tempDir, "claude");
+    await writeFile(claudePath, "#!/bin/sh\ntrap '' TERM\nwhile true; do :; done\n", "utf8");
+    await chmod(claudePath, 0o755);
+
+    const startedAt = Date.now();
+    const [result] = collectToolVersionProbeAttempts({
+      env: { PATH: tempDir, PWD: process.cwd() },
+      observedAt: "2026-06-27T00:00:00Z",
+      timeoutMs: 100,
+      workers: ["claude"],
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(result.validation.ok, true);
+    assert.equal(result.attempt.probe_state, "timed_out");
+    assert.equal(result.attempt.timed_out, true);
+    assert.ok(elapsedMs < 1500, `timeout should be bounded, got ${elapsedMs}ms`);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("version probe command avoids shell network GitHub cleanup and source mutation primitives", async () => {
+  const source = await readFile(versionProbeSourcePath, "utf8");
+  assert.match(source, /spawnSync\(commandPath, VERSION_ARGS/);
+  assert.match(source, /shell: false/);
+  for (const forbiddenPattern of [
+    /\bfetch\s*\(/,
+    /\bnode:http\b/,
+    /\bnode:https\b/,
+    /\bnode:net\b/,
+    /\bnode:tls\b/,
+    /\bnode:dns\b/,
+    /\bWebSocket\b/,
+    /\bgh\s+/,
+    /\brm\s+/,
+    /\bunlink\b/,
+    /\brmdir\b/,
     /\bwriteFile\b/,
   ]) {
     assert.doesNotMatch(source, forbiddenPattern);
@@ -871,6 +1134,10 @@ test("scoped package scripts and check wrapper are wired for the dry-run slice",
   assert.equal(
     packageJson.scripts?.["worker:readiness:collect"],
     "node ./scripts/governed-worker-readiness-collect.mjs",
+  );
+  assert.equal(
+    packageJson.scripts?.["worker:version:probe"],
+    "node ./scripts/governed-worker-version-probe.mjs",
   );
   assert.match(packageJson.scripts?.["check:static"], /pnpm run check:governed-worker-execution-dry-run/);
   assert.equal(existsSync(checkWrapperPath), true);
