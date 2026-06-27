@@ -47,6 +47,18 @@ export type PipelineFixturePacket = WorkPacketV0View & {
   claudeReview: ClaudeReviewPacketV0 | null;
 };
 
+type WorkPacketExecutionAttemptSummary = WorkPacketV0View["executionAttempts"][number];
+
+type GovernedWorkerAttemptFixtureInput = {
+  worker: "claude" | "hermes";
+  status: "planned" | "running" | "rejected" | "failed" | "completed";
+  evidenceRef: string;
+  eventRef: string;
+  packetId: string;
+  failureReason?: string;
+  rejectionReason?: string;
+};
+
 export type LocalModelHealthV0 = {
   provider: "ollama";
   endpointUrl: string | null;
@@ -753,6 +765,48 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
     codexWorkerState: "active",
   }),
   packetFixture({
+    packetId: "fixture:governed-hermes-dry-run-active",
+    title: "Governed Hermes dry-run attempt active",
+    requestedOutcome: "Show Hermes execution-attempt state without launching Hermes, Docker, network, sessions, or source mutation.",
+    currentStage: "execute",
+    currentOwner: "hermes_worker_mock",
+    status: "active",
+    riskLevel: "high",
+    priority: "high",
+    fixtureId: "mocked_hermes_unavailable",
+    matrixRowIds: ["governed_worker.hermes_dry_run_running"],
+    fixtureKind: "mocked",
+    summary: "Hermes is visible as a governed non-executing dry-run attempt with all live execution authorities blocked.",
+    nextAction: "Inspect Hermes dry-run attempt",
+    confidenceLabel: "Worker dry-run active",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    hermesJobState: "mocked_ready",
+    governedWorkerAttempt: { worker: "hermes", status: "running" },
+  }),
+  packetFixture({
+    packetId: "fixture:governed-claude-dry-run-active",
+    title: "Governed Claude dry-run attempt active",
+    requestedOutcome: "Show Claude execution-attempt state without calling Anthropic, inheriting sessions, using network, or mutating source.",
+    currentStage: "execute",
+    currentOwner: "claude_reviewer",
+    status: "active",
+    riskLevel: "high",
+    priority: "high",
+    fixtureId: "codex_active_claude_pending",
+    matrixRowIds: ["governed_worker.claude_dry_run_running"],
+    fixtureKind: "mocked",
+    summary: "Claude is visible as a governed non-executing dry-run attempt while provider and session authority remain blocked.",
+    nextAction: "Inspect Claude dry-run attempt",
+    confidenceLabel: "Worker dry-run active",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    claudeReviewState: "pending",
+    governedWorkerAttempt: { worker: "claude", status: "running" },
+  }),
+  packetFixture({
     packetId: "fixture:claude-pending",
     title: "Claude review pending under scarce review policy",
     requestedOutcome: "Show Claude as an independent reviewer lane without starting provider automation.",
@@ -1097,6 +1151,7 @@ function packetFixture(input: {
   hermesJobState?: HermesJobPacketV0["statusLabel"];
   codexWorkerState?: CodexWorkerPacketV0["readiness"];
   claudeReviewState?: ClaudeReviewPacketV0["statusLabel"];
+  governedWorkerAttempt?: Omit<GovernedWorkerAttemptFixtureInput, "packetId" | "evidenceRef" | "eventRef">;
   }): PipelineFixturePacket {
   const fixture = requireCatalogEntry(input.fixtureId);
   const rows = requireMatrixRows(input.matrixRowIds);
@@ -1166,6 +1221,20 @@ function packetFixture(input: {
   const hermesJob = input.hermesJobState ? hermesJobFixture(input.hermesJobState, input.packetId) : null;
   const codexWorker = input.codexWorkerState ? codexWorkerFixture(input.codexWorkerState, input.packetId) : null;
   const claudeReview = input.claudeReviewState ? claudeReviewFixture(input.claudeReviewState, input.packetId) : null;
+  const governedAttemptEvidenceRef = input.governedWorkerAttempt
+    ? `${input.packetId}:evidence:governed-${input.governedWorkerAttempt.worker}-attempt`
+    : null;
+  const governedAttemptEventRef = input.governedWorkerAttempt
+    ? `${input.packetId}:evidence:governed-${input.governedWorkerAttempt.worker}-status-event`
+    : null;
+  const governedWorkerAttempt = input.governedWorkerAttempt && governedAttemptEvidenceRef && governedAttemptEventRef
+    ? governedWorkerAttemptFixture({
+        ...input.governedWorkerAttempt,
+        packetId: input.packetId,
+        evidenceRef: governedAttemptEvidenceRef,
+        eventRef: governedAttemptEventRef,
+      })
+    : null;
   if (localModelHealth) {
     evidenceRefs.push({
       refId: localModelHealth.evidenceRef,
@@ -1201,6 +1270,24 @@ function packetFixture(input: {
       retentionClass: "metadata_only",
       rawPayloadRetained: false,
     });
+  }
+  if (governedWorkerAttempt) {
+    evidenceRefs.push(
+      {
+        refId: governedWorkerAttempt.evidenceRefs[0],
+        evidenceType: "attempt",
+        label: `Governed ${input.governedWorkerAttempt?.worker} dry-run attempt: ${governedWorkerAttempt.status}`,
+        retentionClass: "metadata_only",
+        rawPayloadRetained: false,
+      },
+      {
+        refId: governedWorkerAttempt.evidenceRefs[1],
+        evidenceType: "event",
+        label: `Governed ${input.governedWorkerAttempt?.worker} dry-run status event`,
+        retentionClass: "metadata_only",
+        rawPayloadRetained: false,
+      }
+    );
   }
   const artifactRefs: WorkPacketV0View["artifactRefs"] = [
     {
@@ -1245,7 +1332,7 @@ function packetFixture(input: {
       confidenceBand: input.confidenceLabel,
       reasonCodes: input.matrixRowIds,
     },
-    executionAttempts: [],
+    executionAttempts: governedWorkerAttempt ? [governedWorkerAttempt] : [],
     sourceRefs,
     evidenceRefs,
     artifactRefs,
@@ -1587,6 +1674,34 @@ function claudeReviewFixture(statusLabel: ClaudeReviewPacketV0["statusLabel"], p
     statusLabel,
     evidenceRef: `${packetId}:evidence:claude-review`,
     boundarySummary: "Claude is a reviewer / second opinion and not an implementation lane in v0.",
+  };
+}
+
+function governedWorkerAttemptFixture(input: GovernedWorkerAttemptFixtureInput): WorkPacketExecutionAttemptSummary {
+  const timestamp = "2026-06-27T00:00:00.000Z";
+  const isActive = input.status === "running";
+  return {
+    attemptId: `${input.packetId}:attempt:governed-${input.worker}`,
+    workItemId: `${input.packetId}:work-item`,
+    routeDecisionId: `${input.packetId}:route:governed-${input.worker}`,
+    workerId: `${input.worker}.governed.dry_run`,
+    lane: `${input.worker}_execution_dry_run`,
+    authorityMode: "non_executing_dry_run",
+    status: input.status,
+    requestedById: "operator.fixture",
+    requestedByLabel: "Pipeline fixture operator",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    startedAt: isActive ? timestamp : null,
+    completedAt: ["completed", "failed", "rejected"].includes(input.status) ? timestamp : null,
+    heartbeatAt: isActive ? timestamp : null,
+    timeoutAt: null,
+    cancelRequestedAt: null,
+    cancelReason: null,
+    rejectionReason: input.rejectionReason ?? (input.status === "rejected" ? "governed_worker_authority_blocked" : null),
+    failureReason: input.failureReason ?? null,
+    evidenceRefs: [input.evidenceRef, input.eventRef],
+    artifactRefs: [`${input.packetId}:artifact:fixture`],
   };
 }
 

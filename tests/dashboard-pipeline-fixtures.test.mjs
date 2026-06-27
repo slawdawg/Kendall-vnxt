@@ -151,6 +151,7 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
     "Got here",
     "Next",
     "Blocked by",
+    "Execution attempts",
     "Back to pipeline",
     "Packet detail:",
     "Packet 5 Whys",
@@ -180,6 +181,9 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
     "Approved model",
     "Latency",
     "Call authority",
+    "authority mode",
+    "metadata_only",
+    "rawPayloadRetained false",
     "Hermes Worker Mock",
     "Mocked Hermes containment",
     "Codex Worker Card",
@@ -190,6 +194,11 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
     "Approval requirement",
     "Network policy",
     "Cleanup policy",
+    "Governed Hermes dry-run attempt active",
+    "Governed Claude dry-run attempt active",
+    "governed.dry_run",
+    "governed_worker.claude_dry_run_running",
+    "non_executing_dry_run",
     "Selected route",
     "Rejected routes",
     "Source context",
@@ -834,7 +843,10 @@ test("pipeline Codex and Claude lane fixtures stay distinct and metadata-only", 
     assert.doesNotMatch(packet.nextAction, /implement with claude|claude implementation/i);
     assert.ok(packet.reviewSummaries.some((review) => review.reviewer === "claude_reviewer" && review.evidenceRefs.includes(packet.claudeReview.evidenceRef)));
     if (packet.claudeReview.statusLabel === "pending") {
-      assert.ok(packet.matrixRowIds.includes("mock.claude_pending_skipped"), `${packet.packetId} should reuse the Claude pending/skipped matrix row`);
+      assert.ok(
+        packet.matrixRowIds.includes("mock.claude_pending_skipped") || packet.matrixRowIds.includes("governed_worker.claude_dry_run_running"),
+        `${packet.packetId} should link either the Claude pending/skipped row or the governed Claude dry-run row`
+      );
       assert.equal(packet.currentOwner, "claude_reviewer");
     }
   }

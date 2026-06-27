@@ -787,6 +787,19 @@ test.describe("dashboard workflow coverage", () => {
     await expect(failedInspection.getByText("Recovery", { exact: true })).toBeVisible();
     await failedPacketButton.click();
     await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
+    await packetSearch.fill("hermes.governed");
+    const governedHermesPacketButton = routeMap.getByRole("button", { name: /Inspect packet: Governed Hermes dry-run attempt active/ });
+    await expect(governedHermesPacketButton).toBeVisible();
+    await governedHermesPacketButton.click();
+    const governedHermesInspection = page.getByLabel("Packet inspection panel");
+    await expect(governedHermesInspection).toBeVisible();
+    await expect(governedHermesInspection.getByLabel("Execution attempts")).toBeVisible();
+    await expect(governedHermesInspection.getByText("hermes.governed.dry_run", { exact: false })).toBeVisible();
+    await expect(governedHermesInspection.getByText("authority mode non_executing_dry_run", { exact: false })).toBeVisible();
+    await expect(governedHermesInspection.getByText("retention metadata_only", { exact: false })).toBeVisible();
+    await expect(governedHermesInspection.getByText("rawPayloadRetained false", { exact: false })).toBeVisible();
+    await governedHermesPacketButton.click();
+    await expect(page.getByLabel("Packet inspection panel")).toHaveCount(0);
     await packetSearch.fill("");
     for (const stage of ["Capture", "Classify", "Route", "Shape", "Needs approval", "Execute", "Review", "Promote", "Deliver", "Learn"]) {
       await expect(routeMap.getByRole("button", { name: stage, exact: true })).toHaveCount(1);

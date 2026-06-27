@@ -648,6 +648,18 @@ function PacketInspection({ packet }: { packet: PipelineFixturePacket }) {
         <InspectionRow label="Next" value={plainNextStageLabel(packet)} />
         <InspectionRow label="Blocked by" value={blockerLabel(packet)} />
       </dl>
+      {packet.executionAttempts.length > 0 ? (
+        <section aria-label="Execution attempts" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
+          <h3 className="text-sm font-semibold">Execution attempts</h3>
+          <ul className="grid gap-2 text-xs leading-5 text-[var(--muted)]">
+            {packet.executionAttempts.map((attempt) => (
+              <li className="break-words" key={attempt.attemptId}>
+                Worker {attempt.workerId}; status {attempt.status}; authority mode {attempt.authorityMode}; retention metadata_only; rawPayloadRetained false; evidence refs {attempt.evidenceRefs.join(", ")}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <Link
         className="mt-3 inline-flex rounded-[0.375rem] border border-[color-mix(in_srgb,var(--accent)_42%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-3 py-1.5 text-sm font-semibold text-[var(--accent)] no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--info)]"
         href={`/pipeline/packets/${encodeURIComponent(packet.packetId)}`}
@@ -1005,6 +1017,7 @@ function searchablePacketText(packet: PipelineFixturePacket) {
     packet.confidenceLabel,
     packet.freshnessLabel,
     packet.sourceTrustStates.join(" "),
+    packet.executionAttempts.map((attempt) => `${attempt.workerId} ${attempt.status} ${attempt.authorityMode} ${attempt.evidenceRefs.join(" ")}`).join(" "),
     packet.laneCards.map((lane) => `${lane.label} ${lane.status}`).join(" "),
   ].join(" ").toLowerCase();
 }
