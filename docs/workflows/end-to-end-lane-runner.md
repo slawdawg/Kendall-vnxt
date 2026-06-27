@@ -142,6 +142,8 @@ cannot be completed without expanded party-mode authority.
    For dependency or bot PRs outside a managed lane, verify in a temporary
    detached worktree from the PR head so dirty local work does not contaminate
    merge evidence.
+   Use `doctor --summary-json` when automation needs a bounded readiness packet
+   instead of human-readable doctor output.
 9. **Cleanup.** Prefer `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
    run first. Add `--summary-json` when an automation runner needs the bounded

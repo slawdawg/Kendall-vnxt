@@ -222,6 +222,9 @@ repair-manifests options:
 rebuild-index options:
   --dry-run                 Preview manifest rebuilds without writing.
   --summary-json            Print a bounded JSON rebuild summary without writing.
+
+doctor options:
+  --summary-json            Print a bounded JSON readiness summary.
 `);
 }
 
@@ -2712,13 +2715,41 @@ function doctor(argv) {
     );
   }
 
-  for (const finding of findings) {
-    console.log(`${finding.ok ? "OK" : finding.optional ? "WARN" : "FAIL"}: ${finding.message}`);
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildDoctorSummary({ state, findings }), null, 2));
+  } else {
+    for (const finding of findings) {
+      console.log(`${finding.ok ? "OK" : finding.optional ? "WARN" : "FAIL"}: ${finding.message}`);
+    }
   }
 
   if (findings.some((finding) => !finding.ok && !finding.optional)) {
     process.exit(1);
   }
+}
+
+function buildDoctorSummary({ state, findings }) {
+  const failures = findings.filter((finding) => !finding.ok && !finding.optional);
+  const warnings = findings.filter((finding) => !finding.ok && finding.optional);
+  const ok = findings.filter((finding) => finding.ok);
+  return {
+    generatedAt: new Date().toISOString(),
+    stateRoot: state.root,
+    status: failures.length > 0 ? "fail" : warnings.length > 0 ? "warn" : "ok",
+    counts: {
+      total: findings.length,
+      ok: ok.length,
+      warnings: warnings.length,
+      failures: failures.length,
+    },
+    failures: failures.slice(0, 10),
+    failuresTruncated: failures.length > 10,
+    warnings: warnings.slice(0, 10),
+    warningsTruncated: warnings.length > 10,
+    okFindings: ok.slice(0, 10),
+    okFindingsTruncated: ok.length > 10,
+    mutation: "none; summary only",
+  };
 }
 
 function readManifests(state) {

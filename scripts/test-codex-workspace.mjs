@@ -14,6 +14,27 @@ try {
     assert(result.code === 0, result.stderr || result.stdout);
   });
 
+  test("doctor summary-json emits bounded readiness counts", () => {
+    const doctorStateRoot = mkdtempSync(join(tmpdir(), "codex-doctor-summary-json-"));
+    try {
+      const result = run(["doctor", "--summary-json", "--state-root", doctorStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(!result.stdout.includes("OK:"), "summary-json stdout must not contain text findings");
+      const packet = JSON.parse(result.stdout);
+      assert(packet.stateRoot === doctorStateRoot, result.stdout || result.stderr);
+      assert(["ok", "warn", "fail"].includes(packet.status), result.stdout || result.stderr);
+      assert(Number.isInteger(packet.counts.total), result.stdout || result.stderr);
+      assert(packet.counts.total === packet.counts.ok + packet.counts.warnings + packet.counts.failures, result.stdout || result.stderr);
+      assert(Array.isArray(packet.okFindings), result.stdout || result.stderr);
+      assert(Array.isArray(packet.warnings), result.stdout || result.stderr);
+      assert(Array.isArray(packet.failures), result.stdout || result.stderr);
+      assert(packet.mutation === "none; summary only", result.stdout || result.stderr);
+    } finally {
+      rmSync(doctorStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("doctor warns about prunable git worktree registrations", () => {
     const staleWorktreePath = mkdtempSync(join(tmpdir(), "codex-stale-worktree-registration-"));
     const staleStateRoot = mkdtempSync(join(tmpdir(), "codex-stale-worktree-state-"));
