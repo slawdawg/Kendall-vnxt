@@ -52,6 +52,9 @@ try {
     case "heartbeat":
       heartbeat(commandArgs);
       break;
+    case "close-assignments":
+      closeAssignments(commandArgs);
+      break;
     case "takeover":
       takeover(commandArgs);
       break;
@@ -103,6 +106,7 @@ Commands:
   assignment-report         Show read-only runner assignment inventory and blockers.
   claim-next                Preview the next claimable runner assignment lane.
   heartbeat <query>         Update owner-only runner heartbeat evidence.
+  close-assignments         Close assignment records whose workspaces are already closed.
   takeover <query>          Build or apply explicit stale-owner takeover evidence.
   dispatch-next             Claim or resume one safe lane and record handoff evidence.
   resume <query>            Print the matching task worktree and branch.
@@ -157,6 +161,10 @@ heartbeat options:
   --current-command <text>  Current command or wait state summary.
   --last-result <text>      Last result summary.
   --stale-after-seconds <n> Stale owner threshold to record. Defaults to 86400.
+
+close-assignments options:
+  --ids <a,b>               Comma-separated assignment ids to close.
+  --apply                   Apply closeout. Without this, closeout is dry-run.
 
 takeover options:
   --dry-run                 Print takeover packet without mutation.
@@ -1020,6 +1028,64 @@ function heartbeat(argv) {
     `wrote ${result.path}`,
     "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
   ]);
+}
+
+function closeAssignments(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (options.apply && options.dryRun) {
+    throw new Error("close-assignments accepts either --dry-run or --apply, not both.");
+  }
+
+  const assignmentIds = closeAssignmentIds(positional, options);
+  if (assignmentIds.length === 0) {
+    throw new Error("close-assignments requires --ids or an assignment query.");
+  }
+
+  const state = workspaceState(options);
+  const currentOwner = currentLaneOwner(options);
+  const records = assignmentIds.map((assignmentId) => {
+    assertSafeTaskId(assignmentId);
+    const path = assignmentPath(state, assignmentId);
+    if (!existsSync(path)) {
+      throw new Error(`Assignment does not exist: ${assignmentId}`);
+    }
+    return { path, assignment: readAssignment(path) };
+  });
+  const manifests = readManifests(state);
+  const plans = records.map((record) => assignmentCloseoutPlan(record, manifests, currentOwner));
+  const lines = plans.map(renderAssignmentCloseoutPlan);
+  const blocked = plans.filter((plan) => !plan.closeable && !plan.alreadyClosed);
+
+  if (!options.apply) {
+    printPlan("close-assignments", [
+      ...lines,
+      "preview only; pass --apply to close eligible assignment records",
+    ]);
+    return;
+  }
+
+  if (blocked.length > 0) {
+    throw new Error(`Refusing to close blocked assignments: ${blocked.map((plan) => plan.assignmentId).join(", ")}`);
+  }
+
+  for (const plan of plans) {
+    if (plan.alreadyClosed) {
+      continue;
+    }
+    applyAssignmentCloseout(state, plan.assignmentId, currentOwner);
+  }
+  printApplied("close-assignments", lines);
+}
+
+function closeAssignmentIds(positional, options) {
+  const ids = [];
+  if (options.ids) {
+    ids.push(...String(options.ids).split(","));
+  }
+  if (positional.length > 0) {
+    ids.push(positional.join(" "));
+  }
+  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
 }
 
 function takeover(argv) {
@@ -1941,6 +2007,110 @@ function closeAssignmentForCleanedManifest(state, manifest) {
       taskEvent("closed", `cleaned merged workspace ${manifest.task_id}`),
     ];
     writeAssignment(path, assignment);
+    return { closed: true, assignmentId, closedAt };
+  });
+}
+
+function assignmentCloseoutPlan(record, manifests, currentOwner) {
+  const assignment = record.assignment;
+  validateAssignment(assignment, record.path);
+  const assignmentId = assignment.assignment_id;
+  const manifestRecord = closedManifestForAssignment(assignment, manifests);
+  const base = {
+    assignmentId,
+    assignmentPath: record.path,
+    taskId: assignment.task_id || null,
+    manifest: manifestRecord?.manifest || null,
+    manifestPath: manifestRecord?.path || null,
+    alreadyClosed: assignment.status === "closed",
+    closeable: false,
+    reason: "",
+  };
+
+  if (assignment.status === "closed") {
+    return { ...base, reason: "assignment already closed" };
+  }
+  if (!manifestRecord) {
+    return { ...base, reason: "no matching closed workspace manifest" };
+  }
+  const manifest = manifestRecord.manifest;
+  const assignmentBranch = assignment.branch || assignment.source_backlog_item?.branch_name || "";
+  if (assignmentBranch !== manifest.branch) {
+    return {
+      ...base,
+      reason: `assignment branch ${assignmentBranch || "missing"} does not match closed workspace branch ${manifest.branch}`,
+    };
+  }
+  if (assignment.owner && assignment.owner !== currentOwner) {
+    return { ...base, reason: `assignment owner ${assignment.owner} does not match ${currentOwner}` };
+  }
+
+  return {
+    ...base,
+    closeable: true,
+    reason: `closed workspace evidence ${manifest.task_id}`,
+  };
+}
+
+function closedManifestForAssignment(assignment, manifests) {
+  return manifests.find(({ manifest }) => {
+    if (manifest.status !== "closed") {
+      return false;
+    }
+    return (
+      manifest.source_assignment_id === assignment.assignment_id ||
+      (assignment.task_id && manifest.task_id === assignment.task_id)
+    );
+  }) || null;
+}
+
+function renderAssignmentCloseoutPlan(plan) {
+  const state = plan.closeable ? "close" : plan.alreadyClosed ? "skip" : "blocked";
+  const target = plan.manifest?.task_id || plan.taskId || "none";
+  return `${state} ${plan.assignmentId} | workspace=${target} | reason=${plan.reason}`;
+}
+
+function applyAssignmentCloseout(state, assignmentId, currentOwner) {
+  assertSafeTaskId(assignmentId);
+  const targetAssignmentPath = assignmentPath(state, assignmentId);
+
+  return withAssignmentLock(state, assignmentId, () => {
+    const assignment = readAssignment(targetAssignmentPath);
+    validateAssignment(assignment, targetAssignmentPath);
+    const manifests = readManifests(state);
+    const plan = assignmentCloseoutPlan({ path: targetAssignmentPath, assignment }, manifests, currentOwner);
+    if (plan.alreadyClosed) {
+      return { closed: false, assignmentId };
+    }
+    if (!plan.closeable) {
+      throw new Error(`Assignment ${assignmentId} is not closeable: ${plan.reason}`);
+    }
+
+    const closedAt = new Date().toISOString();
+    assignment.status = "closed";
+    assignment.phase = "closed";
+    assignment.updated_at = closedAt;
+    assignment.closed_at = closedAt;
+    assignment.current_command = null;
+    assignment.last_result = `closed from completed workspace ${plan.manifest.task_id}`;
+    assignment.events = [
+      ...(Array.isArray(assignment.events) ? assignment.events : []),
+      taskEvent("closed", `closed from completed workspace ${plan.manifest.task_id}`),
+    ];
+    writeAssignment(targetAssignmentPath, assignment);
+
+    withManifestLock(state, plan.manifest.task_id, () => {
+      const manifest = readManifest(plan.manifestPath);
+      validateManifest(manifest, plan.manifestPath);
+      if (manifest.status !== "closed") {
+        throw new Error(`Workspace ${manifest.task_id} is no longer closed.`);
+      }
+      manifest.source_assignment_closed_at = closedAt;
+      manifest.updated_at = closedAt;
+      appendTaskEvent(manifest, "assignment_closed", assignmentId);
+      writeManifest(plan.manifestPath, manifest);
+    });
+
     return { closed: true, assignmentId, closedAt };
   });
 }
