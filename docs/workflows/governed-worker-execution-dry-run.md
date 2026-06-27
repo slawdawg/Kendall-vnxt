@@ -270,6 +270,27 @@ same run. `unknown` is terminal blocked/failed for authority decisions and is
 never eligible for retry, promotion, approval inference, delivery, merge, or
 cleanup.
 
+### `/pipeline` Status Rendering
+
+The dashboard may render governed Claude or Hermes dry-run attempts as
+`ExecutionAttempt` or Work Packet execution-attempt summaries when all of these
+remain true:
+
+- `authorityMode` is `non_executing_dry_run`;
+- evidence refs are packet-local metadata refs;
+- retained evidence is `metadata_only` and `rawPayloadRetained` is false;
+- worker id uses a dry-run identity such as `claude.governed.dry_run` or
+  `hermes.governed.dry_run`;
+- visible status never implies `running_live_worker`, provider calls, network
+  access, session inheritance, source mutation, delivery, merge, cleanup, or raw
+  output retention.
+
+A UI label such as `running` may describe an active non-executing dry-run
+attempt only when the same packet also displays the dry-run authority mode and
+metadata-only evidence boundary. It is not process liveness evidence and must
+not be used by routing, trust scoring, approvals, delivery, merge, cleanup, or
+retry automation.
+
 Event ordering is by `run_id` and strictly increasing `sequence`. Missing,
 duplicate, non-numeric, or decreasing sequence values fail closed. If sequence
 values tie, the event with the older timestamp is retained as evidence and the

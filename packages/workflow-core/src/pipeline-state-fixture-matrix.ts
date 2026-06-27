@@ -395,6 +395,32 @@ export const PIPELINE_STATE_EVIDENCE_MATRIX_V0: PipelineStateEvidenceMatrixRowV0
     storyType: ["projection_adapter", "mock_status", "readiness_evidence"]
   }),
   row({
+    id: "governed_worker.hermes_dry_run_running",
+    sourceEntityState: "Governed Hermes dry-run attempt running",
+    stage: "execute",
+    owner: "hermes_worker_mock",
+    status: "active",
+    mappingInput: { executionAttemptStatus: "running", executionAttemptLane: "hermes_execution_dry_run" },
+    disallowedOrStaleActions: [blockedAction("approve_execution", "Governed dry-run status is not live execution approval.")],
+    requiredEvidence: ["attempt", "event"],
+    fixtureIds: ["mocked_hermes_unavailable"],
+    futureRealSourceCoverage: "Future Hermes dry-run status may populate execution-attempt refs without process launch, network, sessions, source mutation, or raw output.",
+    storyType: ["projection_adapter", "mock_status", "readiness_evidence"]
+  }),
+  row({
+    id: "governed_worker.claude_dry_run_running",
+    sourceEntityState: "Governed Claude dry-run attempt running",
+    stage: "execute",
+    owner: "claude_reviewer",
+    status: "active",
+    mappingInput: { executionAttemptStatus: "running", executionAttemptLane: "claude_execution_dry_run" },
+    disallowedOrStaleActions: [blockedAction("approve_execution", "Governed dry-run status is not live execution approval.")],
+    requiredEvidence: ["attempt", "review"],
+    fixtureIds: ["codex_active_claude_pending"],
+    futureRealSourceCoverage: "Future Claude dry-run status may populate execution-attempt refs without provider calls, network, sessions, source mutation, or raw output.",
+    storyType: ["projection_adapter", "mock_status", "readiness_evidence"]
+  }),
+  row({
     id: "execution_attempt.failed",
     sourceEntityState: "Execution attempt failed",
     stage: "execute",
