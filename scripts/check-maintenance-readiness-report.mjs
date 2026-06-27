@@ -60,7 +60,9 @@ for (const serviceText of [
   "authority-blocker-watch",
   "Ollama Story 4.4 is approved only for VM-to-host endpoint http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b.",
   "Raw Ollama prompts, completions, reasoning fields, and provider payloads must not be retained.",
-  "Maintenance work must not approve local provider/model calls.",
+  "The 2026-06-27 approval allows planning/control-plane readiness",
+  "Subscription-agent, Codex CLI, and Claude CLI process launch remain disabled for this readiness slice.",
+  "Maintenance work must not approve runtime local provider/model calls beyond the existing Story 4.4 boundary.",
   "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Maintenance readiness service must include ${serviceText}`, failures);
@@ -113,7 +115,7 @@ for (const browserText of [
   "/controls#dashboard-e2e-report",
   "verification-hygiene",
   "authority-blocker-watch",
-  "Maintenance work must not approve local provider/model calls.",
+  "Maintenance work must not approve runtime local provider/model calls beyond the existing Story 4.4 boundary.",
   "pnpm run check:maintenance-readiness",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert ${browserText}`, failures);

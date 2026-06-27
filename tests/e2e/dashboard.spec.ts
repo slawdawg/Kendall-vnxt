@@ -1577,7 +1577,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(maintenancePanel.getByText("Related docs").first()).toBeVisible();
     await expect(maintenancePanel.getByText("docs/workflows/implementation-evidence-boundary.md", { exact: true }).first()).toBeVisible();
     await expect(maintenancePanel.getByRole("link", { name: "/controls#dashboard-e2e-report" }).first()).toBeVisible();
-    await expect(maintenancePanel.getByText("Maintenance work must not approve local provider/model calls.")).toBeVisible();
+    await expect(maintenancePanel.getByText("Maintenance work must not approve runtime local provider/model calls beyond the existing Story 4.4 boundary.")).toBeVisible();
 
     const actionPlanPanel = page.locator("section").filter({ hasText: "Next safe work plan" }).first();
     await expect(actionPlanPanel.getByText("Maintenance action plan", { exact: true })).toBeVisible();
@@ -1632,7 +1632,8 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByRole("link", { name: "/controls#safe-development-backlog" }).first()).toBeVisible();
     await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("handoff-checkpoint-coverage", { exact: true })).toBeVisible();
-    await expect(runwayPanel.getByText("authority-families-blocked", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByText("authority-approval-scope-recorded", { exact: true })).toBeVisible();
+    await expect(runwayPanel.getByText("authority-blocked-approval-scope-readiness", { exact: true }).first()).toBeVisible();
     await expect(runwayPanel.getByText("pnpm run check:development-runway", { exact: true }).first()).toBeVisible();
     await expect(runwayPanel.getByRole("link", { name: "/controls#development-runway-report" }).first()).toBeVisible();
     await expect(runwayPanel.getByText("Development runway slices are not execution-authority approvals.")).toBeVisible();

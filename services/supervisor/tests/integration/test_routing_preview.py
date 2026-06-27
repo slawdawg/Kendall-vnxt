@@ -1875,12 +1875,13 @@ def test_maintenance_readiness_report_tracks_safe_work_without_mutation(tmp_path
         "authority-blocker-watch",
     }
     blocker_track = next(track for track in report["tracks"] if track["trackId"] == "authority-blocker-watch")
-    assert blocker_track["status"] == "blocked_pending_explicit_approval"
+    assert blocker_track["status"] == "ready"
     assert (
         "Ollama Story 4.4 is approved only for VM-to-host endpoint "
         "http://192.168.1.128:11434/v1/chat/completions and model qwen3:14b."
     ) in blocker_track["evidence"]
     assert "Raw Ollama prompts, completions, reasoning fields, and provider payloads must not be retained." in blocker_track["evidence"]
+    assert "Subscription-agent, Codex CLI, and Claude CLI process launch remain disabled for this readiness slice." in blocker_track["evidence"]
     assert all("4.1-4.4 remain blocked" not in evidence for evidence in blocker_track["evidence"])
     assert "GET /supervisor/execution-readiness-report" in blocker_track["relatedReports"]
     assert "/controls#execution-readiness-report" in blocker_track["dashboardAnchors"]
@@ -1890,7 +1891,7 @@ def test_maintenance_readiness_report_tracks_safe_work_without_mutation(tmp_path
     documentation_track = next(track for track in report["tracks"] if track["trackId"] == "documentation-hygiene")
     assert "docs/workflows/implementation-evidence-boundary.md" in documentation_track["relatedDocs"]
     assert "/controls#documentation-authority-report" in documentation_track["dashboardAnchors"]
-    assert any("must not approve local provider/model calls" in stop_line for stop_line in report["stopLines"])
+    assert any("must not approve runtime local provider/model calls" in stop_line for stop_line in report["stopLines"])
     assert any("coherent PRs" in action for action in report["nextSafeActions"])
 
 
@@ -1930,7 +1931,9 @@ def test_maintenance_action_plan_report_consolidates_next_safe_steps_without_mut
     assert "GET /supervisor/safe-development-backlog" in safe_slice_step["relatedReports"]
     assert "docs/workflows/implementation-evidence-boundary.md" in safe_slice_step["relatedDocs"]
     authority_step = next(step for step in report["steps"] if step["stepId"] == "preserve-authority-stop-lines")
-    assert authority_step["status"] == "blocked_pending_explicit_approval"
+    assert authority_step["status"] == "ready"
+    assert any("authority-blocked-work is ready" in evidence for evidence in authority_step["evidence"])
+    assert "planning/control-plane gates only" in authority_step["nextAction"]
     assert "pnpm run check:process-lifecycle" in authority_step["verificationCommands"]
     assert "GET /supervisor/execution-readiness-report" in authority_step["relatedReports"]
     assert "docs/architecture/kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md" in authority_step["relatedDocs"]
@@ -2027,16 +2030,16 @@ def test_development_runway_report_groups_larger_safe_slices_without_mutation(tm
     assert "docs/handoffs/current.md" not in handoff_coverage["relatedDocs"]
     assert any("local-development-handoff" in check["evidence"] for check in verification_slice["readinessChecks"])
     authority_slice = next(slice_item for slice_item in report["slices"] if slice_item["sliceId"] == "authority-blocker-maintenance-slice")
-    assert authority_slice["status"] == "blocked_pending_explicit_authority_approval"
-    assert authority_slice["nextLane"] is None
+    assert authority_slice["status"] == "ready"
+    assert authority_slice["nextLane"]["laneSlug"] == "authority-blocked-approval-scope-readiness"
     assert {check["checkId"] for check in authority_slice["readinessChecks"]} == {
-        "authority-families-blocked",
+        "authority-approval-scope-recorded",
         "approval-checkpoint-indexed",
         "boundary-checks-required",
     }
-    assert any(check["status"] == "blocked" for check in authority_slice["readinessChecks"])
-    assert "local-provider-execution" in authority_slice["blockedBy"]
-    assert "subscription-agent-launch" in authority_slice["blockedBy"]
+    assert any(check["status"] == "ready" for check in authority_slice["readinessChecks"])
+    assert "runtime execution successor with exact endpoint or command-template policy" in authority_slice["blockedBy"]
+    assert "disabled-default provider/process safety gate evidence" in authority_slice["blockedBy"]
     assert "GET /supervisor/authority-readiness-matrix-report" in authority_slice["relatedReports"]
     assert "docs/workflows/implementation-evidence-boundary.md" in authority_slice["relatedDocs"]
     assert authority_slice["relatedDocs"].count("docs/workflows/implementation-evidence-boundary.md") == 1
@@ -2344,10 +2347,17 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert report_alignment_item["nextLane"] is None
     assert "do not requeue" in report_alignment_item["nextAction"]
     blocked_item = next(item for item in report["items"] if item["itemId"] == "authority-blocked-work")
-    assert blocked_item["status"] == "blocked_pending_explicit_approval"
-    assert blocked_item["recommendedSliceSize"] == "do_not_start"
-    assert "explicit operator approval naming authority and scope" in blocked_item["blockedBy"]
-    assert blocked_item["nextLane"] is None
+    assert blocked_item["status"] == "ready"
+    assert blocked_item["recommendedSliceSize"] == "medium_to_large"
+    assert "successor PR with exact endpoint or command-template policy before runtime execution" in blocked_item["blockedBy"]
+    assert blocked_item["nextLane"]["laneSlug"] == "authority-blocked-approval-scope-readiness"
+    assert "pnpm run check:authority-readiness" in blocked_item["nextLane"]["verificationCommands"]
+    assert "pnpm run check:execution-boundary" in blocked_item["nextLane"]["verificationCommands"]
+    assert "pnpm run check:process-lifecycle" in blocked_item["nextLane"]["verificationCommands"]
+    assert any("merge, cleanup, issue-sync" in stop_line for stop_line in blocked_item["nextLane"]["stopLines"])
+    assert any("another active lane" in stop_line for stop_line in blocked_item["nextLane"]["stopLines"])
+    assert any("Do not perform any provider/model calls" in stop_line for stop_line in blocked_item["nextLane"]["stopLines"])
+    assert any("Do not launch subscription-agent" in stop_line for stop_line in blocked_item["nextLane"]["stopLines"])
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
     assert verification_item["status"] == "closed"
     assert verification_item["recommendedSliceSize"] == "complete"
@@ -8573,12 +8583,12 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     )
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
-    assert continuity["selectedBranch"] == "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
+    assert continuity["selectedBacklogItemId"] == "authority-blocked-work"
+    assert continuity["selectedBranch"] == "codex/authority-blocked-approval-scope-readiness"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["summaryDryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner <owner>"
     assert continuity["assignableCount"] >= 1
-    assert "blocked-authority" in continuity["blockerCodes"]
+    assert "blocked-authority" not in continuity["blockerCodes"]
     queue_proof_rows = {row["backlogItemId"]: row for row in continuity["queueProofRows"]}
     assert queue_proof_rows["dispatcher-queue-handoff-badges-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-status-refresh"]["classification"] == "closed"
@@ -8693,10 +8703,10 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert queue_proof_rows["dispatcher-queue-state-fixtures-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-continuity-snapshot-refresh"]["classification"] == "closed"
     assert queue_proof_rows["assignment-report-queue-proof-refresh"]["classification"] == "closed"
-    assert queue_proof_rows["authority-blocked-work"]["classification"] == "blocked_authority"
-    assert queue_proof_rows["authority-blocked-work"]["reasonCode"] == "blocked-authority"
+    assert queue_proof_rows["authority-blocked-work"]["classification"] == "assignable"
+    assert queue_proof_rows["authority-blocked-work"]["reasonCode"] == "backlog-assignable"
     authority_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "authority-blocked-work")
-    assert authority_backlog["handoffRecoveryAction"] == "request-explicit-approval"
+    assert authority_backlog["handoffRecoveryAction"] == "no-action"
     assert any(row["classification"] == "claimed" for row in report["laneAssignments"])
     github_backlog = next(row for row in report["backlogCandidates"] if row["backlogItemId"] == "github-delivery-hygiene")
     assert github_backlog["classification"] == "closed"

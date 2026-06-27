@@ -18,6 +18,8 @@ On 2026-06-09, the operator explicitly approved subscription-agent launch Storie
 
 On 2026-06-10, the operator explicitly approved Story 6.1 for a fake-worker orchestrator spike only. That approval allows deterministic lane selection, fake worker adapters, metadata-only evidence, fixture scenarios, and supervisor tests. It does not approve real Codex CLI process launch, real Claude Code CLI process launch, command execution by workers, source mutation by workers, hosted routing gateways, new API billing, credential/session access, autonomous merge, external sends, or raw prompt/completion/provider payload retention.
 
+On 2026-06-27, the operator explicitly approved a planning/implementation slice for the Ollama local provider expansion, subscription-agent launch, and orchestrator CLI worker launch authority families. That approval allows source-owned approval evidence, safe-backlog/readiness/report updates, disabled-default safety gate evidence, command/endpoint boundary preparation, no-call/no-process fixtures, and rollback documentation. It does not approve new Ollama endpoints or models beyond the existing Story 4.4 VM-to-host boundary, endpoint discovery, model discovery, LM Studio, vLLM, llama.cpp, remote providers, subscription-agent process launch, real Codex CLI process launch, real Claude Code CLI process launch, command execution by workers, credential/session access, premium execution, external sends, or worker source mutation. Any runtime execution successor must record the exact endpoint or command-template policy, feature flags, review point, and rollback path before it moves from planning/control-plane preparation to live execution.
+
 ## Current Blocked Execution Stories
 
 ### Ollama Local Provider
@@ -94,12 +96,13 @@ Stories 4.1-4.3 are complete as non-executing Ollama preparation and no-call fix
 Current status remains:
 
 - Ollama provider calls limited to the approved Story 4.4 VM-to-host endpoint/model and disabled unless all exact gates are configured,
+- Ollama local-provider expansion planning and disabled-default gate evidence approved for a bounded 2026-06-27 planning/implementation slice,
 - LM Studio provider calls disabled,
 - vLLM provider calls disabled,
 - llama.cpp provider calls disabled,
-- subscription-agent process launch disabled,
-- orchestrator Codex CLI worker launch disabled,
-- orchestrator Claude Code CLI worker launch disabled,
+- subscription-agent process launch disabled while planning/control-plane preparation and disabled-default gate evidence may proceed,
+- orchestrator Codex CLI worker launch disabled while planning/control-plane preparation and disabled-default gate evidence may proceed,
+- orchestrator Claude Code CLI worker launch disabled while planning/control-plane preparation and disabled-default gate evidence may proceed,
 - premium execution disabled,
 - arbitrary shell execution disabled,
 - worker source mutation disabled,
