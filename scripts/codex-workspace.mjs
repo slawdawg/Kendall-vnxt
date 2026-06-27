@@ -188,10 +188,12 @@ finish-pr options:
 cleanup-merged options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --delete-remote           Delete remote branch after merged cleanup.
+  --summary-json            Without --apply, print a compact JSON cleanup summary.
 
 cleanup-current options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --delete-remote           Delete remote branch after merged cleanup.
+  --summary-json            Without --apply, print a compact JSON cleanup summary.
 
 cleanup-branches options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -1694,6 +1696,9 @@ function antiChurnRecoveryPath(record = {}) {
 
 function cleanupMerged(argv, mode = {}) {
   const { positional, options } = parseOptions(argv);
+  if (options.summaryJson && options.apply) {
+    throw new Error("cleanup-merged --summary-json is only supported without --apply.");
+  }
   const state = workspaceState(options);
   const records = mode.currentOnly
     ? [findManifest(state, positional.join(" "), { preferCurrentWorktree: true })]
@@ -1702,12 +1707,17 @@ function cleanupMerged(argv, mode = {}) {
       : readManifests(state);
   const deleteRemote = Boolean(options.deleteRemote);
   const apply = Boolean(options.apply);
+  const currentOwner = currentLaneOwner(options);
+  const summaryResults = [];
 
   requireGh("cleanup-merged");
 
   for (const record of records) {
     const { manifest, path: manifestPath } = record;
     if (manifest.status === "closed") {
+      if (options.summaryJson) {
+        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_closed", "workspace manifest is already closed"));
+      }
       continue;
     }
     assertLaneOwner(manifest, options);
@@ -1715,10 +1725,22 @@ function cleanupMerged(argv, mode = {}) {
 
     const pr = prView(manifest);
     if (!pr || !pr.mergedAt) {
+      if (options.summaryJson) {
+        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_unmerged_pr", "PR is not merged", { pr }));
+        continue;
+      }
       console.log(`SKIP ${manifest.task_id}: PR is not merged.`);
       continue;
     }
     if (pr.baseRefName && pr.baseRefName !== manifest.base_branch) {
+      if (options.summaryJson) {
+        summaryResults.push(
+          cleanupMergedSkipSummary(manifest, "skipped_pr_base_mismatch", `PR base is ${pr.baseRefName}, expected ${manifest.base_branch}`, {
+            pr,
+          }),
+        );
+        continue;
+      }
       console.log(`SKIP ${manifest.task_id}: PR base is ${pr.baseRefName}, expected ${manifest.base_branch}.`);
       continue;
     }
@@ -1726,11 +1748,19 @@ function cleanupMerged(argv, mode = {}) {
     const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
     const worktreeStatus = worktreeCleanupStatus(manifest, cleanupCwd);
     if (worktreeStatus.dirty) {
+      if (options.summaryJson) {
+        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_dirty_worktree", "worktree is not clean", { pr, worktreeStatus }));
+        continue;
+      }
       console.log(`SKIP ${manifest.task_id}: worktree is not clean.`);
       continue;
     }
 
     const plan = cleanupMergedPlan(manifest, pr, { cleanupCwd, deleteRemote });
+    if (options.summaryJson) {
+      summaryResults.push(cleanupMergedReadySummary(manifest, pr, { cleanupCwd, deleteRemote, plan, worktreeStatus }));
+      continue;
+    }
 
     if (options.dryRun || !apply) {
       printPlan(`cleanup-merged ${manifest.task_id}`, plan);
@@ -1785,6 +1815,93 @@ function cleanupMerged(argv, mode = {}) {
     });
     console.log(`Closed ${manifest.task_id}`);
   }
+
+  if (options.summaryJson) {
+    console.log(
+      JSON.stringify(
+        buildCleanupMergedSummary({
+          state,
+          currentOwner,
+          mode,
+          deleteRemote,
+          results: summaryResults,
+        }),
+        null,
+        2,
+      ),
+    );
+  }
+}
+
+function buildCleanupMergedSummary({ state, currentOwner, mode, deleteRemote, results }) {
+  return {
+    generatedAt: new Date().toISOString(),
+    stateRoot: state.root,
+    currentOwner,
+    mode: mode.currentOnly ? "cleanup-current" : "cleanup-merged",
+    deleteRemote,
+    counts: {
+      total: results.length,
+      cleanupReady: results.filter((result) => result.status === "ready").length,
+      skipped: results.filter((result) => result.status !== "ready").length,
+    },
+    statusCounts: countByField(results, "status"),
+    results: results.slice(0, 10),
+    resultsTruncated: results.length > 10,
+    mutation: "none; summary only",
+  };
+}
+
+function cleanupMergedReadySummary(manifest, pr, options) {
+  return {
+    taskId: manifest.task_id,
+    status: "ready",
+    reason: "PR is merged and worktree is clean",
+    branch: manifest.branch,
+    owner: manifest.owner || null,
+    worktreePath: manifest.worktree_path,
+    worktree: cleanupWorktreeSummary(options.worktreeStatus),
+    pr: cleanupPrSummary(manifest, pr),
+    cleanupCwd: options.cleanupCwd,
+    expectedHeadSha: expectedCleanupHeadSha(manifest, pr) || null,
+    localBranchSha: branchSha(manifest.branch, options.cleanupCwd) || null,
+    remoteBranchSha: options.deleteRemote ? originBranchSha(manifest.branch, options.cleanupCwd) || null : null,
+    plan: options.plan,
+  };
+}
+
+function cleanupMergedSkipSummary(manifest, status, reason, options = {}) {
+  return {
+    taskId: manifest.task_id,
+    status,
+    reason,
+    branch: manifest.branch,
+    owner: manifest.owner || null,
+    worktreePath: manifest.worktree_path,
+    worktree: options.worktreeStatus ? cleanupWorktreeSummary(options.worktreeStatus) : null,
+    pr: cleanupPrSummary(manifest, options.pr),
+  };
+}
+
+function cleanupPrSummary(manifest, pr) {
+  return {
+    number: pr?.number || manifest.pr_number || null,
+    url: pr?.url || manifest.pr_url || null,
+    mergedAt: pr?.mergedAt || manifest.merged_at || null,
+    baseRefName: pr?.baseRefName || null,
+    headRefOid: pr?.headRefOid || manifest.pr_delivery_head_sha || null,
+  };
+}
+
+function cleanupWorktreeSummary(worktreeStatus) {
+  if (!worktreeStatus) {
+    return null;
+  }
+  return {
+    exists: Boolean(worktreeStatus.exists),
+    listed: Boolean(worktreeStatus.listed),
+    dirty: Boolean(worktreeStatus.dirty),
+  };
 }
 
 function closeAssignmentForCleanedManifest(state, manifest) {

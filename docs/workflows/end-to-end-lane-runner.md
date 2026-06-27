@@ -144,8 +144,10 @@ cannot be completed without expanded party-mode authority.
    merge evidence.
 9. **Cleanup.** Prefer `cleanup-current --delete-remote` from inside the lane,
    or `cleanup-merged <query> --delete-remote` from another worktree, as a dry
-   run first. Apply cleanup only when the dry-run output names the expected PR,
-   owner, worktree, local branch, and remote branch for the current lane.
+   run first. Add `--summary-json` when an automation runner needs the bounded
+   cleanup-readiness packet instead of human-readable plan text. Apply cleanup
+   only when the dry-run output names the expected PR, owner, worktree, local
+   branch, and remote branch for the current lane.
    Cleanup is resumable; if a previous attempt removed the worktree but stopped
    before branch deletion or manifest closure, rerun the same cleanup command
    from a stable worktree.
