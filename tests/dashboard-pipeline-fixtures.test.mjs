@@ -1258,6 +1258,100 @@ test("governed copied-worktree evidence projects into pipeline packets without l
   });
   assert.equal(snapshotPackets.length, 1);
   assert.equal(snapshotPackets[0].executionAttempts[0].authorityMode, "copied_worktree_worker_execution");
+
+  const [patchProposalPacket] = projectGovernedCopiedWorktreeExecutionEvidenceSnapshot({
+    schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+    generated_at: "2026-06-27T00:00:00Z",
+    metadata_only: true,
+    raw_payload_retained: false,
+    dashboard_consumption: "no_live_calls",
+    attempts: [
+      {
+        ...baseEvidence,
+        source_id: "claude-patch-proposal-1",
+        worker: "claude",
+        task_id: "starter_patch_proposal",
+        execution_state: "execution_observed",
+        expected_response: "KENDALL_PATCH_PROPOSAL_OK",
+        observed_response: "KENDALL_PATCH_PROPOSAL_OK",
+        output_contract_diagnostic: "structured_match",
+        proposal_target_file: "README.md",
+        proposal_change_kind: "append_line",
+        proposal_summary: "Add a harmless Kendall starter note",
+      },
+    ],
+    errors: [],
+  });
+
+  assert.ok(patchProposalPacket, "patch-proposal evidence should project into the cockpit");
+  assert.equal(patchProposalPacket.status, "complete");
+  assert.equal(patchProposalPacket.executionAttempts[0].status, "completed");
+  assert.match(patchProposalPacket.summary, /KENDALL_PATCH_PROPOSAL_OK/);
+
+  const failurePackets = projectGovernedCopiedWorktreeExecutionEvidenceSnapshot({
+    schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
+    generated_at: "2026-06-27T00:00:00Z",
+    metadata_only: true,
+    raw_payload_retained: false,
+    dashboard_consumption: "no_live_calls",
+    attempts: [
+      {
+        ...baseEvidence,
+        source_id: "claude-missing",
+        worker: "claude",
+        execution_state: "missing",
+        observed_response: null,
+        exit_code: null,
+        command_path: null,
+        copied_tracked_files: 0,
+        copy_bytes: 0,
+      },
+      {
+        ...baseEvidence,
+        source_id: "claude-timeout",
+        worker: "claude",
+        execution_state: "timed_out",
+        observed_response: null,
+        timed_out: true,
+      },
+      {
+        ...baseEvidence,
+        source_id: "claude-invalid-output",
+        worker: "claude",
+        execution_state: "invalid_output",
+        observed_response: null,
+        output_contract_diagnostic: "unexpected_result",
+      },
+      {
+        ...baseEvidence,
+        source_id: "hermes-unsupported",
+        worker: "hermes",
+        execution_state: "unsupported",
+        evidence_ref: "metadata:worker-copied-worktree-execution/hermes",
+        status_event_ref: "metadata:worker-copied-worktree-execution/hermes:status-event",
+        observed_response: null,
+        exit_code: null,
+        command_path: null,
+        copied_tracked_files: 0,
+        copy_bytes: 0,
+      },
+    ],
+    errors: [],
+  });
+
+  assert.equal(failurePackets.length, 4);
+  assert.deepEqual(
+    Object.fromEntries(failurePackets.map((packet) => [packet.packetId, packet.status])),
+    {
+      "evidence:governed-claude-copied-worktree:claude-missing": "failed",
+      "evidence:governed-claude-copied-worktree:claude-timeout": "failed",
+      "evidence:governed-claude-copied-worktree:claude-invalid-output": "failed",
+      "evidence:governed-hermes-copied-worktree:hermes-unsupported": "blocked",
+    },
+  );
+  assert.equal(failurePackets.every((packet) => packet.executionAttempts[0].authorityMode === "copied_worktree_worker_execution"), true);
+  assert.equal(failurePackets.every((packet) => packet.evidenceRefs.every((ref) => ref.rawPayloadRetained === false)), true);
+
   assert.deepEqual(projectGovernedCopiedWorktreeExecutionEvidenceSnapshot({
     schema_version: "governed_worker_copied_worktree_evidence_snapshot.v0",
     generated_at: "2026-06-27T00:00:00Z",

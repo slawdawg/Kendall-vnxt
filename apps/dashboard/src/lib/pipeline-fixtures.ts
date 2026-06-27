@@ -83,8 +83,24 @@ export type GovernedCopiedWorktreeExecutionEvidenceV0 = {
   evidence_ref: string;
   status_event_ref?: string | null;
   observed_at: string;
-  expected_response: "KENDALL_COPY_EXECUTION_OK";
-  observed_response: "KENDALL_COPY_EXECUTION_OK" | null;
+  expected_response: "KENDALL_COPY_EXECUTION_OK" | "KENDALL_PATCH_PROPOSAL_OK";
+  observed_response: "KENDALL_COPY_EXECUTION_OK" | "KENDALL_PATCH_PROPOSAL_OK" | null;
+  output_contract_diagnostic?:
+    | "not_applicable"
+    | "empty_output"
+    | "stderr_raw_marker"
+    | "stdout_not_json"
+    | "stdout_json_not_object"
+    | "stdout_raw_marker"
+    | "missing_result"
+    | "unexpected_result"
+    | "missing_proposal"
+    | "unexpected_proposal"
+    | "structured_match";
+  task_id?: "copy_execution_sentinel" | "starter_patch_proposal";
+  proposal_target_file?: "README.md" | null;
+  proposal_change_kind?: "append_line" | null;
+  proposal_summary?: "Add a harmless Kendall starter note" | null;
   exit_code: number | null;
   timed_out: boolean;
   command_path: string | null;
@@ -129,6 +145,11 @@ const GOVERNED_COPIED_WORKTREE_EVIDENCE_FIELDS = new Set([
   "command_path",
   "expected_response",
   "observed_response",
+  "output_contract_diagnostic",
+  "task_id",
+  "proposal_target_file",
+  "proposal_change_kind",
+  "proposal_summary",
   "exit_code",
   "timed_out",
   "observed_at",
@@ -1324,8 +1345,28 @@ function isSafeGovernedCopiedWorktreeEvidence(entry: GovernedCopiedWorktreeExecu
       && entry.evidence_ref === expectedEvidenceRef
       && !hasUnsafeCopiedWorktreeMarker(entry.evidence_ref)
       && (entry.status_event_ref === undefined || entry.status_event_ref === null || (typeof entry.status_event_ref === "string" && entry.status_event_ref === `${expectedEvidenceRef}:status-event` && !hasUnsafeCopiedWorktreeMarker(entry.status_event_ref)))
-      && entry.expected_response === "KENDALL_COPY_EXECUTION_OK"
-      && (entry.observed_response === "KENDALL_COPY_EXECUTION_OK" || entry.observed_response === null)
+      && (entry.expected_response === "KENDALL_COPY_EXECUTION_OK" || entry.expected_response === "KENDALL_PATCH_PROPOSAL_OK")
+      && (entry.observed_response === entry.expected_response || entry.observed_response === null)
+      && (
+        entry.output_contract_diagnostic === undefined
+        || [
+          "not_applicable",
+          "empty_output",
+          "stderr_raw_marker",
+          "stdout_not_json",
+          "stdout_json_not_object",
+          "stdout_raw_marker",
+          "missing_result",
+          "unexpected_result",
+          "missing_proposal",
+          "unexpected_proposal",
+          "structured_match",
+        ].includes(entry.output_contract_diagnostic)
+      )
+      && (entry.task_id === undefined || entry.task_id === "copy_execution_sentinel" || entry.task_id === "starter_patch_proposal")
+      && (entry.proposal_target_file === undefined || entry.proposal_target_file === null || entry.proposal_target_file === "README.md")
+      && (entry.proposal_change_kind === undefined || entry.proposal_change_kind === null || entry.proposal_change_kind === "append_line")
+      && (entry.proposal_summary === undefined || entry.proposal_summary === null || entry.proposal_summary === "Add a harmless Kendall starter note")
       && (entry.exit_code === null || Number.isInteger(entry.exit_code))
       && typeof entry.timed_out === "boolean"
       && (entry.command_path === null || (typeof entry.command_path === "string" && entry.command_path.startsWith("/") && entry.command_path.split("/").at(-1) === entry.worker))
@@ -1396,11 +1437,21 @@ function hasUnsafeCopiedWorktreeMarkerInValue(value: unknown): boolean {
 function copiedWorktreeStateShapeIsSafe(entry: GovernedCopiedWorktreeExecutionEvidenceV0): boolean {
   if (entry.execution_state === "execution_observed") {
     return entry.worker === "claude"
-      && entry.observed_response === "KENDALL_COPY_EXECUTION_OK"
+      && entry.observed_response === entry.expected_response
       && entry.exit_code === 0
       && entry.timed_out === false
       && entry.command_path !== null
-      && entry.copied_tracked_files >= 1;
+      && entry.copied_tracked_files >= 1
+      && (
+        entry.task_id !== "starter_patch_proposal"
+        || (
+          entry.expected_response === "KENDALL_PATCH_PROPOSAL_OK"
+          && entry.output_contract_diagnostic === "structured_match"
+          && entry.proposal_target_file === "README.md"
+          && entry.proposal_change_kind === "append_line"
+          && entry.proposal_summary === "Add a harmless Kendall starter note"
+        )
+      );
   }
   if (["missing", "unsupported"].includes(entry.execution_state)) {
     return entry.observed_response === null

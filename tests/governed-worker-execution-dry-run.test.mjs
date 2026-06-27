@@ -1412,6 +1412,102 @@ test("copied-worktree evidence export writes metadata-only pipeline snapshots to
   }
 });
 
+test("copied-worktree evidence export persists the governed failure-state matrix as metadata", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-failure-matrix-"));
+  try {
+    const sourceWorktree = await createTrackedSourceWorktree(tempDir);
+    const safeBin = join(tempDir, "safe-bin");
+    await mkdir(safeBin, { recursive: true });
+    const claudePath = join(safeBin, "claude");
+    const collectClaude = (observedAt, taskId = "copy_execution_sentinel", timeoutMs = 1000) =>
+      collectCopiedWorktreeExecutionAttempts({
+        env: { PATH: safeBin, PWD: sourceWorktree },
+        observedAt,
+        sourceWorktree,
+        taskId,
+        timeoutMs,
+        workers: ["claude"],
+      })[0].attempt;
+
+    const missingClaude = collectCopiedWorktreeExecutionAttempts({
+      env: { PATH: "", PWD: sourceWorktree },
+      observedAt: "2026-06-27T00:00:00Z",
+      sourceWorktree,
+      timeoutMs: 1000,
+      workers: ["claude"],
+    })[0].attempt;
+
+    const unsupportedHermes = collectCopiedWorktreeExecutionAttempts({
+      env: { PATH: "", PWD: sourceWorktree },
+      observedAt: "2026-06-27T00:00:01Z",
+      sourceWorktree,
+      timeoutMs: 1000,
+      workers: ["hermes"],
+    })[0].attempt;
+
+    await writeFile(claudePath, "#!/bin/sh\ntrap '' TERM\nwhile true; do :; done\n", "utf8");
+    await chmod(claudePath, 0o755);
+    const timedOut = collectClaude("2026-06-27T00:00:02Z", "copy_execution_sentinel", 100);
+
+    await writeFile(claudePath, "#!/bin/sh\nexit 7\n", "utf8");
+    await chmod(claudePath, 0o755);
+    const failed = collectClaude("2026-06-27T00:00:03Z");
+
+    await writeFile(claudePath, "#!/bin/sh\necho '{\"result\":\"WRONG\"}'\n", "utf8");
+    await chmod(claudePath, 0o755);
+    const invalidOutput = collectClaude("2026-06-27T00:00:04Z");
+
+    await writeFile(claudePath, "#!/bin/sh\necho '{\"result\":\"KENDALL_PATCH_PROPOSAL_OK\"}'\n", "utf8");
+    await chmod(claudePath, 0o755);
+    const missingProposal = collectClaude("2026-06-27T00:00:05Z", "starter_patch_proposal");
+
+    await writeFile(
+      claudePath,
+      "#!/bin/sh\necho '{\"result\":\"KENDALL_PATCH_PROPOSAL_OK\",\"proposal\":{\"target_file\":\"README.md\",\"change_kind\":\"append_line\",\"summary\":\"Not the accepted starter note\"}}'\n",
+      "utf8",
+    );
+    await chmod(claudePath, 0o755);
+    const unexpectedProposal = collectClaude("2026-06-27T00:00:06Z", "starter_patch_proposal");
+
+    const attempts = [
+      missingClaude,
+      unsupportedHermes,
+      timedOut,
+      failed,
+      invalidOutput,
+      missingProposal,
+      unexpectedProposal,
+    ];
+    const { snapshot, validation } = buildGovernedWorkerEvidenceSnapshot({
+      attempts,
+      generatedAt: "2026-06-27T00:01:00Z",
+    });
+
+    assert.equal(validation.ok, true);
+    assert.equal(validateGovernedWorkerEvidenceSnapshot(snapshot).ok, true);
+    assert.deepEqual(snapshot.errors, []);
+    assert.deepEqual(
+      Object.fromEntries(snapshot.attempts.map((entry) => [`${entry.worker}:${entry.observed_at}`, entry.execution_state])),
+      {
+        "claude:2026-06-27T00:00:00Z": "missing",
+        "hermes:2026-06-27T00:00:01Z": "unsupported",
+        "claude:2026-06-27T00:00:02Z": "timed_out",
+        "claude:2026-06-27T00:00:03Z": "failed",
+        "claude:2026-06-27T00:00:04Z": "invalid_output",
+        "claude:2026-06-27T00:00:05Z": "invalid_output",
+        "claude:2026-06-27T00:00:06Z": "invalid_output",
+      },
+    );
+    assert.equal(snapshot.attempts.find((entry) => entry.observed_at === "2026-06-27T00:00:05Z").output_contract_diagnostic, "missing_proposal");
+    assert.equal(snapshot.attempts.find((entry) => entry.observed_at === "2026-06-27T00:00:06Z").output_contract_diagnostic, "unexpected_proposal");
+    assert.equal(snapshot.attempts.every((entry) => entry.raw_output_retained === false), true);
+    assert.equal(snapshot.attempts.every((entry) => entry.copy_retained === false), true);
+    assert.doesNotMatch(JSON.stringify(snapshot), /source_worktree|execution_cwd|command_args|shell_used|raw_prompt|provider_payload|sk-proj/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("copied-worktree evidence export creates the default local evidence directory in a fresh worktree", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "knx-copy-evidence-default-"));
   try {
