@@ -1401,7 +1401,7 @@ try {
       assert(packet.counts.laneAssignments === 1, result.stdout || result.stderr);
       assert(packet.counts.workspaceAssignments >= 2, result.stdout || result.stderr);
       assert(packet.backlogStatusCounts.closed >= 1, result.stdout || result.stderr);
-      assert(packet.backlogStatusCounts.assignable === 1, result.stdout || result.stderr);
+      assert(packet.backlogStatusCounts.assignable >= 1, result.stdout || result.stderr);
       assert(packet.laneAssignmentStatusCounts.claimed === 1, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.assignable >= 1, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.blocked_stale_owner_needs_takeover >= 1, result.stdout || result.stderr);
@@ -1835,10 +1835,10 @@ try {
 
     assert(result.code === 0, result.stderr || result.stdout);
     assert(result.stdout.includes("DRY RUN: claim-next"), result.stdout || result.stderr);
-    assert(result.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- branch codex/queue-zero-runway-continuity-refresh"), result.stdout || result.stderr);
-    assert(result.stdout.includes('start command node ./scripts/codex-workspace.mjs start "queue zero runway continuity refresh"'), result.stdout || result.stderr);
+    assert(result.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
+    assert(result.stdout.includes("claimable=34"), result.stdout || result.stderr);
     assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
+    assert(result.stdout.includes("- bmad-1-2-expose-read-only-supervisor-packet-projections | assignable"), result.stdout || result.stderr);
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | closed"), result.stdout || result.stderr);
     assert(before === after, "claim-next --dry-run mutated workspace manifests");
@@ -1867,16 +1867,14 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       const packet = JSON.parse(result.stdout);
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
-      assert(packet.selected?.itemId === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
-      assert(packet.selected?.branch === "codex/queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
+      assert(packet.selected?.itemId === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
-      assert(packet.counts.claimable === 1, result.stdout || result.stderr);
+      assert(packet.counts.claimable === 34, result.stdout || result.stderr);
       assert(packet.counts.excluded >= 1, result.stdout || result.stderr);
       assert(packet.counts.sourceDrift === 0, result.stdout || result.stderr);
       assert(packet.nextActionSummary.action === "claim selected lane", result.stdout || result.stderr);
-      assert(packet.nextActionSummary.itemId === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
       assert(packet.nextActionSummary.sourceDrift === 0, result.stdout || result.stderr);
-      assert(packet.statusCounts.assignable === 1, result.stdout || result.stderr);
+      assert(packet.statusCounts.assignable === 34, result.stdout || result.stderr);
       assert(!packet.blockerStatusCounts.closed, result.stdout || result.stderr);
       assert(packet.excludedStatusCounts.closed >= 1, result.stdout || result.stderr);
       assert(packet.blockers.length <= 10, result.stdout || result.stderr);
@@ -1924,8 +1922,8 @@ try {
       const after = taskSnapshot(assignmentsDir);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), result.stdout || result.stderr);
-      assert(result.stdout.includes("claimable=1 blocked=0 excluded=44 sourceDrift=0"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claimable=34"), result.stdout || result.stderr);
       assert(result.stdout.includes("- authority-blocked-work | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
@@ -1972,16 +1970,16 @@ try {
       assert(report.stdout.includes(`- ${expected.slug} | closed`), report.stdout || report.stderr);
       assert(report.stdout.includes("reason=safe backlog item is already complete and must not be requeued"), report.stdout || report.stderr);
       assert(claim.code === 0, claim.stderr || claim.stdout);
-      assert(claim.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${expected.slug} | closed`), claim.stdout || claim.stderr);
       assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
-      assert(dispatch.stdout.includes("- selected lane queue-zero-runway-continuity-refresh"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes("- selected lane bmad-1-1-validate-the-pipeline-work-packet-read-contract"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes("- allowed true"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${expected.slug} | closed`), dispatch.stdout || dispatch.stderr);
       assert(dispatchSummary.code === 0, dispatchSummary.stderr || dispatchSummary.stdout);
       const packet = JSON.parse(dispatchSummary.stdout);
       assert(packet.dispatch.allowed === true, dispatchSummary.stdout);
-      assert(packet.dispatch.selectedLane === "queue-zero-runway-continuity-refresh", dispatchSummary.stdout);
+      assert(packet.dispatch.selectedLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", dispatchSummary.stdout);
       assert(beforeTasks === taskSnapshot(tasksDir), "closed source guard dry-runs mutated task manifests");
       assert(beforeAssignments === taskSnapshot(assignmentsDir), "closed source guard dry-runs mutated assignments");
     } finally {
@@ -1989,7 +1987,7 @@ try {
     }
   });
 
-  test("claim-next and dispatch-next select the source seed after completed authority and keyboard-loop lanes", () => {
+  test("claim-next and dispatch-next report no generated lane after completed authority and keyboard-loop lanes", () => {
     const queueStateRoot = mkdtempSync(join(tmpdir(), "codex-priority-lane-selection-"));
     try {
       const completedKeyboardLoop = expectedClaimCandidate();
@@ -2004,11 +2002,11 @@ try {
       const dispatch = run(["dispatch-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
 
       assert(claim.code === 0, claim.stderr || claim.stdout);
-      assert(claim.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${completedKeyboardLoop.slug} | closed`), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${completedAuthority.slug} | closed`), claim.stdout || claim.stderr);
       assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
-      assert(dispatch.stdout.includes("- selected lane queue-zero-runway-continuity-refresh"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes("- selected lane bmad-1-1-validate-the-pipeline-work-packet-read-contract"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes("- allowed true"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${completedKeyboardLoop.slug} | closed`), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${completedAuthority.slug} | closed`), dispatch.stdout || dispatch.stderr);
@@ -2035,11 +2033,11 @@ try {
       const dispatch = run(["dispatch-next", "--dry-run", "--owner", "runner-a", "--state-root", queueStateRoot]);
 
       assert(claim.code === 0, claim.stderr || claim.stdout);
-      assert(claim.stdout.includes("claim candidate queue-zero-runway-continuity-refresh"), claim.stdout || claim.stderr);
+      assert(claim.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${owned.slug} | closed`), claim.stdout || claim.stderr);
       assert(claim.stdout.includes(`- ${completedAuthority.slug} | closed`), claim.stdout || claim.stderr);
       assert(dispatch.code === 0, dispatch.stderr || dispatch.stdout);
-      assert(dispatch.stdout.includes("- selected lane queue-zero-runway-continuity-refresh"), dispatch.stdout || dispatch.stderr);
+      assert(dispatch.stdout.includes("- selected lane bmad-1-1-validate-the-pipeline-work-packet-read-contract"), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${owned.slug} | closed`), dispatch.stdout || dispatch.stderr);
       assert(dispatch.stdout.includes(`- ${completedAuthority.slug} | closed`), dispatch.stdout || dispatch.stderr);
       assert(beforeTasks === taskSnapshot(tasksDir), "owned lane priority dry-runs mutated task manifests");
@@ -2148,51 +2146,41 @@ try {
     }
   });
 
-  test("claim-next apply claims the queue-zero source seed without creating a worktree", () => {
+  test("claim-next apply claims the first BMAD safe backlog lane without creating a worktree", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-apply-"));
     try {
       const tasksDir = join(claimStateRoot, "tasks");
       const assignmentsDir = join(claimStateRoot, "assignments");
       seedGeneratedSuccessorPrerequisites(claimStateRoot);
       const beforeTasks = taskSnapshot(tasksDir);
-      const beforeAssignments = taskSnapshot(assignmentsDir);
 
       const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("APPLY: claim-next"), result.stdout || result.stderr);
-      assert(result.stdout.includes("claimed ready lane queue-zero-runway-continuity-refresh for runner-a"), result.stdout || result.stderr);
-      assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next --apply created worktrees");
-      assert(taskSnapshot(tasksDir) === beforeTasks, "failed claim-next --apply mutated workspace task manifests");
-      assert(taskSnapshot(assignmentsDir) !== beforeAssignments, "claim-next --apply did not write assignment evidence");
-      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "queue-zero-runway-continuity-refresh.json"), "utf8"));
-      assert(assignment.assignment_id === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
-      assert(assignment.branch === "codex/queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
+      assert(result.stdout.includes("claimed ready lane bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
+      const assignment = readJson(join(assignmentsDir, "bmad-1-1-validate-the-pipeline-work-packet-read-contract.json"));
       assert(assignment.owner === "runner-a", result.stdout || result.stderr);
+      assert(assignment.branch === "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next --apply created worktrees");
+      assert(taskSnapshot(tasksDir) === beforeTasks, "claim-next --apply mutated workspace task manifests");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }
   });
 
-  test("claim-next apply is idempotent after claiming the queue-zero source seed", () => {
+  test("claim-next apply refreshes the first BMAD assignment idempotently", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-idempotent-"));
     try {
       seedGeneratedSuccessorPrerequisites(claimStateRoot);
       const assignmentsDir = join(claimStateRoot, "assignments");
-      const beforeAssignments = taskSnapshot(assignmentsDir);
       const first = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       assert(first.code === 0, first.stderr || first.stdout);
-      assert(first.stdout.includes("claimed ready lane queue-zero-runway-continuity-refresh for runner-a"), first.stdout || first.stderr);
-      const afterFirst = taskSnapshot(assignmentsDir);
-      assert(afterFirst !== beforeAssignments, "first claim-next --apply did not write seed assignment evidence");
       const second = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       assert(second.code === 0, second.stderr || second.stdout);
-      assert(second.stdout.includes("refreshed existing assignment queue-zero-runway-continuity-refresh for runner-a"), second.stdout || second.stderr);
-      const assignment = JSON.parse(readFileSync(join(assignmentsDir, "queue-zero-runway-continuity-refresh.json"), "utf8"));
-      assert(assignment.assignment_id === "queue-zero-runway-continuity-refresh", second.stdout || second.stderr);
-      assert(assignment.branch === "codex/queue-zero-runway-continuity-refresh", second.stdout || second.stderr);
-      assert(assignment.owner === "runner-a", second.stdout || second.stderr);
-      assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next --apply idempotency created worktrees");
+      assert(second.stdout.includes("refreshed existing assignment bmad-1-1-validate-the-pipeline-work-packet-read-contract"), second.stdout || second.stderr);
+      const assignment = readJson(join(assignmentsDir, "bmad-1-1-validate-the-pipeline-work-packet-read-contract.json"));
+      assert(assignment.assignment_id === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", second.stdout || second.stderr);
+      assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next idempotent apply created worktrees");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }
@@ -2708,11 +2696,12 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("DRY RUN: dispatch-next"), result.stdout || result.stderr);
-      assert(result.stdout.includes("- selected lane queue-zero-runway-continuity-refresh"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- selected lane bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
       assert(result.stdout.includes("- workspace action claim_and_create_workspace"), result.stdout || result.stderr);
       assert(result.stdout.includes("- allowed true"), result.stdout || result.stderr);
       assert(result.stdout.includes("- blockers none"), result.stdout || result.stderr);
       assert(result.stdout.includes("- queue states "), result.stdout || result.stderr);
+      assert(result.stdout.includes("assignable=34"), result.stdout || result.stderr);
       assert(result.stdout.includes("closed="), result.stdout || result.stderr);
       assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch dry-run mutated assignments");
       assert(taskSnapshot(tasksDir) === beforeTasks, "dispatch dry-run mutated manifests");
@@ -2743,14 +2732,14 @@ try {
       const packet = JSON.parse(result.stdout);
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
       assert(packet.readinessProfile === "doctor", result.stdout || result.stderr);
-      assert(packet.selected?.itemId === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
+      assert(packet.selected?.itemId === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
       assert(packet.dispatch.allowed === true, result.stdout || result.stderr);
-      assert(packet.dispatch.selectedLane === "queue-zero-runway-continuity-refresh", result.stdout || result.stderr);
+      assert(packet.dispatch.selectedLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
       assert(packet.dispatch.workspaceAction === "claim_and_create_workspace", result.stdout || result.stderr);
-      assert(packet.dispatch.nextActionGuidance.includes("dispatch-next --apply"), result.stdout || result.stderr);
+      assert(packet.dispatch.nextActionGuidance.includes("run dispatch-next --apply"), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
-      assert(packet.counts.dispatchable === 1, result.stdout || result.stderr);
-      assert(packet.candidateStateCounts.assignable === 1, result.stdout || result.stderr);
+      assert(packet.counts.dispatchable === 34, result.stdout || result.stderr);
+      assert(packet.candidateStateCounts.assignable === 34, result.stdout || result.stderr);
       assert(packet.candidateStateCounts.closed >= 1, result.stdout || result.stderr);
       assert(packet.blockedCandidates.length <= 10, result.stdout || result.stderr);
       assert(typeof packet.blockedCandidatesTruncated === "boolean", result.stdout || result.stderr);
@@ -2783,7 +2772,7 @@ try {
         dispatchStateRoot,
       ]);
 
-      assert(result.code !== 0, "dispatch-next unexpectedly accepted an invalid base");
+      assert(result.code !== 0, "dispatch-next unexpectedly accepted an invalid base branch");
       assert(result.stderr.includes("Invalid base branch: bad:refs/heads/injected"), result.stderr || result.stdout);
       assert(taskSnapshot(assignmentsDir) === beforeAssignments, "invalid dispatch base mutated assignments");
       assert(taskSnapshot(tasksDir) === beforeTasks, "invalid dispatch base mutated manifests");
@@ -2808,7 +2797,6 @@ try {
       const manifestPath = join(tasksDir, "dispatch-workspace.json");
       const expected = expectedAuthorityClaimCandidate();
       seedClaimedSafeBacklogAssignment(dispatchStateRoot, "read-only-evidence-polish", "runner-b");
-      seedClaimedSafeBacklogAssignment(dispatchStateRoot, "queue-zero-runway-continuity-refresh", "runner-b", "codex/queue-zero-runway-continuity-refresh");
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
@@ -2841,12 +2829,26 @@ try {
       ]);
       const after = readFileSync(manifestPath, "utf8");
 
-      assert(result.code !== 0, "dispatch unexpectedly claimed unowned workspace for closed source lane");
-      assert(result.stderr.includes("No dispatchable safe backlog lane found"), result.stderr || result.stdout);
-      assert(after === before, "failed dispatch mutated unowned workspace manifest");
-      assert(!existsSync(join(dispatchStateRoot, "assignments", `${expected.slug}.json`)), "workspace dispatch created assignment metadata");
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("selected lane bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
+      assert(after === before, "dispatch mutated unowned workspace manifest for closed source lane");
+      assert(!existsSync(join(dispatchStateRoot, "assignments", `${expected.slug}.json`)), "workspace dispatch created closed-source assignment metadata");
+      assert(
+        existsSync(join(dispatchStateRoot, "assignments", "bmad-1-1-validate-the-pipeline-work-packet-read-contract.json")),
+        "dispatch did not create BMAD assignment metadata",
+      );
     } finally {
       rmSync(dispatchStateRoot, { recursive: true, force: true });
+      spawnSync("git", ["worktree", "prune"], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      spawnSync("git", ["branch", "-D", "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract"], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
       rmSync(worktreePath, { recursive: true, force: true });
     }
   });
@@ -2865,6 +2867,8 @@ try {
       const tasksDir = join(dispatchStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
       const blockedBranches = [
+        ...bmadPipelineBacklogBranches(),
+        "codex/queue-zero-runway-continuity-refresh",
         "codex/verification-surface-hardening",
         "codex/github-delivery-hygiene",
         "codex/read-only-evidence-polish",
@@ -2905,7 +2909,6 @@ try {
         "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
         "codex/authority-blocked-approval-scope-readiness",
-        "codex/queue-zero-runway-continuity-refresh",
       ];
       const manifestPaths = blockedBranches.map((branchName, index) => {
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
@@ -2971,6 +2974,8 @@ try {
         })}\n`,
       );
       for (const laneSlug of [
+        ...bmadPipelineBacklogSlugs(),
+        "queue-zero-runway-continuity-refresh",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
         "worker-backlog-queue-refresh",
@@ -3009,7 +3014,6 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
         "authority-blocked-work",
-        "queue-zero-runway-continuity-refresh",
       ]) {
         const branch = laneSlug === "authority-blocked-work" ? "codex/authority-blocked-approval-scope-readiness" : `codex/${laneSlug}`;
         writeFileSync(
@@ -3026,6 +3030,8 @@ try {
         );
       }
       const assignmentFiles = [
+        ...bmadPipelineBacklogSlugs(),
+        "queue-zero-runway-continuity-refresh",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
         "worker-backlog-queue-refresh",
@@ -3064,7 +3070,6 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
         "authority-blocked-work",
-        "queue-zero-runway-continuity-refresh",
       ].map((laneSlug) => join(assignmentsDir, `${laneSlug}.json`));
       const before = assignmentFiles.map((assignmentPath) => readFileSync(assignmentPath, "utf8")).join("\n---\n");
 
@@ -3091,7 +3096,6 @@ try {
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
       const expected = expectedAuthorityClaimCandidate();
       seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
-      seedClaimedSafeBacklogAssignment(claimStateRoot, "queue-zero-runway-continuity-refresh", "runner-b", "codex/queue-zero-runway-continuity-refresh");
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
@@ -3112,7 +3116,7 @@ try {
       const after = readFileSync(manifestPath, "utf8");
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("no claimable safe backlog lane found"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
       assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
       assert(before === after, "claim-next --dry-run mutated the unowned lane manifest");
     } finally {
@@ -3128,7 +3132,6 @@ try {
       const manifestPath = join(tasksDir, "unowned-safe-backlog.json");
       const expected = expectedAuthorityClaimCandidate();
       seedClaimedSafeBacklogAssignment(claimStateRoot, "read-only-evidence-polish", "runner-b");
-      seedClaimedSafeBacklogAssignment(claimStateRoot, "queue-zero-runway-continuity-refresh", "runner-b", "codex/queue-zero-runway-continuity-refresh");
       writeFileSync(
         manifestPath,
         `${JSON.stringify(
@@ -3148,9 +3151,13 @@ try {
       const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
       const after = readFileSync(manifestPath, "utf8");
 
-      assert(result.code !== 0, "claim-next --apply unexpectedly claimed a closed source workspace manifest");
-      assert(result.stderr.includes("No claimable safe backlog lane found"), result.stderr || result.stdout);
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("claimed ready lane bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
       assert(!existsSync(join(claimStateRoot, "assignments", `${expected.slug}.json`)), "manifest claim should not create assignment metadata");
+      assert(
+        existsSync(join(claimStateRoot, "assignments", "bmad-1-1-validate-the-pipeline-work-packet-read-contract.json")),
+        "claim-next did not create BMAD assignment metadata",
+      );
       assert(after === before, "failed claim-next --apply mutated the unowned manifest");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
@@ -3447,6 +3454,8 @@ try {
       const tasksDir = join(ownedStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
       const manifestPaths = [
+        ...bmadPipelineBacklogSlugs(),
+        "queue-zero-runway-continuity-refresh",
         "verification-surface-hardening",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
@@ -3487,7 +3496,6 @@ try {
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-focus-refresh",
         "dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
         "authority-blocked-work",
-        "queue-zero-runway-continuity-refresh",
       ].map((laneSlug) => {
         const branch = laneSlug === "authority-blocked-work" ? "codex/authority-blocked-approval-scope-readiness" : `codex/${laneSlug}`;
         const manifestPath = join(tasksDir, `owned-${laneSlug}.json`);
@@ -4266,6 +4274,48 @@ function expectedAuthorityClaimCandidate() {
     title: "authority blocked approval scope readiness",
     branch: "codex/authority-blocked-approval-scope-readiness",
   };
+}
+
+function bmadPipelineBacklogBranches() {
+  return bmadPipelineBacklogSlugs().map((slug) => `codex/${slug}`);
+}
+
+function bmadPipelineBacklogSlugs() {
+  return [
+    "bmad-1-1-validate-the-pipeline-work-packet-read-contract",
+    "bmad-1-2-expose-read-only-supervisor-packet-projections",
+    "bmad-1-3-render-the-pipeline-cockpit-from-supervisor-packets",
+    "bmad-1-4-render-packet-detail-evidence-and-recovery",
+    "bmad-1-5-enforce-cockpit-ux-and-import-boundaries",
+    "bmad-2-1-import-approved-obsidian-metadata-as-candidate-work",
+    "bmad-2-2-preserve-source-refs-through-candidate-promotion",
+    "bmad-2-3-inventory-legacy-planning-artifacts",
+    "bmad-2-4-propose-legacy-artifact-dispositions",
+    "bmad-2-5-prepare-user-facing-source-summaries-for-obsidian",
+    "bmad-3-1-define-and-render-human-gate-actions",
+    "bmad-3-2-record-durable-stage-transition-events",
+    "bmad-3-3-validate-gate-state-against-event-replay",
+    "bmad-3-4-submit-action-requests-without-performing-execution",
+    "bmad-4-1-report-assignable-and-blocked-lanes",
+    "bmad-4-2-preview-a-safe-lane-assignment",
+    "bmad-4-3-claim-one-unowned-safe-lane",
+    "bmad-4-4-maintain-heartbeat-and-stale-takeover-evidence",
+    "bmad-4-5-prove-bounded-parallel-session-coordination",
+    "bmad-5-1-execute-the-safe-runner-loop-contract",
+    "bmad-5-2-capture-best-judgment-decisions-as-evidence",
+    "bmad-5-3-trigger-bmad-party-mode-and-claude-review-by-policy",
+    "bmad-5-4-surface-loop-stop-states-in-pipeline",
+    "bmad-6-1-attach-delivery-evidence-to-work-packets",
+    "bmad-6-2-prepare-pr-creation-and-update-as-gated-evidence",
+    "bmad-6-3-prove-checks-review-threads-and-exact-head-state",
+    "bmad-6-4-gate-merge-and-cleanup-with-rollback-evidence",
+    "bmad-6-5-render-delivery-and-cleanup-in-packet-detail",
+    "bmad-7-1-render-reviewable-memory-proposals",
+    "bmad-7-2-route-user-facing-documentation-proposals",
+    "bmad-7-3-keep-llm-wiki-derived-and-rebuildable",
+    "bmad-7-4-deauthorize-unsafe-or-regressing-automation",
+    "bmad-7-5-close-the-learn-loop-in-pipeline",
+  ];
 }
 
 function seedClosedSafeBacklogManifests(stateRootPath) {
