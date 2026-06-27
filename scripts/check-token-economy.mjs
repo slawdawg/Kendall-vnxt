@@ -48,6 +48,7 @@ const agents = readRequiredWorkspaceFile("AGENTS.md", failures);
 const contextIndex = readRequiredWorkspaceFile("docs/ai-context/index.md", failures);
 const rcaWorkflow = readRequiredWorkspaceFile("docs/workflows/tool-churn-rca.md", failures);
 const rcaExamples = readRequiredWorkspaceFile("docs/workflows/tool-churn-rca-examples.md", failures);
+const endToEndLaneRunner = readRequiredWorkspaceFile("docs/workflows/end-to-end-lane-runner.md", failures);
 const tokenEconomyGovernance = readRequiredWorkspaceFile("docs/workflows/token-economy-governance.md", failures);
 const storyIndex = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
 const story21_2 = readRequiredWorkspaceFile("docs/workflows/implementation-evidence-boundary.md", failures);
@@ -82,6 +83,7 @@ assertCondition(
 for (const path of [
   "docs/workflows/tool-churn-rca.md",
   "docs/workflows/tool-churn-rca-examples.md",
+  "docs/workflows/end-to-end-lane-runner.md",
   "docs/workflows/token-economy-governance.md",
   "docs/ai-context/index.md",
   "docs/workflows/implementation-evidence-boundary.md",
@@ -221,6 +223,19 @@ for (const evaluationText of [
   "Redis LangCache or another semantic cache belongs later",
 ]) {
   assertCondition(tokenEconomyGovernance.includes(evaluationText), `Token economy governance must preserve ${evaluationText}`, failures);
+}
+
+for (const laneRunnerText of [
+  "repair-manifests --dry-run",
+  "limited to closed legacy",
+  "manifests and inert validation fields",
+  "stop for active, unreadable, or identity-missing manifests",
+]) {
+  assertCondition(
+    endToEndLaneRunner.includes(laneRunnerText),
+    `End-to-end lane runner guidance must preserve manifest repair boundary ${laneRunnerText}`,
+    failures,
+  );
 }
 
 assertCondition(
