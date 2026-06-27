@@ -338,6 +338,7 @@ function listWorkspaces(argv) {
     prNumber: manifest.pr_number || prNumberFromUrl(manifest.pr_url || "") || null,
     owner: manifest.owner || null,
     worktreePath: manifest.worktree_path,
+    worktreeExists: existsSync(manifest.worktree_path),
     manifestPath: path,
     updatedAt: manifest.updated_at || null,
     cleanup: {

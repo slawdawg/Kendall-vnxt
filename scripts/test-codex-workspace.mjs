@@ -667,6 +667,7 @@ try {
     try {
       const tasksDir = join(jsonStateRoot, "tasks");
       mkdirSync(tasksDir, { recursive: true });
+      const missingWorktreePath = join(jsonStateRoot, "worktrees", "missing-json-lane");
       writeFileSync(
         join(tasksDir, "json-lane.json"),
         `${JSON.stringify({
@@ -681,20 +682,34 @@ try {
           cleanup_expected_head_sha: "abc123",
         })}\n`,
       );
+      writeFileSync(
+        join(tasksDir, "missing-json-lane.json"),
+        `${JSON.stringify({
+          task_id: "missing-json-lane",
+          branch: "codex/missing-json-lane",
+          worktree_path: missingWorktreePath,
+          base_branch: "dev",
+          status: "active",
+          owner: "runner-json",
+        })}\n`,
+      );
 
       const result = run(["list", "--active", "--json", "--state-root", jsonStateRoot]);
       const rows = JSON.parse(result.stdout);
+      const byTaskId = new Map(rows.map((row) => [row.taskId, row]));
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(Array.isArray(rows), result.stdout || result.stderr);
-      assert(rows.length === 1, result.stdout || result.stderr);
-      assert(rows[0].taskId === "json-lane", result.stdout || result.stderr);
-      assert(rows[0].branch === "codex/json-lane", result.stdout || result.stderr);
-      assert(rows[0].baseBranch === "dev", result.stdout || result.stderr);
-      assert(rows[0].prNumber === 123, result.stdout || result.stderr);
-      assert(rows[0].owner === "runner-json", result.stdout || result.stderr);
-      assert(rows[0].cleanup.startedAt === "2026-06-26T00:00:00.000Z", result.stdout || result.stderr);
-      assert(rows[0].cleanup.expectedHeadSha === "abc123", result.stdout || result.stderr);
+      assert(rows.length === 2, result.stdout || result.stderr);
+      assert(byTaskId.get("json-lane").branch === "codex/json-lane", result.stdout || result.stderr);
+      assert(byTaskId.get("json-lane").baseBranch === "dev", result.stdout || result.stderr);
+      assert(byTaskId.get("json-lane").prNumber === 123, result.stdout || result.stderr);
+      assert(byTaskId.get("json-lane").owner === "runner-json", result.stdout || result.stderr);
+      assert(byTaskId.get("json-lane").worktreeExists === true, result.stdout || result.stderr);
+      assert(byTaskId.get("json-lane").cleanup.startedAt === "2026-06-26T00:00:00.000Z", result.stdout || result.stderr);
+      assert(byTaskId.get("json-lane").cleanup.expectedHeadSha === "abc123", result.stdout || result.stderr);
+      assert(byTaskId.get("missing-json-lane").worktreePath === missingWorktreePath, result.stdout || result.stderr);
+      assert(byTaskId.get("missing-json-lane").worktreeExists === false, result.stdout || result.stderr);
     } finally {
       rmSync(jsonStateRoot, { recursive: true, force: true });
     }
