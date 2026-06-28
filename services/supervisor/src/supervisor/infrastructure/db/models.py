@@ -159,8 +159,6 @@ class MemoryProposal(Base):
     contradiction_status: Mapped[str] = mapped_column(String(16))
     confidence: Mapped[str] = mapped_column(String(16))
     operator_action: Mapped[str] = mapped_column(String(16))
-    decision_actor_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    decision_actor_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     decision_needed_context: Mapped[str | None] = mapped_column(Text, nullable=True)
     backup_recovery_path: Mapped[str] = mapped_column(Text)
     write_back_status: Mapped[str] = mapped_column(String(32))

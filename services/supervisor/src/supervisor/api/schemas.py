@@ -775,8 +775,6 @@ class MemoryProposalV0View(BaseModel):
     contradictionStatus: MemoryProposalContradictionStatusV0
     confidence: MemoryProposalConfidenceV0
     operatorAction: MemoryProposalOperatorActionV0
-    decisionActorId: str | None = None
-    decisionActorLabel: str | None = None
     decisionNeededContext: str | None = None
     backupRecoveryPath: str
     writeBackStatus: MemoryProposalWriteBackStatusV0

@@ -872,15 +872,12 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         updated = update_response.json()["data"]
         assert updated["status"] == "approved"
         assert updated["operatorAction"] == "approve"
-        assert updated["decisionActorId"] == "operator:reviewer"
-        assert updated["decisionActorLabel"] == "Operator Reviewer"
         assert updated["writeBackAllowed"] is False
         assert updated["writeBackStatus"] == "approved_for_future"
 
         packet_after_update = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         assert packet_after_update["memoryProposals"][0]["status"] == "approved"
         assert packet_after_update["memoryProposals"][0]["operatorAction"] == "approve"
-        assert packet_after_update["memoryProposals"][0]["decisionActorLabel"] == "Operator Reviewer"
         learn_outcome = packet_after_update["learnOutcome"]
         assert learn_outcome["outcomeId"] == f"learn-outcome:work_item:{work_item['id']}"
         assert learn_outcome["retentionClass"] == "metadata_only"

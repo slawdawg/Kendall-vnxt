@@ -521,8 +521,6 @@ class SupervisorService:
             contradiction_status=payload.contradictionStatus,
             confidence=payload.confidence,
             operator_action=payload.operatorAction,
-            decision_actor_id=payload.actorId,
-            decision_actor_label=payload.actorLabel,
             decision_needed_context=payload.decisionNeededContext,
             backup_recovery_path=payload.backupRecoveryPath,
             write_back_status=payload.writeBackStatus,
@@ -539,9 +537,14 @@ class SupervisorService:
                 "proposalId": proposal.proposal_id,
                 "sourceRefs": proposal.source_refs_json,
                 "evidenceRefs": proposal.evidence_refs_json,
+                "actorId": payload.actorId,
+                "actorLabel": payload.actorLabel,
                 "writeBackAllowed": False,
                 "retentionClass": "metadata_only",
             },
+            actor_type="operator" if payload.actorId or payload.actorLabel else "system",
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
         )
         await session.commit()
         await session.refresh(proposal)
@@ -616,10 +619,6 @@ class SupervisorService:
             proposal.status = payload.status
         if payload.operatorAction is not None:
             proposal.operator_action = payload.operatorAction
-        if payload.actorId is not None:
-            proposal.decision_actor_id = payload.actorId
-        if payload.actorLabel is not None:
-            proposal.decision_actor_label = payload.actorLabel
         if payload.decisionNeededContext is not None:
             proposal.decision_needed_context = payload.decisionNeededContext
         if payload.writeBackStatus is not None:
@@ -637,12 +636,15 @@ class SupervisorService:
                 "proposalId": proposal.proposal_id,
                 "status": proposal.status,
                 "operatorAction": proposal.operator_action,
-                "actorId": proposal.decision_actor_id,
-                "actorLabel": proposal.decision_actor_label,
+                "actorId": payload.actorId,
+                "actorLabel": payload.actorLabel,
                 "writeBackStatus": proposal.write_back_status,
                 "writeBackAllowed": False,
                 "retentionClass": "metadata_only",
             },
+            actor_type="operator" if payload.actorId or payload.actorLabel else "system",
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
         )
         await session.commit()
         await session.refresh(proposal)
@@ -21308,7 +21310,7 @@ class SupervisorService:
             laneCards=self._work_packet_lane_cards(attempts, routing_preview),
             memoryProposals=memory_proposal_views,
             deliveryEvidence=self._work_packet_delivery_evidence(item_view, evidence_refs, artifact_refs),
-            learnOutcome=self._work_packet_learn_outcome(packet_id, memory_proposal_views),
+            learnOutcome=self._work_packet_learn_outcome(packet_id, memory_proposal_views, workflow_events),
             alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs, memory_proposal_views),
             gateStateValidation=self._work_packet_gate_state_validation(
                 stored_stage=stage,
@@ -21420,6 +21422,7 @@ class SupervisorService:
         self,
         packet_id: str,
         memory_proposals: list[MemoryProposalV0View],
+        workflow_events: list[WorkflowEvent],
     ) -> WorkPacketLearnOutcomeV0View | None:
         if not memory_proposals:
             return None
@@ -21430,7 +21433,7 @@ class SupervisorService:
                 decisionId=f"learn-decision:{packet_id}:{proposal.proposalId}",
                 proposalId=proposal.proposalId,
                 proposalType=proposal.proposalType,
-                actor=proposal.decisionActorLabel or proposal.decisionActorId or "system",
+                actor=self._learn_decision_actor(proposal, workflow_events),
                 result=proposal.status,
                 operatorAction=proposal.operatorAction,
                 evidenceRefs=list(proposal.evidenceRefs),
@@ -21452,6 +21455,17 @@ class SupervisorService:
             evidenceRefs=list(dict.fromkeys(ref for proposal in memory_proposals for ref in proposal.evidenceRefs)),
             sourceRefs=list(dict.fromkeys(ref for proposal in memory_proposals for ref in proposal.sourceRefs)),
         )
+
+    def _learn_decision_actor(self, proposal: MemoryProposalV0View, workflow_events: list[WorkflowEvent]) -> str:
+        for event in workflow_events:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            if (
+                event.event_type in {"memory_proposal.review_updated", "memory_proposal.created"}
+                and payload.get("proposalId") == proposal.proposalId
+            ):
+                actor = event.actor_label or event.actor_id or payload.get("actorLabel") or payload.get("actorId")
+                return str(actor) if actor else "system"
+        return "system"
 
     def _learn_outcome_status(self, memory_proposals: list[MemoryProposalV0View]) -> str:
         proposal_statuses = {proposal.status for proposal in memory_proposals}
@@ -23018,8 +23032,6 @@ class SupervisorService:
             contradictionStatus=proposal.contradiction_status,
             confidence=proposal.confidence,
             operatorAction=proposal.operator_action,
-            decisionActorId=proposal.decision_actor_id,
-            decisionActorLabel=proposal.decision_actor_label,
             decisionNeededContext=proposal.decision_needed_context,
             backupRecoveryPath=proposal.backup_recovery_path,
             writeBackStatus=proposal.write_back_status,

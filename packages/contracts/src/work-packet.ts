@@ -509,8 +509,6 @@ export interface MemoryProposalV0 {
   contradictionStatus: MemoryProposalContradictionStatusV0;
   confidence: MemoryProposalConfidenceV0;
   operatorAction: MemoryProposalOperatorActionV0;
-  decisionActorId?: string | null;
-  decisionActorLabel?: string | null;
   decisionNeededContext?: string | null;
   backupRecoveryPath: string;
   writeBackStatus: MemoryProposalWriteBackStatusV0;
