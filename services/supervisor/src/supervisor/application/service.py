@@ -34,6 +34,7 @@ from supervisor.api.schemas import (
     AuthorityReadinessMatrixReportView,
     CandidateWorkBmadImportRequest,
     CandidateWorkCreate,
+    CandidateWorkObsidianMetadataImportRequest,
     CandidateWorkUpdate,
     CandidateWorkView,
     ClaudeReadinessCheckView,
@@ -199,6 +200,7 @@ from supervisor.api.schemas import (
 )
 from supervisor.config.settings import Settings
 from supervisor.domain.bmad_import import parse_bmad_import_package
+from supervisor.domain.obsidian_metadata_import import build_obsidian_metadata_import_package
 from supervisor.domain.disabled_provider_adapter import DisabledLocalProviderAdapter
 from supervisor.domain.local_readonly_worker import MockLocalReadonlyWorkerAdapter
 from supervisor.domain.ollama_provider_adapter import OllamaProviderAdapter
@@ -1177,6 +1179,39 @@ class SupervisorService:
                     "notes": list(package.notes),
                     "retentionPolicy": "metadata_only_no_raw_artifact_content",
                 },
+            ),
+        )
+
+    async def import_obsidian_metadata_candidate_work(
+        self,
+        session: AsyncSession,
+        payload: CandidateWorkObsidianMetadataImportRequest,
+    ) -> CandidateWork:
+        package = build_obsidian_metadata_import_package(
+            title=payload.title,
+            requested_outcome=payload.requestedOutcome,
+            source_artifact_path=payload.sourceArtifactPath,
+            source_ref=payload.sourceRef,
+            evidence_refs=payload.evidenceRefs,
+            approval_status=payload.approvalStatus,
+            approved_by=payload.approvedBy,
+            approved_at=payload.approvedAt,
+            freshness=payload.freshness,
+            risk_level=payload.riskLevel,
+            priority=payload.priority,
+        )
+        return await self.create_candidate_work(
+            session,
+            CandidateWorkCreate(
+                title=package.title,
+                requestedOutcome=package.requested_outcome,
+                source="obsidian",
+                sourceArtifactPath=package.source_artifact_path,
+                sourceArtifactType="obsidian_metadata",
+                riskLevel=package.risk_level,
+                priority=package.recommended_priority,
+                sortOrder=payload.sortOrder,
+                importMetadata=package.import_metadata,
             ),
         )
 
@@ -20374,7 +20409,7 @@ class SupervisorService:
             attempts=attempts,
             memory_proposals=memory_proposal_views,
         )
-        evidence_refs = self._work_packet_evidence_refs(item_view, routing_preview, attempts)
+        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, routing_preview, attempts)
         artifact_refs = self._work_packet_artifact_refs(candidate_view, item_view, task_packet, attempts)
 
         packet_id = self._work_packet_id(candidate_view, item_view)
@@ -20591,6 +20626,9 @@ class SupervisorService:
                     blockedReason=None,
                 )
             )
+            if item is None:
+                metadata = candidate.importMetadata if isinstance(candidate.importMetadata, dict) else {}
+                refs.extend(self._work_packet_metadata_source_refs(metadata))
         if item:
             metadata = item.metadata if isinstance(item.metadata, dict) else {}
             path = metadata.get("sourceArtifactPath")
@@ -20906,11 +20944,18 @@ class SupervisorService:
 
     def _work_packet_evidence_refs(
         self,
+        candidate: CandidateWorkView | None,
         item: WorkItemView | None,
         routing_preview: RoutingPreviewView | None,
         attempts: list[ExecutionAttemptView],
     ) -> list[EvidenceRefV0View]:
         refs: list[EvidenceRefV0View] = []
+        if candidate:
+            metadata = candidate.importMetadata if isinstance(candidate.importMetadata, dict) else {}
+            refs.extend(self._work_packet_metadata_evidence_refs(metadata))
+        if item:
+            metadata = item.metadata if isinstance(item.metadata, dict) else {}
+            refs.extend(self._work_packet_metadata_evidence_refs(metadata))
         if item and item.deliveryReadiness and (
             item.deliveryReadiness.readyForApproval
             or item.deliveryReadiness.pullRequestUrl
@@ -20952,6 +20997,26 @@ class SupervisorService:
                             retentionClass="metadata_only",
                         )
                     )
+        return refs
+
+    def _work_packet_metadata_evidence_refs(self, metadata: dict) -> list[EvidenceRefV0View]:
+        import_metadata = metadata.get("importMetadata") if isinstance(metadata.get("importMetadata"), dict) else metadata
+        raw_refs = import_metadata.get("evidenceRefs") if isinstance(import_metadata, dict) else None
+        if not isinstance(raw_refs, list):
+            return []
+        refs: list[EvidenceRefV0View] = []
+        for raw_ref in raw_refs:
+            if not isinstance(raw_ref, str) or not raw_ref.strip():
+                continue
+            ref_id = raw_ref.strip()
+            refs.append(
+                EvidenceRefV0View(
+                    refId=ref_id,
+                    evidenceType="memory",
+                    label="Approved Obsidian metadata evidence",
+                    retentionClass="metadata_only",
+                )
+            )
         return refs
 
     def _work_packet_artifact_refs(

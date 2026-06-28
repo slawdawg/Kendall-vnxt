@@ -2,6 +2,7 @@ import type {
   ApiEnvelope,
   AuthorityReadinessMatrixReportView,
   CandidateWorkBmadImportPayload,
+  CandidateWorkObsidianMetadataImportPayload,
   CandidateWorkPromotionView,
   CandidateWorkUpdatePayload,
   CandidateWorkView,
@@ -103,6 +104,20 @@ export async function importBmadCandidateWork(payload: CandidateWorkBmadImportPa
       | { detail?: { error?: { message?: string } } }
       | null;
     throw new Error(errorPayload?.detail?.error?.message ?? "Unable to import BMAD work.");
+  }
+  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
+  return envelope.data;
+}
+
+export async function importObsidianMetadataCandidateWork(payload: CandidateWorkObsidianMetadataImportPayload): Promise<CandidateWorkView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/import-obsidian-metadata`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to import Obsidian metadata: ${response.status}`);
   }
   const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
   return envelope.data;

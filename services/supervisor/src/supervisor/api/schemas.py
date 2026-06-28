@@ -87,6 +87,23 @@ class CandidateWorkBmadImportRequest(BaseModel):
     sortOrder: int = 0
 
 
+class CandidateWorkObsidianMetadataImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    requestedOutcome: str
+    sourceArtifactPath: str
+    sourceRef: str
+    evidenceRefs: list[str]
+    approvalStatus: str
+    approvedBy: str | None = None
+    approvedAt: datetime | None = None
+    freshness: Literal["fresh", "stale", "unknown", "not_applicable"] = "fresh"
+    riskLevel: RiskLevel = RiskLevel.LOW
+    priority: CandidateWorkPriority = CandidateWorkPriority.NORMAL
+    sortOrder: int = 0
+
+
 class WorkItemActionRequest(BaseModel):
     action: WorkflowAction
     note: str | None = None

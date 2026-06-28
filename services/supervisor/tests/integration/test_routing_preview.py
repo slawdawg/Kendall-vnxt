@@ -2376,6 +2376,11 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
             assert item["recommendedSliceSize"] == "story"
         else:
             assert item["recommendedSliceSize"] in {"large", "medium_to_large"}
+    bmad_2_1_item = next(item for item in report["items"] if item["itemId"] == "bmad-2-1-import-approved-obsidian-metadata-as-candidate-work")
+    assert bmad_2_1_item["status"] == "ready"
+    assert bmad_2_1_item["nextLane"]["branchName"] == "codex/bmad-2-1-import-approved-obsidian-metadata-as-candidate-work"
+    assert any("metadata-only" in scope for scope in bmad_2_1_item["nextLane"]["scope"])
+    assert any("Do not write canonical Obsidian memory" in stop_line for stop_line in bmad_2_1_item["nextLane"]["stopLines"])
     report_alignment_item = next(item for item in report["items"] if item["itemId"] == "safe-backlog-report-alignment")
     assert report_alignment_item["status"] == "closed"
     assert report_alignment_item["recommendedSliceSize"] == "complete"

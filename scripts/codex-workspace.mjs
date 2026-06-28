@@ -4452,6 +4452,7 @@ function recordAssignmentDispatchHandoff(assignment, packet, manifest, context) 
   assignment.owner = context.currentOwner;
   assignment.owner_thread_id = process.env.CODEX_THREAD_ID || null;
   assignment.task_id = manifest.task_id;
+  assignment.branch = manifest.branch;
   assignment.worktree_path = manifest.worktree_path;
   assignment.status = "active";
   assignment.phase = "handoff";
