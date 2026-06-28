@@ -1,7 +1,13 @@
 import type { VerificationCommandView, VerificationReadinessReportView } from "@kendall/contracts";
+import Link from "next/link";
+import { reportShortcutHref } from "../lib/report-shortcuts";
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
+}
+
+function isTemplateHref(value: string): boolean {
+  return value.includes("{") || value.includes("}");
 }
 
 function CommandCard({ command }: { command: VerificationCommandView }) {
@@ -29,6 +35,7 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
   const commandLabelById = new Map(
     [...report.requiredCommands, ...report.optionalCommands].map((command) => [command.commandId, command.label]),
   );
+  const surfaceCoverage = report.surfaceCoverage ?? [];
 
   return (
     <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
@@ -120,6 +127,73 @@ export function VerificationReadinessReportPanel({ report }: { report: Verificat
                 ))}
               </div>
               <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{checkpoint.nextAction}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-[0.5rem] border bg-[var(--surface)] p-4">
+        <h4 className="text-base font-semibold">Surface coverage</h4>
+        <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+          Evidence surfaces that must stay aligned before verification results can be used for delivery decisions.
+        </p>
+        <div className="mt-3 grid gap-3 xl:grid-cols-2">
+          {surfaceCoverage.map((surface) => (
+            <article key={surface.surfaceId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{surface.status}</p>
+                  <h5 className="mt-1 text-sm font-semibold">{surface.label}</h5>
+                </div>
+                <span className="w-fit rounded-full bg-[var(--surface)] px-3 py-1 font-mono text-[11px] text-[var(--muted)]">
+                  {surface.surfaceId}
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{surface.summary}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {surface.requiredCommandIds.map((commandId) => (
+                  <span key={commandId} className="rounded-full border bg-[var(--surface)] px-2 py-1 font-mono text-[11px] text-[var(--muted)]">
+                    {commandLabelById.get(commandId) ?? commandId}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {surface.relatedReports.map((reportEndpoint, reportIndex) => (
+                  <Link
+                    key={`${surface.surfaceId}:report:${reportEndpoint}:${reportIndex}`}
+                    href={reportShortcutHref(reportEndpoint)}
+                    className="break-all rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-[11px] text-[var(--accent)]"
+                  >
+                    {reportEndpoint}
+                  </Link>
+                ))}
+                {surface.dashboardAnchors.map((anchor, anchorIndex) => (
+                  isTemplateHref(anchor) ? (
+                    <span
+                      key={`${surface.surfaceId}:anchor:${anchor}:${anchorIndex}`}
+                      className="break-all rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-[11px] text-[var(--muted)]"
+                    >
+                      {anchor}
+                    </span>
+                  ) : (
+                    <Link
+                      key={`${surface.surfaceId}:anchor:${anchor}:${anchorIndex}`}
+                      href={anchor}
+                      className="break-all rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 font-mono text-[11px] text-[var(--accent)]"
+                    >
+                      {anchor}
+                    </Link>
+                  )
+                ))}
+              </div>
+              <div className="mt-3 space-y-2">
+                {surface.stopLines.map((stopLine) => (
+                  <p key={stopLine} className="rounded-[0.5rem] border bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
+                    {stopLine}
+                  </p>
+                ))}
+              </div>
+              <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{surface.nextAction}</p>
             </article>
           ))}
         </div>

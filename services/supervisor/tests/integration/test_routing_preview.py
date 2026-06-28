@@ -1866,6 +1866,84 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "docs/workflows/linux-primary-development-runbook.md" in setup_handoff["relatedRunbooks"]
     authority_handoff = next(checkpoint for checkpoint in report["handoffCheckpoints"] if checkpoint["checkpointId"] == "authority-boundary-handoff")
     assert "explicit operator approval" in authority_handoff["summary"]
+    surface_by_id = {surface["surfaceId"]: surface for surface in report["surfaceCoverage"]}
+    assert set(surface_by_id) == {
+        "dashboard-e2e-surface",
+        "supervisor-report-catalog-surface",
+        "runtime-export-surface",
+        "safe-backlog-surface",
+        "managed-recipe-surface",
+        "delivery-readiness-surface",
+    }
+    assert surface_by_id["dashboard-e2e-surface"]["requiredCommandIds"] == ["check-e2e-report", "test-dashboard-e2e-runner"]
+    assert surface_by_id["dashboard-e2e-surface"]["relatedReports"] == [
+        "GET /supervisor/verification-readiness-report",
+        "GET /supervisor/dashboard-e2e-report",
+    ]
+    assert surface_by_id["dashboard-e2e-surface"]["dashboardAnchors"] == [
+        "/controls#verification-readiness-report",
+        "/controls#dashboard-e2e-report",
+    ]
+    assert surface_by_id["supervisor-report-catalog-surface"]["requiredCommandIds"] == ["check-reports", "check-verification-readiness"]
+    assert surface_by_id["supervisor-report-catalog-surface"]["relatedReports"] == [
+        "GET /supervisor/report-catalog",
+        "GET /supervisor/verification-readiness-report",
+    ]
+    assert surface_by_id["supervisor-report-catalog-surface"]["dashboardAnchors"] == [
+        "/controls#supervisor-report-catalog",
+        "/controls#verification-readiness-report",
+    ]
+    assert surface_by_id["runtime-export-surface"]["requiredCommandIds"] == ["check-runtime-export", "check-runtime-review"]
+    assert surface_by_id["runtime-export-surface"]["relatedReports"] == [
+        "GET /work-items/{id}/runtime-evidence-export",
+        "GET /supervisor/runtime-evidence-review-report",
+        "GET /supervisor/verification-readiness-report",
+    ]
+    assert surface_by_id["runtime-export-surface"]["dashboardAnchors"] == [
+        "/work-items/{id}",
+        "/controls#runtime-evidence-review-report",
+        "/controls#verification-readiness-report",
+    ]
+    assert surface_by_id["safe-backlog-surface"]["requiredCommandIds"] == [
+        "check-safe-backlog",
+        "check-development-runway",
+        "check-runner-assignment-status",
+    ]
+    assert surface_by_id["safe-backlog-surface"]["relatedReports"] == [
+        "GET /supervisor/safe-development-backlog",
+        "GET /supervisor/development-runway-report",
+        "GET /supervisor/runner-assignment-status-report",
+    ]
+    assert surface_by_id["safe-backlog-surface"]["dashboardAnchors"] == [
+        "/controls#safe-development-backlog",
+        "/controls#development-runway-report",
+        "/controls#runner-assignment-status",
+    ]
+    assert surface_by_id["managed-recipe-surface"]["requiredCommandIds"] == ["check-managed-recipes"]
+    assert surface_by_id["managed-recipe-surface"]["relatedReports"] == [
+        "GET /supervisor/managed-recipe-policy-report",
+        "GET /supervisor/verification-readiness-report",
+    ]
+    assert surface_by_id["managed-recipe-surface"]["dashboardAnchors"] == [
+        "/controls#managed-recipe-policy-report",
+        "/controls#verification-readiness-report",
+    ]
+    assert surface_by_id["delivery-readiness-surface"]["requiredCommandIds"] == [
+        "check-delivery-readiness",
+        "check-github-workflow-policy",
+        "check-cleanup-automation",
+    ]
+    assert surface_by_id["delivery-readiness-surface"]["relatedReports"] == [
+        "GET /supervisor/delivery-readiness-policy-report",
+        "GET /supervisor/github-workflow-policy-report",
+        "GET /supervisor/local-cleanup-readiness-report",
+    ]
+    assert surface_by_id["delivery-readiness-surface"]["dashboardAnchors"] == [
+        "/controls#delivery-readiness-policy-report",
+        "/controls#github-workflow-policy-report",
+        "/controls#local-cleanup-readiness-report",
+    ]
+    assert any("exact-head mismatch" in stop_line for stop_line in surface_by_id["delivery-readiness-surface"]["stopLines"])
     assert any("provider/model calls" in stop_line for stop_line in report["stopLines"])
     assert "pnpm run check" in " ".join(report["nextSafeActions"])
 

@@ -899,6 +899,18 @@ export interface VerificationHandoffCheckpointView {
   nextAction: string;
 }
 
+export interface VerificationSurfaceCoverageView {
+  surfaceId: string;
+  label: string;
+  status: string;
+  summary: string;
+  requiredCommandIds: string[];
+  relatedReports: string[];
+  dashboardAnchors: string[];
+  stopLines: string[];
+  nextAction: string;
+}
+
 export interface VerificationReadinessReportView {
   reportId: string;
   generatedAt: string;
@@ -907,6 +919,7 @@ export interface VerificationReadinessReportView {
   optionalCommands: VerificationCommandView[];
   commandGroups: VerificationCommandGroupView[];
   handoffCheckpoints: VerificationHandoffCheckpointView[];
+  surfaceCoverage: VerificationSurfaceCoverageView[];
   stopLines: string[];
   nextSafeActions: string[];
   readyForAuthorityEnablement: boolean;

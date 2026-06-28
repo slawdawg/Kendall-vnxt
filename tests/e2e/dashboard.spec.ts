@@ -1467,6 +1467,18 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("dashboard-change-handoff")).toBeVisible();
     await expect(verificationPanel.getByText("setup-handoff")).toBeVisible();
     await expect(verificationPanel.getByText("authority-boundary-handoff")).toBeVisible();
+    await expect(verificationPanel.getByText("Surface coverage")).toBeVisible();
+    await expect(verificationPanel.getByText("dashboard-e2e-surface")).toBeVisible();
+    await expect(verificationPanel.getByText("supervisor-report-catalog-surface")).toBeVisible();
+    await expect(verificationPanel.getByText("runtime-export-surface")).toBeVisible();
+    await expect(verificationPanel.getByText("safe-backlog-surface")).toBeVisible();
+    await expect(verificationPanel.getByText("managed-recipe-surface")).toBeVisible();
+    await expect(verificationPanel.getByText("delivery-readiness-surface")).toBeVisible();
+    await expect(verificationPanel.getByText("GET /supervisor/runtime-evidence-review-report", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("/controls#runner-assignment-status", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByRole("link", { name: "/controls#runner-assignment-status" })).toHaveAttribute("href", "/controls#runner-assignment-status");
+    await expect(verificationPanel.getByRole("link", { name: "/work-items/{id}" })).toHaveCount(0);
+    await expect(verificationPanel.getByText("Delivery checks do not bypass failing checks, unresolved review threads, or exact-head mismatch.")).toBeVisible();
     await expect(verificationPanel.getByText("docs/workflows/linux-primary-development-runbook.md", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:docs", { exact: true })).toBeVisible();

@@ -1627,6 +1627,18 @@ class VerificationHandoffCheckpointView(BaseModel):
     nextAction: str
 
 
+class VerificationSurfaceCoverageView(BaseModel):
+    surfaceId: str
+    label: str
+    status: str
+    summary: str
+    requiredCommandIds: list[str] = Field(default_factory=list)
+    relatedReports: list[str] = Field(default_factory=list)
+    dashboardAnchors: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
+    nextAction: str
+
+
 class VerificationReadinessReportView(BaseModel):
     reportId: str
     generatedAt: datetime
@@ -1635,6 +1647,7 @@ class VerificationReadinessReportView(BaseModel):
     optionalCommands: list[VerificationCommandView]
     commandGroups: list[VerificationCommandGroupView]
     handoffCheckpoints: list[VerificationHandoffCheckpointView]
+    surfaceCoverage: list[VerificationSurfaceCoverageView] = Field(default_factory=list)
     stopLines: list[str]
     nextSafeActions: list[str]
     readyForAuthorityEnablement: bool = False
