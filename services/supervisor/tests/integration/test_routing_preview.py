@@ -16,6 +16,41 @@ import pytest
 STORY_8_5_APPROVAL_TIMESTAMP = datetime.fromisoformat("2026-06-12T16:20:33.2776334-05:00").astimezone(timezone.utc)
 STORY_8_5_APPROVAL_EXPIRY = datetime.fromisoformat("2026-06-12T16:50:33.2776334-05:00").astimezone(timezone.utc)
 STORY_8_5_APPROVAL_VALID_NOW = datetime.fromisoformat("2026-06-12T16:30:00-05:00").astimezone(timezone.utc)
+BMAD_STORY_BACKLOG_ITEM_IDS = {
+    "bmad-1-1-validate-the-pipeline-work-packet-read-contract",
+    "bmad-1-2-expose-read-only-supervisor-packet-projections",
+    "bmad-1-3-render-the-pipeline-cockpit-from-supervisor-packets",
+    "bmad-1-4-render-packet-detail-evidence-and-recovery",
+    "bmad-1-5-enforce-cockpit-ux-and-import-boundaries",
+    "bmad-2-1-import-approved-obsidian-metadata-as-candidate-work",
+    "bmad-2-2-preserve-source-refs-through-candidate-promotion",
+    "bmad-2-3-inventory-legacy-planning-artifacts",
+    "bmad-2-4-propose-legacy-artifact-dispositions",
+    "bmad-2-5-prepare-user-facing-source-summaries-for-obsidian",
+    "bmad-3-1-define-and-render-human-gate-actions",
+    "bmad-3-2-record-durable-stage-transition-events",
+    "bmad-3-3-validate-gate-state-against-event-replay",
+    "bmad-3-4-submit-action-requests-without-performing-execution",
+    "bmad-4-1-report-assignable-and-blocked-lanes",
+    "bmad-4-2-preview-a-safe-lane-assignment",
+    "bmad-4-3-claim-one-unowned-safe-lane",
+    "bmad-4-4-maintain-heartbeat-and-stale-takeover-evidence",
+    "bmad-4-5-prove-bounded-parallel-session-coordination",
+    "bmad-5-1-execute-the-safe-runner-loop-contract",
+    "bmad-5-2-capture-best-judgment-decisions-as-evidence",
+    "bmad-5-3-trigger-bmad-party-mode-and-claude-review-by-policy",
+    "bmad-5-4-surface-loop-stop-states-in-pipeline",
+    "bmad-6-1-attach-delivery-evidence-to-work-packets",
+    "bmad-6-2-prepare-pr-creation-and-update-as-gated-evidence",
+    "bmad-6-3-prove-checks-review-threads-and-exact-head-state",
+    "bmad-6-4-gate-merge-and-cleanup-with-rollback-evidence",
+    "bmad-6-5-render-delivery-and-cleanup-in-packet-detail",
+    "bmad-7-1-render-reviewable-memory-proposals",
+    "bmad-7-2-route-user-facing-documentation-proposals",
+    "bmad-7-3-keep-llm-wiki-derived-and-rebuildable",
+    "bmad-7-4-deauthorize-unsafe-or-regressing-automation",
+    "bmad-7-5-close-the-learn-loop-in-pipeline",
+}
 
 
 def _reset_supervisor_modules() -> None:
@@ -2288,7 +2323,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert report["reportId"] == "safe-development-backlog-report-v1"
     assert report["readOnly"] is True
     assert report["executionAuthorityApproved"] is False
-    assert {item["itemId"] for item in report["items"]} == {
+    assert {item["itemId"] for item in report["items"]} == BMAD_STORY_BACKLOG_ITEM_IDS | {
         "safe-backlog-report-alignment",
         "verification-surface-hardening",
         "github-delivery-hygiene",
@@ -2336,7 +2371,11 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "queue-zero-runway-continuity-refresh",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
-    assert all(item["recommendedSliceSize"] in {"large", "medium_to_large"} for item in ready_items)
+    for item in ready_items:
+        if item["itemId"] in BMAD_STORY_BACKLOG_ITEM_IDS:
+            assert item["recommendedSliceSize"] == "story"
+        else:
+            assert item["recommendedSliceSize"] in {"large", "medium_to_large"}
     report_alignment_item = next(item for item in report["items"] if item["itemId"] == "safe-backlog-report-alignment")
     assert report_alignment_item["status"] == "closed"
     assert report_alignment_item["recommendedSliceSize"] == "complete"
@@ -2667,8 +2706,8 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
         in dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["nextAction"]
     )
-    assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
-    assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
+    assert "GET /supervisor/maintenance-readiness-report" in report_alignment_item["relatedReports"]
+    assert "/controls#maintenance-readiness-report" in report_alignment_item["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("large enough" in action for action in report["nextSafeActions"])
     assert any("GitHub delivery hygiene" in action for action in report["nextSafeActions"])
@@ -8591,13 +8630,14 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     )
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "queue-zero-runway-continuity-refresh"
-    assert continuity["selectedBranch"] == "codex/queue-zero-runway-continuity-refresh"
+    assert continuity["selectedBacklogItemId"] == "bmad-1-1-validate-the-pipeline-work-packet-read-contract"
+    assert continuity["selectedBranch"] == "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["summaryDryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner <owner>"
-    assert continuity["assignableCount"] == 1
+    assert continuity["assignableCount"] == len(BMAD_STORY_BACKLOG_ITEM_IDS) + 1
     assert "blocked-authority" not in continuity["blockerCodes"]
     queue_proof_rows = {row["backlogItemId"]: row for row in continuity["queueProofRows"]}
+    assert queue_proof_rows["bmad-1-1-validate-the-pipeline-work-packet-read-contract"]["classification"] == "assignable"
     assert queue_proof_rows["dispatcher-queue-handoff-badges-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-status-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-lifecycle-refresh"]["classification"] == "closed"
