@@ -555,6 +555,51 @@ function countByField(rows, field) {
   }, {});
 }
 
+function reasonCodeForClassification(classification = {}) {
+  const status = String(classification.status || "unknown").trim() || "unknown";
+  const reason = String(classification.reason || "").trim();
+
+  if (reason === "workspace manifest is closed") return "workspace_manifest_closed";
+  if (reason === "manifest is authority-blocked") return "manifest_authority_blocked";
+  if (reason === "worktree path is missing") return "worktree_path_missing";
+  if (reason.startsWith("owner heartbeat older than ")) return "owner_heartbeat_stale";
+  if (reason.startsWith("owned by ")) return "owned_by_other_runner";
+  if (reason === "PR is merged but cleanup is not closed") return "pr_merged_cleanup_pending";
+  if (reason === "cleanup is partial" || status === "cleanup") return "cleanup_partial";
+  if (reason === "PR is open") return "pr_open_delivery";
+  if (reason === "active workspace has no owner") return "active_workspace_unowned";
+  if (reason === "owned by current runner") return "active_current_owner";
+  if (reason === "safe backlog item is already complete and must not be requeued") return "safe_backlog_complete";
+  if (reason === "safe backlog item is not dispatchable from generic continuation") return "safe_backlog_not_dispatchable";
+  if (reason === "ready item has no source-owned lane start command") return "safe_backlog_missing_start_command";
+  if (reason === "ready item has no source-owned lane start command and branch") return "safe_backlog_missing_start_metadata";
+  if (reason === "ready item has no source-owned lane branch") return "safe_backlog_missing_branch";
+  if (reason.startsWith("closed workspace evidence exists for ")) return "closed_workspace_evidence";
+  if (reason.startsWith("closed assignment evidence exists for ")) return "closed_assignment_evidence";
+  if (reason === "lane assignment already exists for branch") return "lane_assignment_exists";
+  if (reason === "multiple active assignment records exist for branch") return "duplicate_assignment_records";
+  if (reason.startsWith("multiple active lane assignments exist for ")) return "duplicate_lane_assignments";
+  if (reason === "workspace manifest already exists for branch") return "workspace_manifest_exists";
+  if (reason === "only closed workspace manifests exist for branch") return "closed_workspace_only";
+  if (reason === "ready safe backlog item has no active workspace conflict") return "ready_no_workspace_conflict";
+  if (reason === "assignment is closed") return "assignment_closed";
+  if (reason === "assignment is authority-blocked") return "assignment_authority_blocked";
+  if (reason === "assignment has no owner") return "assignment_missing_owner";
+  if (reason.startsWith("assignment heartbeat older than ")) return "assignment_heartbeat_stale";
+  if (reason.startsWith("assigned to ")) return "assignment_owned_by_other_runner";
+  if (reason === "assignment is owned by current runner") return "assignment_current_owner";
+  if (reason.startsWith("multiple active workspace manifests exist for ")) return "duplicate_workspace_manifests";
+  if (reason === "ready safe backlog lane has an unowned active workspace") return "ready_unowned_active_workspace";
+  if (reason === "ready safe backlog lane is already claimed by current runner") return "ready_claimed_by_current_runner";
+  if (reason === "ready safe backlog lane has no workspace conflict") return "ready_no_workspace_conflict";
+  if (reason.startsWith("Refusing to operate on protected branch: ")) return "protected_branch_blocked";
+  if (reason.startsWith("branch ") || reason.startsWith("local branch ") || reason.startsWith("remote branch ")) {
+    return "branch_availability_blocked";
+  }
+
+  return `${status.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase() || "unknown"}_unclassified`;
+}
+
 function summaryLane(lane) {
   return {
     taskId: lane.taskId,
@@ -881,6 +926,7 @@ function assignmentReport(argv) {
           `source_status=${item.status || "unknown"}`,
           `slice=${item.recommendedSliceSize || "unknown"}`,
           `branch=${item.branchName || "none"}`,
+          `reason_code=${reasonCodeForClassification(classification)}`,
           `reason=${classification.reason}`,
         ].join(" | "),
       );
@@ -906,6 +952,7 @@ function assignmentReport(argv) {
           `phase=${assignment.phase || "none"}`,
           `heartbeat=${assignment.last_heartbeat_at || "none"}`,
           `runner=${assignment.runner_kind || "none"}`,
+          `reason_code=${reasonCodeForClassification(classification)}`,
           `reason=${classification.reason}`,
           `next=${classification.nextAction}`,
         ].join(" | "),
@@ -935,6 +982,7 @@ function assignmentReport(argv) {
         `phase=${manifest.phase || "none"}`,
         `heartbeat=${manifest.last_heartbeat_at || "none"}`,
         `runner=${manifest.runner_kind || "none"}`,
+        `reason_code=${reasonCodeForClassification(classification)}`,
         `reason=${classification.reason}`,
         `next=${classification.nextAction}`,
       ].join(" | "),
@@ -961,6 +1009,7 @@ function buildAssignmentReportSummary({
       sourceStatus: item.status || "unknown",
       status: classification.status,
       branch: item.branchName || null,
+      reasonCode: reasonCodeForClassification(classification),
       reason: classification.reason,
     };
   });
@@ -974,6 +1023,7 @@ function buildAssignmentReportSummary({
       branch: assignment.branch || null,
       phase: assignment.phase || null,
       heartbeat: assignment.last_heartbeat_at || null,
+      reasonCode: reasonCodeForClassification(classification),
       reason: classification.reason,
       nextAction: classification.nextAction,
     };
@@ -989,6 +1039,7 @@ function buildAssignmentReportSummary({
       worktreePath: manifest.worktree_path || null,
       phase: manifest.phase || null,
       heartbeat: manifest.last_heartbeat_at || manifest.owner_updated_at || null,
+      reasonCode: reasonCodeForClassification(classification),
       reason: classification.reason,
       nextAction: classification.nextAction,
     };
@@ -1008,6 +1059,9 @@ function buildAssignmentReportSummary({
     backlogStatusCounts: countByField(backlogCandidates, "status"),
     laneAssignmentStatusCounts: countByField(laneAssignments, "status"),
     workspaceAssignmentStatusCounts: countByField(workspaceAssignments, "status"),
+    backlogReasonCodeCounts: countByField(backlogCandidates, "reasonCode"),
+    laneAssignmentReasonCodeCounts: countByField(laneAssignments, "reasonCode"),
+    workspaceAssignmentReasonCodeCounts: countByField(workspaceAssignments, "reasonCode"),
     backlogCandidates: backlogCandidates.slice(0, 10),
     backlogCandidatesTruncated: backlogCandidates.length > 10,
     laneAssignments: laneAssignments.slice(0, 10),
@@ -1101,6 +1155,13 @@ function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selecte
     stateRoot: state.root,
     staleAfterSeconds,
     selected: selected ? summarizeClaimEvaluation(selected) : null,
+    assignmentPreview: buildAssignmentPreview({
+      selected,
+      currentOwner,
+      mode: "claim-next",
+      blockedReasons: claimNextBlockedReasons({ selected, blockers, sourceDrift }),
+      blockedRequiredEvidence: claimNextBlockedRequiredEvidence(),
+    }),
     nextActionSummary: buildClaimNextActionSummary({ selected, blockers, excluded, sourceDrift, evaluations }),
     counts: {
       total: evaluations.length,
@@ -1120,6 +1181,48 @@ function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selecte
     sourceDriftTruncated: sourceDrift.length > 10,
     mutation: "none; dry-run summary only",
   };
+}
+
+function buildAssignmentPreview({ selected, currentOwner, mode, blockedReasons = [], blockedRequiredEvidence = [] }) {
+  const targetLane = selected?.item?.itemId || null;
+  return {
+    proposedRunner: currentOwner,
+    targetLane,
+    targetBranch: selected?.item?.branchName || null,
+    rationale: selected
+      ? selected.reason
+      : blockedReasons[0] || "no safe independent lane is available to claim",
+    blockedReasons: selected ? [] : blockedReasons,
+    requiredEvidence: selected
+      ? [`safe backlog item ${targetLane}`, `${mode} dry-run summary-json`]
+      : [`${mode} dry-run summary-json`, ...blockedRequiredEvidence],
+    mutation: "none; preview only",
+  };
+}
+
+function claimNextBlockedReasons({ selected, blockers, sourceDrift }) {
+  if (selected) {
+    return [];
+  }
+  const reasons = blockers.map(previewBlockedReason);
+  if (reasons.length > 0) {
+    return reasons;
+  }
+  return sourceDrift.map(previewBlockedReason);
+}
+
+function claimNextBlockedRequiredEvidence() {
+  return ["resolve blockers before applying claim-next"];
+}
+
+function previewBlockedReason(evaluation) {
+  if (typeof evaluation === "string") {
+    return evaluation;
+  }
+  const itemId = evaluation?.item?.itemId || "unknown";
+  const status = evaluation?.status || "unknown";
+  const reason = evaluation?.reason || evaluation?.nextAction || "no reason recorded";
+  return `${itemId}: ${status} - ${reason}`;
 }
 
 function claimEvaluationIsExcluded(evaluation) {
@@ -1176,6 +1279,7 @@ function summarizeClaimEvaluation(evaluation) {
     branch: evaluation.item.branchName || null,
     action: evaluation.action || null,
     mutation: evaluation.mutation || null,
+    reasonCode: reasonCodeForClassification(evaluation),
     reason: evaluation.reason,
     nextAction: evaluation.nextAction,
   };
@@ -3585,7 +3689,19 @@ function classifyBacklogItem(item, manifestBranchStates, assignmentBranchStates 
   if (!item.startCommand && !item.branchName) {
     return {
       status: "ambiguous",
+      reason: "ready item has no source-owned lane start command and branch",
+    };
+  }
+  if (!item.startCommand) {
+    return {
+      status: "ambiguous",
       reason: "ready item has no source-owned lane start command",
+    };
+  }
+  if (!item.branchName) {
+    return {
+      status: "ambiguous",
+      reason: "ready item has no source-owned lane branch",
     };
   }
   const closedCompletionEvidence = closedSourceCompletionEvidence(item, manifests, assignments);
@@ -3980,6 +4096,7 @@ function dispatchPacket(selected, evaluations, context) {
       .map((evaluation) => ({
         item_id: evaluation.item.itemId,
         status: evaluation.status,
+        reason_code: reasonCodeForClassification(evaluation),
         reason: evaluation.reason,
         next_action: evaluation.nextAction,
       })),
@@ -3994,6 +4111,13 @@ function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, read
     staleAfterSeconds,
     readinessProfile,
     selected: plan.selected ? summarizeClaimEvaluation(plan.selected) : null,
+    laneAssignmentPreview: buildAssignmentPreview({
+      selected: plan.selected,
+      currentOwner,
+      mode: "dispatch-next",
+      blockedReasons: dispatchNextBlockedReasons(plan.packet),
+      blockedRequiredEvidence: dispatchNextBlockedRequiredEvidence(),
+    }),
     dispatch: {
       allowed: plan.packet.allowed,
       selectedLane: plan.packet.selected_lane,
@@ -4014,10 +4138,32 @@ function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, read
       blocked: blockedCandidates.length,
     },
     candidateStateCounts: plan.packet.candidate_state_counts,
+    blockedCandidateReasonCodeCounts: countByField(plan.packet.blocked_candidates, "reason_code"),
     blockedCandidates: plan.packet.blocked_candidates.slice(0, 10),
     blockedCandidatesTruncated: plan.packet.blocked_candidates.length > 10,
     mutation: "none; dry-run summary only",
   };
+}
+
+function dispatchNextBlockedReasons(packet) {
+  if (packet.selected_lane) {
+    return [];
+  }
+  const blockers = Array.isArray(packet.blockers) ? packet.blockers : [];
+  const blockedCandidates = Array.isArray(packet.blocked_candidates) ? packet.blocked_candidates : [];
+  const reasons = [
+    packet.next_action_guidance,
+    ...blockers,
+    ...blockedCandidates.slice(0, 10).map((candidate) => {
+      const reason = candidate.reason || candidate.next_action || "no reason recorded";
+      return `${candidate.item_id}: ${candidate.status} - ${reason}`;
+    }),
+  ].filter(Boolean);
+  return [...new Set(reasons)];
+}
+
+function dispatchNextBlockedRequiredEvidence() {
+  return ["resolve blockers before applying dispatch-next"];
 }
 
 function dispatchNextActionGuidance(selected, counts = {}) {
@@ -5686,6 +5832,7 @@ function printClaimBlockers(evaluations, selected) {
         evaluation.status,
         `source_status=${evaluation.item.status || "unknown"}`,
         `branch=${evaluation.item.branchName || "none"}`,
+        `reason_code=${reasonCodeForClassification(evaluation)}`,
         `reason=${evaluation.reason}`,
         `next=${evaluation.nextAction}`,
       ].join(" | "),

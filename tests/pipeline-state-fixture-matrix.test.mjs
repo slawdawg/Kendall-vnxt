@@ -110,8 +110,13 @@ test("Pipeline State/Evidence Matrix covers required rows, stages, actions, and 
     "approve_execution",
     "approve_provider_exception",
     "approve_memory_proposal",
+    "approve_delivery",
     "reject_packet",
+    "edit_packet",
     "request_clarification",
+    "downgrade_to_reference",
+    "send_back_to_shape",
+    "send_back_to_research",
     "rerun_smaller",
     "reroute",
     "cancel_worker",
@@ -207,12 +212,29 @@ test("Pipeline State/Evidence Matrix validates typed Human Gate actions and read
   assert.ok(stale.failures.some((failure) => failure.id === "payload.decisionId"));
   assert.ok(stale.failures.some((failure) => failure.id === "requiredEvidenceRefs"));
 
-  const unavailableWithoutReason = validateHumanGateActionModel(validGateAction({
+  const unavailableWithoutDisabledReason = validateHumanGateActionModel(validGateAction({
     status: "blocked",
-    disabledReason: undefined
+    disabledReason: undefined,
+    reasonCodes: ["human_gate.unavailable.approve_execution"]
   }));
-  assert.equal(unavailableWithoutReason.ok, false);
-  assert.ok(unavailableWithoutReason.failures.some((failure) => failure.id === "disabledReason"));
+  assert.equal(unavailableWithoutDisabledReason.ok, false);
+  assert.ok(unavailableWithoutDisabledReason.failures.some((failure) => failure.id === "disabledReason"));
+  assert.ok(!unavailableWithoutDisabledReason.failures.some((failure) => failure.id === "reasonCodes"));
+
+  const unavailableWithoutReasonCodes = validateHumanGateActionModel(validGateAction({
+    status: "blocked",
+    disabledReason: "disabled reason: blocked for fixture review.",
+    reasonCodes: []
+  }));
+  assert.equal(unavailableWithoutReasonCodes.ok, false);
+  assert.ok(unavailableWithoutReasonCodes.failures.some((failure) => failure.id === "reasonCodes"));
+
+  const malformedReasonCodes = validateHumanGateActionModel(validGateAction({
+    reasonCodes: ["human_gate.status.available", "not a code", "human_gate.status.available"]
+  }));
+  assert.equal(malformedReasonCodes.ok, false);
+  assert.ok(malformedReasonCodes.failures.some((failure) => failure.id === "reasonCodes.format"));
+  assert.ok(malformedReasonCodes.failures.some((failure) => failure.id === "reasonCodes.duplicate"));
 
   const missingIntentionalCoverage = getMissingHumanGateActionFixtureCoverage(
     PIPELINE_STATE_EVIDENCE_MATRIX_V0.map((row) => row.id === "source.restricted_refs"
@@ -370,6 +392,7 @@ function validGateAction(overrides = {}) {
       decisionId: "fixture:human-gate-blocked:decision:current"
     },
     requiredEvidenceRefs: ["fixture:human-gate-blocked:evidence:fixture"],
+    reasonCodes: ["human_gate.status.available"],
     stopLines: ["Do not launch real workers."],
     rollbackPath: "Return to Shape with fixture evidence preserved.",
     resultingStage: "execute",

@@ -2886,6 +2886,21 @@ function buildHumanGateActions(input: {
       }),
       humanGateAction({
         ...common,
+        type: "reject_packet",
+        family: "Reject",
+        label: "Reject memory proposal",
+        uiCopy: "Reject the memory proposal and preserve review metadata.",
+        status: "disabled",
+        authorityFamily: "operator.memory.proposal.reject",
+        stopLines: ["Do not delete or mutate Obsidian content automatically."],
+        rollbackPath: "Keep packet in Learn with rejection rationale required.",
+        resultingStage: "learn",
+        resultingOwner: "memory_review",
+        auditEventType: "human_gate.reject_memory_proposal.disabled",
+        disabledReason: "disabled reason: rejection rationale capture is preview-only."
+      }),
+      humanGateAction({
+        ...common,
         type: "send_back_to_research",
         family: "Request Changes",
         label: "Send back to Research",
@@ -3001,9 +3016,10 @@ function buildHumanGateActions(input: {
   ];
 }
 
-function humanGateAction(input: Omit<HumanGateActionV0, "actionId" | "payload" | "requiredEvidenceRefs"> & {
+function humanGateAction(input: Omit<HumanGateActionV0, "actionId" | "payload" | "requiredEvidenceRefs" | "reasonCodes"> & {
   packetId: string;
   evidenceRef: string;
+  reasonCodes?: string[];
 }): HumanGateActionV0 {
   const actionId = `${input.packetId}:action:${input.type}`;
   return {
@@ -3025,6 +3041,7 @@ function humanGateAction(input: Omit<HumanGateActionV0, "actionId" | "payload" |
     resultingStage: input.resultingStage,
     resultingOwner: input.resultingOwner,
     auditEventType: input.auditEventType,
+    reasonCodes: usableReasonCodes(input.reasonCodes) ?? humanGateActionReasonCodes(input),
     ...(input.disabledReason ? { disabledReason: input.disabledReason } : {})
   };
 }
@@ -3128,6 +3145,29 @@ function actionRequestId(actionId: string, requestedByLabel: string, requestedAt
 
 function compactRequestIdPart(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "unknown";
+}
+
+function humanGateActionReasonCodes(input: Pick<HumanGateActionV0, "auditEventType" | "disabledReason" | "status" | "type">): string[] {
+  const codes = [`human_gate.status.${input.status}`, `human_gate.audit.${slugReasonCode(input.auditEventType)}`];
+  if (input.status !== "available") {
+    codes.push(`human_gate.unavailable.${input.type}`);
+  }
+  if (input.disabledReason) {
+    codes.push(`human_gate.reason.${slugReasonCode(input.disabledReason.replace(/^disabled reason:\s*/i, ""))}`);
+  }
+  return [...new Set(codes)];
+}
+
+function usableReasonCodes(reasonCodes: string[] | undefined) {
+  return Array.isArray(reasonCodes) && reasonCodes.some((code) => code.trim().length > 0) ? reasonCodes : null;
+}
+
+function slugReasonCode(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "unspecified";
 }
 
 function buildHumanGateFixtureEvents(

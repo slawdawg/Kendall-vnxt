@@ -188,9 +188,11 @@ from supervisor.api.schemas import (
     WorkflowEventView,
     ArtifactRefV0View,
     EvidenceRefV0View,
+    GateReplayRefStateV0View,
     RecoveryActionV0View,
     AlphaMemorySourceStatusV0View,
     SourceRefV0View,
+    WorkPacketGateStateValidationV0View,
     WorkPacketExecutionAttemptSummaryV0View,
     WorkPacketLaneCardV0View,
     WorkPacketRouteSummaryV0View,
@@ -1296,6 +1298,23 @@ class SupervisorService:
             raise ValueError("Candidate work has already been promoted.")
 
         import_metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+        normalized_work_packet_source_refs = self._normalized_work_packet_metadata_source_refs(import_metadata)
+        promotion_evidence_refs = import_metadata.get("promotionEvidenceRefs")
+        normalized_promotion_evidence_refs = (
+            [ref for ref in promotion_evidence_refs if isinstance(ref, str) and ref]
+            if isinstance(promotion_evidence_refs, list)
+            else []
+        )
+        promoted_import_metadata = self._promotion_import_metadata(import_metadata)
+        if normalized_work_packet_source_refs:
+            promoted_import_metadata["workPacketSourceRefs"] = normalized_work_packet_source_refs
+        else:
+            promoted_import_metadata.pop("workPacketSourceRefs", None)
+        if normalized_promotion_evidence_refs:
+            promoted_import_metadata["promotionEvidenceRefs"] = normalized_promotion_evidence_refs
+        else:
+            promoted_import_metadata.pop("promotionEvidenceRefs", None)
+
         item_metadata = {
             "candidateWorkId": candidate.id,
             "candidatePriority": candidate.priority,
@@ -1303,20 +1322,18 @@ class SupervisorService:
             "sourceArtifactPath": candidate.source_artifact_path,
             "sourceArtifactType": candidate.source_artifact_type,
             "source": candidate.source,
-            "importMetadata": import_metadata,
+            "importMetadata": promoted_import_metadata,
         }
         verification_summary = import_metadata.get("verificationSummary")
         acceptance_criteria = import_metadata.get("acceptanceCriteria")
-        work_packet_source_refs = import_metadata.get("workPacketSourceRefs")
-        promotion_evidence_refs = import_metadata.get("promotionEvidenceRefs")
         if isinstance(verification_summary, str) and verification_summary:
             item_metadata["verificationSummary"] = verification_summary
         if isinstance(acceptance_criteria, str) and acceptance_criteria:
             item_metadata["acceptanceCriteriaSummary"] = acceptance_criteria
-        if isinstance(work_packet_source_refs, list):
-            item_metadata["workPacketSourceRefs"] = work_packet_source_refs
-        if isinstance(promotion_evidence_refs, list):
-            item_metadata["promotionEvidenceRefs"] = [ref for ref in promotion_evidence_refs if isinstance(ref, str) and ref]
+        if normalized_work_packet_source_refs:
+            item_metadata["workPacketSourceRefs"] = normalized_work_packet_source_refs
+        if normalized_promotion_evidence_refs:
+            item_metadata["promotionEvidenceRefs"] = normalized_promotion_evidence_refs
 
         item = WorkItem(
             title=candidate.title,
@@ -1350,22 +1367,22 @@ class SupervisorService:
                 "sourceArtifactType": candidate.source_artifact_type,
                 "candidatePriority": candidate.priority,
                 "candidateSortOrder": candidate.sort_order,
-                "importMetadata": import_metadata,
+                "importMetadata": promoted_import_metadata,
                 "actor": {"type": "system", "id": None, "label": None},
                 "authority": {
                     "operation": "candidate_work.promotion",
                     "mode": "explicit_candidate_approval",
                 },
+                "approval": {
+                    "status": candidate.status,
+                    "approvedAt": candidate.approved_at.isoformat() if candidate.approved_at else None,
+                    "approvedBy": promoted_import_metadata.get("approvedBy"),
+                    "approvalReference": promoted_import_metadata.get("approvalStatus"),
+                },
                 "before": before_state,
                 "after": after_state,
-                "evidenceRefs": item_metadata.get("promotionEvidenceRefs", []),
-                "workPacketSourceRefs": [
-                    raw_ref.get("refId")
-                    for raw_ref in work_packet_source_refs
-                    if isinstance(raw_ref, dict) and isinstance(raw_ref.get("refId"), str) and raw_ref.get("refId")
-                ]
-                if isinstance(work_packet_source_refs, list)
-                else [],
+                "evidenceRefs": normalized_promotion_evidence_refs,
+                "workPacketSourceRefs": [ref["refId"] for ref in normalized_work_packet_source_refs],
             },
         )
         await session.commit()
@@ -20414,6 +20431,7 @@ class SupervisorService:
         task_packet = self._task_packet_from_preview(item, routing_preview) if item and routing_preview else None
         memory_proposals = await self.list_memory_proposals(session, item.id) if item else []
         memory_proposal_views = [self.to_memory_proposal_view(proposal, packet_id=f"work_item:{item.id}") for proposal in memory_proposals] if item else []
+        events = await self.list_work_item_events(session, item.id) if item else []
         stage, owner, status, mapping_reason_codes = self._map_work_packet_state(
             candidate=candidate_view,
             item=item_view,
@@ -20456,6 +20474,14 @@ class SupervisorService:
             laneCards=self._work_packet_lane_cards(attempts, routing_preview),
             memoryProposals=memory_proposal_views,
             alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs, memory_proposal_views),
+            gateStateValidation=self._work_packet_gate_state_validation(
+                stored_stage=stage,
+                stored_owner=owner,
+                stored_status=status,
+                source_refs=source_refs,
+                evidence_refs=evidence_refs,
+                events=events,
+            ),
             reviewSummaries=self._work_packet_review_summaries(item_view, evidence_refs, artifact_refs),
             recoveryActions=self._work_packet_recovery_actions(status, evidence_refs),
         )
@@ -20619,6 +20645,168 @@ class SupervisorService:
         }
         return lane if lane in allowed else "unknown"
 
+    def _work_packet_gate_state_validation(
+        self,
+        *,
+        stored_stage: str,
+        stored_owner: str,
+        stored_status: str,
+        source_refs: list[SourceRefV0View],
+        evidence_refs: list[EvidenceRefV0View],
+        events: list[WorkflowEvent],
+    ) -> WorkPacketGateStateValidationV0View:
+        event_views = [self.to_event_view(event) for event in events]
+        derived_stage, derived_owner, derived_status, replayed_event_types = self._derive_gate_state_from_events(event_views)
+        ref_states = self._gate_replay_ref_states(source_refs, evidence_refs, event_views)
+        blocked_reasons = [state.blockingReason for state in ref_states if state.blockingReason]
+        mismatch_reasons: list[str] = []
+        if derived_stage and derived_stage != stored_stage:
+            mismatch_reasons.append(f"stored stage {stored_stage} does not match event replay stage {derived_stage}")
+        if derived_owner and derived_owner != stored_owner:
+            mismatch_reasons.append(f"stored owner {stored_owner} does not match event replay owner {derived_owner}")
+        if derived_status and derived_status != stored_status:
+            mismatch_reasons.append(f"stored status {stored_status} does not match event replay status {derived_status}")
+
+        status = "matched"
+        if not derived_stage:
+            status = "preview_only"
+            blocked_reasons.append("No replayable workflow event establishes gate state yet.")
+        if mismatch_reasons or blocked_reasons:
+            status = "blocked" if derived_stage else "preview_only"
+
+        return WorkPacketGateStateValidationV0View(
+            status=status,
+            storedStage=stored_stage,
+            derivedStage=derived_stage,
+            storedOwner=stored_owner,
+            derivedOwner=derived_owner,
+            storedStatus=stored_status,
+            derivedStatus=derived_status,
+            eventCount=len(event_views),
+            latestEventType=event_views[0].eventType if event_views else None,
+            replayedEventTypes=replayed_event_types,
+            mismatchReasons=mismatch_reasons,
+            blockedReasons=blocked_reasons,
+            refStates=ref_states,
+        )
+
+    def _derive_gate_state_from_events(
+        self,
+        events_desc: list[WorkflowEventView],
+    ) -> tuple[str | None, str | None, str | None, list[str]]:
+        derived: tuple[str | None, str | None, str | None] = (None, None, None)
+        replayed_event_types: list[str] = []
+        for event in reversed(events_desc):
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            event_type = event.eventType
+            if event_type not in replayed_event_types:
+                replayed_event_types.append(event_type)
+
+            state = payload.get("state")
+            if isinstance(state, str):
+                lane = payload.get("lane")
+                mapped = self._gate_state_from_workflow_state(state, lane if isinstance(lane, str) else None)
+                if mapped:
+                    derived = mapped
+
+            if event_type.startswith("execution_attempt."):
+                attempt_status = str(payload.get("status") or event_type.removeprefix("execution_attempt."))
+                lane = payload.get("selectedLane") or payload.get("lane")
+                mapped = self._gate_state_from_execution_attempt_status(attempt_status, lane if isinstance(lane, str) else None)
+                if mapped:
+                    derived = mapped
+
+        return (*derived, replayed_event_types)
+
+    def _gate_state_from_workflow_state(self, state: str, lane: str | None = None) -> tuple[str, str, str] | None:
+        state_map = {
+            "queued": ("capture", "kendall", "active"),
+            "triaged": ("classify", "kendall", "active"),
+            "ready": ("human_gate", "operator", "waiting"),
+            "implementing": ("execute", self._owner_for_lane(lane), "active"),
+            "validating": ("review", "kendall", "active"),
+            "reviewing": ("review", "kendall", "active"),
+            "awaiting_audit": ("review", "operator", "waiting"),
+            "needs_rework": ("shape", "kendall", "active"),
+            "blocked": ("human_gate", "blocked", "blocked"),
+            "done": ("deliver", "kendall", "complete"),
+        }
+        return state_map.get(state)
+
+    def _gate_state_from_execution_attempt_status(self, status: str, lane: str | None) -> tuple[str, str, str] | None:
+        if status == ExecutionAttemptStatus.PLANNED.value:
+            return "shape", "kendall", "waiting"
+        if status == ExecutionAttemptStatus.APPROVED.value:
+            return "human_gate", "operator", "waiting"
+        if status in {ExecutionAttemptStatus.STARTING.value, ExecutionAttemptStatus.RUNNING.value}:
+            return "execute", self._owner_for_lane(lane), "active"
+        if status == ExecutionAttemptStatus.COMPLETED.value:
+            return "review", "kendall", "complete"
+        if status == ExecutionAttemptStatus.CANCELLED.value:
+            return "execute", "blocked", "blocked"
+        if status in {
+            ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+            ExecutionAttemptStatus.TIMED_OUT.value,
+            ExecutionAttemptStatus.FAILED.value,
+            ExecutionAttemptStatus.REJECTED.value,
+        }:
+            return "execute", "blocked", "failed"
+        return None
+
+    def _gate_replay_ref_states(
+        self,
+        source_refs: list[SourceRefV0View],
+        evidence_refs: list[EvidenceRefV0View],
+        event_views: list[WorkflowEventView],
+    ) -> list[GateReplayRefStateV0View]:
+        states: list[GateReplayRefStateV0View] = []
+        for ref in source_refs:
+            access_state = ref.accessState
+            blocking_reason = None
+            if access_state != "allowed":
+                blocking_reason = ref.blockedReason or f"Source ref {ref.refId} is {access_state}."
+            states.append(
+                GateReplayRefStateV0View(
+                    refId=ref.refId,
+                    refType="source",
+                    state=access_state,
+                    label=ref.label,
+                    blockingReason=blocking_reason,
+                )
+            )
+        for ref in evidence_refs:
+            state = "metadata_only" if ref.retentionClass == "metadata_only" else "allowed"
+            states.append(
+                GateReplayRefStateV0View(
+                    refId=ref.refId,
+                    refType="evidence",
+                    state=state,
+                    label=ref.label,
+                    blockingReason=None,
+                )
+            )
+        for event in event_views:
+            if self._payload_contains_redaction_marker(event.payload):
+                states.append(
+                    GateReplayRefStateV0View(
+                        refId=f"event:{event.id}",
+                        refType="event",
+                        state="redacted",
+                        label=event.eventType,
+                        blockingReason=f"Event {event.eventType} contains redacted payload fields and cannot fully prove gate state.",
+                    )
+                )
+        return states
+
+    def _payload_contains_redaction_marker(self, value: object) -> bool:
+        if isinstance(value, dict):
+            if value.get("redactedUnknownKeys") is True:
+                return True
+            return any(self._payload_contains_redaction_marker(child) for child in value.values())
+        if isinstance(value, list):
+            return any(self._payload_contains_redaction_marker(child) for child in value)
+        return False
+
     def _work_packet_source_refs(
         self,
         candidate: CandidateWorkView | None,
@@ -20699,10 +20887,14 @@ class SupervisorService:
                 invalid_reasons.append("unsafe non-summary source metadata")
             elif summary_only is not None and summary_only is not True:
                 invalid_reasons.append("invalid summary-only flag")
+            contradiction_status = raw_ref.get("contradictionStatus")
+            if isinstance(contradiction_status, str) and contradiction_status not in {"", "none"}:
+                invalid_reasons.append(f"contradictory source metadata: {contradiction_status}")
             ref_id = raw_ref.get("refId")
             label = raw_ref.get("label")
             path_or_url = raw_ref.get("pathOrUrl")
             canonical = raw_ref.get("canonical")
+            blocked_reason = raw_ref.get("blockedReason")
             safe_source_type = source_type if source_type in allowed_source_types else "manual"
             safe_freshness = freshness if freshness in allowed_freshness else "unknown"
             if access_state == "unavailable":
@@ -20718,11 +20910,15 @@ class SupervisorService:
                 safe_label = f"{safe_label} ({', '.join(invalid_reasons)})"
             safe_blocked_reason = "; ".join(invalid_reasons) if invalid_reasons else None
             if safe_access_state != "allowed" and not safe_blocked_reason:
-                safe_blocked_reason = {
-                    "excluded": "source ref is excluded from automated mutation",
-                    "missing": "source ref is missing or unavailable",
-                    "blocked": "source ref is blocked by source boundary",
-                }[safe_access_state]
+                safe_blocked_reason = (
+                    blocked_reason
+                    if isinstance(blocked_reason, str) and blocked_reason
+                    else {
+                        "excluded": "source ref is excluded from automated mutation",
+                        "missing": "source ref is missing or unavailable",
+                        "blocked": "source ref is blocked by source boundary",
+                    }[safe_access_state]
+                )
             safe_canonical = False if safe_source_type == "llm_wiki" else canonical if isinstance(canonical, bool) else True
             refs.append(
                 SourceRefV0View(
@@ -20740,6 +20936,39 @@ class SupervisorService:
                 )
             )
         return refs
+
+    def _normalized_work_packet_metadata_source_refs(self, metadata: dict) -> list[dict[str, object]]:
+        return [ref.model_dump(mode="json") for ref in self._work_packet_metadata_source_refs(metadata)]
+
+    def _promotion_import_metadata(self, import_metadata: dict) -> dict[str, object]:
+        promoted: dict[str, object] = {}
+        string_fields = {
+            "verificationSummary",
+            "acceptanceCriteria",
+            "retentionPolicy",
+            "artifactTitle",
+            "storyId",
+            "epicId",
+            "allowedScope",
+            "approvalStatus",
+            "approvedBy",
+            "approvedAt",
+        }
+        bool_fields = {"canonicalMutationAllowed", "sourceMutationAllowed"}
+        for field in string_fields:
+            value = import_metadata.get(field)
+            if isinstance(value, str) and value:
+                promoted[field] = value
+        for field in bool_fields:
+            value = import_metadata.get(field)
+            if isinstance(value, bool):
+                promoted[field] = value
+        notes = import_metadata.get("notes")
+        if isinstance(notes, list):
+            safe_notes = [note for note in notes if isinstance(note, str) and note][:10]
+            if safe_notes:
+                promoted["notes"] = safe_notes
+        return promoted
 
     def _work_packet_alpha_memory_source_status(
         self,

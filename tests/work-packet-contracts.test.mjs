@@ -99,6 +99,7 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   ]) {
     assert.match(humanGateActionRequestBlock, fieldPattern);
   }
+  assert.match(humanGateActionBlock, /reasonCodes:\s*string\[\];/);
 
   assert.match(workPacketSource, /rawPayloadRetained:\s*false;/);
   assert.match(workPacketSource, /writeBackAllowed:\s*false;/);

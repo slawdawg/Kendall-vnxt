@@ -258,6 +258,7 @@ function HumanGateActionList({ packet }: { packet: PipelineFixturePacket }) {
               ["Resulting state", `${action.resultingStage} / ${action.resultingOwner}`],
               ["Rollback", action.rollbackPath],
               ["Audit", action.auditEventType],
+              ["Reason codes", formatReasonCodes(action.reasonCodes)],
               ["Action guard previews", guards.length > 0 ? guards.map(formatActionGuardSummary).join(" | ") : "none"],
               ["Preview event", event ? `${event.eventId}; ${event.summary}` : "none"],
               ["Stop lines", action.stopLines.join(" | ") || "none"],
@@ -363,6 +364,10 @@ function RecoveryActionList({ packet }: { packet: PipelineFixturePacket }) {
 
 function formatActionGuardSummary(guard: PipelineFixturePacket["actionGuardFixtures"][number]) {
   return `${guard.classification}; ${guard.primaryRisk}; ${guard.safeNextOption}`;
+}
+
+function formatReasonCodes(reasonCodes: unknown) {
+  return Array.isArray(reasonCodes) && reasonCodes.every((code) => typeof code === "string") && reasonCodes.length > 0 ? reasonCodes.join(", ") : "none";
 }
 
 function DetailCard({ children, empty, title }: { children: ReactNode; empty: string | null; title: string }) {

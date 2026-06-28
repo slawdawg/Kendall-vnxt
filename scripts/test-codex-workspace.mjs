@@ -1317,9 +1317,12 @@ try {
     assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- authority-blocked-work | closed"), result.stdout || result.stderr);
     assert(result.stdout.includes("- unowned-active | assignable"), result.stdout || result.stderr);
+    assert(result.stdout.includes("reason_code=active_workspace_unowned"), result.stdout || result.stderr);
     assert(result.stdout.includes("- current-active | active"), result.stdout || result.stderr);
     assert(result.stdout.includes("- other-active | blocked_owned_active"), result.stdout || result.stderr);
+    assert(result.stdout.includes("reason_code=owned_by_other_runner"), result.stdout || result.stderr);
     assert(result.stdout.includes("- stale-active | blocked_stale_owner_needs_takeover"), result.stdout || result.stderr);
+    assert(result.stdout.includes("reason_code=owner_heartbeat_stale"), result.stdout || result.stderr);
     assert(result.stdout.includes("- closed-lane | closed"), result.stdout || result.stderr);
     assert(before === after, "assignment-report mutated a workspace manifest");
   });
@@ -1379,6 +1382,67 @@ try {
           2,
         )}\n`,
       );
+      writeFileSync(
+        join(assignmentsDir, "blocked-authority-assignment.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "blocked-authority-assignment",
+            task_id: "blocked-authority-assignment",
+            branch: "codex/blocked-authority-assignment",
+            status: "blocked_authority_waiting",
+            owner: "runner-a",
+            last_heartbeat_at: now,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(assignmentsDir, "ambiguous-assignment.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "ambiguous-assignment",
+            task_id: "ambiguous-assignment",
+            branch: "codex/ambiguous-assignment",
+            status: "claimed",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      for (const duplicateId of ["duplicate-assignment-a", "duplicate-assignment-b"]) {
+        writeFileSync(
+          join(assignmentsDir, `${duplicateId}.json`),
+          `${JSON.stringify(
+            {
+              assignment_id: duplicateId,
+              task_id: duplicateId,
+              branch: "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract",
+              status: "claimed",
+              owner: "runner-b",
+              last_heartbeat_at: now,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
+      writeFileSync(
+        join(tasksDir, "missing-worktree.json"),
+        `${JSON.stringify(
+          {
+            task_id: "missing-worktree",
+            branch: "codex/missing-worktree",
+            worktree_path: join(tmpdir(), "codex-missing-worktree-fixture"),
+            base_branch: "main",
+            status: "active",
+            owner: "runner-a",
+            owner_updated_at: now,
+          },
+          null,
+          2,
+        )}\n`,
+      );
       const beforeTasks = taskSnapshot(tasksDir);
       const beforeAssignments = taskSnapshot(assignmentsDir);
 
@@ -1398,16 +1462,32 @@ try {
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
       assert(packet.staleAfterSeconds === 1, result.stdout || result.stderr);
       assert(packet.counts.backlogCandidates > 0, result.stdout || result.stderr);
-      assert(packet.counts.laneAssignments === 1, result.stdout || result.stderr);
-      assert(packet.counts.workspaceAssignments >= 2, result.stdout || result.stderr);
+      assert(packet.counts.laneAssignments === 5, result.stdout || result.stderr);
+      assert(packet.counts.workspaceAssignments >= 3, result.stdout || result.stderr);
       assert(packet.backlogStatusCounts.closed >= 1, result.stdout || result.stderr);
       assert(packet.backlogStatusCounts.assignable >= 1, result.stdout || result.stderr);
+      assert(packet.backlogStatusCounts.ambiguous >= 1, result.stdout || result.stderr);
       assert(packet.laneAssignmentStatusCounts.claimed === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentStatusCounts.blocked_authority === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentStatusCounts.ambiguous === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentStatusCounts.blocked_owned_active === 2, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.assignable >= 1, result.stdout || result.stderr);
+      assert(packet.workspaceAssignmentStatusCounts.ambiguous >= 1, result.stdout || result.stderr);
       assert(packet.workspaceAssignmentStatusCounts.blocked_stale_owner_needs_takeover >= 1, result.stdout || result.stderr);
+      assert(packet.backlogReasonCodeCounts.safe_backlog_complete >= 1, result.stdout || result.stderr);
+      assert(packet.backlogReasonCodeCounts.duplicate_assignment_records === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentReasonCodeCounts.assignment_current_owner === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentReasonCodeCounts.assignment_authority_blocked === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentReasonCodeCounts.assignment_missing_owner === 1, result.stdout || result.stderr);
+      assert(packet.laneAssignmentReasonCodeCounts.assignment_owned_by_other_runner === 2, result.stdout || result.stderr);
+      assert(packet.workspaceAssignmentReasonCodeCounts.active_workspace_unowned >= 1, result.stdout || result.stderr);
+      assert(packet.workspaceAssignmentReasonCodeCounts.worktree_path_missing >= 1, result.stdout || result.stderr);
       assert(packet.backlogCandidates.length <= 10, result.stdout || result.stderr);
       assert(packet.laneAssignments.length <= 10, result.stdout || result.stderr);
       assert(packet.workspaceAssignments.length <= 10, result.stdout || result.stderr);
+      assert(packet.backlogCandidates.every((candidate) => typeof candidate.reasonCode === "string"), result.stdout || result.stderr);
+      assert(packet.laneAssignments.every((assignment) => typeof assignment.reasonCode === "string"), result.stdout || result.stderr);
+      assert(packet.workspaceAssignments.every((assignment) => typeof assignment.reasonCode === "string"), result.stdout || result.stderr);
       assert(typeof packet.backlogCandidatesTruncated === "boolean", result.stdout || result.stderr);
       assert(typeof packet.laneAssignmentsTruncated === "boolean", result.stdout || result.stderr);
       assert(typeof packet.workspaceAssignmentsTruncated === "boolean", result.stdout || result.stderr);
@@ -1868,6 +1948,15 @@ try {
       const packet = JSON.parse(result.stdout);
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
       assert(packet.selected?.itemId === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.proposedRunner === "runner-a", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.targetLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.targetBranch === "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.rationale.includes("ready safe backlog lane"), result.stdout || result.stderr);
+      assert(Array.isArray(packet.assignmentPreview.blockedReasons), result.stdout || result.stderr);
+      assert(packet.assignmentPreview.blockedReasons.length === 0, result.stdout || result.stderr);
+      assert(packet.assignmentPreview.requiredEvidence.includes("safe backlog item bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
+      assert(packet.assignmentPreview.mutation === "none; preview only", result.stdout || result.stderr);
+      assert(!("assignedLane" in packet.assignmentPreview), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
       assert(packet.counts.claimable === 34, result.stdout || result.stderr);
       assert(packet.counts.excluded >= 1, result.stdout || result.stderr);
@@ -1886,6 +1975,34 @@ try {
       assert(typeof packet.sourceDriftTruncated === "boolean", result.stdout || result.stderr);
       assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
       assert(before === after, "claim-next --summary-json mutated workspace manifests");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next summary-json explains blocked preview when no safe lane is claimable", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-no-safe-preview-"));
+    try {
+      const assignmentsDir = join(claimStateRoot, "assignments");
+      for (const laneSlug of safeBacklogReadyItemIds()) {
+        seedClaimedSafeBacklogAssignment(claimStateRoot, laneSlug, "runner-b");
+      }
+      const before = taskSnapshot(assignmentsDir);
+
+      const result = run(["claim-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      const after = taskSnapshot(assignmentsDir);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.selected === null, result.stdout || result.stderr);
+      assert(packet.assignmentPreview.proposedRunner === "runner-a", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.targetLane === null, result.stdout || result.stderr);
+      assert(packet.assignmentPreview.targetBranch === null, result.stdout || result.stderr);
+      assert(packet.assignmentPreview.blockedReasons.some((reason) => reason.includes("assigned to runner-b")), result.stdout || result.stderr);
+      assert(packet.assignmentPreview.requiredEvidence.includes("resolve blockers before applying claim-next"), result.stdout || result.stderr);
+      assert(packet.assignmentPreview.mutation === "none; preview only", result.stdout || result.stderr);
+      assert(!("assignedLane" in packet.assignmentPreview), result.stdout || result.stderr);
+      assert(before === after, "claim-next blocked summary preview mutated assignments");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }
@@ -1980,6 +2097,9 @@ try {
       const packet = JSON.parse(dispatchSummary.stdout);
       assert(packet.dispatch.allowed === true, dispatchSummary.stdout);
       assert(packet.dispatch.selectedLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", dispatchSummary.stdout);
+      assert(packet.laneAssignmentPreview.targetLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", dispatchSummary.stdout);
+      assert(Array.isArray(packet.laneAssignmentPreview.blockedReasons), dispatchSummary.stdout);
+      assert(packet.laneAssignmentPreview.blockedReasons.length === 0, dispatchSummary.stdout);
       assert(beforeTasks === taskSnapshot(tasksDir), "closed source guard dry-runs mutated task manifests");
       assert(beforeAssignments === taskSnapshot(assignmentsDir), "closed source guard dry-runs mutated assignments");
     } finally {
@@ -2102,6 +2222,17 @@ try {
       const packet = JSON.parse(result.stdout);
       assert(packet.dispatch.allowed === false, result.stdout);
       assert(packet.dispatch.selectedLane === null, result.stdout);
+      assert(packet.laneAssignmentPreview.proposedRunner === "runner-a", result.stdout);
+      assert(packet.laneAssignmentPreview.targetLane === null, result.stdout);
+      assert(
+        packet.laneAssignmentPreview.blockedReasons.includes(
+          "finish open delivery lanes first: verify PR checks, review threads, exact head, merge evidence, then run merged-lane cleanup",
+        ),
+        result.stdout,
+      );
+      assert(packet.laneAssignmentPreview.requiredEvidence.includes("resolve blockers before applying dispatch-next"), result.stdout);
+      assert(packet.laneAssignmentPreview.mutation === "none; preview only", result.stdout);
+      assert(!("assignedLane" in packet.laneAssignmentPreview), result.stdout);
       assert(packet.candidateStateCounts.delivery === 1, result.stdout);
       assert(
         packet.dispatch.nextActionGuidance ===
@@ -2132,6 +2263,13 @@ try {
       const packet = JSON.parse(result.stdout);
       assert(packet.dispatch.allowed === false, result.stdout);
       assert(packet.dispatch.selectedLane === null, result.stdout);
+      assert(packet.laneAssignmentPreview.targetLane === null, result.stdout);
+      assert(
+        packet.laneAssignmentPreview.blockedReasons.includes(
+          "finish open delivery lanes first: verify PR checks, review threads, exact head, merge evidence, then run merged-lane cleanup",
+        ),
+        result.stdout,
+      );
       assert(packet.candidateStateCounts.delivery === 1, result.stdout);
       assert(packet.candidateStateCounts.closed >= 1, result.stdout);
       assert(
@@ -2735,6 +2873,15 @@ try {
       assert(packet.selected?.itemId === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
       assert(packet.dispatch.allowed === true, result.stdout || result.stderr);
       assert(packet.dispatch.selectedLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.proposedRunner === "runner-a", result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.targetLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.targetBranch === "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.rationale.includes("ready safe backlog lane"), result.stdout || result.stderr);
+      assert(Array.isArray(packet.laneAssignmentPreview.blockedReasons), result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.blockedReasons.length === 0, result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.requiredEvidence.includes("dispatch-next dry-run summary-json"), result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.mutation === "none; preview only", result.stdout || result.stderr);
+      assert(!("assignedLane" in packet.laneAssignmentPreview), result.stdout || result.stderr);
       assert(packet.dispatch.workspaceAction === "claim_and_create_workspace", result.stdout || result.stderr);
       assert(packet.dispatch.nextActionGuidance.includes("run dispatch-next --apply"), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
@@ -2746,6 +2893,58 @@ try {
       assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
       assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch summary-json mutated assignments");
       assert(taskSnapshot(tasksDir) === beforeTasks, "dispatch summary-json mutated manifests");
+    } finally {
+      rmSync(dispatchStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("dispatch-next summary-json counts blocked candidate reason codes before truncation", () => {
+    const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-reason-code-counts-"));
+    try {
+      seedGeneratedSuccessorPrerequisites(dispatchStateRoot);
+      const assignmentsDir = join(dispatchStateRoot, "assignments");
+      const tasksDir = join(dispatchStateRoot, "tasks");
+      mkdirSync(assignmentsDir, { recursive: true });
+      const duplicateBranch = "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract";
+      for (const duplicateId of ["duplicate-dispatch-assignment-a", "duplicate-dispatch-assignment-b"]) {
+        writeFileSync(
+          join(assignmentsDir, `${duplicateId}.json`),
+          `${JSON.stringify(
+            {
+              assignment_id: duplicateId,
+              task_id: duplicateId,
+              branch: duplicateBranch,
+              status: "claimed",
+              owner: "runner-b",
+              last_heartbeat_at: new Date().toISOString(),
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
+      const beforeTasks = taskSnapshot(tasksDir);
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run([
+        "dispatch-next",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        dispatchStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      const duplicateCandidate = packet.blockedCandidates.find(
+        (candidate) => candidate.item_id === "bmad-1-1-validate-the-pipeline-work-packet-read-contract",
+      );
+      assert(packet.blockedCandidateReasonCodeCounts.duplicate_lane_assignments === 1, result.stdout);
+      assert(duplicateCandidate?.reason_code === "duplicate_lane_assignments", result.stdout);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch reason-code dry-run mutated assignments");
+      assert(taskSnapshot(tasksDir) === beforeTasks, "dispatch reason-code dry-run mutated manifests");
     } finally {
       rmSync(dispatchStateRoot, { recursive: true, force: true });
     }
@@ -2931,24 +3130,41 @@ try {
         "codex/dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh",
         "codex/authority-blocked-approval-scope-readiness",
       ];
+      const authorityBlockedBranch = "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract";
+      const ambiguousBranch = "codex/bmad-1-2-expose-read-only-supervisor-packet-projections";
       const manifestPaths = blockedBranches.map((branchName, index) => {
+        const manifest = {
+          task_id: `dispatch-workspace-${index}`,
+          branch: branchName,
+          worktree_path: worktreePath,
+          base_branch: "main",
+          status: branchName === authorityBlockedBranch ? "blocked_authority_waiting" : "active",
+          owner: branchName === ambiguousBranch ? "runner-a" : "runner-b",
+          owner_updated_at: new Date().toISOString(),
+        };
+        if (branchName === ambiguousBranch) {
+          manifest.worktree_path = join(tmpdir(), "codex-missing-dispatch-worktree-fixture");
+        }
         const manifestPath = join(tasksDir, `dispatch-workspace-${index}.json`);
         writeFileSync(
           manifestPath,
-          `${JSON.stringify({
-            task_id: `dispatch-workspace-${index}`,
-            branch: branchName,
-            worktree_path: worktreePath,
-            base_branch: "main",
-            status: "active",
-            owner: "runner-b",
-            owner_updated_at: new Date().toISOString(),
-          })}\n`,
+          `${JSON.stringify(manifest)}\n`,
         );
         return manifestPath;
       });
       const before = manifestPaths.map((manifestPath) => readFileSync(manifestPath, "utf8")).join("\n---\n");
 
+      const summary = run([
+        "dispatch-next",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--readiness",
+        "none",
+        "--state-root",
+        dispatchStateRoot,
+      ]);
       const result = run([
         "dispatch-next",
         "--apply",
@@ -2961,9 +3177,26 @@ try {
       ]);
       const after = manifestPaths.map((manifestPath) => readFileSync(manifestPath, "utf8")).join("\n---\n");
 
+      assert(summary.code === 0, summary.stderr || summary.stdout);
+      const packet = JSON.parse(summary.stdout);
+      const authorityBlocked = packet.blockedCandidates.find(
+        (candidate) => candidate.item_id === "bmad-1-1-validate-the-pipeline-work-packet-read-contract",
+      );
+      const ambiguous = packet.blockedCandidates.find(
+        (candidate) => candidate.item_id === "bmad-1-2-expose-read-only-supervisor-packet-projections",
+      );
+      assert(packet.dispatch.allowed === false, summary.stdout);
+      assert(packet.candidateStateCounts.blocked_authority >= 1, summary.stdout);
+      assert(packet.candidateStateCounts.ambiguous >= 1, summary.stdout);
+      assert(authorityBlocked?.status === "blocked_authority", summary.stdout);
+      assert(authorityBlocked?.reason_code === "manifest_authority_blocked", summary.stdout);
+      assert(ambiguous?.status === "ambiguous", summary.stdout);
+      assert(ambiguous?.reason_code === "worktree_path_missing", summary.stdout);
       assert(result.code !== 0, "dispatch unexpectedly passed for workspace owned by another runner");
       assert(result.stdout.includes("BLOCKED: dispatch-next"), result.stderr || result.stdout);
       assert(result.stdout.includes("no dispatchable safe backlog lane found"), result.stderr || result.stdout);
+      assert(result.stdout.includes("reason_code=manifest_authority_blocked"), result.stderr || result.stdout);
+      assert(result.stdout.includes("reason_code=worktree_path_missing"), result.stderr || result.stdout);
       assert(before === after, "blocked dispatch mutated owned workspace");
     } finally {
       rmSync(dispatchStateRoot, { recursive: true, force: true });
@@ -4338,6 +4571,27 @@ function bmadPipelineBacklogSlugs() {
     "bmad-7-4-deauthorize-unsafe-or-regressing-automation",
     "bmad-7-5-close-the-learn-loop-in-pipeline",
   ];
+}
+
+function safeBacklogReadyItemIds() {
+  const servicePath = join(rootDir, "services", "supervisor", "src", "supervisor", "application", "service.py");
+  const source = readFileSync(servicePath, "utf8");
+  const reportMatch = source.match(/def get_safe_development_backlog_report[\s\S]*?return SafeDevelopmentBacklogReportView/);
+  assert(reportMatch, "safe backlog source not found");
+  return reportMatch[0]
+    .split("SafeDevelopmentBacklogItemView(")
+    .slice(1)
+    .map((block) => ({
+      itemId: pythonStringFieldFromSource(block, "itemId"),
+      status: pythonStringFieldFromSource(block, "status"),
+    }))
+    .filter((item) => item.itemId && item.status === "ready")
+    .map((item) => item.itemId);
+}
+
+function pythonStringFieldFromSource(source, fieldName) {
+  const match = source.match(new RegExp(`${fieldName}=["']([^"']*)["']`));
+  return match?.[1] || "";
 }
 
 function seedClosedSafeBacklogManifests(stateRootPath) {
