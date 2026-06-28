@@ -139,6 +139,7 @@ const REQUIRED_MATRIX_ROW_COVERAGE: Array<{ id: string; category: PipelineReadin
   { id: "execution_attempt.planned", category: "state" },
   { id: "execution_attempt.approved", category: "state" },
   { id: "execution_attempt.running", category: "state" },
+  { id: "loop_stop.limit_window", category: "state" },
   { id: "governed_worker.claude_real_execution_running", category: "state" },
   { id: "governed_worker.hermes_real_execution_unavailable", category: "state" },
   { id: "execution_attempt.failed", category: "state" },
@@ -670,6 +671,19 @@ export const PIPELINE_STATE_EVIDENCE_MATRIX_V0: PipelineStateEvidenceMatrixRowV0
     fixtureIds: ["corrupted_incomplete_aggregate"],
     futureRealSourceCoverage: "Provider, worker, model, and memory adapters must keep metadata-only evidence boundaries.",
     storyType: ["readiness_evidence"]
+  }),
+  row({
+    id: "loop_stop.limit_window",
+    sourceEntityState: "Autonomous runner loop stopped at limit window",
+    stage: "execute",
+    owner: "codex_worker",
+    status: "blocked",
+    mappingInput: { executionAttemptStatus: "running", executionAttemptLane: "codex_worker" },
+    disallowedOrStaleActions: [blockedAction("approve_execution", "Limit-window stop states cannot be approved into new work.")],
+    requiredEvidence: ["event", "attempt", "progress"],
+    fixtureIds: ["blocked_human_gate", "partial_worker_evidence"],
+    futureRealSourceCoverage: "Real runner loop evidence may surface limit-window, review-thread, failed-check, tool-churn, and cleanup stop states without launching workers or mutating GitHub.",
+    storyType: ["fixture_ui", "readiness_evidence"]
   })
 ];
 

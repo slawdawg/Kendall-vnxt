@@ -125,6 +125,13 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /export interface WorkPacketStageTransitionEventV0/);
   assert.match(workPacketSource, /transitionEvents:\s*WorkPacketStageTransitionEventV0\[\];/);
   assert.match(workPacketSource, /durable:\s*boolean;/);
+  assert.match(workPacketSource, /export interface WorkPacketLoopStopStateV0/);
+  assert.match(workPacketSource, /loopStopStates:\s*WorkPacketLoopStopStateV0\[\];/);
+  assert.match(workPacketSource, /kind:\s*WorkPacketLoopStopStateKindV0;/);
+  assert.match(workPacketSource, /nextSafeAction:\s*string;/);
+  assert.match(workPacketSource, /metadataOnly:\s*true;/);
+  assert.match(workPacketSource, /githubMutationAllowed:\s*false;/);
+  assert.match(workPacketSource, /cleanupAllowed:\s*false;/);
   assert.match(workPacketSource, /humanGateActionRequests:\s*HumanGateActionRequestV0\[\];/);
   assert.doesNotMatch(workPacketSource, /executionAttempts:\s*ExecutionAttemptView\[\];/);
   assert.match(workPacketSource, /accessState:\s*"allowed";/);

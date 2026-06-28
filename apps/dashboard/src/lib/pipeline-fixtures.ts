@@ -73,6 +73,10 @@ type GovernedWorkerAttemptFixtureOptions = Omit<GovernedWorkerAttemptFixtureInpu
   sourceEventRef?: string;
 };
 
+type LoopStopStateFixtureInput = Omit<WorkPacketV0View["loopStopStates"][number], "stopStateId" | "evidenceRefs"> & {
+  evidenceRefs?: string[];
+};
+
 export type GovernedCopiedWorktreeExecutionEvidenceV0 = {
   source_id: string;
   worker: "claude" | "hermes";
@@ -590,6 +594,43 @@ const memoryProposalStates: MemoryProposalV0["status"][] = [
 ];
 
 export const pipelineFixturePackets: PipelineFixturePacket[] = [
+  packetFixture({
+    packetId: "fixture:loop-stop-limit-window",
+    title: "Pause runner loop at limit window",
+    requestedOutcome: "Show autonomous runner stop-state evidence before another lane action starts.",
+    currentStage: "execute",
+    currentOwner: "codex_worker",
+    status: "blocked",
+    riskLevel: "high",
+    priority: "urgent",
+    fixtureId: "blocked_human_gate",
+    matrixRowIds: ["loop_stop.limit_window"],
+    fixtureKind: "synthetic",
+    summary: "Runner loop stopped before new verification or delivery work because the active 5h limit window reached the stop line.",
+    nextAction: "Preserve status and wait for the limit window reset",
+    confidenceLabel: "Stop line active",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    codexWorkerState: "blocked",
+    loopStopStates: [
+      {
+        kind: "limit_window",
+        label: "Limit window stop",
+        phase: "blocked",
+        severity: "blocking",
+        summary: "5h Codex limit window reached 5% remaining; no new verification, review, delivery, or lane work may start.",
+        stopLine: "Pause in place after preserving status/evidence; resume only after reset or manager instruction.",
+        nextSafeAction: "Emit MANAGER_STATUS phase=blocked blocker=limit-window-5-percent and wait.",
+        metadataOnly: true,
+        sourceMutationAllowed: false,
+        providerCallsAllowed: false,
+        workerLaunchAllowed: false,
+        githubMutationAllowed: false,
+        cleanupAllowed: false,
+      },
+    ],
+  }),
   packetFixture({
     packetId: "fixture:happy-path",
     title: "Shape cockpit route from Work Packet matrix",
@@ -1213,6 +1254,7 @@ function projectSupervisorWorkPacketToCockpitPacket(packet: WorkPacketV0View): P
     hermesJob: null,
     codexWorker: null,
     claudeReview: null,
+    loopStopStates: packet.loopStopStates ?? [],
   };
 }
 
@@ -1810,6 +1852,7 @@ function packetFixture(input: {
   codexWorkerState?: CodexWorkerPacketV0["readiness"];
   claudeReviewState?: ClaudeReviewPacketV0["statusLabel"];
   governedWorkerAttempt?: GovernedWorkerAttemptFixtureOptions;
+  loopStopStates?: LoopStopStateFixtureInput[];
   }): PipelineFixturePacket {
   const fixture = requireCatalogEntry(input.fixtureId);
   const rows = requireMatrixRows(input.matrixRowIds);
@@ -1903,6 +1946,11 @@ function packetFixture(input: {
         eventRef: governedAttemptEventRef,
       })
     : null;
+  const loopStopStates: WorkPacketV0View["loopStopStates"] = (input.loopStopStates ?? []).map((stopState, index) => ({
+    ...stopState,
+    stopStateId: `${input.packetId}:loop-stop:${String(index + 1).padStart(2, "0")}`,
+    evidenceRefs: stopState.evidenceRefs ?? [`${input.packetId}:loop-stop:${String(index + 1).padStart(2, "0")}:evidence`],
+  }));
   const transitionEvents: WorkPacketV0View["transitionEvents"] = governedWorkerAttempt
     ? [
         {
@@ -1978,6 +2026,17 @@ function packetFixture(input: {
       }
     );
   }
+  for (const stopState of loopStopStates) {
+    for (const refId of stopState.evidenceRefs) {
+      evidenceRefs.push({
+        refId,
+        evidenceType: "event",
+        label: `Loop stop state: ${stopState.label}`,
+        retentionClass: "metadata_only",
+        rawPayloadRetained: false,
+      });
+    }
+  }
   const artifactRefs: WorkPacketV0View["artifactRefs"] = [
     {
       refId: `${input.packetId}:artifact:fixture`,
@@ -1986,6 +2045,16 @@ function packetFixture(input: {
       pathOrUrl: "packages/workflow-core/src/pipeline-state-fixture-matrix.ts",
       status: "available",
     },
+    ...(codexWorker
+      ? [
+          {
+            refId: `${input.packetId}:artifact:progress`,
+            artifactType: "progress" as const,
+            label: "Codex worker progress metadata",
+            status: "available" as const,
+          },
+        ]
+      : []),
   ];
   const humanGateActions = buildHumanGateActions(input);
   const humanGateFixtureEvents = buildHumanGateFixtureEvents(input, humanGateActions);
@@ -2111,6 +2180,7 @@ function packetFixture(input: {
         artifactRefs: [`${input.packetId}:artifact:fixture`],
       },
     ],
+    loopStopStates,
     recoveryActions,
     recoveryFixtureEvents,
     localModelHealth,
@@ -3819,6 +3889,11 @@ function cloneDensityPacket(packet: PipelineFixturePacket, ordinal: number): Pip
       ...review,
       evidenceRefs: review.evidenceRefs.map(remapId),
       artifactRefs: review.artifactRefs.map(remapId),
+    })),
+    loopStopStates: packet.loopStopStates.map((stopState) => ({
+      ...stopState,
+      stopStateId: remapId(stopState.stopStateId),
+      evidenceRefs: stopState.evidenceRefs.map(remapId),
     })),
     recoveryActions: packet.recoveryActions.map((action) => ({
       ...action,

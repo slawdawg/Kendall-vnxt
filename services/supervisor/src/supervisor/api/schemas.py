@@ -1009,6 +1009,33 @@ class WorkPacketStageTransitionEventV0View(BaseModel):
     actorLabel: str | None = None
 
 
+class WorkPacketLoopStopStateV0View(BaseModel):
+    stopStateId: str
+    kind: Literal[
+        "limit_window",
+        "operator_approval",
+        "review_thread",
+        "failed_check",
+        "tool_churn",
+        "unsafe_cleanup",
+        "scope_boundary",
+        "owner_conflict",
+    ]
+    label: str
+    phase: str
+    severity: Literal["info", "warning", "blocking"]
+    summary: str
+    stopLine: str
+    nextSafeAction: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    workerLaunchAllowed: Literal[False] = False
+    githubMutationAllowed: Literal[False] = False
+    cleanupAllowed: Literal[False] = False
+
+
 class WorkPacketV0View(BaseModel):
     packetId: str
     title: str
@@ -1044,6 +1071,7 @@ class WorkPacketV0View(BaseModel):
     memoryProposals: list[MemoryProposalV0View] = Field(default_factory=list)
     alphaMemorySourceStatus: AlphaMemorySourceStatusV0View | None = None
     gateStateValidation: WorkPacketGateStateValidationV0View | None = None
+    loopStopStates: list[WorkPacketLoopStopStateV0View] = Field(default_factory=list)
     reviewSummaries: list[WorkPacketReviewSummaryV0View] = Field(default_factory=list)
     recoveryActions: list[RecoveryActionV0View] = Field(default_factory=list)
 
