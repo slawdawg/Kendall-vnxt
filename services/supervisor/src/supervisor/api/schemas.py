@@ -669,7 +669,15 @@ MemoryProposalStatusV0 = Literal[
     "stale",
     "contradictory",
 ]
-MemoryProposalTypeV0 = Literal["new_note", "append_note", "link_notes", "tag_update", "decision_record", "error_book_entry"]
+MemoryProposalTypeV0 = Literal[
+    "new_note",
+    "append_note",
+    "link_notes",
+    "tag_update",
+    "decision_record",
+    "error_book_entry",
+    "user_facing_documentation",
+]
 MemoryProposalSensitivityV0 = Literal["low", "medium", "high"]
 MemoryProposalFreshnessV0 = Literal["fresh", "stale", "conflicting", "unknown"]
 MemoryProposalContradictionStatusV0 = Literal["none", "possible", "confirmed"]

@@ -17,6 +17,7 @@ const requiredFixtureIds = [
   "mocked_hermes_unavailable",
   "codex_active_claude_pending",
   "obsidian_proposal_pending_approval",
+  "documentation_proposal_pending_approval",
   "no_packets",
   "corrupted_incomplete_aggregate"
 ];
@@ -67,6 +68,7 @@ test("Pipeline State/Evidence Matrix covers required rows, stages, actions, and 
     "delivery.evidence_present",
     "memory.pending_human_approval",
     "memory.obsidian_proposal_pending_human_approval",
+    "documentation.user_facing_proposal_pending_human_approval",
     "source.restricted_refs",
     "execution_lane.missing",
     "mock.hermes_unavailable",
@@ -92,6 +94,7 @@ test("Pipeline State/Evidence Matrix covers required rows, stages, actions, and 
   assert.deepEqual(matrixRowById.get("execution_attempt.review_rejected").recoveryActions, ["discard_result", "send_back_to_shape", "mark_blocked"]);
   assert.ok(matrixRowById.get("memory.pending_human_approval").recoveryActions.includes("reopen_human_gate"));
   assert.ok(matrixRowById.get("memory.pending_human_approval").recoveryActions.includes("send_back_to_research"));
+  assert.match(matrixRowById.get("documentation.user_facing_proposal_pending_human_approval").futureRealSourceCoverage, /user_facing_documentation/);
 
   assert.deepEqual(new Set(PIPELINE_STATE_EVIDENCE_MATRIX_V0.map((row) => row.stage)), new Set([
     "capture",
@@ -155,6 +158,9 @@ test("Pipeline State/Evidence Matrix covers required rows, stages, actions, and 
   for (const provenance of requiredProvenance) {
     assert.ok(PIPELINE_STATE_FIXTURE_CATALOG_V0.some((fixture) => fixture.provenance === provenance), `missing provenance ${provenance}`);
   }
+  const documentationFixture = PIPELINE_STATE_FIXTURE_CATALOG_V0.find((fixture) => fixture.id === "documentation_proposal_pending_approval");
+  assert.ok(documentationFixture.sourceStates.includes("excluded"));
+  assert.ok(documentationFixture.artifactTypes.includes("memory_proposal"));
 
   assert.deepEqual(validatePipelineStateFixtureMatrix(), { ok: true, failures: [] });
 });

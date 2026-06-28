@@ -1148,6 +1148,10 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
     memoryPackets.some((packet) => packet.fixtureId === "obsidian_proposal_pending_approval"),
     "memory proposals should reuse obsidian_proposal_pending_approval"
   );
+  assert.ok(
+    memoryPackets.some((packet) => packet.fixtureId === "documentation_proposal_pending_approval"),
+    "documentation proposals should route through review-gated memory proposal packet evidence"
+  );
 
   const allProposals = memoryPackets.flatMap((packet) => packet.memoryProposals.map((proposal) => ({ packet, proposal })));
   assert.deepEqual(
@@ -1171,6 +1175,13 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
     if (packet.fixtureId === "obsidian_proposal_pending_approval") {
       assert.ok(proposal.sourceRefs.some((ref) => ref.includes("obsidian-human-owned")), `${packet.packetId} proposal should cite the Obsidian human-owned boundary`);
       assert.ok(proposal.sourceRefs.some((ref) => ref.includes("llm-wiki-derived-only")), `${packet.packetId} proposal should cite the LLM-Wiki derived-only boundary`);
+    }
+    if (packet.fixtureId === "documentation_proposal_pending_approval") {
+      assert.equal(proposal.proposalType, "user_facing_documentation", `${packet.packetId} proposal should be typed as user-facing documentation`);
+      assert.ok(proposal.sourceRefs.some((ref) => ref.includes("obsidian-human-owned")), `${packet.packetId} documentation proposal should cite the Obsidian human-owned boundary`);
+      assert.ok(proposal.sourceRefs.some((ref) => ref.includes("llm-wiki-derived-only")), `${packet.packetId} documentation proposal should cite the LLM-Wiki derived-only boundary`);
+      assert.match(proposal.targetVaultFolder, /^01 Dashboard Queue\/Documentation Drafts$/, `${packet.packetId} documentation proposal should target the draft-plan queue`);
+      assert.match(proposal.patchSummary ?? "", /Draft-plan evidence only/i, `${packet.packetId} documentation proposal should stay proposal-only`);
     }
     assert.ok(proposal.suggestedContentSummary.length > 0, `${packet.packetId} proposal should summarize suggested content`);
     assert.ok(proposal.backupRecoveryPath.length > 0, `${packet.packetId} proposal should describe backup/recovery`);

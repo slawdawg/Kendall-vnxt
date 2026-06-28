@@ -156,6 +156,7 @@ const REQUIRED_MATRIX_ROW_COVERAGE: Array<{ id: string; category: PipelineReadin
   { id: "mock.claude_pending_skipped", category: "state" },
   { id: "readiness.local_provider_disabled", category: "boundary" },
   { id: "memory.obsidian_proposal_pending_human_approval", category: "state" },
+  { id: "documentation.user_facing_proposal_pending_human_approval", category: "state" },
   { id: "aggregate.no_packets", category: "boundary" },
   { id: "aggregate.corrupted_incomplete", category: "boundary" },
   { id: "boundary.raw_retention_rejected", category: "boundary" }
@@ -170,6 +171,7 @@ const REQUIRED_FIXTURE_IDS = [
   "mocked_hermes_unavailable",
   "codex_active_claude_pending",
   "obsidian_proposal_pending_approval",
+  "documentation_proposal_pending_approval",
   "no_packets",
   "corrupted_incomplete_aggregate"
 ] as const;
@@ -533,6 +535,21 @@ export const PIPELINE_STATE_EVIDENCE_MATRIX_V0: PipelineStateEvidenceMatrixRowV0
     storyType: ["mock_status", "typed_action", "readiness_evidence"]
   }),
   row({
+    id: "documentation.user_facing_proposal_pending_human_approval",
+    sourceEntityState: "User-facing documentation proposal pending human approval",
+    stage: "learn",
+    owner: "memory_review",
+    status: "waiting",
+    mappingInput: { workItemState: "done", hasMemoryProposal: true, memoryProposalStatus: "pending_human_approval" },
+    allowedActions: ["approve_memory_proposal", "reject_packet", "edit_packet"],
+    disallowedOrStaleActions: [blockedAction("send_back_to_shape", "User-facing documentation proposals remain draft-plan evidence until operator approval.")],
+    recoveryActions: ["preserve_evidence", "reopen_human_gate", "mark_blocked", "send_back_to_research"],
+    requiredEvidence: ["memory", "memory_proposal"],
+    fixtureIds: ["documentation_proposal_pending_approval"],
+    futureRealSourceCoverage: "Documentation updates remain proposal-only; future real-source coverage must use user_facing_documentation draft-plan evidence before any user-facing write-back.",
+    storyType: ["projection_adapter", "typed_action", "readiness_evidence"]
+  }),
+  row({
     id: "source.restricted_refs",
     sourceEntityState: "Restricted source refs: stale, missing, excluded, blocked",
     stage: "capture",
@@ -777,10 +794,21 @@ export const PIPELINE_STATE_FIXTURE_CATALOG_V0: PipelineFixtureCatalogEntryV0[] 
     provenance: "local-readiness",
     matrixRowIds: ["memory.pending_human_approval", "memory.obsidian_proposal_pending_human_approval"],
     recoveryActions: ["preserve_evidence", "reopen_human_gate", "mark_blocked", "send_back_to_research"],
-    sourceStates: ["allowed", "blocked"],
+    sourceStates: ["allowed", "excluded", "blocked"],
     evidenceTypes: ["memory"],
     artifactTypes: ["memory_proposal"],
     futureCoverageStates: ["stale memory", "blocked Obsidian write-back"]
+  }),
+  fixture({
+    id: "documentation_proposal_pending_approval",
+    label: "User-facing documentation proposal pending human approval",
+    provenance: "local-readiness",
+    matrixRowIds: ["memory.pending_human_approval", "documentation.user_facing_proposal_pending_human_approval"],
+    recoveryActions: ["preserve_evidence", "reopen_human_gate", "mark_blocked", "send_back_to_research"],
+    sourceStates: ["allowed", "excluded", "blocked"],
+    evidenceTypes: ["memory"],
+    artifactTypes: ["memory_proposal"],
+    futureCoverageStates: ["documentation draft plan pending approval", "canonical Obsidian unchanged"]
   }),
   fixture({
     id: "no_packets",
