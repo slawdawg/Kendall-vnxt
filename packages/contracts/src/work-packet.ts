@@ -650,6 +650,8 @@ export interface WorkPacketDeliveryEvidenceV0 {
   mergeResult?: string | null;
   cleanupDryRunStatus?: string | null;
   cleanupTarget?: string | null;
+  mergeGate?: WorkPacketDeliveryMergeGateV0 | null;
+  cleanupDryRunGate?: WorkPacketCleanupDryRunGateV0 | null;
   readyForApproval: boolean;
   hasDeliveryExecutionEvidence: boolean;
   evidenceRefs: WorkPacketRefIdV0[];
@@ -661,6 +663,39 @@ export interface WorkPacketDeliveryEvidenceV0 {
   rawPayloadRetained: false;
   remoteMutationApproved: false;
   mergeApproved: false;
+  cleanupApproved: false;
+}
+
+export interface WorkPacketDeliveryGateCriterionV0 {
+  criterionId: string;
+  label: string;
+  status: "passed" | "blocked";
+  evidence: string[];
+  blockedReason?: string | null;
+}
+
+export interface WorkPacketDeliveryMergeGateV0 {
+  status: "passed" | "blocked";
+  lowRiskReady: boolean;
+  criteria: WorkPacketDeliveryGateCriterionV0[];
+  blockedReasons: string[];
+  recoveryPath: string;
+  metadataOnly: true;
+  mergeApproved: false;
+}
+
+export interface WorkPacketCleanupDryRunGateV0 {
+  status: "passed" | "blocked";
+  dryRunMatchesPolicy: boolean;
+  expectedPr?: string | null;
+  expectedOwner?: string | null;
+  expectedWorktree?: string | null;
+  expectedLocalBranch?: string | null;
+  expectedRemoteBranch?: string | null;
+  expectedHeadRevision?: string | null;
+  blockedReasons: string[];
+  recoveryPath: string;
+  metadataOnly: true;
   cleanupApproved: false;
 }
 

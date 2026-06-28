@@ -47,6 +47,7 @@ from supervisor.api.schemas import (
     CodexReadinessReportView,
     CleanupPlanResidueView,
     CleanupPlanView,
+    CleanupDryRunGateEvidenceView,
     CurrentStateReconciliationFindingView,
     DashboardE2EReportView,
     DashboardE2ERunnerView,
@@ -54,6 +55,8 @@ from supervisor.api.schemas import (
     DeliveryReadinessPolicyReportView,
     DeliveryExecutionEvidencePayload,
     DeliveryExecutionEvidenceView,
+    DeliveryGateCriterionView,
+    DeliveryMergeGateEvidenceView,
     DevelopmentRunwayReportView,
     DevelopmentRunwayReadinessCheckView,
     DevelopmentRunwaySliceView,
@@ -202,6 +205,9 @@ from supervisor.api.schemas import (
     SourceRefV0View,
     WorkPacketGateStateValidationV0View,
     WorkPacketDeliveryEvidenceV0View,
+    WorkPacketCleanupDryRunGateV0View,
+    WorkPacketDeliveryGateCriterionV0View,
+    WorkPacketDeliveryMergeGateV0View,
     WorkPacketExecutionAttemptSummaryV0View,
     WorkPacketLaneCardV0View,
     WorkPacketRouteSummaryV0View,
@@ -11402,6 +11408,8 @@ class SupervisorService:
             workingTreeStatus=eligibility.workingTreeStatus,
             prRef=delivery_evidence.get("pullRequestUrl") if isinstance(delivery_evidence.get("pullRequestUrl"), str) else None,
             actions=actions,
+            mergeGate=self._delivery_merge_gate_evidence(eligibility, delivery_evidence),
+            cleanupDryRunGate=self._cleanup_dry_run_gate_evidence(delivery_evidence),
             hardStops=[
                 *eligibility.hardStops,
                 "policy approval is missing or stale",
@@ -11551,6 +11559,151 @@ class SupervisorService:
 
         return blockers
 
+    def _delivery_merge_gate_evidence(
+        self,
+        eligibility: TrustedDeliveryEligibilityReportView,
+        delivery_evidence: dict,
+    ) -> DeliveryMergeGateEvidenceView:
+        expected_head = self._metadata_text(delivery_evidence, "expectedHeadRevision")
+        pr_head = self._metadata_text(delivery_evidence, "pullRequestHeadRevision")
+        base_branch = self._metadata_text(delivery_evidence, "baseBranch")
+        review_state = self._metadata_text(delivery_evidence, "reviewState")
+        local_verification = self._metadata_text(delivery_evidence, "localVerificationStatus")
+        diff_surface = self._metadata_text(delivery_evidence, "diffSurfaceStatus")
+        high_risk_surface = self._metadata_text(delivery_evidence, "highRiskSurfaceStatus")
+        explicit_rollback_path = self._metadata_text(delivery_evidence, "recoveryPath") or self._metadata_text(delivery_evidence, "rollbackPath")
+        rollback_path = (
+            explicit_rollback_path
+            or "inspect retained merge gate evidence before merge or cleanup"
+        )
+
+        criteria = [
+            self._delivery_gate_criterion(
+                "exact-head",
+                "Exact head",
+                bool(expected_head and pr_head and expected_head == pr_head == eligibility.headRevision),
+                [f"expectedHeadRevision={expected_head or 'missing'}", f"pullRequestHeadRevision={pr_head or 'missing'}"],
+                "exact-head-evidence-missing-or-stale",
+            ),
+            self._delivery_gate_criterion(
+                "required-checks",
+                "Required checks",
+                delivery_evidence.get("ciStatus") in {"passed", "waived"},
+                [f"ciStatus={delivery_evidence.get('ciStatus') or 'missing'}"],
+                "required-checks-not-passed",
+            ),
+            self._delivery_gate_criterion(
+                "thread-aware-review",
+                "Thread-aware review",
+                review_state in {"approved", "resolved", "waived", "clean", "no_unresolved_threads"},
+                [f"reviewState={review_state or 'missing'}"],
+                "thread-aware-review-not-proven",
+            ),
+            self._delivery_gate_criterion(
+                "local-verification",
+                "Local verification",
+                local_verification in {"passed", "waived"},
+                [f"localVerificationStatus={local_verification or 'missing'}"],
+                "local-verification-not-proven",
+            ),
+            self._delivery_gate_criterion(
+                "diff-surface",
+                "Diff surface",
+                diff_surface in {"passed", "low_risk", "allowed"},
+                [f"diffSurfaceStatus={diff_surface or 'missing'}"],
+                "diff-surface-not-proven",
+            ),
+            self._delivery_gate_criterion(
+                "base-branch",
+                "Base branch",
+                bool(base_branch and base_branch == eligibility.baseBranch),
+                [f"baseBranch={base_branch or 'missing'}", f"expectedBaseBranch={eligibility.baseBranch}"],
+                "base-branch-missing-or-mismatch",
+            ),
+            self._delivery_gate_criterion(
+                "rollback-path",
+                "Rollback path",
+                bool(explicit_rollback_path),
+                [f"recoveryPath={explicit_rollback_path or 'missing'}"],
+                "rollback-path-missing",
+            ),
+            self._delivery_gate_criterion(
+                "excluded-high-risk-surface",
+                "Excluded high-risk surface",
+                high_risk_surface in {"passed", "excluded", "none"},
+                [f"highRiskSurfaceStatus={high_risk_surface or 'missing'}"],
+                "excluded-high-risk-surface-not-proven",
+            ),
+        ]
+        blocked_reasons = [criterion.blockedReason for criterion in criteria if criterion.blockedReason]
+        return DeliveryMergeGateEvidenceView(
+            status="blocked" if blocked_reasons else "passed",
+            lowRiskReady=not blocked_reasons,
+            criteria=criteria,
+            blockedReasons=list(dict.fromkeys(blocked_reasons)),
+            recoveryPath=rollback_path,
+            metadataOnly=True,
+            mergeApproved=False,
+        )
+
+    def _delivery_gate_criterion(
+        self,
+        criterion_id: str,
+        label: str,
+        passed: bool,
+        evidence: list[str],
+        blocked_reason: str,
+    ) -> DeliveryGateCriterionView:
+        return DeliveryGateCriterionView(
+            criterionId=criterion_id,
+            label=label,
+            status="passed" if passed else "blocked",
+            evidence=evidence,
+            blockedReason=None if passed else blocked_reason,
+        )
+
+    def _cleanup_dry_run_gate_evidence(self, delivery_evidence: dict) -> CleanupDryRunGateEvidenceView:
+        expected_pr = self._metadata_text(delivery_evidence, "cleanupExpectedPr")
+        expected_owner = self._metadata_text(delivery_evidence, "cleanupExpectedOwner")
+        expected_worktree = self._metadata_text(delivery_evidence, "cleanupExpectedWorktree")
+        expected_local_branch = self._metadata_text(delivery_evidence, "cleanupExpectedLocalBranch")
+        expected_remote_branch = self._metadata_text(delivery_evidence, "cleanupExpectedRemoteBranch")
+        expected_head = self._metadata_text(delivery_evidence, "cleanupExpectedHeadRevision")
+        recovery_path = (
+            self._metadata_text(delivery_evidence, "cleanupRecoveryPath")
+            or self._metadata_text(delivery_evidence, "recoveryPath")
+            or "rerun cleanup dry-run and compare expected PR, owner, worktree, branches, and head before cleanup apply"
+        )
+        missing = []
+        for field_name, value in [
+            ("cleanup-expected-pr-missing", expected_pr),
+            ("cleanup-expected-owner-missing", expected_owner),
+            ("cleanup-expected-worktree-missing", expected_worktree),
+            ("cleanup-expected-local-branch-missing", expected_local_branch),
+            ("cleanup-expected-remote-branch-missing", expected_remote_branch),
+            ("cleanup-expected-head-missing", expected_head),
+        ]:
+            if not value:
+                missing.append(field_name)
+        if delivery_evidence.get("cleanupDryRunStatus") != "passed":
+            missing.append("cleanup-dry-run-not-passed")
+        if delivery_evidence.get("cleanupDryRunPolicyMatch") is not True:
+            missing.append("cleanup-dry-run-policy-match-missing")
+        return CleanupDryRunGateEvidenceView(
+            status="blocked" if missing else "passed",
+            dryRunMatchesPolicy=not missing,
+            expectedPr=expected_pr,
+            expectedOwner=expected_owner,
+            expectedWorktree=expected_worktree,
+            expectedLocalBranch=expected_local_branch,
+            expectedRemoteBranch=expected_remote_branch,
+            expectedHeadRevision=expected_head,
+            blockedReasons=list(dict.fromkeys(missing)),
+            recoveryPath=recovery_path,
+            metadataOnly=True,
+            cleanupApproved=False,
+        )
+
     async def _latest_work_item_verification_evidence(
         self,
         session: AsyncSession | None,
@@ -11615,7 +11768,18 @@ class SupervisorService:
             **latest_delivery_evidence,
             "hasDeliveryExecutionEvidence": bool(latest_delivery_evidence),
             "cleanupDryRunStatus": cleanup_evidence.get("dryRunStatus"),
+            "cleanupDryRunPolicyMatch": cleanup_evidence.get("policyMatch") is True,
             "cleanupTarget": cleanup_target,
+            "cleanupExpectedPr": cleanup_evidence.get("expectedPr"),
+            "cleanupExpectedOwner": cleanup_evidence.get("expectedOwner"),
+            "cleanupExpectedWorktree": cleanup_evidence.get("expectedWorktree"),
+            "cleanupExpectedLocalBranch": cleanup_evidence.get("expectedLocalBranch"),
+            "cleanupExpectedRemoteBranch": cleanup_evidence.get("expectedRemoteBranch"),
+            "cleanupExpectedHeadRevision": cleanup_evidence.get("expectedHeadRevision"),
+            "cleanupRecoveryPath": cleanup_evidence.get("recoveryPath") or metadata.get("cleanupRecoveryPath"),
+            "localVerificationStatus": latest_delivery_evidence.get("localVerificationStatus") or metadata.get("localVerificationStatus"),
+            "diffSurfaceStatus": latest_delivery_evidence.get("diffSurfaceStatus") or metadata.get("diffSurfaceStatus"),
+            "highRiskSurfaceStatus": latest_delivery_evidence.get("highRiskSurfaceStatus") or metadata.get("highRiskSurfaceStatus"),
         }
 
     async def get_cleanup_plan(self, session: AsyncSession, work_item_id: str) -> CleanupPlanView | None:
@@ -21125,6 +21289,8 @@ class SupervisorService:
             mergeResult=self._metadata_text(latest_delivery, "mergeResult"),
             cleanupDryRunStatus=cleanup_evidence.get("dryRunStatus"),
             cleanupTarget=cleanup_target if isinstance(cleanup_target, str) and cleanup_target else None,
+            mergeGate=self._work_packet_merge_gate_evidence(metadata, latest_delivery),
+            cleanupDryRunGate=self._work_packet_cleanup_dry_run_gate(metadata, cleanup_evidence),
             readyForApproval=bool(delivery_readiness.readyForApproval) if delivery_readiness else False,
             hasDeliveryExecutionEvidence=bool(latest_delivery),
             evidenceRefs=list(dict.fromkeys(evidence_ref_ids)),
@@ -21132,6 +21298,148 @@ class SupervisorService:
             retainedEvidence=list(dict.fromkeys(retained_evidence)),
             blockedReasons=list(dict.fromkeys(blocked_reasons)),
             recoveryPath=self._metadata_text(latest_delivery, "recoveryPath") or self._metadata_text(metadata, "cleanupRecoveryPath") or "inspect retained delivery evidence before retry, merge, or cleanup",
+        )
+
+    def _work_packet_merge_gate_evidence(self, metadata: dict, latest_delivery: dict) -> WorkPacketDeliveryMergeGateV0View:
+        expected_head = self._metadata_text(latest_delivery, "expectedHeadRevision")
+        pr_head = self._metadata_text(latest_delivery, "pullRequestHeadRevision") or self._metadata_text(metadata, "pullRequestHeadRevision")
+        current_head = self._metadata_text(metadata, "headRevision")
+        base_branch = self._metadata_text(latest_delivery, "baseBranch")
+        expected_base_branch = self._metadata_text(metadata, "baseBranch")
+        review_state = self._metadata_text(latest_delivery, "reviewState") or self._metadata_text(metadata, "reviewState")
+        local_verification = self._metadata_text(latest_delivery, "localVerificationStatus") or self._metadata_text(metadata, "localVerificationStatus")
+        diff_surface = self._metadata_text(latest_delivery, "diffSurfaceStatus") or self._metadata_text(metadata, "diffSurfaceStatus")
+        high_risk_surface = self._metadata_text(latest_delivery, "highRiskSurfaceStatus") or self._metadata_text(metadata, "highRiskSurfaceStatus")
+        explicit_rollback_path = self._metadata_text(latest_delivery, "recoveryPath") or self._metadata_text(metadata, "rollbackPath")
+        recovery_path = (
+            explicit_rollback_path
+            or "inspect retained merge gate evidence before merge or cleanup"
+        )
+        criteria = [
+            self._work_packet_delivery_gate_criterion(
+                "exact-head",
+                "Exact head",
+                bool(expected_head and pr_head and current_head and expected_head == pr_head == current_head),
+                [
+                    f"expectedHeadRevision={expected_head or 'missing'}",
+                    f"pullRequestHeadRevision={pr_head or 'missing'}",
+                    f"currentHeadRevision={current_head or 'missing'}",
+                ],
+                "exact-head-evidence-missing-or-stale",
+            ),
+            self._work_packet_delivery_gate_criterion(
+                "required-checks",
+                "Required checks",
+                (self._metadata_text(latest_delivery, "ciStatus") or self._metadata_text(metadata, "ciStatus")) in {"passed", "waived"},
+                [f"ciStatus={self._metadata_text(latest_delivery, 'ciStatus') or self._metadata_text(metadata, 'ciStatus') or 'missing'}"],
+                "required-checks-not-passed",
+            ),
+            self._work_packet_delivery_gate_criterion(
+                "thread-aware-review",
+                "Thread-aware review",
+                review_state in {"approved", "resolved", "waived", "clean", "no_unresolved_threads"},
+                [f"reviewState={review_state or 'missing'}"],
+                "thread-aware-review-not-proven",
+            ),
+            self._work_packet_delivery_gate_criterion(
+                "local-verification",
+                "Local verification",
+                local_verification in {"passed", "waived"},
+                [f"localVerificationStatus={local_verification or 'missing'}"],
+                "local-verification-not-proven",
+            ),
+            self._work_packet_delivery_gate_criterion(
+                "diff-surface",
+                "Diff surface",
+                diff_surface in {"passed", "low_risk", "allowed"},
+                [f"diffSurfaceStatus={diff_surface or 'missing'}"],
+                "diff-surface-not-proven",
+            ),
+            self._work_packet_delivery_gate_criterion(
+                "base-branch",
+                "Base branch",
+                bool(base_branch and expected_base_branch and base_branch == expected_base_branch),
+                [f"baseBranch={base_branch or 'missing'}", f"expectedBaseBranch={expected_base_branch or 'missing'}"],
+                "base-branch-missing-or-mismatch",
+            ),
+            self._work_packet_delivery_gate_criterion(
+                "rollback-path",
+                "Rollback path",
+                bool(explicit_rollback_path),
+                [f"recoveryPath={explicit_rollback_path or 'missing'}"],
+                "rollback-path-missing",
+            ),
+            self._work_packet_delivery_gate_criterion(
+                "excluded-high-risk-surface",
+                "Excluded high-risk surface",
+                high_risk_surface in {"passed", "excluded", "none"},
+                [f"highRiskSurfaceStatus={high_risk_surface or 'missing'}"],
+                "excluded-high-risk-surface-not-proven",
+            ),
+        ]
+        blocked_reasons = [criterion.blockedReason for criterion in criteria if criterion.blockedReason]
+        return WorkPacketDeliveryMergeGateV0View(
+            status="blocked" if blocked_reasons else "passed",
+            lowRiskReady=not blocked_reasons,
+            criteria=criteria,
+            blockedReasons=list(dict.fromkeys(blocked_reasons)),
+            recoveryPath=recovery_path,
+        )
+
+    def _work_packet_delivery_gate_criterion(
+        self,
+        criterion_id: str,
+        label: str,
+        passed: bool,
+        evidence: list[str],
+        blocked_reason: str,
+    ) -> WorkPacketDeliveryGateCriterionV0View:
+        return WorkPacketDeliveryGateCriterionV0View(
+            criterionId=criterion_id,
+            label=label,
+            status="passed" if passed else "blocked",
+            evidence=evidence,
+            blockedReason=None if passed else blocked_reason,
+        )
+
+    def _work_packet_cleanup_dry_run_gate(self, metadata: dict, cleanup_evidence: dict) -> WorkPacketCleanupDryRunGateV0View:
+        expected_pr = self._metadata_text(cleanup_evidence, "expectedPr")
+        expected_owner = self._metadata_text(cleanup_evidence, "expectedOwner")
+        expected_worktree = self._metadata_text(cleanup_evidence, "expectedWorktree")
+        expected_local_branch = self._metadata_text(cleanup_evidence, "expectedLocalBranch")
+        expected_remote_branch = self._metadata_text(cleanup_evidence, "expectedRemoteBranch")
+        expected_head = self._metadata_text(cleanup_evidence, "expectedHeadRevision")
+        recovery_path = (
+            self._metadata_text(cleanup_evidence, "recoveryPath")
+            or self._metadata_text(metadata, "cleanupRecoveryPath")
+            or "rerun cleanup dry-run and compare expected PR, owner, worktree, branches, and head before cleanup apply"
+        )
+        blocked_reasons = []
+        for reason, value in [
+            ("cleanup-expected-pr-missing", expected_pr),
+            ("cleanup-expected-owner-missing", expected_owner),
+            ("cleanup-expected-worktree-missing", expected_worktree),
+            ("cleanup-expected-local-branch-missing", expected_local_branch),
+            ("cleanup-expected-remote-branch-missing", expected_remote_branch),
+            ("cleanup-expected-head-missing", expected_head),
+        ]:
+            if not value:
+                blocked_reasons.append(reason)
+        if cleanup_evidence.get("dryRunStatus") != "passed":
+            blocked_reasons.append("cleanup-dry-run-not-passed")
+        if cleanup_evidence.get("policyMatch") is not True:
+            blocked_reasons.append("cleanup-dry-run-policy-match-missing")
+        return WorkPacketCleanupDryRunGateV0View(
+            status="blocked" if blocked_reasons else "passed",
+            dryRunMatchesPolicy=not blocked_reasons,
+            expectedPr=expected_pr,
+            expectedOwner=expected_owner,
+            expectedWorktree=expected_worktree,
+            expectedLocalBranch=expected_local_branch,
+            expectedRemoteBranch=expected_remote_branch,
+            expectedHeadRevision=expected_head,
+            blockedReasons=list(dict.fromkeys(blocked_reasons)),
+            recoveryPath=recovery_path,
         )
 
     def _work_packet_id(self, candidate: CandidateWorkView | None, item: WorkItemView | None) -> str:

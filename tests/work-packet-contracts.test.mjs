@@ -25,6 +25,9 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
     "HumanGateActionRequestStatusV0",
     "WorkPacketExecutionAttemptSummaryV0",
     "WorkPacketDeliveryEvidenceV0",
+    "WorkPacketDeliveryGateCriterionV0",
+    "WorkPacketDeliveryMergeGateV0",
+    "WorkPacketCleanupDryRunGateV0",
     "WorkPacketLaneCardV0",
     "MODEL_ROLES_V0",
     "MODEL_ROLE_POLICIES_V0",
@@ -128,6 +131,16 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /remoteMutationApproved:\s*false;/);
   assert.match(workPacketSource, /mergeApproved:\s*false;/);
   assert.match(workPacketSource, /cleanupApproved:\s*false;/);
+  assert.match(workPacketSource, /mergeGate\?:\s*WorkPacketDeliveryMergeGateV0 \| null;/);
+  assert.match(workPacketSource, /cleanupDryRunGate\?:\s*WorkPacketCleanupDryRunGateV0 \| null;/);
+  assert.match(workPacketSource, /lowRiskReady:\s*boolean;/);
+  assert.match(workPacketSource, /dryRunMatchesPolicy:\s*boolean;/);
+  assert.match(workPacketSource, /expectedPr\?:\s*string \| null;/);
+  assert.match(workPacketSource, /expectedOwner\?:\s*string \| null;/);
+  assert.match(workPacketSource, /expectedWorktree\?:\s*string \| null;/);
+  assert.match(workPacketSource, /expectedLocalBranch\?:\s*string \| null;/);
+  assert.match(workPacketSource, /expectedRemoteBranch\?:\s*string \| null;/);
+  assert.match(workPacketSource, /expectedHeadRevision\?:\s*string \| null;/);
   assert.match(workPacketSource, /export interface WorkPacketStageTransitionEventV0/);
   assert.match(workPacketSource, /transitionEvents:\s*WorkPacketStageTransitionEventV0\[\];/);
   assert.match(workPacketSource, /durable:\s*boolean;/);

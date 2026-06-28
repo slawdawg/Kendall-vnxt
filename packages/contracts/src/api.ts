@@ -1683,6 +1683,39 @@ export interface LowRiskDeliveryPlanActionView {
   readOnly: boolean;
 }
 
+export interface DeliveryGateCriterionView {
+  criterionId: string;
+  label: string;
+  status: string;
+  evidence: string[];
+  blockedReason?: string | null;
+}
+
+export interface DeliveryMergeGateEvidenceView {
+  status: string;
+  lowRiskReady: boolean;
+  criteria: DeliveryGateCriterionView[];
+  blockedReasons: string[];
+  recoveryPath: string;
+  metadataOnly: boolean;
+  mergeApproved: boolean;
+}
+
+export interface CleanupDryRunGateEvidenceView {
+  status: string;
+  dryRunMatchesPolicy: boolean;
+  expectedPr?: string | null;
+  expectedOwner?: string | null;
+  expectedWorktree?: string | null;
+  expectedLocalBranch?: string | null;
+  expectedRemoteBranch?: string | null;
+  expectedHeadRevision?: string | null;
+  blockedReasons: string[];
+  recoveryPath: string;
+  metadataOnly: boolean;
+  cleanupApproved: boolean;
+}
+
 export interface LowRiskDeliveryPlanReportView {
   reportId: string;
   generatedAt: string;
@@ -1694,6 +1727,8 @@ export interface LowRiskDeliveryPlanReportView {
   workingTreeStatus: string;
   prRef?: string | null;
   actions: LowRiskDeliveryPlanActionView[];
+  mergeGate: DeliveryMergeGateEvidenceView;
+  cleanupDryRunGate: CleanupDryRunGateEvidenceView;
   hardStops: string[];
   nextSafeActions: string[];
   readOnly: boolean;

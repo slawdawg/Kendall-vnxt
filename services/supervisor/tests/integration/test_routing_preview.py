@@ -6122,6 +6122,26 @@ def test_work_item_low_risk_delivery_plan_is_report_only(tmp_path, monkeypatch) 
     assert any("would block merge" in effect for effect in merge_action["dryRunEffects"])
     assert any("would block worktree removal" in effect for effect in cleanup_action["dryRunEffects"])
     assert any("would block local branch deletion" in effect for effect in cleanup_action["dryRunEffects"])
+    assert report["mergeGate"]["status"] == "blocked"
+    assert report["mergeGate"]["lowRiskReady"] is False
+    merge_criteria = {criterion["criterionId"]: criterion for criterion in report["mergeGate"]["criteria"]}
+    for criterion_id in [
+        "exact-head",
+        "required-checks",
+        "thread-aware-review",
+        "local-verification",
+        "diff-surface",
+        "base-branch",
+        "rollback-path",
+        "excluded-high-risk-surface",
+    ]:
+        assert criterion_id in merge_criteria
+    assert "thread-aware-review-not-proven" in report["mergeGate"]["blockedReasons"]
+    assert report["mergeGate"]["metadataOnly"] is True
+    assert report["mergeGate"]["mergeApproved"] is False
+    assert report["cleanupDryRunGate"]["status"] == "blocked"
+    assert "cleanup-expected-pr-missing" in report["cleanupDryRunGate"]["blockedReasons"]
+    assert report["cleanupDryRunGate"]["cleanupApproved"] is False
 
 
 def test_work_item_low_risk_delivery_plan_blocks_stale_pr_head(tmp_path, monkeypatch) -> None:
@@ -6212,6 +6232,161 @@ def test_low_risk_delivery_plan_blocks_green_stage_when_policy_is_missing(tmp_pa
     assert "policy-missing" in action.blockedReasons
     assert "push named branch" in action.blockedOperations
     assert "would push branch codex/story-10-1" in action.dryRunEffects
+
+
+def test_low_risk_delivery_gate_evidence_requires_all_merge_criteria(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "low-risk-delivery-merge-gate-evidence.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import service
+
+    eligibility = SimpleNamespace(
+        currentBranch="codex/story-6-4",
+        baseBranch="dev",
+        headRevision="fixture-head",
+    )
+    passed = service._delivery_merge_gate_evidence(  # type: ignore[attr-defined]
+        eligibility,
+        {
+            "expectedHeadRevision": "fixture-head",
+            "pullRequestHeadRevision": "fixture-head",
+            "ciStatus": "passed",
+            "reviewState": "no_unresolved_threads",
+            "localVerificationStatus": "passed",
+            "diffSurfaceStatus": "low_risk",
+            "baseBranch": "dev",
+            "highRiskSurfaceStatus": "excluded",
+            "recoveryPath": "revert merge commit and restore retained branch refs",
+        },
+    )
+    blocked = service._delivery_merge_gate_evidence(  # type: ignore[attr-defined]
+        eligibility,
+        {
+            "expectedHeadRevision": "fixture-head",
+            "pullRequestHeadRevision": "stale-head",
+            "ciStatus": "passed",
+            "reviewState": "approved",
+            "baseBranch": "main",
+            "recoveryPath": "revert merge commit and restore retained branch refs",
+        },
+    )
+    missing_expected_head = service._delivery_merge_gate_evidence(  # type: ignore[attr-defined]
+        eligibility,
+        {
+            "pullRequestHeadRevision": "fixture-head",
+            "ciStatus": "passed",
+            "reviewState": "no_unresolved_threads",
+            "localVerificationStatus": "passed",
+            "diffSurfaceStatus": "low_risk",
+            "baseBranch": "dev",
+            "highRiskSurfaceStatus": "excluded",
+            "recoveryPath": "revert merge commit and restore retained branch refs",
+        },
+    )
+    work_packet_blocked = service._work_packet_merge_gate_evidence(  # type: ignore[attr-defined]
+        {
+            "headRevision": "fixture-head",
+            "baseBranch": "dev",
+            "ciStatus": "passed",
+            "reviewState": "no_unresolved_threads",
+            "localVerificationStatus": "passed",
+            "diffSurfaceStatus": "low_risk",
+            "highRiskSurfaceStatus": "excluded",
+            "rollbackPath": "revert merge commit and restore retained branch refs",
+        },
+        {
+            "expectedHeadRevision": "stale-head",
+            "pullRequestHeadRevision": "stale-head",
+            "baseBranch": "main",
+            "ciStatus": "passed",
+        },
+    )
+
+    assert passed.status == "passed"
+    assert passed.lowRiskReady is True
+    assert passed.mergeApproved is False
+    assert passed.metadataOnly is True
+    assert blocked.status == "blocked"
+    assert blocked.lowRiskReady is False
+    assert "exact-head-evidence-missing-or-stale" in blocked.blockedReasons
+    assert "local-verification-not-proven" in blocked.blockedReasons
+    assert "diff-surface-not-proven" in blocked.blockedReasons
+    assert "base-branch-missing-or-mismatch" in blocked.blockedReasons
+    assert "excluded-high-risk-surface-not-proven" in blocked.blockedReasons
+    assert missing_expected_head.status == "blocked"
+    assert "exact-head-evidence-missing-or-stale" in missing_expected_head.blockedReasons
+    assert work_packet_blocked.status == "blocked"
+    assert "exact-head-evidence-missing-or-stale" in work_packet_blocked.blockedReasons
+    assert "base-branch-missing-or-mismatch" in work_packet_blocked.blockedReasons
+
+
+def test_cleanup_dry_run_gate_names_exact_expected_resources(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "cleanup-dry-run-gate-evidence.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import service
+
+    passed = service._cleanup_dry_run_gate_evidence(  # type: ignore[attr-defined]
+        {
+            "cleanupDryRunStatus": "passed",
+            "cleanupDryRunPolicyMatch": True,
+            "cleanupExpectedPr": "https://github.com/slawdawg/Kendall-vnxt/pull/664",
+            "cleanupExpectedOwner": "codex-2",
+            "cleanupExpectedWorktree": "/worktrees/20260628-bmad-6-4",
+            "cleanupExpectedLocalBranch": "codex/bmad-6-4",
+            "cleanupExpectedRemoteBranch": "origin/codex/bmad-6-4",
+            "cleanupExpectedHeadRevision": "fixture-head",
+            "cleanupRecoveryPath": "rerun cleanup dry-run before apply; retain branch if any head mismatches",
+        }
+    )
+    blocked = service._cleanup_dry_run_gate_evidence(  # type: ignore[attr-defined]
+        {
+            "cleanupDryRunStatus": "passed",
+            "cleanupExpectedPr": "https://github.com/slawdawg/Kendall-vnxt/pull/664",
+            "cleanupExpectedOwner": "codex-2",
+            "cleanupExpectedWorktree": "/worktrees/20260628-bmad-6-4",
+            "cleanupExpectedLocalBranch": "codex/bmad-6-4",
+            "cleanupExpectedRemoteBranch": "origin/codex/bmad-6-4",
+        }
+    )
+    work_packet_stale_metadata = service._work_packet_cleanup_dry_run_gate(  # type: ignore[attr-defined]
+        {
+            "cleanupExpectedPr": "https://github.com/slawdawg/Kendall-vnxt/pull/664",
+            "cleanupExpectedOwner": "codex-2",
+            "cleanupExpectedWorktree": "/worktrees/20260628-bmad-6-4",
+            "cleanupExpectedLocalBranch": "codex/bmad-6-4",
+            "cleanupExpectedRemoteBranch": "origin/codex/bmad-6-4",
+            "cleanupExpectedHeadRevision": "fixture-head",
+        },
+        {
+            "dryRunStatus": "passed",
+            "policyMatch": True,
+        },
+    )
+
+    assert passed.status == "passed"
+    assert passed.dryRunMatchesPolicy is True
+    assert passed.expectedPr == "https://github.com/slawdawg/Kendall-vnxt/pull/664"
+    assert passed.expectedOwner == "codex-2"
+    assert passed.expectedWorktree == "/worktrees/20260628-bmad-6-4"
+    assert passed.expectedLocalBranch == "codex/bmad-6-4"
+    assert passed.expectedRemoteBranch == "origin/codex/bmad-6-4"
+    assert passed.expectedHeadRevision == "fixture-head"
+    assert passed.cleanupApproved is False
+    assert passed.metadataOnly is True
+    assert blocked.status == "blocked"
+    assert blocked.dryRunMatchesPolicy is False
+    assert "cleanup-expected-head-missing" in blocked.blockedReasons
+    assert "cleanup-dry-run-policy-match-missing" in blocked.blockedReasons
+    assert work_packet_stale_metadata.status == "blocked"
+    assert "cleanup-expected-pr-missing" in work_packet_stale_metadata.blockedReasons
+    assert "cleanup-expected-head-missing" in work_packet_stale_metadata.blockedReasons
 
 
 def test_low_risk_delivery_plan_requires_pr_url_for_merge_binding(tmp_path, monkeypatch) -> None:
