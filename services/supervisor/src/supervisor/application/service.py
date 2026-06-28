@@ -222,7 +222,7 @@ from supervisor.domain.subscription_launch import (
     SupervisedSubscriptionLaunchAdapter,
     SubscriptionLaunchRegistry,
 )
-from supervisor.domain.types import AuditMode, BmadLane, CandidateWorkStatus, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
+from supervisor.domain.types import AuditMode, BmadLane, CandidateWorkSource, CandidateWorkStatus, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
 from supervisor.infrastructure.db.models import AuditEvent, CandidateWork, ExecutionAttempt, MemoryProposal, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
@@ -21164,7 +21164,62 @@ class SupervisorService:
             safe_notes = [note for note in notes if isinstance(note, str) and note][:10]
             if safe_notes:
                 promoted["notes"] = safe_notes
+        source_summary = self._safe_user_facing_source_summary(import_metadata.get("userFacingSourceSummary"))
+        if source_summary:
+            promoted["userFacingSourceSummary"] = source_summary
         return promoted
+
+    def _safe_user_facing_source_summary(self, value: object) -> dict[str, object] | None:
+        if not isinstance(value, dict):
+            return None
+        string_fields = [
+            "label",
+            "summary",
+            "sourceType",
+            "sourceRef",
+            "sourceArtifactPath",
+            "freshness",
+            "accessState",
+            "retentionPolicy",
+            "boundarySummary",
+            "approvalStatus",
+            "approvedBy",
+            "approvedAt",
+        ]
+        summary: dict[str, object] = {}
+        for field in string_fields:
+            field_value = value.get(field)
+            if isinstance(field_value, str) and field_value:
+                summary[field] = field_value
+        evidence_refs = value.get("evidenceRefs")
+        if isinstance(evidence_refs, list):
+            safe_evidence_refs = [ref for ref in evidence_refs if isinstance(ref, str) and ref][:20]
+            if safe_evidence_refs:
+                summary["evidenceRefs"] = list(dict.fromkeys(safe_evidence_refs))
+        required = {
+            "label",
+            "summary",
+            "sourceType",
+            "sourceRef",
+            "sourceArtifactPath",
+            "freshness",
+            "accessState",
+            "retentionPolicy",
+            "boundarySummary",
+            "approvalStatus",
+            "approvedBy",
+            "approvedAt",
+            "evidenceRefs",
+        }
+        if not required <= set(summary):
+            return None
+        if summary["sourceType"] not in {source.value for source in CandidateWorkSource}:
+            return None
+        if summary["freshness"] not in {"fresh", "stale", "unknown", "not_applicable"}:
+            return None
+        if summary["accessState"] not in {"allowed", "excluded", "missing", "blocked"}:
+            return None
+        return summary
 
     def _work_packet_alpha_memory_source_status(
         self,
@@ -21753,6 +21808,9 @@ class SupervisorService:
         ]
 
     def to_candidate_work_view(self, candidate: CandidateWork) -> CandidateWorkView:
+        import_metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+        source_summary = import_metadata.get("userFacingSourceSummary")
+        safe_source_summary = self._safe_user_facing_source_summary(source_summary)
         return CandidateWorkView(
             id=candidate.id,
             title=candidate.title,
@@ -21768,7 +21826,8 @@ class SupervisorService:
             updatedAt=self._normalize_timestamp(candidate.updated_at),
             approvedAt=self._normalize_timestamp(candidate.approved_at) if candidate.approved_at else None,
             promotedWorkItemId=candidate.promoted_work_item_id,
-            importMetadata=candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {},
+            sourceSummary=safe_source_summary,
+            importMetadata=import_metadata,
         )
 
     def to_memory_proposal_view(self, proposal: MemoryProposal, *, packet_id: str) -> MemoryProposalV0View:

@@ -132,6 +132,36 @@ def test_candidate_work_can_be_created_listed_and_updated_without_active_work(tm
         assert work_items_after_update_response.json()["data"] == []
 
 
+def test_candidate_work_source_summary_rejects_generic_or_incomplete_metadata(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "candidate-work-unsafe-summary.db") as client:
+        created_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Unsafe summary metadata",
+                "requestedOutcome": "Do not project arbitrary source summaries.",
+                "source": "operator",
+                "sourceArtifactPath": "00 Inbox/source-reconciliation.md",
+                "sourceArtifactType": "manual_note",
+                "importMetadata": {
+                    "userFacingSourceSummary": {
+                        "label": {"rawContent": "copied note body"},
+                        "summary": "Raw note content should not become top-level API data.",
+                        "sourceRef": "obsidian:00 Inbox/source-reconciliation.md",
+                        "sourceArtifactPath": "00 Inbox/source-reconciliation.md",
+                        "retentionPolicy": "metadata_only_no_raw_obsidian_content",
+                        "boundarySummary": "Canonical Obsidian memory remains human-owned and unchanged.",
+                        "rawContent": "copied note body",
+                    }
+                },
+            },
+        )
+
+        assert created_response.status_code == 200
+        candidate = created_response.json()["data"]
+        assert candidate["sourceSummary"] is None
+        assert "rawContent" in candidate["importMetadata"]["userFacingSourceSummary"]
+
+
 def test_candidate_work_rejects_invalid_enum_values_and_missing_candidate(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "candidate-work-validation.db") as client:
         valid_payload = {
@@ -572,6 +602,22 @@ def test_approved_obsidian_metadata_import_flows_into_candidate_work_and_packets
         assert candidate["importMetadata"]["approvedAt"] == "2026-06-27T00:00:00+00:00"
         assert candidate["importMetadata"]["canonicalMutationAllowed"] is False
         assert candidate["importMetadata"]["sourceMutationAllowed"] is False
+        assert candidate["sourceSummary"] == {
+            "label": "Approved Obsidian metadata: Review source reconciliation note",
+            "summary": "Review source reconciliation note is represented by approved Obsidian metadata only; raw note content was not copied.",
+            "sourceType": "obsidian",
+            "sourceRef": "obsidian:00 Inbox/source-reconciliation.md",
+            "sourceArtifactPath": "00 Inbox/source-reconciliation.md",
+            "freshness": "fresh",
+            "accessState": "allowed",
+            "retentionPolicy": "metadata_only_no_raw_obsidian_content",
+            "boundarySummary": "Canonical Obsidian memory remains human-owned and unchanged.",
+            "evidenceRefs": ["evidence:obsidian-approval:source-reconciliation"],
+            "approvalStatus": "approved",
+            "approvedBy": "operator",
+            "approvedAt": "2026-06-27T00:00:00+00:00",
+        }
+        assert candidate["importMetadata"]["userFacingSourceSummary"] == candidate["sourceSummary"]
         assert candidate["importMetadata"]["workPacketSourceRefs"] == [
             {
                 "refId": "obsidian:00 Inbox/source-reconciliation.md",
@@ -688,6 +734,9 @@ def test_approved_obsidian_metadata_import_flows_into_candidate_work_and_packets
         assert work_item["metadata"]["sourceArtifactType"] == "obsidian_metadata"
         assert work_item["metadata"]["workPacketSourceRefs"][0]["sourceType"] == "obsidian"
         assert work_item["metadata"]["importMetadata"]["retentionPolicy"] == "metadata_only_no_raw_obsidian_content"
+        assert work_item["metadata"]["importMetadata"]["userFacingSourceSummary"]["boundarySummary"] == (
+            "Canonical Obsidian memory remains human-owned and unchanged."
+        )
 
         packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         assert {ref["sourceType"] for ref in packet["sourceRefs"]} == {"candidate_work", "work_item", "obsidian"}

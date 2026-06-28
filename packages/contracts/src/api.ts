@@ -60,6 +60,22 @@ export interface CandidateWorkObsidianMetadataImportPayload {
   sortOrder?: number;
 }
 
+export interface CandidateWorkSourceSummaryView {
+  label: string;
+  summary: string;
+  sourceType: CandidateWorkSource;
+  sourceRef: string;
+  sourceArtifactPath: string;
+  freshness: "fresh" | "stale" | "unknown" | "not_applicable";
+  accessState: "allowed" | "excluded" | "missing" | "blocked";
+  retentionPolicy: string;
+  boundarySummary: string;
+  evidenceRefs: string[];
+  approvalStatus: string;
+  approvedBy: string;
+  approvedAt: string;
+}
+
 export interface CandidateWorkView {
   id: string;
   title: string;
@@ -75,6 +91,7 @@ export interface CandidateWorkView {
   updatedAt: string;
   approvedAt?: string | null;
   promotedWorkItemId?: string | null;
+  sourceSummary?: CandidateWorkSourceSummaryView | null;
   importMetadata: Record<string, unknown>;
 }
 

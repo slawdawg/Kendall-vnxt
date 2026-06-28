@@ -48,6 +48,22 @@ class CandidateWorkUpdate(BaseModel):
     sortOrder: int | None = None
 
 
+class CandidateWorkSourceSummaryView(BaseModel):
+    label: str
+    summary: str
+    sourceType: CandidateWorkSource
+    sourceRef: str
+    sourceArtifactPath: str
+    freshness: Literal["fresh", "stale", "unknown", "not_applicable"]
+    accessState: Literal["allowed", "excluded", "missing", "blocked"]
+    retentionPolicy: str
+    boundarySummary: str
+    evidenceRefs: list[str]
+    approvalStatus: str
+    approvedBy: str
+    approvedAt: str
+
+
 class CandidateWorkView(BaseModel):
     id: str
     title: str
@@ -63,6 +79,7 @@ class CandidateWorkView(BaseModel):
     updatedAt: datetime
     approvedAt: datetime | None = None
     promotedWorkItemId: str | None = None
+    sourceSummary: CandidateWorkSourceSummaryView | None = None
     importMetadata: dict[str, Any] = Field(default_factory=dict)
 
 
