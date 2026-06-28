@@ -46,14 +46,14 @@ Do not claim a second lane during a smoke run.
 Prefer Codex's normal sandbox and approval model for the first worker:
 
 ```bash
-KENDALL_REPO="<path-to-Kendall_Nxt>"
-CODEX_WORKSPACES_ROOT="<path-to-codex-workspaces>"
+KENDALL_NXT_ROOT="${KENDALL_NXT_ROOT:?Set KENDALL_NXT_ROOT to the Kendall_Nxt checkout path}"
+CODEX_WORKSPACES_ROOT="${CODEX_WORKSPACES_ROOT:?Set CODEX_WORKSPACES_ROOT to the Codex workspace state root}"
 
-tmux new-session -d -s codex-1 -c "$KENDALL_REPO" \
+tmux new-session -d -s codex-1 -c "$KENDALL_NXT_ROOT" \
   env CODEX_WORKSPACE_OWNER=codex-1 CODEX_THREAD_ID=tmux-codex-1 \
   codex --no-alt-screen \
-    --cd "$KENDALL_REPO" \
-    --add-dir "$CODEX_WORKSPACES_ROOT/slawdawg-kendall-vnxt" \
+    --cd "$KENDALL_NXT_ROOT" \
+    --add-dir "$CODEX_WORKSPACES_ROOT" \
     --sandbox workspace-write \
     --ask-for-approval on-request \
     "<worker prompt>"
