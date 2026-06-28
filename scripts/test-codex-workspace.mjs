@@ -2785,6 +2785,7 @@ try {
     const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-apply-workspace-"));
     const worktreePath = mkdtempSync(join(tmpdir(), "codex-dispatch-worktree-"));
     let selectedBmadLane = null;
+    let selectedBmadLaneExistedBefore = false;
     try {
       runGit(worktreePath, ["init", "-q"]);
       runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
@@ -2833,6 +2834,7 @@ try {
         )}\n`,
       );
       const before = readFileSync(manifestPath, "utf8");
+      selectedBmadLaneExistedBefore = branchExists(rootDir, selectedBmadLane.branch);
 
       const result = run([
         "dispatch-next",
@@ -2861,9 +2863,12 @@ try {
         encoding: "utf8",
         stdio: "pipe",
       });
-      if (selectedBmadLane) {
-        deleteLocalBranchesMatching(selectedBmadLane.branch);
-        deleteLocalBranchesMatching(`${selectedBmadLane.branch}-fixture-*`);
+      if (selectedBmadLane && !selectedBmadLaneExistedBefore) {
+        spawnSync("git", ["branch", "-D", selectedBmadLane.branch], {
+          cwd: rootDir,
+          encoding: "utf8",
+          stdio: "pipe",
+        });
       }
       rmSync(worktreePath, { recursive: true, force: true });
     }
@@ -3878,6 +3883,7 @@ function run(args) {
     encoding: "utf8",
     env: {
       ...process.env,
+      CODEX_WORKSPACE_TEST_MODE: "1",
       CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES: "1",
     },
     stdio: "pipe",
@@ -4528,25 +4534,6 @@ function seedClaimedVerificationAssignment(stateRootPath, owner) {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function deleteLocalBranchesMatching(pattern) {
-  const listed = spawnSync("git", ["branch", "--list", pattern, "--format=%(refname:short)"], {
-    cwd: rootDir,
-    encoding: "utf8",
-    stdio: "pipe",
-  });
-  if (listed.status !== 0) {
-    return;
-  }
-  for (const branch of listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
-    const deleted = spawnSync("git", ["branch", "-D", branch], {
-      cwd: rootDir,
-      encoding: "utf8",
-      stdio: "pipe",
-    });
-    assert(deleted.status === 0, deleted.stderr || `Failed to delete ${branch}`);
-  }
 }
 
 function test(name, fn) {

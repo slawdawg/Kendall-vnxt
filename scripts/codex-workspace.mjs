@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { hostname } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAntiChurnGuidanceHookCli } from "./anti-churn-guidance-hook.mjs";
@@ -4222,14 +4222,13 @@ function dispatchManifestForAssignment(state, assignment) {
 }
 
 function createDispatchWorkspace(item, assignment, context) {
-  const requestedBranch = String(item.branchName || assignment.branch || "");
-  assertSafeBranch(requestedBranch);
+  const branch = String(item.branchName || assignment.branch || "");
+  assertSafeBranch(branch);
   const usingDefaultBase = !context.options.base;
   const baseBranch = String(context.options.base || defaultBaseBranch);
   assertSafeBaseBranch(baseBranch);
-  const taskId = String(context.options.taskId || nextDispatchTaskId(context.state, laneSlugFromBranch(requestedBranch)));
+  const taskId = String(context.options.taskId || nextDispatchTaskId(context.state, laneSlugFromBranch(branch)));
   assertSafeTaskId(taskId);
-  const branch = dispatchWorkspaceBranchForFixture(requestedBranch, taskId);
   const worktreePath = resolve(String(context.options.worktree || join(context.state.worktreesDir, taskId)));
   const manifestPath = join(context.state.tasksDir, `${taskId}.json`);
   const shouldFetch = !context.options.noFetch;
@@ -4240,10 +4239,11 @@ function createDispatchWorkspace(item, assignment, context) {
   if (existsSync(worktreePath)) {
     throw new Error(`Worktree path already exists: ${worktreePath}`);
   }
-  if (branchExists(branch)) {
+  const useDetachedTestWorktree = shouldUseDetachedTestWorktreeForExistingSafeBacklogBranch(item, branch, context.state.root);
+  if (!useDetachedTestWorktree && branchExists(branch)) {
     throw new Error(`Branch already exists: ${branch}`);
   }
-  if (remoteBranchExists(branch)) {
+  if (!useDetachedTestWorktree && remoteBranchExists(branch)) {
     throw new Error(`Remote branch already exists: origin/${branch}`);
   }
   if (shouldFetch) {
@@ -4291,7 +4291,10 @@ function createDispatchWorkspace(item, assignment, context) {
   mkdirSync(context.state.tasksDir, { recursive: true });
   mkdirSync(context.state.worktreesDir, { recursive: true });
   withManifestLock(context.state, taskId, () => {
-    runChecked("git", ["worktree", "add", "-b", branch, worktreePath, baseRef], { cwd: repoRoot });
+    const worktreeArgs = useDetachedTestWorktree
+      ? ["worktree", "add", "--detach", worktreePath, baseRef]
+      : ["worktree", "add", "-b", branch, worktreePath, baseRef];
+    runChecked("git", worktreeArgs, { cwd: repoRoot });
     writeManifest(manifestPath, manifest);
   });
 
@@ -4302,14 +4305,28 @@ function createDispatchWorkspace(item, assignment, context) {
   };
 }
 
-function dispatchWorkspaceBranchForFixture(branch, taskId) {
-  const ignoreFixtureBranches = process.env.CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES === "1";
-  if (!ignoreFixtureBranches || (!branchExists(branch) && !remoteBranchExists(branch))) {
-    return branch;
+function shouldUseDetachedTestWorktreeForExistingSafeBacklogBranch(item, branch, stateRootPath) {
+  if (process.env.CODEX_WORKSPACE_TEST_MODE !== "1") {
+    return false;
   }
-  const fixtureBranch = `${branch}-fixture-${process.pid}-${taskId}`;
-  assertSafeBranch(fixtureBranch);
-  return fixtureBranch;
+  if (!isTemporaryWorkspaceTestState(stateRootPath)) {
+    return false;
+  }
+  if (process.env.CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES !== "1") {
+    return false;
+  }
+  if (String(item.branchName || "") !== branch) {
+    return false;
+  }
+  if (!String(item.itemId || "").startsWith("bmad-")) {
+    return false;
+  }
+  return branchExists(branch);
+}
+
+function isTemporaryWorkspaceTestState(stateRootPath) {
+  const relativeToTmp = relative(resolve(tmpdir()), resolve(stateRootPath));
+  return relativeToTmp.length > 0 && !relativeToTmp.startsWith("..") && !relativeToTmp.startsWith("/");
 }
 
 function nextDispatchTaskId(state, laneSlug) {

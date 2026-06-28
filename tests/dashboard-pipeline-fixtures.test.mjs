@@ -10,6 +10,7 @@ const packageJsonPath = new URL("../package.json", import.meta.url);
 const nextConfigPath = new URL("../apps/dashboard/next.config.ts", import.meta.url);
 const routePath = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta.url);
 const packetDetailRoutePath = new URL("../apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx", import.meta.url);
+const pipelinePacketLoaderPath = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
 const settingsRoutePath = new URL("../apps/dashboard/src/app/settings/page.tsx", import.meta.url);
 const settingsUsageVisibilityPath = new URL("../apps/dashboard/src/components/settings/usage-visibility-settings.tsx", import.meta.url);
 const layoutPath = new URL("../apps/dashboard/src/app/layout.tsx", import.meta.url);
@@ -48,9 +49,10 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   assert.match(nextConfigSource + (await readFile(new URL("../playwright.config.ts", import.meta.url), "utf8")), /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS/);
 });
 
-test("/pipeline route uses fixture-only cockpit frame without supervisor calls", async () => {
+test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fallback", async () => {
   const routeSource = await readFile(routePath, "utf8");
   const packetDetailRouteSource = await readFile(packetDetailRoutePath, "utf8");
+  const pipelinePacketLoaderSource = await readFile(pipelinePacketLoaderPath, "utf8");
   const settingsRouteSource = await readFile(settingsRoutePath, "utf8");
   const settingsUsageVisibilitySource = await readFile(settingsUsageVisibilityPath, "utf8");
   const layoutSource = await readFile(layoutPath, "utf8");
@@ -66,7 +68,7 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   const pipelineComponentSource = (
     await Promise.all(componentFiles.map((file) => readFile(new URL(file, pipelineComponentsPath), "utf8")))
   ).join("\n");
-  const allPipelineSource = `${routeSource}\n${packetDetailRouteSource}\n${fixtureSource}\n${pipelineComponentSource}`;
+  const allPipelineSource = `${routeSource}\n${packetDetailRouteSource}\n${pipelinePacketLoaderSource}\n${fixtureSource}\n${pipelineComponentSource}`;
 
   assert.match(routeSource, /<Shell\b/);
   assert.match(routeSource, /<Shell\b[^>]*realtimeRefresh=\{false\}[^>]*wide/);
@@ -88,12 +90,21 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(realtimeRefreshSource, /EventSource/);
   assert.match(layoutSource, /data-scroll-behavior="smooth"/);
   assert.match(routeSource, /PipelineCockpit/);
-  assert.doesNotMatch(routeSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
+  assert.match(routeSource, /loadPipelineCockpitPackets/);
+  assert.match(routeSource, /fixtureMode=\{fixtureMode\}/);
+  assert.match(pipelinePacketLoaderSource, /getWorkPackets/);
+  assert.match(pipelinePacketLoaderSource, /projectSupervisorWorkPacketsToCockpitPackets/);
+  assert.match(pipelinePacketLoaderSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
+  assert.match(pipelinePacketLoaderSource, /catch/);
+  assert.match(pipelinePacketLoaderSource, /Supervisor packets/);
+  assert.match(pipelinePacketLoaderSource, /Supervisor unavailable/);
+  assert.doesNotMatch(routeSource, /getRunStatus|getWorkItems|fetch\s*\(/);
   assert.match(packetDetailRouteSource, /PacketDetailPage/);
   assert.match(packetDetailRouteSource, /<Shell\b[^>]*compactHeader[^>]*realtimeRefresh=\{false\}[^>]*wide/);
   assert.match(packetDetailRouteSource, /realtimeRefresh=\{false\}/);
   assert.match(packetDetailRouteSource, /generateStaticParams/);
-  assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
+  assert.match(packetDetailRouteSource, /loadPipelineCockpitPackets/);
+  assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|fetch\s*\(/);
 
   for (const regionName of [
     "Refined pipeline cockpit frame",
@@ -511,24 +522,33 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.doesNotMatch(cockpitSource, /import\s+\{\s*pipelineStages\s+\}\s+from\s+"..\/..\/lib\/pipeline-fixtures"/);
   assert.match(packetDetailSource, /Packet 5 Whys/);
   assert.match(packetDetailSource, /Evidence and artifacts/);
+  assert.match(packetDetailSource, /Evidence trace/);
+  assert.match(packetDetailSource, /Artifact trace/);
+  assert.match(packetDetailSource, /Retention class/);
+  assert.match(packetDetailSource, /Raw payload retained/);
+  assert.match(packetDetailSource, /Artifact type/);
+  assert.match(packetDetailSource, /Path or URL/);
+  assert.match(packetDetailSource, /Action guard previews/);
+  assert.match(packetDetailSource, /Recovery preview event/);
+  assert.match(packetDetailSource, /Human Gate binding/);
   assert.match(packetDetailSource, /Workers and review/);
   assert.match(packetDetailSource, /Gate, memory, recovery/);
-  assert.match(packetDetailSource, /required evidence:/);
-  assert.match(packetDetailSource, /stop lines:/);
-  assert.match(packetDetailSource, /rollback:/);
-  assert.match(packetDetailSource, /audit:/);
-  assert.match(packetDetailSource, /proposal type:/);
-  assert.match(packetDetailSource, /sensitivity:/);
-  assert.match(packetDetailSource, /contradiction:/);
-  assert.match(packetDetailSource, /write-back allowed:/);
-  assert.match(packetDetailSource, /write-back status:/);
-  assert.match(packetDetailSource, /guard classification:/);
-  assert.match(packetDetailSource, /expected binding:/);
-  assert.match(packetDetailSource, /actual binding:/);
-  assert.match(packetDetailSource, /primary risk:/);
-  assert.match(packetDetailSource, /stop line:/);
-  assert.match(packetDetailSource, /safe next option:/);
-  assert.match(packetDetailSource, /fixture event:/);
+  assert.match(packetDetailSource, /Required evidence/);
+  assert.match(packetDetailSource, /Stop lines/);
+  assert.match(packetDetailSource, /Rollback/);
+  assert.match(packetDetailSource, /Audit/);
+  assert.match(packetDetailSource, /Proposal type/);
+  assert.match(packetDetailSource, /Sensitivity/);
+  assert.match(packetDetailSource, /Contradiction/);
+  assert.match(packetDetailSource, /Write-back allowed/);
+  assert.match(packetDetailSource, /Write-back status/);
+  assert.match(packetDetailSource, /Action guard previews/);
+  assert.match(packetDetailSource, /Expected binding/);
+  assert.match(packetDetailSource, /Actual binding/);
+  assert.match(packetDetailSource, /Primary risk/);
+  assert.match(packetDetailSource, /Stop line/);
+  assert.match(packetDetailSource, /Safe next option/);
+  assert.match(packetDetailSource, /Recovery preview event/);
   assert.match(packetDetailSource, /Packet source boundaries/);
   assert.doesNotMatch(cockpitSource, /FixtureScenarioSelector|GoldenPathLifecycle|ActivePacketDrawer|RecoveryDrawerPanel|ActionGuardPanel|EvidenceDetailList|evaluateFixtureActionDecision/);
   assert.match(fixtureSource, /routeFork/);
@@ -540,7 +560,13 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(cockpitSource, /findTopAttentionPacket/);
   assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
   assert.match(fixtureSource, /Density \$\{ordinal\}:/);
-  assert.match(routeSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
+  assert.match(pipelinePacketLoaderSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
+  assert.match(pipelinePacketLoaderSource, /mergePipelinePackets/);
+  assert.match(fixtureSource, /projectSupervisorWorkPacketsToCockpitPackets/);
+  assert.match(fixtureSource, /safeProjectSupervisorWorkPacketToCockpitPacket/);
+  assert.match(fixtureSource, /supervisorReasonCodes/);
+  assert.match(fixtureSource, /fixtureKind:\s*"future-real-source"/);
+  assert.match(fixtureSource, /Supervisor Work Packet projection rendered/);
   const fixturePacketCount = (fixtureSource.match(/packetFixture\(\{/g) ?? []).length;
   const densityCloneCountMatch = fixtureSource.match(/Array\.from\(\{ length: (\d+) \}/);
   assert.ok(densityCloneCountMatch, "density fixture clone count should be explicit");
@@ -614,7 +640,7 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(fixtureSource, /PIPELINE_STATE_EVIDENCE_MATRIX_V0|PIPELINE_STATE_FIXTURE_CATALOG_V0/);
   assert.doesNotMatch(fixtureSource, /rawPrompt|rawCompletion|reasoningTrace|providerPayload|secretValue|credentialValue|credentialPayload|writeBackAllowed:\s*true/);
   assert.doesNotMatch(allPipelineSource, /rawPrompt|rawCompletion|reasoningTrace|providerPayload|secretValue|credentialValue|credentialPayload|memoryDump|fullRawHistory/);
-  assert.doesNotMatch(allPipelineSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(|EventSource|WebSocket|XMLHttpRequest|sendBeacon/);
+  assert.doesNotMatch(allPipelineSource, /getRunStatus|getWorkItems|fetch\s*\(|EventSource|WebSocket|XMLHttpRequest|sendBeacon/);
   assert.doesNotMatch(routeSource + "\n" + pipelineComponentSource, /11434\/v1\/chat\/completions|OllamaProviderAdapter|ollama_provider_adapter|model\s*discovery|endpoint\s*discovery/i);
   assert.doesNotMatch(
     allPipelineSource,
@@ -899,8 +925,8 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
   const allPipelineSource = `${routeSource}\n${fixtureSource}\n${pipelineComponentSource}\n${packetDetailSource}`;
 
   assert.match(packetDetailSource, /Memory proposals/);
-  assert.match(packetDetailSource, /packet\.memoryProposals\.map\(formatMemoryProposal\)/);
-  assert.match(packetDetailSource, /function formatMemoryProposal/);
+  assert.match(packetDetailSource, /MemoryProposalList/);
+  assert.match(packetDetailSource, /packet\.memoryProposals\.map\(\(proposal\)/);
 
   for (const visibleLabel of [
     "Packet id",

@@ -172,11 +172,11 @@ const canonicalMappingFixtures = [
 ];
 
 const sourceRefFixtures = [
-  { refId: "source:fresh", sourceType: "manual", label: "Fresh note", freshness: "fresh", accessState: "allowed", summaryOnly: true },
-  { refId: "source:stale", sourceType: "obsidian", label: "Stale note", freshness: "stale", accessState: "allowed", summaryOnly: true },
-  { refId: "source:missing", sourceType: "github", label: "Missing PR", freshness: "unknown", accessState: "missing", summaryOnly: true },
-  { refId: "source:excluded", sourceType: "llm_wiki", label: "Excluded wiki", freshness: "unknown", accessState: "excluded", summaryOnly: true },
-  { refId: "source:blocked", sourceType: "research", label: "Blocked source", freshness: "unknown", accessState: "blocked", summaryOnly: true }
+  { refId: "source:fresh", sourceType: "manual", label: "Fresh note", freshness: "fresh", accessState: "allowed", canonical: true, summaryOnly: true, blockedReason: null },
+  { refId: "source:stale", sourceType: "obsidian", label: "Stale note", freshness: "stale", accessState: "allowed", canonical: true, summaryOnly: true, blockedReason: null },
+  { refId: "source:missing", sourceType: "github", label: "Missing PR", freshness: "unknown", accessState: "missing", canonical: false, summaryOnly: true, blockedReason: "source unavailable" },
+  { refId: "source:excluded", sourceType: "llm_wiki", label: "Excluded wiki", freshness: "unknown", accessState: "excluded", canonical: false, summaryOnly: true, blockedReason: "derived source excluded from source-of-truth role" },
+  { refId: "source:blocked", sourceType: "research", label: "Blocked source", freshness: "unknown", accessState: "blocked", canonical: false, summaryOnly: true, blockedReason: "source boundary blocked" }
 ];
 
 const forbiddenFields = [

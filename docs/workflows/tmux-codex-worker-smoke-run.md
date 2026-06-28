@@ -49,6 +49,9 @@ Prefer Codex's normal sandbox and approval model for the first worker:
 KENDALL_NXT_ROOT="${KENDALL_NXT_ROOT:?Set KENDALL_NXT_ROOT to the Kendall_Nxt checkout path}"
 CODEX_WORKSPACES_ROOT="${CODEX_WORKSPACES_ROOT:?Set CODEX_WORKSPACES_ROOT to the Codex workspace state root}"
 
+[ -d "$KENDALL_NXT_ROOT" ] || { echo "Missing repo checkout: $KENDALL_NXT_ROOT" >&2; exit 1; }
+[ -d "$CODEX_WORKSPACES_ROOT" ] || { echo "Missing Codex state root: $CODEX_WORKSPACES_ROOT" >&2; exit 1; }
+
 tmux new-session -d -s codex-1 -c "$KENDALL_NXT_ROOT" \
   env CODEX_WORKSPACE_OWNER=codex-1 CODEX_THREAD_ID=tmux-codex-1 \
   codex --no-alt-screen \

@@ -510,7 +510,9 @@ class SourceRefV0View(BaseModel):
     pathOrUrl: str | None = None
     freshness: Literal["fresh", "stale", "unknown", "not_applicable"] = "unknown"
     accessState: Literal["allowed", "excluded", "missing", "blocked"] = "allowed"
+    canonical: bool = True
     summaryOnly: bool = True
+    blockedReason: str | None = None
 
 
 class EvidenceRefV0View(BaseModel):

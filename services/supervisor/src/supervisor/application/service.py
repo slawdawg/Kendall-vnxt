@@ -1307,13 +1307,16 @@ class SupervisorService:
         }
         verification_summary = import_metadata.get("verificationSummary")
         acceptance_criteria = import_metadata.get("acceptanceCriteria")
+        work_packet_source_refs = import_metadata.get("workPacketSourceRefs")
+        promotion_evidence_refs = import_metadata.get("promotionEvidenceRefs")
         if isinstance(verification_summary, str) and verification_summary:
             item_metadata["verificationSummary"] = verification_summary
         if isinstance(acceptance_criteria, str) and acceptance_criteria:
             item_metadata["acceptanceCriteriaSummary"] = acceptance_criteria
-        source_refs = import_metadata.get("workPacketSourceRefs")
-        if isinstance(source_refs, list):
-            item_metadata["workPacketSourceRefs"] = source_refs
+        if isinstance(work_packet_source_refs, list):
+            item_metadata["workPacketSourceRefs"] = work_packet_source_refs
+        if isinstance(promotion_evidence_refs, list):
+            item_metadata["promotionEvidenceRefs"] = [ref for ref in promotion_evidence_refs if isinstance(ref, str) and ref]
 
         item = WorkItem(
             title=candidate.title,
@@ -1332,8 +1335,10 @@ class SupervisorService:
         )
         session.add(item)
         await session.flush()
+        before_state = {"candidateStatus": candidate.status, "promotedWorkItemId": candidate.promoted_work_item_id}
         candidate.promoted_work_item_id = item.id
         candidate.updated_at = datetime.now(timezone.utc)
+        after_state = {"candidateStatus": candidate.status, "promotedWorkItemId": item.id}
         await self._record_event(
             session,
             item,
@@ -1346,6 +1351,21 @@ class SupervisorService:
                 "candidatePriority": candidate.priority,
                 "candidateSortOrder": candidate.sort_order,
                 "importMetadata": import_metadata,
+                "actor": {"type": "system", "id": None, "label": None},
+                "authority": {
+                    "operation": "candidate_work.promotion",
+                    "mode": "explicit_candidate_approval",
+                },
+                "before": before_state,
+                "after": after_state,
+                "evidenceRefs": item_metadata.get("promotionEvidenceRefs", []),
+                "workPacketSourceRefs": [
+                    raw_ref.get("refId")
+                    for raw_ref in work_packet_source_refs
+                    if isinstance(raw_ref, dict) and isinstance(raw_ref.get("refId"), str) and raw_ref.get("refId")
+                ]
+                if isinstance(work_packet_source_refs, list)
+                else [],
             },
         )
         await session.commit()
@@ -20601,7 +20621,9 @@ class SupervisorService:
                     pathOrUrl=candidate.sourceArtifactPath,
                     freshness="fresh",
                     accessState="allowed",
+                    canonical=True,
                     summaryOnly=True,
+                    blockedReason=None,
                 )
             )
             if item is None:
@@ -20618,7 +20640,9 @@ class SupervisorService:
                     pathOrUrl=path if isinstance(path, str) and path else None,
                     freshness="fresh",
                     accessState="allowed",
+                    canonical=True,
                     summaryOnly=True,
+                    blockedReason=None,
                 )
             )
             refs.extend(self._work_packet_metadata_source_refs(metadata))
@@ -20641,13 +20665,16 @@ class SupervisorService:
                         label=f"Blocked metadata source {index + 1}: malformed source ref",
                         freshness="unknown",
                         accessState="blocked",
+                        canonical=False,
                         summaryOnly=True,
+                        blockedReason="malformed source ref",
                     )
                 )
                 continue
             source_type = raw_ref.get("sourceType")
             access_state = raw_ref.get("accessState")
             freshness = raw_ref.get("freshness")
+            summary_only = raw_ref.get("summaryOnly")
             invalid_reasons: list[str] = []
             if source_type not in allowed_source_types:
                 invalid_reasons.append("invalid source type")
@@ -20655,9 +20682,14 @@ class SupervisorService:
                 invalid_reasons.append("invalid access state")
             if freshness not in allowed_freshness:
                 invalid_reasons.append("invalid freshness")
+            if summary_only is False:
+                invalid_reasons.append("unsafe non-summary source metadata")
+            elif summary_only is not None and summary_only is not True:
+                invalid_reasons.append("invalid summary-only flag")
             ref_id = raw_ref.get("refId")
             label = raw_ref.get("label")
             path_or_url = raw_ref.get("pathOrUrl")
+            canonical = raw_ref.get("canonical")
             safe_source_type = source_type if source_type in allowed_source_types else "manual"
             safe_freshness = freshness if freshness in allowed_freshness else "unknown"
             if access_state == "unavailable":
@@ -20671,6 +20703,14 @@ class SupervisorService:
             safe_label = label if isinstance(label, str) and label else f"Metadata source {index + 1}"
             if invalid_reasons:
                 safe_label = f"{safe_label} ({', '.join(invalid_reasons)})"
+            safe_blocked_reason = "; ".join(invalid_reasons) if invalid_reasons else None
+            if safe_access_state != "allowed" and not safe_blocked_reason:
+                safe_blocked_reason = {
+                    "excluded": "source ref is excluded from automated mutation",
+                    "missing": "source ref is missing or unavailable",
+                    "blocked": "source ref is blocked by source boundary",
+                }[safe_access_state]
+            safe_canonical = False if safe_source_type == "llm_wiki" else canonical if isinstance(canonical, bool) else True
             refs.append(
                 SourceRefV0View(
                     refId=ref_id if isinstance(ref_id, str) and ref_id else f"metadata_source:{index}",
@@ -20681,7 +20721,9 @@ class SupervisorService:
                     else None,
                     freshness=safe_freshness,
                     accessState=safe_access_state,
+                    canonical=safe_canonical,
                     summaryOnly=True,
+                    blockedReason=safe_blocked_reason,
                 )
             )
         return refs
