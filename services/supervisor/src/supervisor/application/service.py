@@ -196,6 +196,7 @@ from supervisor.api.schemas import (
     AlphaMemorySourceStatusV0View,
     SourceRefV0View,
     WorkPacketGateStateValidationV0View,
+    WorkPacketDeliveryEvidenceV0View,
     WorkPacketExecutionAttemptSummaryV0View,
     WorkPacketLaneCardV0View,
     WorkPacketRouteSummaryV0View,
@@ -20780,6 +20781,7 @@ class SupervisorService:
             humanGateActionRequests=[],
             laneCards=self._work_packet_lane_cards(attempts, routing_preview),
             memoryProposals=memory_proposal_views,
+            deliveryEvidence=self._work_packet_delivery_evidence(item_view, evidence_refs, artifact_refs),
             alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs, memory_proposal_views),
             gateStateValidation=self._work_packet_gate_state_validation(
                 stored_stage=stage,
@@ -20791,6 +20793,98 @@ class SupervisorService:
             ),
             reviewSummaries=self._work_packet_review_summaries(item_view, evidence_refs, artifact_refs),
             recoveryActions=self._work_packet_recovery_actions(status, evidence_refs),
+        )
+
+    def _work_packet_delivery_evidence(
+        self,
+        item: WorkItemView | None,
+        evidence_refs: list[EvidenceRefV0View],
+        artifact_refs: list[ArtifactRefV0View],
+    ) -> WorkPacketDeliveryEvidenceV0View | None:
+        if not item:
+            return None
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        delivery_readiness = item.deliveryReadiness
+        delivery_entries = [entry for entry in metadata.get("deliveryExecutionEvidence", []) if isinstance(entry, dict)]
+        latest_delivery = delivery_entries[-1] if delivery_entries else {}
+        cleanup_evidence = metadata.get("cleanupEvidence") if isinstance(metadata.get("cleanupEvidence"), dict) else {}
+        cleanup_target = cleanup_evidence.get("target")
+        if not isinstance(cleanup_target, str) or not cleanup_target:
+            cleanup_target = metadata.get("cleanupTargetPath")
+
+        pull_request_url = self._metadata_text(latest_delivery, "pullRequestUrl") or (
+            delivery_readiness.pullRequestUrl if delivery_readiness else None
+        )
+        ci_status = self._metadata_text(latest_delivery, "ciStatus") or (
+            delivery_readiness.ciStatus if delivery_readiness else None
+        )
+        merge_status = self._metadata_text(latest_delivery, "mergeStatus") or (
+            delivery_readiness.mergeStatus if delivery_readiness else None
+        )
+        has_readiness = bool(
+            delivery_readiness
+            and (
+                delivery_readiness.readyForApproval
+                or delivery_readiness.pullRequestUrl
+                or delivery_readiness.deliveryWaived
+                or delivery_readiness.ciStatus
+                or delivery_readiness.mergeStatus
+            )
+        )
+        has_cleanup = bool(cleanup_evidence or cleanup_target)
+        has_delivery = bool(latest_delivery or has_readiness or has_cleanup)
+        if not has_delivery:
+            return None
+
+        evidence_ref_ids = [
+            ref.refId
+            for ref in evidence_refs
+            if ref.refId.startswith("delivery:") or "delivery" in ref.label.lower()
+        ]
+        artifact_ref_ids = [
+            ref.refId
+            for ref in artifact_refs
+            if ref.refId.startswith("artifact:delivery:") or "delivery" in ref.label.lower()
+        ]
+        retained_evidence = [ref for ref in latest_delivery.get("artifactRefs", []) if isinstance(ref, str) and ref]
+        retained_evidence.extend(ref for ref in metadata.get("retainedEvidence", []) if isinstance(ref, str) and ref)
+
+        blocked_reasons: list[str] = []
+        if not pull_request_url:
+            blocked_reasons.append("pull-request-url-missing")
+        if ci_status not in {"passed", "waived"}:
+            blocked_reasons.append("ci-evidence-missing")
+        if merge_status not in {"ready", "merged", "waived"}:
+            blocked_reasons.append("merge-state-evidence-missing")
+        if has_cleanup and cleanup_evidence.get("dryRunStatus") != "passed":
+            blocked_reasons.append("cleanup-dry-run-missing")
+
+        action_id = latest_delivery.get("actionId")
+        if action_id not in {"pr", "merge"}:
+            action_id = "cleanup" if has_cleanup and not latest_delivery else None
+
+        return WorkPacketDeliveryEvidenceV0View(
+            evidenceId=f"delivery-evidence:{item.id}",
+            actionId=action_id,
+            status=str(latest_delivery.get("status") or ("ready" if delivery_readiness and delivery_readiness.readyForApproval else "not_recorded")),
+            targetBranch=self._metadata_text(latest_delivery, "targetBranch") or self._metadata_text(metadata, "executionBranch"),
+            baseBranch=self._metadata_text(latest_delivery, "baseBranch"),
+            pullRequestUrl=pull_request_url,
+            expectedHeadRevision=self._metadata_text(latest_delivery, "expectedHeadRevision"),
+            pullRequestHeadRevision=self._metadata_text(latest_delivery, "pullRequestHeadRevision"),
+            ciStatus=ci_status,
+            reviewState=self._metadata_text(latest_delivery, "reviewState"),
+            mergeStatus=merge_status,
+            mergeResult=self._metadata_text(latest_delivery, "mergeResult"),
+            cleanupDryRunStatus=cleanup_evidence.get("dryRunStatus"),
+            cleanupTarget=cleanup_target if isinstance(cleanup_target, str) and cleanup_target else None,
+            readyForApproval=bool(delivery_readiness.readyForApproval) if delivery_readiness else False,
+            hasDeliveryExecutionEvidence=bool(latest_delivery),
+            evidenceRefs=list(dict.fromkeys(evidence_ref_ids)),
+            artifactRefs=list(dict.fromkeys(artifact_ref_ids)),
+            retainedEvidence=list(dict.fromkeys(retained_evidence)),
+            blockedReasons=list(dict.fromkeys(blocked_reasons)),
+            recoveryPath=self._metadata_text(latest_delivery, "recoveryPath") or self._metadata_text(metadata, "cleanupRecoveryPath") or "inspect retained delivery evidence before retry, merge, or cleanup",
         )
 
     def _work_packet_id(self, candidate: CandidateWorkView | None, item: WorkItemView | None) -> str:

@@ -24,6 +24,7 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
     "HumanGateActionRequestV0",
     "HumanGateActionRequestStatusV0",
     "WorkPacketExecutionAttemptSummaryV0",
+    "WorkPacketDeliveryEvidenceV0",
     "WorkPacketLaneCardV0",
     "MODEL_ROLES_V0",
     "MODEL_ROLE_POLICIES_V0",
@@ -122,6 +123,11 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /backupCreated:\s*false;/);
   assert.match(workPacketSource, /durableWriteAllowed:\s*false;/);
   assert.match(workPacketSource, /executionAttempts:\s*WorkPacketExecutionAttemptSummaryV0\[\];/);
+  assert.match(workPacketSource, /deliveryEvidence\?:\s*WorkPacketDeliveryEvidenceV0 \| null;/);
+  assert.match(workPacketSource, /deliveryRailsGrantAuthority:\s*false;/);
+  assert.match(workPacketSource, /remoteMutationApproved:\s*false;/);
+  assert.match(workPacketSource, /mergeApproved:\s*false;/);
+  assert.match(workPacketSource, /cleanupApproved:\s*false;/);
   assert.match(workPacketSource, /export interface WorkPacketStageTransitionEventV0/);
   assert.match(workPacketSource, /transitionEvents:\s*WorkPacketStageTransitionEventV0\[\];/);
   assert.match(workPacketSource, /durable:\s*boolean;/);

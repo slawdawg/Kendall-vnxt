@@ -238,6 +238,12 @@ test("canonical Work Packet fixtures cover refs, memory proposals, and recovery 
     if (fixture.input.hasDeliveryEvidence) {
       assert.ok(packet.evidenceRefs.some((ref) => ref.evidenceType === "gate"), `${fixture.name}: missing delivery evidence`);
       assert.ok(packet.artifactRefs.some((ref) => ref.artifactType === "pull_request"), `${fixture.name}: missing delivery artifact`);
+      assert.equal(packet.deliveryEvidence.mode, "metadata_only", fixture.name);
+      assert.equal(packet.deliveryEvidence.deliveryRailsGrantAuthority, false, fixture.name);
+      assert.equal(packet.deliveryEvidence.remoteMutationApproved, false, fixture.name);
+      assert.equal(packet.deliveryEvidence.mergeApproved, false, fixture.name);
+      assert.equal(packet.deliveryEvidence.cleanupApproved, false, fixture.name);
+      assert.deepEqual(validateWorkPacketFixtureBoundary(packet.deliveryEvidence), [], fixture.name);
     }
     if (fixture.input.memoryProposalStatus) {
       assert.ok(packet.memoryProposals.length > 0, `${fixture.name}: missing memory proposal`);
@@ -429,6 +435,33 @@ function buildWorkPacketFixture(name, input, stage) {
       artifactRefs: [artifactRefs[0].refId]
     }] : [],
     memoryProposals,
+    deliveryEvidence: input.hasDeliveryEvidence ? {
+      evidenceId: `delivery-evidence:fixture:${slug}`,
+      mode: "metadata_only",
+      actionId: "pr",
+      status: "ready",
+      targetBranch: `codex/${slug}`,
+      baseBranch: "dev",
+      pullRequestUrl: "https://github.com/example/repo/pull/42",
+      pullRequestHeadRevision: "fixture-head",
+      ciStatus: "passed",
+      reviewState: "clean",
+      mergeStatus: "ready",
+      cleanupDryRunStatus: "not_recorded",
+      cleanupTarget: null,
+      readyForApproval: true,
+      hasDeliveryExecutionEvidence: true,
+      evidenceRefs: [`delivery:fixture:${slug}`],
+      artifactRefs: [`artifact:delivery:${slug}:pull_request`],
+      retainedEvidence: [`artifact:delivery:${slug}:pull_request`],
+      blockedReasons: [],
+      recoveryPath: "Inspect retained metadata-only delivery evidence before retry, merge, or cleanup.",
+      deliveryRailsGrantAuthority: false,
+      rawPayloadRetained: false,
+      remoteMutationApproved: false,
+      mergeApproved: false,
+      cleanupApproved: false
+    } : null,
     reviewSummaries: [{
       reviewer: "kendall",
       status: stage.status === "complete" ? "complete" : "pending",
