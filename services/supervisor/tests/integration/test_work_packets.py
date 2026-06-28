@@ -1485,6 +1485,101 @@ def test_work_item_accepts_proof_derived_dashboard_proposal_payload(tmp_path, mo
         assert packet_proposal["writeBackAllowed"] is False
 
 
+def test_work_item_routes_user_facing_documentation_proposal_as_draft_plan_only(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-documentation-proposal.db") as client:
+        work_item = _create_work_item(client, title="User-facing documentation proposal")
+        payload = {
+            "proposalId": "doc-proposal-20260628",
+            "label": "User-facing documentation proposal",
+            "status": "pending_human_approval",
+            "summary": "Prepare an operator-reviewed docs draft plan from approved packet evidence.",
+            "sourceRefs": ["obsidian:00 Inbox/source-summary.md", "llm_wiki:derived/source-summary"],
+            "evidenceRefs": ["evidence:documentation-draft-plan:source-summary"],
+            "targetVaultPath": "01 Dashboard Queue/Documentation Drafts/user-facing-documentation-proposal-doc-proposal-20260628.md",
+            "targetVaultFolder": "01 Dashboard Queue/Documentation Drafts",
+            "proposalType": "user_facing_documentation",
+            "suggestedContentSummary": "Create a user-facing source summary draft plan for operator review.",
+            "patchSummary": "Draft-plan evidence only; no canonical Obsidian note or user-facing docs page written.",
+            "sensitivity": "medium",
+            "freshness": "fresh",
+            "contradictionStatus": "none",
+            "confidence": "medium",
+            "operatorAction": "defer",
+            "decisionNeededContext": "Operator must approve this draft plan before any future documentation write-back; canonical Obsidian notes remain human-owned.",
+            "backupRecoveryPath": "No mutation performed. Discard this proposal evidence and regenerate it from source refs if stale.",
+            "writeBackStatus": "review_gated",
+            "writeBackAllowed": False,
+        }
+
+        create_response = client.post(f"/work-items/{work_item['id']}/memory-proposals", json=payload)
+
+        assert create_response.status_code == 200
+        created = create_response.json()["data"]
+        assert created["proposalType"] == "user_facing_documentation"
+        assert created["targetVaultFolder"] == "01 Dashboard Queue/Documentation Drafts"
+        assert created["sourceRefs"] == payload["sourceRefs"]
+        assert created["evidenceRefs"] == payload["evidenceRefs"]
+        assert created["writeBackStatus"] == "review_gated"
+        assert created["writeBackAllowed"] is False
+        assert "rawContent" not in created
+
+        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        assert packet["currentStage"] == "learn"
+        assert packet["currentOwner"] == "memory_review"
+        assert packet["status"] == "waiting"
+        proposal = packet["memoryProposals"][0]
+        assert proposal["proposalId"] == payload["proposalId"]
+        assert proposal["proposalType"] == "user_facing_documentation"
+        assert proposal["targetVaultFolder"] == "01 Dashboard Queue/Documentation Drafts"
+        assert proposal["writeBackAllowed"] is False
+        assert "canonical Obsidian notes remain human-owned" in proposal["decisionNeededContext"]
+
+
+def test_user_facing_documentation_proposal_rejects_unsafe_targets_and_missing_evidence(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "work-packet-documentation-proposal-rejected.db") as client:
+        work_item = _create_work_item(client, title="Unsafe user-facing documentation proposal")
+        base_payload = {
+            "proposalId": "doc-proposal-invalid",
+            "label": "User-facing documentation proposal",
+            "status": "pending_human_approval",
+            "summary": "Prepare an operator-reviewed docs draft plan from approved packet evidence.",
+            "sourceRefs": ["obsidian:00 Inbox/source-summary.md", "llm_wiki:derived/source-summary"],
+            "evidenceRefs": ["evidence:documentation-draft-plan:source-summary"],
+            "targetVaultPath": "01 Dashboard Queue/Documentation Drafts/user-facing-documentation-proposal-doc-proposal-invalid.md",
+            "targetVaultFolder": "01 Dashboard Queue/Documentation Drafts",
+            "proposalType": "user_facing_documentation",
+            "suggestedContentSummary": "Create a user-facing source summary draft plan for operator review.",
+            "patchSummary": "Draft-plan evidence only; no canonical Obsidian note or user-facing docs page written.",
+            "sensitivity": "medium",
+            "freshness": "fresh",
+            "contradictionStatus": "none",
+            "confidence": "medium",
+            "operatorAction": "defer",
+            "decisionNeededContext": "Operator must approve this draft plan before any future documentation write-back.",
+            "backupRecoveryPath": "No mutation performed. Discard this proposal evidence and regenerate it from source refs if stale.",
+            "writeBackStatus": "review_gated",
+            "writeBackAllowed": False,
+        }
+
+        unsafe_cases = [
+            ("canonical-target", {"targetVaultFolder": "Obsidian/Kendall_Nxt/Docs"}),
+            ("approved-too-early", {"status": "approved"}),
+            ("future-writeback", {"writeBackStatus": "approved_for_future"}),
+            ("missing-llm-wiki", {"sourceRefs": ["obsidian:00 Inbox/source-summary.md"]}),
+            ("missing-documentation-evidence", {"evidenceRefs": ["evidence:read-only-proof:source-summary"]}),
+            ("unsafe-path", {"targetVaultPath": "../Documentation Drafts/user-facing-documentation-proposal.md"}),
+        ]
+
+        for suffix, patch in unsafe_cases:
+            payload = {**base_payload, **patch, "proposalId": f"doc-proposal-invalid-{suffix}"}
+            response = client.post(f"/work-items/{work_item['id']}/memory-proposals", json=payload)
+            assert response.status_code == 409
+            assert response.json()["detail"]["error"]["code"] == "memory_proposal_conflict"
+
+        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        assert packet["memoryProposals"] == []
+
+
 def test_memory_proposal_schema_is_repaired_for_existing_sqlite_database(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-memory-proposal-legacy-schema.db"
     db_path = _db_path(tmp_path, db_name)

@@ -1172,6 +1172,26 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
     sourceTrustSummary: "Obsidian is excluded from automatic writes and LLM-Wiki remains derived-only.",
   }),
   packetFixture({
+    packetId: "fixture:documentation-proposal",
+    title: "Route user-facing documentation proposal",
+    requestedOutcome: "Prepare a reviewable user-facing documentation draft plan without mutating canonical Obsidian memory.",
+    currentStage: "learn",
+    currentOwner: "memory_review",
+    status: "waiting",
+    riskLevel: "medium",
+    priority: "normal",
+    fixtureId: "documentation_proposal_pending_approval",
+    matrixRowIds: ["memory.pending_human_approval", "documentation.user_facing_proposal_pending_human_approval"],
+    fixtureKind: "synthetic",
+    summary: "Learn fixture routes a documentation draft-plan proposal through packet evidence before any human-owned write-back.",
+    nextAction: "Review documentation proposal",
+    confidenceLabel: "Human review",
+    freshnessLabel: "fresh",
+    sourceTrustState: "excluded",
+    sourceTrustStates: ["excluded", "derived-only"],
+    sourceTrustSummary: "User-facing documentation remains proposal-only; Obsidian stays human-owned and LLM-Wiki remains derived-only.",
+  }),
+  packetFixture({
     packetId: "fixture:llm-wiki-rebuild-preview",
     title: "Preview LLM-Wiki rebuild",
     requestedOutcome: "Show the metadata-only rebuild preview from approved Obsidian memory.",
@@ -1917,7 +1937,11 @@ function packetFixture(input: {
       blockedReason: "stale research source must be refreshed before promotion",
     });
   }
-  if (input.fixtureId === "obsidian_proposal_pending_approval" || input.fixtureId === "corrupted_incomplete_aggregate") {
+  if (
+    input.fixtureId === "obsidian_proposal_pending_approval" ||
+    input.fixtureId === "documentation_proposal_pending_approval" ||
+    input.fixtureId === "corrupted_incomplete_aggregate"
+  ) {
     sourceRefs.push(
       {
         refId: `${input.packetId}:source:obsidian-human-owned`,
@@ -2123,12 +2147,16 @@ function packetFixture(input: {
   const recoveryFixtureEvents = buildRecoveryFixtureEvents(input, recoveryActions, humanGateActions);
   const actionGuardFixtures = buildActionGuardFixtures(input, humanGateActions, humanGateFixtureEvents, recoveryActions, recoveryFixtureEvents);
   const humanGateActionRequests = buildHumanGateActionRequests(input.packetId, humanGateActions);
+  const packetSourceRefs = sourceRefs.map((ref) => ref.refId);
+  const fixtureEvidenceRef = `${input.packetId}:evidence:fixture`;
   const memoryProposals = input.fixtureId === "obsidian_proposal_pending_approval"
-    ? buildMemoryProposalFixtures(input.packetId, sourceRefs.map((ref) => ref.refId), `${input.packetId}:evidence:fixture`)
+    ? buildMemoryProposalFixtures(input.packetId, packetSourceRefs, fixtureEvidenceRef)
+    : input.fixtureId === "documentation_proposal_pending_approval"
+      ? [documentationProposalFixture(input.packetId, packetSourceRefs, fixtureEvidenceRef)]
     : input.packetId === "fixture:llm-wiki-rebuild-preview"
-      ? [llmWikiRebuildReadyMemoryProposal(input.packetId, sourceRefs.map((ref) => ref.refId), `${input.packetId}:evidence:fixture`)]
+      ? [llmWikiRebuildReadyMemoryProposal(input.packetId, packetSourceRefs, fixtureEvidenceRef)]
       : input.fixtureId === "corrupted_incomplete_aggregate"
-        ? [memoryProposalFixture("blocked", input.packetId, sourceRefs.map((ref) => ref.refId), `${input.packetId}:evidence:fixture`)]
+        ? [memoryProposalFixture("blocked", input.packetId, packetSourceRefs, fixtureEvidenceRef)]
         : [];
   const alphaMemorySourceStatus = buildAlphaMemorySourceStatus(input.packetId, sourceRefs, evidenceRefs, memoryProposals);
 
@@ -2569,6 +2597,35 @@ function llmWikiRebuildReadyMemoryProposal(packetId: string, sourceRefs: string[
     writeBackAllowed: false,
   };
 }
+
+function documentationProposalFixture(packetId: string, sourceRefs: string[], evidenceRef: string): MemoryProposalV0 {
+  const proposalSourceRefs = Array.from(new Set(memoryProposalSourceRefs(packetId, sourceRefs))) as MemoryProposalV0["sourceRefs"];
+  return {
+    proposalId: `${packetId}:memory:proposal:user-facing-documentation`,
+    packetId,
+    label: "User-facing documentation proposal pending review",
+    status: "pending_human_approval",
+    summary: "Review-gated documentation proposal for an operator-facing draft plan; canonical Obsidian remains human-owned.",
+    sourceRefs: proposalSourceRefs,
+    evidenceRefs: [evidenceRef],
+    targetRef: null,
+    targetVaultPath: "01 Dashboard Queue/Documentation Drafts/user-facing-documentation-proposal.md",
+    targetVaultFolder: "01 Dashboard Queue/Documentation Drafts",
+    proposalType: "user_facing_documentation",
+    suggestedContentSummary: "Prepare a source summary and draft-plan outline for operator review before any user-facing documentation update.",
+    patchSummary: "Draft-plan evidence only; no canonical Obsidian note or user-facing documentation page is written.",
+    sensitivity: "medium",
+    freshness: "fresh",
+    contradictionStatus: "none",
+    confidence: "medium",
+    operatorAction: "defer",
+    decisionNeededContext: "Operator must approve the draft plan before any future documentation write-back; canonical Obsidian memory remains human-owned.",
+    backupRecoveryPath: "Discard this proposal evidence and regenerate it from packet source refs; no vault or documentation page mutation occurred.",
+    writeBackStatus: "review_gated",
+    writeBackAllowed: false,
+  };
+}
+
 function memoryProposalFixture(
   status: MemoryProposalV0["status"],
   packetId: string,

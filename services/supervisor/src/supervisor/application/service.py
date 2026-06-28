@@ -495,6 +495,7 @@ class SupervisorService:
         )
         if existing_result.scalar_one_or_none():
             raise ValueError(f"Memory proposal already exists for this Work Item: {payload.proposalId}")
+        self._validate_documentation_memory_proposal_payload(payload)
         proposal = MemoryProposal(
             work_item_id=work_item_id,
             proposal_id=payload.proposalId,
@@ -538,6 +539,39 @@ class SupervisorService:
         await session.refresh(proposal)
         await self._publish_item(item)
         return proposal
+
+    def _validate_documentation_memory_proposal_payload(self, payload: MemoryProposalCreateRequest) -> None:
+        if payload.proposalType != "user_facing_documentation":
+            return
+        if payload.status != "pending_human_approval":
+            raise ValueError("User-facing documentation proposals must start pending human approval.")
+        if payload.writeBackStatus != "review_gated":
+            raise ValueError("User-facing documentation proposals must remain review gated.")
+        if payload.writeBackAllowed is not False:
+            raise ValueError("User-facing documentation proposals cannot allow write-back.")
+        if payload.targetRef is not None:
+            raise ValueError("User-facing documentation proposals must not target a canonical source ref.")
+        draft_folder = payload.targetVaultFolder.strip().strip("/")
+        if draft_folder != "01 Dashboard Queue/Documentation Drafts":
+            raise ValueError("User-facing documentation proposals must target the documentation draft queue.")
+        for target in [payload.targetVaultPath, payload.targetVaultFolder]:
+            if target is None:
+                continue
+            normalized = target.strip()
+            if (
+                normalized.startswith(("/", "~", "\\\\"))
+                or ".." in normalized.replace("\\", "/").split("/")
+                or ".obsidian" in normalized.lower()
+                or "secret" in normalized.lower()
+                or "credential" in normalized.lower()
+            ):
+                raise ValueError("User-facing documentation proposal target path is unsafe.")
+        if not any(ref.startswith("obsidian:") for ref in payload.sourceRefs):
+            raise ValueError("User-facing documentation proposals must cite Obsidian source metadata.")
+        if not any(ref.startswith("llm_wiki:") or "llm-wiki" in ref for ref in payload.sourceRefs):
+            raise ValueError("User-facing documentation proposals must cite derived LLM-Wiki context.")
+        if not any("documentation" in ref for ref in payload.evidenceRefs):
+            raise ValueError("User-facing documentation proposals must cite documentation draft-plan evidence.")
 
     async def update_memory_proposal(
         self,

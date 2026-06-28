@@ -479,7 +479,8 @@ export type MemoryProposalTypeV0 =
   | "link_notes"
   | "tag_update"
   | "decision_record"
-  | "error_book_entry";
+  | "error_book_entry"
+  | "user_facing_documentation";
 
 export type MemoryProposalSensitivityV0 = "low" | "medium" | "high";
 export type MemoryProposalFreshnessV0 = "fresh" | "stale" | "conflicting" | "unknown";
