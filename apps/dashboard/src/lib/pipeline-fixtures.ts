@@ -23,7 +23,9 @@ export type PipelineFixtureKind =
   | "local-readiness"
   | "future-real-source";
 
-export type PipelineFixturePacket = WorkPacketV0View & {
+export type PipelineReadPacketContractV0 = WorkPacketV0View;
+
+export type PipelineFixturePacket = PipelineReadPacketContractV0 & {
   fixtureId: string;
   fixtureKind: PipelineFixtureKind;
   fixtureLabel: string;
