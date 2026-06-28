@@ -634,6 +634,43 @@ export interface WorkPacketExecutionAttemptSummaryV0 {
   artifactRefs: WorkPacketRefIdV0[];
 }
 
+export type GateReplayRefStateV0 =
+  | "allowed"
+  | "blocked"
+  | "missing"
+  | "excluded"
+  | "redacted"
+  | "unsupported"
+  | "metadata_only";
+
+export interface GateReplayRefStateV0View {
+  refId: string;
+  refType: "source" | "evidence" | "event";
+  state: GateReplayRefStateV0;
+  label: string;
+  blockingReason?: string | null;
+}
+
+export interface WorkPacketGateStateValidationV0 {
+  status: "matched" | "blocked" | "preview_only";
+  storedStage: PipelineStage;
+  derivedStage?: PipelineStage | null;
+  storedOwner: WorkPacketOwner;
+  derivedOwner?: WorkPacketOwner | null;
+  storedStatus: WorkPacketStatus;
+  derivedStatus?: WorkPacketStatus | null;
+  eventCount: number;
+  latestEventType?: string | null;
+  replayedEventTypes: string[];
+  mismatchReasons: string[];
+  blockedReasons: string[];
+  refStates: GateReplayRefStateV0View[];
+  readOnly: true;
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  workerLaunchAllowed: false;
+}
+
 export interface WorkPacketV0View {
   packetId: string;
   title: string;
@@ -656,6 +693,7 @@ export interface WorkPacketV0View {
   laneCards: WorkPacketLaneCardV0[];
   memoryProposals: MemoryProposalV0[];
   alphaMemorySourceStatus?: AlphaMemorySourceStatusV0 | null;
+  gateStateValidation?: WorkPacketGateStateValidationV0 | null;
   reviewSummaries: WorkPacketReviewSummaryV0[];
   recoveryActions: RecoveryActionV0[];
 }
