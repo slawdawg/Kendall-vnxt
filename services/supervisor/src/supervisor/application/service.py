@@ -1316,7 +1316,7 @@ class SupervisorService:
                 "candidatePriority": candidate.priority,
                 "candidateSortOrder": candidate.sort_order,
                 "importMetadata": import_metadata,
-                "actor": {"type": "operator", "id": None, "label": "Operator"},
+                "actor": {"type": "system", "id": None, "label": None},
                 "authority": {
                     "operation": "candidate_work.promotion",
                     "mode": "explicit_candidate_approval",
@@ -1332,8 +1332,6 @@ class SupervisorService:
                 if isinstance(work_packet_source_refs, list)
                 else [],
             },
-            actor_type="operator",
-            actor_label="Operator",
         )
         await session.commit()
         await session.refresh(candidate)
@@ -20667,6 +20665,14 @@ class SupervisorService:
             safe_label = label if isinstance(label, str) and label else f"Metadata source {index + 1}"
             if invalid_reasons:
                 safe_label = f"{safe_label} ({', '.join(invalid_reasons)})"
+            safe_blocked_reason = "; ".join(invalid_reasons) if invalid_reasons else None
+            if safe_access_state != "allowed" and not safe_blocked_reason:
+                safe_blocked_reason = {
+                    "excluded": "source ref is excluded from automated mutation",
+                    "missing": "source ref is missing or unavailable",
+                    "blocked": "source ref is blocked by source boundary",
+                }[safe_access_state]
+            safe_canonical = False if safe_source_type == "llm_wiki" else canonical if isinstance(canonical, bool) else True
             refs.append(
                 SourceRefV0View(
                     refId=ref_id if isinstance(ref_id, str) and ref_id else f"metadata_source:{index}",
@@ -20677,9 +20683,9 @@ class SupervisorService:
                     else None,
                     freshness=safe_freshness,
                     accessState=safe_access_state,
-                    canonical=canonical if isinstance(canonical, bool) else safe_source_type != "llm_wiki",
+                    canonical=safe_canonical,
                     summaryOnly=True,
-                    blockedReason="; ".join(invalid_reasons) if invalid_reasons else None,
+                    blockedReason=safe_blocked_reason,
                 )
             )
         return refs

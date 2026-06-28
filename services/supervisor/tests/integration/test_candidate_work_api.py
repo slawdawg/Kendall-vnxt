@@ -270,6 +270,26 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
                             "canonical": False,
                             "summaryOnly": False,
                         },
+                        {
+                            "refId": "llm-wiki:derived-summary",
+                            "sourceType": "llm_wiki",
+                            "label": "Derived LLM-Wiki summary",
+                            "pathOrUrl": "llm-wiki/derived-summary.md",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                            "canonical": True,
+                            "summaryOnly": True,
+                        },
+                        {
+                            "refId": "github:missing-pr",
+                            "sourceType": "github",
+                            "label": "Missing GitHub PR",
+                            "pathOrUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/0",
+                            "freshness": "unknown",
+                            "accessState": "missing",
+                            "canonical": False,
+                            "summaryOnly": True,
+                        },
                     ],
                     "promotionEvidenceRefs": ["candidate-import:source-ref-check"],
                 },
@@ -307,12 +327,23 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
         assert blocked_ref["summaryOnly"] is True
         assert blocked_ref["pathOrUrl"] is None
         assert blocked_ref["blockedReason"] == "invalid source type; invalid freshness; unsafe non-summary source metadata"
+        llm_wiki_ref = refs_by_id["llm-wiki:derived-summary"]
+        assert llm_wiki_ref["accessState"] == "allowed"
+        assert llm_wiki_ref["canonical"] is False
+        assert llm_wiki_ref["summaryOnly"] is True
+        assert llm_wiki_ref["blockedReason"] is None
+        missing_ref = refs_by_id["github:missing-pr"]
+        assert missing_ref["sourceType"] == "github"
+        assert missing_ref["accessState"] == "missing"
+        assert missing_ref["canonical"] is False
+        assert missing_ref["pathOrUrl"] is None
+        assert missing_ref["blockedReason"] == "source ref is missing or unavailable"
 
         events_response = client.get(f"/work-items/{work_item_id}/events")
         assert events_response.status_code == 200
         promotion_event = next(event for event in events_response.json()["data"] if event["eventType"] == "candidate_work.promoted")
-        assert promotion_event["actorType"] == "operator"
-        assert promotion_event["payload"]["actor"] == {"type": "operator", "id": None, "label": "Operator"}
+        assert promotion_event["actorType"] == "system"
+        assert promotion_event["payload"]["actor"] == {"type": "system", "id": None, "label": None}
         assert promotion_event["payload"]["authority"] == {
             "operation": "candidate_work.promotion",
             "mode": "explicit_candidate_approval",
@@ -324,6 +355,8 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
         assert promotion_event["payload"]["workPacketSourceRefs"] == [
             "obsidian:00-inbox/customer-signal",
             "source:malformed",
+            "llm-wiki:derived-summary",
+            "github:missing-pr",
         ]
 
 
