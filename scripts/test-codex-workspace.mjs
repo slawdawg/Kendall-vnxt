@@ -2785,6 +2785,7 @@ try {
     const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-apply-workspace-"));
     const worktreePath = mkdtempSync(join(tmpdir(), "codex-dispatch-worktree-"));
     let selectedBmadLane = null;
+    let selectedBmadLaneExistedBefore = false;
     try {
       runGit(worktreePath, ["init", "-q"]);
       runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
@@ -2833,6 +2834,7 @@ try {
         )}\n`,
       );
       const before = readFileSync(manifestPath, "utf8");
+      selectedBmadLaneExistedBefore = branchExists(rootDir, selectedBmadLane.branch);
 
       const result = run([
         "dispatch-next",
@@ -2861,7 +2863,7 @@ try {
         encoding: "utf8",
         stdio: "pipe",
       });
-      if (selectedBmadLane) {
+      if (selectedBmadLane && !selectedBmadLaneExistedBefore) {
         spawnSync("git", ["branch", "-D", selectedBmadLane.branch], {
           cwd: rootDir,
           encoding: "utf8",
@@ -3881,6 +3883,7 @@ function run(args) {
     encoding: "utf8",
     env: {
       ...process.env,
+      CODEX_WORKSPACE_TEST_MODE: "1",
       CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES: "1",
     },
     stdio: "pipe",
