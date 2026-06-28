@@ -1839,6 +1839,7 @@ function finishPr(argv) {
         cwd: manifest.worktree_path,
       }).stdout.trim();
       appendTaskEvent(manifest, "committed", manifest.last_commit);
+      worktreeStatus = parseStatus(manifest.worktree_path);
     }
 
     runChecked("git", ["push", "-u", "origin", manifest.branch], { cwd: manifest.worktree_path });
@@ -1870,8 +1871,23 @@ function finishPr(argv) {
       );
       manifest.pr_url = result.stdout.trim().split(/\r?\n/).at(-1);
       manifest.pr_number = prNumberFromUrl(manifest.pr_url);
+      if (!manifest.pr_url || !manifest.pr_number) {
+        throw new Error("Could not parse created PR URL from GitHub CLI output.");
+      }
     }
 
+    manifest.pr_delivery_evidence = shapePrDeliveryEvidence(manifest, {
+      existingPr,
+      prTitle,
+      prBody,
+      verifyCommand,
+      noVerify: Boolean(options.noVerify),
+    });
+    manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, antiChurn.manifestRecord, {
+      worktreeStatus,
+      prDeliveryEvidence: manifest.pr_delivery_evidence,
+    });
+    appendTaskEvent(manifest, "pr_delivery_evidence_recorded", manifest.pr_url || manifest.branch);
     manifest.status = "pr_open";
     manifest.updated_at = new Date().toISOString();
     appendTaskEvent(manifest, "pr_open", manifest.pr_url || manifest.branch);
@@ -2164,6 +2180,58 @@ function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
     worktree_path: manifest.worktree_path,
     updated_at: antiChurnRecord.updated_at || new Date().toISOString(),
     anti_churn_finalization: shapeAntiChurnEvidencePacket(antiChurnRecord, options),
+    pr_delivery: options.prDeliveryEvidence || null,
+  };
+}
+
+function shapePrDeliveryEvidence(manifest, options = {}) {
+  const prBody = typeof options.prBody === "string" ? options.prBody : "";
+  const verifyCommand = Array.isArray(options.verifyCommand) ? options.verifyCommand.filter(Boolean).join(" ") : "";
+  return {
+    schemaVersion: 1,
+    operation: options.existingPr ? "update-existing-pr-reference" : "create-pr",
+    status: "recorded",
+    authorityProfile: "standard-delivery",
+    taskId: manifest.task_id,
+    branch: manifest.pr_delivery_branch || manifest.branch,
+    baseBranch: manifest.pr_delivery_base_branch || manifest.base_branch || null,
+    headRevision: manifest.pr_delivery_head_sha || null,
+    pushedAt: manifest.pr_delivery_pushed_at || null,
+    pullRequestUrl: manifest.pr_url || null,
+    pullRequestNumber: manifest.pr_number || null,
+    pullRequestTitle: typeof options.prTitle === "string" ? options.prTitle : null,
+    pullRequestBodyLineCount: prBody ? prBody.split(/\r?\n/).length : 0,
+    pullRequestBodyCharCount: prBody.length,
+    verificationGate: verifyCommand
+      ? {
+          status: "passed",
+          command: verifyCommand,
+          verifiedAt: manifest.last_verified_at || null,
+        }
+      : {
+          status: "not-run",
+          decision: options.noVerify ? "explicit-no-verify" : "no-verification-profile",
+          recordedAt: new Date().toISOString(),
+        },
+    requiredGates: [
+      "clean worktree or intentionally staged changes",
+      "configured verification command or explicitly recorded no-verify decision",
+      "anti-churn finalization before delivery mutation",
+      "safe branch",
+      "expected base branch",
+      "push succeeded before PR evidence is recorded",
+    ],
+    stopLines: [
+      "no provider/model calls",
+      "no paid usage",
+      "no worker launch",
+      "no credential or sensitive-material retention",
+      "no merge or cleanup from finish-pr",
+      "no failed-check bypass",
+      "no review-thread mutation",
+    ],
+    recoveryPath: "If push or PR creation/update fails, leave the local branch and manifest in place, preserve command output, and rerun finish-pr after fixing the gate.",
+    metadataOnly: true,
   };
 }
 

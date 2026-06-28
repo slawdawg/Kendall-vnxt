@@ -710,6 +710,47 @@ try {
     }
   });
 
+  test("finish-pr records PR creation and update as gated metadata-only evidence", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const finishPr = source.match(/function finishPr[\s\S]*?function runAntiChurnFinalization/);
+    const evidenceBlock = source.match(/function shapePrDeliveryEvidence[\s\S]*?function shapeAntiChurnEvidencePacket/);
+    assert(finishPr, "finishPr source not found");
+    assert(evidenceBlock, "PR delivery evidence helper not found");
+    assert(finishPr[0].includes("manifest.pr_delivery_evidence = shapePrDeliveryEvidence"), "finish-pr must shape PR delivery evidence");
+    assert(finishPr[0].includes("prDeliveryEvidence: manifest.pr_delivery_evidence"), "finish-pr must attach PR evidence to the lane evidence packet");
+    assert(
+      finishPr[0].indexOf("runChecked(\"git\", [\"push\"") < finishPr[0].indexOf("manifest.pr_delivery_evidence = shapePrDeliveryEvidence"),
+      "PR delivery evidence must be recorded only after a successful push",
+    );
+    for (const expected of [
+      "operation",
+      "create-pr",
+      "update-existing-pr-reference",
+      "authorityProfile",
+      "standard-delivery",
+      "headRevision",
+      "pullRequestUrl",
+      "pullRequestNumber",
+      "pullRequestTitle",
+      "pullRequestBodyLineCount",
+      "pullRequestBodyCharCount",
+      "verificationGate",
+      "explicit-no-verify",
+      "no-verification-profile",
+      "requiredGates",
+      "push succeeded before PR evidence is recorded",
+      "stopLines",
+      "no merge or cleanup from finish-pr",
+      "metadataOnly",
+      "recoveryPath",
+    ]) {
+      assert(evidenceBlock[0].includes(expected), `PR delivery evidence missing ${expected}`);
+    }
+    for (const forbidden of ["providerPayload", "rawPrompt", "rawCompletion", "reasoningTrace"]) {
+      assert(!evidenceBlock[0].includes(forbidden), `PR delivery evidence must not retain ${forbidden}`);
+    }
+  });
+
   test("anti-churn evidence packet keeps proposals local and source edits recoverable", () => {
     const source = readFileSync(scriptPath, "utf8");
     const proposalBlock = source.match(/function shapeProposalEvidence[\s\S]*?function shapeNoOpReasonEvidence/);
@@ -4161,10 +4202,70 @@ try {
       assert(manifest.status === "pr_open", `manifest status is ${manifest.status}`);
       assert(manifest.last_commit === expectedHead, `manifest last_commit is ${manifest.last_commit}`);
       assert(manifest.pr_url === "https://example.test/pull/456", `manifest pr_url is ${manifest.pr_url}`);
+      assert(manifest.pr_delivery_evidence?.operation === "create-pr", "manifest missing create-pr delivery evidence");
+      assert(manifest.pr_delivery_evidence.headRevision, "manifest PR delivery evidence missing head revision");
+      assert(manifest.pr_delivery_evidence.pullRequestUrl === "https://example.test/pull/456", "manifest PR delivery evidence missing PR URL");
+      assert(manifest.pr_delivery_evidence.metadataOnly === true, "manifest PR delivery evidence must be metadata-only");
+      assert(manifest.pr_delivery_evidence.verificationGate?.decision === "explicit-no-verify", "manifest PR delivery evidence missing no-verify decision");
+      assert(
+        manifest.pr_delivery_evidence.stopLines.includes("no merge or cleanup from finish-pr"),
+        "manifest PR delivery evidence missing finish-pr stop line",
+      );
+      assert(
+        manifest.lane_evidence_packet?.pr_delivery?.pullRequestNumber === 456,
+        "lane evidence packet missing PR delivery evidence",
+      );
       assert(
         manifest.events.some((event) => event.type === "commit_reconciled"),
         "manifest missing commit_reconciled event",
       );
+      assert(
+        manifest.events.some((event) => event.type === "pr_delivery_evidence_recorded"),
+        "manifest missing pr_delivery_evidence_recorded event",
+      );
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr records existing PR updates as gated delivery evidence", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.pr_url === "https://example.test/pull/456", `manifest pr_url is ${manifest.pr_url}`);
+      assert(
+        manifest.pr_delivery_evidence?.operation === "update-existing-pr-reference",
+        `unexpected PR delivery operation ${manifest.pr_delivery_evidence?.operation}`,
+      );
+      assert(
+        manifest.lane_evidence_packet?.pr_delivery?.operation === "update-existing-pr-reference",
+        "lane evidence packet missing existing PR delivery operation",
+      );
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("finish-pr rejects unparseable PR creation output before recording delivery evidence", () => {
+    const fixture = createFinishPrExistingCommitFixture({ invalidCreateOutput: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--no-verify", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "finish-pr unexpectedly accepted unparseable PR output");
+      assert(result.stderr.includes("Could not parse created PR URL"), result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(!manifest.pr_delivery_evidence, "manifest must not record PR delivery evidence after parse failure");
     } finally {
       cleanupFinishPrExistingCommitFixture(fixture);
     }
@@ -4420,7 +4521,7 @@ function taskSnapshot(tasksDir) {
     .join("\n---\n");
 }
 
-function createFinishPrExistingCommitFixture() {
+function createFinishPrExistingCommitFixture(options = {}) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-finish-existing-commit-"));
   const remoteRoot = `${fixtureRoot}-remote.git`;
   const stateRootFixture = join(fixtureRoot, "state");
@@ -4449,6 +4550,7 @@ function createFinishPrExistingCommitFixture() {
   runGit(worktree, ["config", "user.name", "Codex Workspace Test"]);
   commitFile(worktree, "feature.txt", "feature\n", "feature");
   runGit(worktree, ["push", "-q", "-u", "origin", branch]);
+  const branchHead = runGit(worktree, ["rev-parse", "HEAD"]).stdout;
 
   const fakeGh = join(fakeBin, "gh");
   writeFileSync(
@@ -4457,8 +4559,12 @@ function createFinishPrExistingCommitFixture() {
       "#!/usr/bin/env node",
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
-      "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
-      "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
+      options.existingPr
+        ? `if (args[0] === 'pr' && args[1] === 'view') { console.log(JSON.stringify({ number: 456, url: 'https://example.test/pull/456', mergedAt: null, state: 'OPEN', baseRefName: 'main', headRefOid: '${branchHead}' })); process.exit(0); }`
+        : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
+      options.invalidCreateOutput
+        ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
+        : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
       "process.exit(1);",
       "",
