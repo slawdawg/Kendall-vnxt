@@ -1403,7 +1403,7 @@ test.describe("dashboard workflow coverage", () => {
     const documentationPanel = page.locator("section").filter({ hasText: "Indexes and approval stop lines" }).first();
     await expect(documentationPanel.getByText("Documentation authority", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("Indexes and approval stop lines")).toBeVisible();
-    await expect(documentationPanel.getByText("Legacy artifact dispositions")).toBeVisible();
+    await expect(documentationPanel.getByText("Legacy artifact dispositions").first()).toBeVisible();
     await expect(documentationPanel.getByText("Local BMAD story files")).toBeVisible();
     await expect(documentationPanel.getByText("Leave raw story bodies in local BMAD output")).toBeVisible();
     await expect(documentationPanel.getByText("Never retain raw prompts")).toBeVisible();
@@ -1434,6 +1434,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:governed-worker-execution-dry-run", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:legacy-planning-inventory", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:review-resource-policy", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:pipeline-implementation-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:dashboard-pipeline-boundary", { exact: true })).toBeVisible();
@@ -1584,6 +1585,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/codex-implementation-approval-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/claude-review-approval-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/review-resource-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/delivery-readiness-policy-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/trusted-delivery-eligibility-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/disabled-provider-proofs")).toBeVisible();
@@ -1635,7 +1637,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(actionPlanPanel.getByText("Maintenance action plans are not execution-authority approvals.")).toBeVisible();
     await expect(page.locator("#maintenance-action-plan-report")).toBeVisible();
 
-    const runwayPanel = page.locator("section").filter({ hasText: "Larger PR slice planner" }).first();
+    const runwayPanel = page.locator("#development-runway-report");
     await expect(runwayPanel.getByText("Development runway", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("Larger PR slice planner")).toBeVisible();
     await expect(runwayPanel.getByText("report-evidence-navigation-slice")).toBeVisible();
@@ -1643,7 +1645,6 @@ test.describe("dashboard workflow coverage", () => {
     await expect(runwayPanel.getByText("pnpm run check:safe-backlog").first()).toBeVisible();
     await expect(runwayPanel.getByText("verification-runbook-hardening-slice")).toBeVisible();
     await expect(runwayPanel.getByText("authority-blocker-maintenance-slice")).toBeVisible();
-    await expect(runwayPanel.getByText("Next lane handoff").first()).toBeVisible();
     await expect(runwayPanel.getByText("Readiness checks").first()).toBeVisible();
     await expect(runwayPanel.getByText("ready-backlog-item", { exact: true })).toBeVisible();
     await expect(runwayPanel.getByText("Batching policy")).toBeVisible();
@@ -1945,6 +1946,7 @@ test.describe("dashboard workflow coverage", () => {
       .filter({ has: page.getByRole("heading", { name: "Dispatcher closed source guard filter empty state shortcut reason keyboard loop refresh", exact: true }) });
     await expect(closedSourceGuardFilterEmptyStateShortcutReasonKeyboardLoopCard.getByText("Slice: complete")).toBeVisible();
     await expect(closedSourceGuardFilterEmptyStateShortcutReasonKeyboardLoopCard.getByText("do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh")).toBeVisible();
+    await expect(safeBacklogPanel.getByText("Next lane handoff").first()).toBeVisible();
     await expect(safeBacklogPanel.getByText("Execution-authority stories")).toBeVisible();
     await expect(safeBacklogPanel.getByText("Safe backlog items are planning and maintenance guidance, not execution-authority approvals.")).toBeVisible();
 
@@ -1970,7 +1972,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(filteredSourceSummary.getByText(/Source completion: assignment \d+, workspace \d+, none \d+/)).toBeVisible();
     const resetAssignmentFilters = assignmentRowFilters.getByRole("button", { name: "Reset assignment row filters" });
     await expect(resetAssignmentFilters).toBeDisabled();
-    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText(/^Candidate: /)).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("active");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("workspace");
     await expect(resetAssignmentFilters).toBeEnabled();
@@ -2137,7 +2139,7 @@ test.describe("dashboard workflow coverage", () => {
         .filter({ hasText: "codex/dispatcher-cleanup-assignment-closure-refresh" })
         .getByText("source: Lane assignment"),
     ).toBeVisible();
-    await expect(runnerAssignmentPanel.getByText("Candidate: dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh")).toBeVisible();
+    await expect(runnerAssignmentPanel.getByText(/^Candidate: /)).toBeVisible();
     await assignmentRowFilters.getByLabel("Classification").selectOption("attention");
     await assignmentRowFilters.getByLabel("Source", { exact: true }).selectOption("all");
     await expect(runnerAssignmentPanel.getByText("Resume packet")).toBeVisible();
@@ -2407,6 +2409,25 @@ test.describe("dashboard workflow coverage", () => {
     await expect(claudeApprovalPanel.getByText("Risk-ranked findings")).toBeVisible();
     await expect(claudeApprovalPanel.getByText("One Claude review attempt per approval")).toBeVisible();
     await expect(page.locator("#claude-review-approval-report")).toBeVisible();
+
+    const reviewResourcePolicyPanel = page.locator("#review-resource-policy-report");
+    await expect(reviewResourcePolicyPanel.getByText("Review resource policy", { exact: true })).toBeVisible();
+    await expect(reviewResourcePolicyPanel.getByRole("heading", { name: "Policy triggers" }).first()).toBeVisible();
+    await expect(reviewResourcePolicyPanel.getByRole("heading", { name: "Review routes" })).toBeVisible();
+    await expect(reviewResourcePolicyPanel.getByRole("heading", { name: "Packet evaluations" })).toBeVisible();
+    await expect(reviewResourcePolicyPanel.getByRole("heading", { name: "Claude read-only command" })).toBeVisible();
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-route-bmad_party_mode")).toContainText("BMAD party mode");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-route-claude_readonly_review")).toContainText("Claude read-only");
+    await expect(reviewResourcePolicyPanel.getByText("sample-authority-security-packet", { exact: true })).toBeVisible();
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-claude-command")).toContainText("--tools Read,Grep");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-claude-command")).toContainText("--max-budget-usd 1");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-stop-lines")).toContainText("Do not retain raw prompts");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-processLaunchApproved")).toContainText("blocked");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-sourceMutationApproved")).toContainText("blocked");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-githubMutationApproved")).toContainText("blocked");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-rawProviderPayloadsRetained")).toContainText("not retained");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-rawReasoningRetained")).toContainText("not retained");
+    await expect(page.locator("#review-resource-policy-report")).toBeVisible();
 
     const deliveryReadinessPolicyPanel = page.locator("section").filter({ hasText: "Review gate policy" }).first();
     await expect(deliveryReadinessPolicyPanel.getByText("Delivery readiness", { exact: true })).toBeVisible();

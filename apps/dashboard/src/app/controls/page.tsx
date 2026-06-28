@@ -24,6 +24,7 @@ import { OperatorProfilePanel } from "../../components/operator-profile-panel";
 import { PageIntro } from "../../components/page-intro";
 import { RoutingFleetPanel } from "../../components/routing-fleet-panel";
 import { RuntimeEvidenceReviewReportPanel } from "../../components/runtime-evidence-review-report-panel";
+import { ReviewResourcePolicyReportPanel } from "../../components/review-resource-policy-report-panel";
 import { RunnerAssignmentStatusReportPanel } from "../../components/runner-assignment-status-report-panel";
 import { RemoteCleanupSyncReadinessReportPanel } from "../../components/remote-cleanup-sync-readiness-report-panel";
 import { SafeDevelopmentBacklogPanel } from "../../components/safe-development-backlog-panel";
@@ -58,6 +59,7 @@ import {
   getRoutingLaneProfiles,
   getRunStatus,
   getRuntimeEvidenceReviewReport,
+  getReviewResourcePolicyReport,
   getRunnerAssignmentStatusReport,
   getRemoteCleanupSyncReadinessReport,
   getSafeDevelopmentBacklogReport,
@@ -102,6 +104,7 @@ export default async function ControlsPage() {
     codexImplementationApprovalReport,
     claudeReviewReadinessReport,
     claudeReviewApprovalReport,
+    reviewResourcePolicyReport,
     deliveryReadinessPolicyReport,
     executionRecipes,
   ] = await Promise.all([
@@ -136,6 +139,7 @@ export default async function ControlsPage() {
     getCodexImplementationApprovalReport(),
     getClaudeReviewReadinessReport(),
     getClaudeReviewApprovalReport(),
+    getReviewResourcePolicyReport(),
     getDeliveryReadinessPolicyReport(),
     getExecutionRecipes(),
   ]);
@@ -237,6 +241,9 @@ export default async function ControlsPage() {
       </div>
       <div id="claude-review-approval-report" className="scroll-mt-28">
         <ClaudeReviewApprovalReportPanel report={claudeReviewApprovalReport} />
+      </div>
+      <div id="review-resource-policy-report" className="scroll-mt-28">
+        <ReviewResourcePolicyReportPanel report={reviewResourcePolicyReport} />
       </div>
       <div id="delivery-readiness-policy-report" className="scroll-mt-28">
         <DeliveryReadinessPolicyReportPanel report={deliveryReadinessPolicyReport} />

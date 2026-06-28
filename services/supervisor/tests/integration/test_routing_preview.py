@@ -1707,6 +1707,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-governed-worker-execution-dry-run",
         "check-documentation-authority",
         "check-legacy-planning-inventory",
+        "check-review-resource-policy",
         "check-verification-readiness",
         "check-pipeline-implementation-readiness",
         "check-dashboard-pipeline-boundary",
@@ -1794,6 +1795,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     }
     static_group = next(group for group in report["commandGroups"] if group["groupId"] == "static-drift-chain")
     assert "check-governed-worker-execution-dry-run" in static_group["commandIds"]
+    assert "check-review-resource-policy" in static_group["commandIds"]
     assert "check-runtime-review" in static_group["commandIds"]
     assert "check-pipeline-implementation-readiness" in static_group["commandIds"]
     assert "check-dashboard-pipeline-boundary" in static_group["commandIds"]
@@ -1912,6 +1914,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/codex-implementation-approval-report",
         "GET /supervisor/claude-review-readiness-report",
         "GET /supervisor/claude-review-approval-report",
+        "GET /supervisor/review-resource-policy-report",
         "GET /supervisor/github-delivery-authority-report",
         "GET /supervisor/trusted-delivery-eligibility-report",
         "GET /supervisor/local-cleanup-readiness-report",
@@ -4967,6 +4970,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/codex-implementation-approval-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/claude-review-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/claude-review-approval-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/review-resource-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/github-delivery-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/local-cleanup-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/remote-cleanup-sync-readiness-report" in export["boundary"]["relatedSupervisorReports"]
@@ -5329,6 +5333,97 @@ def test_claude_review_approval_report_stays_review_only_and_non_executing(tmp_p
     assert any("Risk-ranked findings" in output for output in report["outputContract"])
     assert any("One Claude review attempt per approval" in control for control in report["scarcityControls"])
     assert any("edit files" in stop_condition for stop_condition in report["stopConditions"])
+
+
+def test_review_resource_policy_report_maps_triggers_to_bounded_review_routes_without_mutation(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = (tmp_path / "review-resource-policy-report.db").as_posix()
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/review-resource-policy-report")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "review-resource-policy-report-v1"
+    assert report["readOnly"] is True
+    assert report["processLaunchApproved"] is False
+    assert report["sourceMutationApproved"] is False
+    assert report["githubMutationApproved"] is False
+    assert report["rawProviderPayloadsRetained"] is False
+    assert report["rawReasoningRetained"] is False
+    assert report["retentionPolicy"] == "summaries_findings_paths_command_metadata_verification_policy_basis_only"
+
+    triggers = {trigger["triggerId"]: trigger for trigger in report["triggers"]}
+    assert set(triggers) == {
+        "high_risk_diff",
+        "authority_expansion",
+        "source_memory_boundary_change",
+        "security_sensitive_change",
+        "merge_readiness_uncertainty",
+        "major_architectural_decision",
+    }
+    assert "claude_readonly_review" in triggers["authority_expansion"]["recommendedRoutes"]
+    assert "bmad_subagent_review" in triggers["merge_readiness_uncertainty"]["recommendedRoutes"]
+
+    routes = {route["routeId"]: route for route in report["routes"]}
+    assert set(routes) == {"bmad_party_mode", "bmad_subagent_review", "claude_readonly_review"}
+    route_ids = set(routes)
+    assert all(set(trigger["recommendedRoutes"]).issubset(route_ids) for trigger in report["triggers"])
+    assert all(set(scenario["selectedRoutes"]).issubset(route_ids) for scenario in report["scenarios"])
+    claude_route = routes["claude_readonly_review"]
+    assert claude_route["authorityFamily"] == "external-review-readonly"
+    assert claude_route["budgetCap"] == "--max-budget-usd 1"
+    assert "claude -p" in claude_route["commandPolicy"]
+    assert "--max-budget-usd 1" in claude_route["commandPolicy"]
+    assert "--tools Read,Grep" in claude_route["commandPolicy"]
+    assert "GitHub mutation" in claude_route["blockedCapabilities"]
+    assert "secret access" in claude_route["blockedCapabilities"]
+    assert "filesystem mutation" in claude_route["blockedCapabilities"]
+    assert "raw provider payload retention" in routes["bmad_party_mode"]["blockedCapabilities"]
+    assert "source mutation by reviewer" in routes["bmad_subagent_review"]["blockedCapabilities"]
+
+    scenarios = {scenario["scenarioId"]: scenario for scenario in report["scenarios"]}
+    assert scenarios["authority-and-security-change"]["selectedRoutes"] == [
+        "bmad_party_mode",
+        "claude_readonly_review",
+    ]
+    assert scenarios["merge-thread-ambiguity"]["selectedRoutes"] == ["bmad_subagent_review"]
+    assert scenarios["source-memory-boundary-change"]["retentionSummary"] == report["retentionPolicy"]
+
+    packet_evaluations = {evaluation["packetId"]: evaluation for evaluation in report["packetEvaluations"]}
+    assert set(packet_evaluations) == {"sample-authority-security-packet", "sample-merge-thread-packet"}
+    assert all(set(evaluation["triggerIds"]).issubset(set(triggers)) for evaluation in packet_evaluations.values())
+    assert all(set(evaluation["selectedRoutes"]).issubset(route_ids) for evaluation in packet_evaluations.values())
+    authority_packet = packet_evaluations["sample-authority-security-packet"]
+    assert authority_packet["triggerIds"] == ["authority_expansion", "security_sensitive_change"]
+    assert authority_packet["selectedRoutes"] == ["bmad_party_mode", "claude_readonly_review"]
+    assert authority_packet["readOnly"] is True
+    assert authority_packet["processLaunchApproved"] is False
+    assert authority_packet["sourceMutationApproved"] is False
+    assert authority_packet["githubMutationApproved"] is False
+    assert authority_packet["rawProviderPayloadsRetained"] is False
+    assert authority_packet["rawReasoningRetained"] is False
+    assert any("Do not launch Claude" in stop_line for stop_line in authority_packet["stopLines"])
+
+    assert report["claudeReadOnlyCommand"][:2] == ["claude -p", "--max-budget-usd 1"]
+    assert "--tools Read,Grep" in report["claudeReadOnlyCommand"]
+    assert not any("--allowedTools" in command_part for command_part in report["claudeReadOnlyCommand"])
+    assert not any("--disallowedTools" in command_part for command_part in report["claudeReadOnlyCommand"])
+    assert any("Do not retain raw prompts" in stop_line for stop_line in report["stopLines"])
+    assert any("does not approve Claude process launch" in stop_line for stop_line in report["stopLines"])
+    assert any("separate Claude review approval packet" in action for action in report["nextSafeActions"])
 
 
 def test_github_delivery_authority_report_stays_read_only_and_blocks_remote_steps(tmp_path, monkeypatch) -> None:
