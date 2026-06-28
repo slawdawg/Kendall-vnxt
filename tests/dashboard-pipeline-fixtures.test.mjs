@@ -136,6 +136,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     "Packet plain-language summary",
     "Packet detail",
     "Packet 5 Whys",
+    "Action request ledger",
     "Packet source boundaries"
   ]) {
     assert.match(cockpitSource + packetDetailSource, new RegExp(`aria-label=["']${regionName}["']`));
@@ -329,6 +330,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     "artifactRefs",
     "laneCards",
     "humanGateActions",
+    "humanGateActionRequests",
     "humanGateFixtureEvents",
     "recoveryFixtureEvents",
     "actionGuardFixtures",
@@ -551,6 +553,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(packetDetailSource, /Human Gate binding/);
   assert.match(packetDetailSource, /Workers and review/);
   assert.match(packetDetailSource, /Gate, memory, recovery/);
+  assert.match(packetDetailSource, /Action request ledger/);
   assert.match(packetDetailSource, /Required evidence/);
   assert.match(packetDetailSource, /Stop lines/);
   assert.match(packetDetailSource, /Rollback/);
@@ -567,6 +570,9 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(packetDetailSource, /Stop line/);
   assert.match(packetDetailSource, /Safe next option/);
   assert.match(packetDetailSource, /Recovery preview event/);
+  assert.match(packetDetailSource, /Request status/);
+  assert.match(packetDetailSource, /Execution started/);
+  assert.match(packetDetailSource, /Resulting state applied/);
   assert.match(packetDetailSource, /Packet source boundaries/);
   assert.doesNotMatch(cockpitSource, /FixtureScenarioSelector|GoldenPathLifecycle|ActivePacketDrawer|RecoveryDrawerPanel|ActionGuardPanel|EvidenceDetailList|evaluateFixtureActionDecision/);
   assert.match(fixtureSource, /routeFork/);
@@ -1124,6 +1130,7 @@ test("pipeline source boundary checklist preserves Obsidian and LLM-Wiki ownersh
 test("pipeline action guards reject stale unsafe unknown and boundary cases through fixture decision helper", async () => {
   const {
     evaluateFixtureActionDecision,
+    submitFixtureHumanGateActionRequest,
     pipelineDensityFixturePackets,
     pipelineFixturePackets,
   } = await loadCompiledDashboardFixtures();
@@ -1160,6 +1167,17 @@ test("pipeline action guards reject stale unsafe unknown and boundary cases thro
   assert.equal(unknownDecision.submitCapable, false);
   assert.equal(unknownDecision.guard?.classification, "unknown_action");
   assert.equal(unknownDecision.primaryRisk, "false_authority");
+  const { packet: packetWithUnknownRequest, request: unknownRequest } = submitFixtureHumanGateActionRequest(unknownGuard.packet, `${unknownGuard.packet.packetId}:action:not_in_packet`, "Operator");
+  assert.equal(unknownRequest.status, "rejected");
+  assert.equal(unknownRequest.auditEventType, "human_gate.unknown_action.request_rejected");
+  assert.equal(unknownRequest.executionStarted, false);
+  assert.equal(unknownRequest.resultingStateApplied, false);
+  assert.equal(unknownRequest.retentionClass, "metadata_only");
+  assert.equal(unknownRequest.rawPayloadRetained, false);
+  assert.ok(
+    packetWithUnknownRequest.humanGateActionRequests.some((request) => request.requestId === unknownRequest.requestId),
+    "rejected unknown action request should be durable packet metadata"
+  );
 
   const densityGuard = pipelineDensityFixturePackets
     .flatMap((packet) => packet.actionGuardFixtures.map((guard) => ({ packet, guard })))
@@ -1167,6 +1185,31 @@ test("pipeline action guards reject stale unsafe unknown and boundary cases thro
   if (densityGuard) {
     assert.match(densityGuard.guard.safeNextOption, new RegExp(escapeRegExp(densityGuard.packet.packetId)));
   }
+
+  const humanGatePacket = pipelineFixturePackets.find((packet) => packet.packetId === "fixture:human-gate-blocked");
+  assert.ok(humanGatePacket, "human gate packet should exist");
+  const availableAction = humanGatePacket.humanGateActions.find((action) => action.status === "available");
+  assert.ok(availableAction, "human gate packet should expose an available action");
+  const { packet: packetWithRecordedRequest, request: recordedRequest } = submitFixtureHumanGateActionRequest(humanGatePacket, availableAction.actionId, "Operator");
+  assert.equal(recordedRequest.status, "recorded");
+  assert.equal(recordedRequest.actionId, availableAction.actionId);
+  assert.equal(recordedRequest.decisionId, availableAction.payload.decisionId);
+  assert.equal(recordedRequest.requestedActionType, availableAction.type);
+  assert.equal(recordedRequest.executionStarted, false);
+  assert.equal(recordedRequest.resultingStateApplied, false);
+  assert.equal(recordedRequest.retentionClass, "metadata_only");
+  assert.equal(recordedRequest.rawPayloadRetained, false);
+  assert.ok(recordedRequest.stopLines.some((line) => /Do not launch|No command|Do not call/i.test(line)));
+  assert.ok(
+    packetWithRecordedRequest.humanGateActionRequests.some((request) => request.requestId === recordedRequest.requestId),
+    "submitted action request should be durable packet metadata"
+  );
+  const { packet: packetWithSecondRecordedRequest, request: secondRecordedRequest } = submitFixtureHumanGateActionRequest(packetWithRecordedRequest, availableAction.actionId, "Second operator");
+  assert.notEqual(secondRecordedRequest.requestId, recordedRequest.requestId);
+  assert.ok(
+    packetWithSecondRecordedRequest.humanGateActionRequests.some((request) => request.requestId === secondRecordedRequest.requestId),
+    "repeated action requests should append without request id collisions"
+  );
 });
 
 test("governed copied-worktree evidence projects into pipeline packets without live dashboard authority", async () => {

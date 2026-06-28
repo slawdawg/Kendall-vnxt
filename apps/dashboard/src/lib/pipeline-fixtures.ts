@@ -1,6 +1,8 @@
 import type {
   AlphaMemorySourceStatusV0,
   HumanGateActionV0,
+  HumanGateActionRequestV0,
+  HumanGateActionRequestStatusV0,
   MemoryProposalV0,
   PipelineStage,
   RecoveryActionV0,
@@ -13,6 +15,8 @@ import {
   PIPELINE_STATE_EVIDENCE_MATRIX_V0,
   PIPELINE_STATE_FIXTURE_CATALOG_V0,
 } from "@kendall/workflow-core";
+
+const FIXTURE_ACTION_REQUESTED_AT = "2026-06-27T00:00:00.000Z";
 
 type PipelineMatrixRow = (typeof PIPELINE_STATE_EVIDENCE_MATRIX_V0)[number];
 
@@ -1288,6 +1292,59 @@ export function evaluateFixtureActionDecision(
   };
 }
 
+export function submitFixtureHumanGateActionRequest(
+  packet: PipelineFixturePacket,
+  actionId: string,
+  requestedByLabel = "Operator"
+): { packet: PipelineFixturePacket; request: HumanGateActionRequestV0 } {
+  const requestedAt = FIXTURE_ACTION_REQUESTED_AT;
+  const requestSequence = nextHumanGateActionRequestSequence(packet, actionId);
+  const action = packet.humanGateActions.find((candidate) => candidate.actionId === actionId);
+  if (!action) {
+    const request = rejectedHumanGateActionRequest({
+      packetId: packet.packetId,
+      actionId,
+      requestedByLabel,
+      requestedAt,
+      requestSequence,
+      rejectionReason: "unknown_action",
+    });
+    return appendHumanGateActionRequest(packet, request);
+  }
+
+  const decision = evaluateFixtureActionDecision(packet, actionId, "human_gate");
+  const baseInput = { requestedByLabel, requestedAt, requestSequence };
+  if (action.status === "stale") {
+    const request = humanGateActionRequest(packet.packetId, action, {
+      ...baseInput,
+      status: "stale",
+      auditEventType: `${action.auditEventType}.request_rejected`,
+      rejectionReason: decision.guard?.disabledReason ?? action.disabledReason ?? "stale_action",
+    });
+    return appendHumanGateActionRequest(packet, request);
+  }
+  if (action.status === "blocked") {
+    const request = humanGateActionRequest(packet.packetId, action, {
+      ...baseInput,
+      status: "blocked",
+      auditEventType: `${action.auditEventType}.request_rejected`,
+      rejectionReason: decision.guard?.disabledReason ?? action.disabledReason ?? "blocked_action",
+    });
+    return appendHumanGateActionRequest(packet, request);
+  }
+  if (!decision.submitCapable) {
+    const request = humanGateActionRequest(packet.packetId, action, {
+      ...baseInput,
+      status: "rejected",
+      auditEventType: `${action.auditEventType}.request_rejected`,
+      rejectionReason: decision.guard?.disabledReason ?? action.disabledReason ?? decision.primaryRisk,
+    });
+    return appendHumanGateActionRequest(packet, request);
+  }
+  const request = humanGateActionRequest(packet.packetId, action, baseInput);
+  return appendHumanGateActionRequest(packet, request);
+}
+
 function findBlockingActionGuard(packet: PipelineFixturePacket, actionId: string) {
   return packet.actionGuardFixtures.find((guard) => guard.actionId === actionId || guard.expectedActionId === actionId || guard.actualActionId === actionId) ?? null;
 }
@@ -1914,6 +1971,7 @@ function packetFixture(input: {
   const recoveryActions = buildRecoveryActions(input, rows, fixture);
   const recoveryFixtureEvents = buildRecoveryFixtureEvents(input, recoveryActions, humanGateActions);
   const actionGuardFixtures = buildActionGuardFixtures(input, humanGateActions, humanGateFixtureEvents, recoveryActions, recoveryFixtureEvents);
+  const humanGateActionRequests = buildHumanGateActionRequests(input.packetId, humanGateActions);
   const memoryProposals = input.fixtureId === "obsidian_proposal_pending_approval"
     ? buildMemoryProposalFixtures(input.packetId, sourceRefs.map((ref) => ref.refId), `${input.packetId}:evidence:fixture`)
     : input.packetId === "fixture:llm-wiki-rebuild-preview"
@@ -1948,6 +2006,7 @@ function packetFixture(input: {
     evidenceRefs,
     artifactRefs,
     humanGateActions,
+    humanGateActionRequests,
     humanGateFixtureEvents,
     actionGuardFixtures,
     laneCards: [
@@ -2968,6 +3027,107 @@ function humanGateAction(input: Omit<HumanGateActionV0, "actionId" | "payload" |
     auditEventType: input.auditEventType,
     ...(input.disabledReason ? { disabledReason: input.disabledReason } : {})
   };
+}
+
+function buildHumanGateActionRequests(packetId: string, actions: HumanGateActionV0[]): HumanGateActionRequestV0[] {
+  return actions
+    .filter((action) => action.status === "available")
+    .map((action, index) => humanGateActionRequest(packetId, action, {
+      requestedByLabel: "Fixture operator",
+      requestedAt: FIXTURE_ACTION_REQUESTED_AT,
+      requestSequence: index + 1,
+    }));
+}
+
+function humanGateActionRequest(
+  packetId: string,
+  action: HumanGateActionV0,
+  input: {
+    requestedByLabel: string;
+    requestedAt: string;
+    requestSequence: number;
+    status?: HumanGateActionRequestStatusV0;
+    auditEventType?: string;
+    rejectionReason?: string;
+  }
+): HumanGateActionRequestV0 {
+  const status = input.status ?? "recorded";
+  return {
+    requestId: actionRequestId(action.actionId, input.requestedByLabel, input.requestedAt, input.requestSequence),
+    packetId,
+    actionId: action.actionId,
+    decisionId: action.payload.decisionId,
+    requestedActionType: action.type,
+    requestedByLabel: input.requestedByLabel,
+    requestedAt: input.requestedAt,
+    status,
+    auditEventType: input.auditEventType ?? `${action.auditEventType}.request_recorded`,
+    evidenceRefs: action.requiredEvidenceRefs,
+    retentionClass: "metadata_only",
+    rawPayloadRetained: false,
+    executionStarted: false,
+    resultingStateApplied: false,
+    stopLines: [
+      ...action.stopLines,
+      "Do not perform the requested action from the request record.",
+    ],
+    rollbackPath: action.rollbackPath,
+    ...(input.rejectionReason ? { rejectionReason: input.rejectionReason } : {}),
+  };
+}
+
+function rejectedHumanGateActionRequest(input: {
+  packetId: string;
+  actionId: string;
+  requestedByLabel: string;
+  requestedAt: string;
+  requestSequence: number;
+  rejectionReason: string;
+}): HumanGateActionRequestV0 {
+  return {
+    requestId: actionRequestId(input.actionId, input.requestedByLabel, input.requestedAt, input.requestSequence),
+    packetId: input.packetId,
+    actionId: input.actionId,
+    decisionId: `${input.packetId}:decision:unknown`,
+    requestedActionType: "request_clarification",
+    requestedByLabel: input.requestedByLabel,
+    requestedAt: input.requestedAt,
+    status: "rejected",
+    auditEventType: "human_gate.unknown_action.request_rejected",
+    evidenceRefs: [],
+    retentionClass: "metadata_only",
+    rawPayloadRetained: false,
+    executionStarted: false,
+    resultingStateApplied: false,
+    stopLines: ["Do not perform unknown or stale Human Gate action requests."],
+    rollbackPath: "Keep the packet state unchanged and refresh the Human Gate action list.",
+    rejectionReason: input.rejectionReason,
+  };
+}
+
+function appendHumanGateActionRequest(
+  packet: PipelineFixturePacket,
+  request: HumanGateActionRequestV0
+): { packet: PipelineFixturePacket; request: HumanGateActionRequestV0 } {
+  return {
+    request,
+    packet: {
+      ...packet,
+      humanGateActionRequests: [...(packet.humanGateActionRequests ?? []), request],
+    },
+  };
+}
+
+function nextHumanGateActionRequestSequence(packet: PipelineFixturePacket, actionId: string) {
+  return (packet.humanGateActionRequests ?? []).filter((request) => request.actionId === actionId).length + 1;
+}
+
+function actionRequestId(actionId: string, requestedByLabel: string, requestedAt: string, requestSequence: number) {
+  return `${actionId}:request:${compactRequestIdPart(requestedAt)}:${compactRequestIdPart(requestedByLabel)}:${requestSequence}`;
+}
+
+function compactRequestIdPart(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "unknown";
 }
 
 function buildHumanGateFixtureEvents(

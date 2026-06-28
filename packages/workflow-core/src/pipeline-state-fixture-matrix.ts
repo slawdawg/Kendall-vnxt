@@ -216,7 +216,7 @@ export const PIPELINE_STATE_EVIDENCE_MATRIX_V0: PipelineStateEvidenceMatrixRowV0
   contractRow("contract.route_summary", ["routeSummary"], ["route"]),
   contractRow("contract.execution_attempts", ["executionAttempts"], ["attempt"]),
   contractRow("contract.lane_cards", ["laneCards"], ["attempt"]),
-  contractRow("contract.human_gate_actions", ["humanGateActions"], ["gate"], ["approve_route", "approve_execution", "reject_packet", "edit_packet", "request_clarification", "reroute"]),
+  contractRow("contract.human_gate_actions", ["humanGateActions", "humanGateActionRequests"], ["gate"], ["approve_route", "approve_execution", "reject_packet", "edit_packet", "request_clarification", "reroute"]),
   contractRow("contract.memory_proposals", ["memoryProposals"], ["memory"]),
   contractRow("contract.review_summaries", ["reviewSummaries"], ["review"]),
   contractRow("contract.recovery_actions", ["recoveryActions"], ["fixture"], ["rerun_smaller", "reroute", "send_back_to_shape"]),

@@ -564,6 +564,42 @@ class HumanGateActionV0View(BaseModel):
     ] | None = None
 
 
+class HumanGateActionRequestV0View(BaseModel):
+    requestId: str
+    packetId: str
+    actionId: str
+    decisionId: str
+    requestedActionType: Literal[
+        "approve_route",
+        "approve_execution",
+        "approve_provider_exception",
+        "approve_memory_proposal",
+        "approve_delivery",
+        "reject_packet",
+        "edit_packet",
+        "request_clarification",
+        "downgrade_to_reference",
+        "send_back_to_shape",
+        "send_back_to_research",
+        "cancel_worker",
+        "discard_result",
+        "rerun_smaller",
+        "reroute",
+    ]
+    requestedByLabel: str
+    requestedAt: str
+    status: Literal["recorded", "rejected", "blocked", "stale"]
+    auditEventType: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    rawPayloadRetained: Literal[False] = False
+    executionStarted: Literal[False] = False
+    resultingStateApplied: Literal[False] = False
+    stopLines: list[str] = Field(default_factory=list)
+    rollbackPath: str
+    rejectionReason: str | None = None
+
+
 class WorkPacketLaneCardV0View(BaseModel):
     laneId: str
     laneType: Literal[
@@ -918,6 +954,7 @@ class WorkPacketV0View(BaseModel):
     evidenceRefs: list[EvidenceRefV0View] = Field(default_factory=list)
     artifactRefs: list[ArtifactRefV0View] = Field(default_factory=list)
     humanGateActions: list[HumanGateActionV0View] = Field(default_factory=list)
+    humanGateActionRequests: list[HumanGateActionRequestV0View] = Field(default_factory=list)
     laneCards: list[WorkPacketLaneCardV0View] = Field(default_factory=list)
     memoryProposals: list[MemoryProposalV0View] = Field(default_factory=list)
     alphaMemorySourceStatus: AlphaMemorySourceStatusV0View | None = None

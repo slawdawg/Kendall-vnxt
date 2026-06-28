@@ -76,6 +76,7 @@ export function PacketDetailPage({
 
         <DetailSection title="Gate, memory, recovery">
           <HumanGateActionList packet={packet} />
+          <HumanGateActionRequestList packet={packet} />
           <MemoryProposalList packet={packet} />
           <RecoveryActionList packet={packet} />
         </DetailSection>
@@ -265,6 +266,39 @@ function HumanGateActionList({ packet }: { packet: PipelineFixturePacket }) {
         );
       })}
     </DetailCard>
+  );
+}
+
+function HumanGateActionRequestList({ packet }: { packet: PipelineFixturePacket }) {
+  const requests = packet.humanGateActionRequests ?? [];
+  return (
+    <section aria-label="Action request ledger">
+      <DetailCard title="Action request ledger" empty={requests.length === 0 ? "No Human Gate action request for this packet." : null}>
+        {requests.map((request) => (
+          <TraceBlock
+            key={request.requestId}
+            title={request.requestedActionType}
+            fields={[
+              ["Request id", request.requestId],
+              ["Request status", request.status],
+              ["Action id", request.actionId],
+              ["Decision id", request.decisionId],
+              ["Requested by", request.requestedByLabel],
+              ["Requested at", request.requestedAt],
+              ["Evidence refs", request.evidenceRefs.join(", ") || "none"],
+              ["Retention class", request.retentionClass],
+              ["Raw payload retained", String(request.rawPayloadRetained)],
+              ["Execution started", String(request.executionStarted)],
+              ["Resulting state applied", String(request.resultingStateApplied)],
+              ["Audit", request.auditEventType],
+              ["Rejection reason", request.rejectionReason ?? "none"],
+              ["Rollback", request.rollbackPath],
+              ["Stop lines", request.stopLines.join(" | ") || "none"],
+            ]}
+          />
+        ))}
+      </DetailCard>
+    </section>
   );
 }
 

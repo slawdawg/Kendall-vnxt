@@ -394,6 +394,28 @@ export interface HumanGateActionV0 {
   disabledReason?: string;
 }
 
+export type HumanGateActionRequestStatusV0 = "recorded" | "rejected" | "blocked" | "stale";
+
+export interface HumanGateActionRequestV0 {
+  requestId: string;
+  packetId: string;
+  actionId: string;
+  decisionId: string;
+  requestedActionType: HumanGateActionTypeV0;
+  requestedByLabel: string;
+  requestedAt: string;
+  status: HumanGateActionRequestStatusV0;
+  auditEventType: string;
+  evidenceRefs: WorkPacketRefIdV0[];
+  retentionClass: "metadata_only";
+  rawPayloadRetained: false;
+  executionStarted: false;
+  resultingStateApplied: false;
+  stopLines: string[];
+  rollbackPath: string;
+  rejectionReason?: string;
+}
+
 export type WorkPacketLaneTypeV0 =
   | "local_model"
   | "hermes_worker_mock"
@@ -653,6 +675,7 @@ export interface WorkPacketV0View {
   evidenceRefs: EvidenceRefV0[];
   artifactRefs: ArtifactRefV0[];
   humanGateActions: HumanGateActionV0[];
+  humanGateActionRequests: HumanGateActionRequestV0[];
   laneCards: WorkPacketLaneCardV0[];
   memoryProposals: MemoryProposalV0[];
   alphaMemorySourceStatus?: AlphaMemorySourceStatusV0 | null;

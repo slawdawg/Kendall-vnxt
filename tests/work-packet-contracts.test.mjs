@@ -20,6 +20,8 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
     "EvidenceRefV0",
     "ArtifactRefV0",
     "HumanGateActionV0",
+    "HumanGateActionRequestV0",
+    "HumanGateActionRequestStatusV0",
     "WorkPacketExecutionAttemptSummaryV0",
     "WorkPacketLaneCardV0",
     "MODEL_ROLES_V0",
@@ -79,6 +81,24 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.doesNotMatch(humanGateActionBlock, /actionType:/);
   assert.doesNotMatch(humanGateActionBlock, /availability:/);
   assert.doesNotMatch(humanGateActionBlock, /summary:/);
+  const humanGateActionRequestBlock = workPacketSource.match(/export interface HumanGateActionRequestV0 \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.ok(humanGateActionRequestBlock, "missing Human Gate action request contract");
+  for (const fieldPattern of [
+    /requestId:\s*string;/,
+    /packetId:\s*string;/,
+    /actionId:\s*string;/,
+    /decisionId:\s*string;/,
+    /requestedActionType:\s*HumanGateActionTypeV0;/,
+    /status:\s*HumanGateActionRequestStatusV0;/,
+    /retentionClass:\s*"metadata_only";/,
+    /rawPayloadRetained:\s*false;/,
+    /executionStarted:\s*false;/,
+    /resultingStateApplied:\s*false;/,
+    /stopLines:\s*string\[\];/,
+    /rollbackPath:\s*string;/,
+  ]) {
+    assert.match(humanGateActionRequestBlock, fieldPattern);
+  }
 
   assert.match(workPacketSource, /rawPayloadRetained:\s*false;/);
   assert.match(workPacketSource, /writeBackAllowed:\s*false;/);
@@ -99,6 +119,7 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /backupCreated:\s*false;/);
   assert.match(workPacketSource, /durableWriteAllowed:\s*false;/);
   assert.match(workPacketSource, /executionAttempts:\s*WorkPacketExecutionAttemptSummaryV0\[\];/);
+  assert.match(workPacketSource, /humanGateActionRequests:\s*HumanGateActionRequestV0\[\];/);
   assert.doesNotMatch(workPacketSource, /executionAttempts:\s*ExecutionAttemptView\[\];/);
   assert.match(workPacketSource, /accessState:\s*"allowed";/);
   assert.match(workPacketSource, /accessState:\s*"excluded" \| "missing" \| "blocked";/);
