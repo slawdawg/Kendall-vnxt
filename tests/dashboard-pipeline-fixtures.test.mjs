@@ -48,7 +48,7 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   assert.match(nextConfigSource + (await readFile(new URL("../playwright.config.ts", import.meta.url), "utf8")), /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS/);
 });
 
-test("/pipeline route uses fixture-only cockpit frame without supervisor calls", async () => {
+test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fallback", async () => {
   const routeSource = await readFile(routePath, "utf8");
   const packetDetailRouteSource = await readFile(packetDetailRoutePath, "utf8");
   const settingsRouteSource = await readFile(settingsRoutePath, "utf8");
@@ -88,7 +88,13 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(realtimeRefreshSource, /EventSource/);
   assert.match(layoutSource, /data-scroll-behavior="smooth"/);
   assert.match(routeSource, /PipelineCockpit/);
-  assert.doesNotMatch(routeSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
+  assert.match(routeSource, /getWorkPackets/);
+  assert.match(routeSource, /projectSupervisorWorkPacketsToCockpitPackets/);
+  assert.match(routeSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
+  assert.match(routeSource, /catch/);
+  assert.match(routeSource, /Supervisor packets/);
+  assert.match(routeSource, /Supervisor unavailable/);
+  assert.doesNotMatch(routeSource, /getRunStatus|getWorkItems|fetch\s*\(/);
   assert.match(packetDetailRouteSource, /PacketDetailPage/);
   assert.match(packetDetailRouteSource, /<Shell\b[^>]*compactHeader[^>]*realtimeRefresh=\{false\}[^>]*wide/);
   assert.match(packetDetailRouteSource, /realtimeRefresh=\{false\}/);
@@ -526,6 +532,12 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
   assert.match(fixtureSource, /Density \$\{ordinal\}:/);
   assert.match(routeSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
+  assert.match(routeSource, /mergePipelinePackets/);
+  assert.match(fixtureSource, /projectSupervisorWorkPacketsToCockpitPackets/);
+  assert.match(fixtureSource, /safeProjectSupervisorWorkPacketToCockpitPacket/);
+  assert.match(fixtureSource, /supervisorReasonCodes/);
+  assert.match(fixtureSource, /fixtureKind:\s*"future-real-source"/);
+  assert.match(fixtureSource, /Supervisor Work Packet projection rendered/);
   const fixturePacketCount = (fixtureSource.match(/packetFixture\(\{/g) ?? []).length;
   const densityCloneCountMatch = fixtureSource.match(/Array\.from\(\{ length: (\d+) \}/);
   assert.ok(densityCloneCountMatch, "density fixture clone count should be explicit");
@@ -599,7 +611,7 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(fixtureSource, /PIPELINE_STATE_EVIDENCE_MATRIX_V0|PIPELINE_STATE_FIXTURE_CATALOG_V0/);
   assert.doesNotMatch(fixtureSource, /rawPrompt|rawCompletion|reasoningTrace|providerPayload|secretValue|credentialValue|credentialPayload|writeBackAllowed:\s*true/);
   assert.doesNotMatch(allPipelineSource, /rawPrompt|rawCompletion|reasoningTrace|providerPayload|secretValue|credentialValue|credentialPayload|memoryDump|fullRawHistory/);
-  assert.doesNotMatch(allPipelineSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(|EventSource|WebSocket|XMLHttpRequest|sendBeacon/);
+  assert.doesNotMatch(allPipelineSource, /getRunStatus|getWorkItems|fetch\s*\(|EventSource|WebSocket|XMLHttpRequest|sendBeacon/);
   assert.doesNotMatch(routeSource + "\n" + pipelineComponentSource, /11434\/v1\/chat\/completions|OllamaProviderAdapter|ollama_provider_adapter|model\s*discovery|endpoint\s*discovery/i);
   assert.doesNotMatch(
     allPipelineSource,

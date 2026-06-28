@@ -2784,6 +2784,8 @@ try {
   test("dispatch-next apply does not claim unowned workspace when source lane is closed", () => {
     const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-apply-workspace-"));
     const worktreePath = mkdtempSync(join(tmpdir(), "codex-dispatch-worktree-"));
+    const bmadDispatchBranch = "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract";
+    let bmadDispatchBranchExistedBefore = false;
     try {
       runGit(worktreePath, ["init", "-q"]);
       runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
@@ -2816,6 +2818,7 @@ try {
         )}\n`,
       );
       const before = readFileSync(manifestPath, "utf8");
+      bmadDispatchBranchExistedBefore = branchExists(rootDir, bmadDispatchBranch);
 
       const result = run([
         "dispatch-next",
@@ -2844,11 +2847,13 @@ try {
         encoding: "utf8",
         stdio: "pipe",
       });
-      spawnSync("git", ["branch", "-D", "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract"], {
-        cwd: rootDir,
-        encoding: "utf8",
-        stdio: "pipe",
-      });
+      if (!bmadDispatchBranchExistedBefore) {
+        spawnSync("git", ["branch", "-D", bmadDispatchBranch], {
+          cwd: rootDir,
+          encoding: "utf8",
+          stdio: "pipe",
+        });
+      }
       rmSync(worktreePath, { recursive: true, force: true });
     }
   });
@@ -3862,6 +3867,7 @@ function run(args) {
     encoding: "utf8",
     env: {
       ...process.env,
+      CODEX_WORKSPACE_TEST_MODE: "1",
       CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES: "1",
     },
     stdio: "pipe",

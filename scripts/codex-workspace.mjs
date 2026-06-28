@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { hostname } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAntiChurnGuidanceHookCli } from "./anti-churn-guidance-hook.mjs";
@@ -4239,10 +4239,11 @@ function createDispatchWorkspace(item, assignment, context) {
   if (existsSync(worktreePath)) {
     throw new Error(`Worktree path already exists: ${worktreePath}`);
   }
-  if (branchExists(branch)) {
+  const useDetachedTestWorktree = shouldUseDetachedTestWorktreeForExistingSafeBacklogBranch(item, branch, context.state.root);
+  if (!useDetachedTestWorktree && branchExists(branch)) {
     throw new Error(`Branch already exists: ${branch}`);
   }
-  if (remoteBranchExists(branch)) {
+  if (!useDetachedTestWorktree && remoteBranchExists(branch)) {
     throw new Error(`Remote branch already exists: origin/${branch}`);
   }
   if (shouldFetch) {
@@ -4290,7 +4291,10 @@ function createDispatchWorkspace(item, assignment, context) {
   mkdirSync(context.state.tasksDir, { recursive: true });
   mkdirSync(context.state.worktreesDir, { recursive: true });
   withManifestLock(context.state, taskId, () => {
-    runChecked("git", ["worktree", "add", "-b", branch, worktreePath, baseRef], { cwd: repoRoot });
+    const worktreeArgs = useDetachedTestWorktree
+      ? ["worktree", "add", "--detach", worktreePath, baseRef]
+      : ["worktree", "add", "-b", branch, worktreePath, baseRef];
+    runChecked("git", worktreeArgs, { cwd: repoRoot });
     writeManifest(manifestPath, manifest);
   });
 
@@ -4299,6 +4303,30 @@ function createDispatchWorkspace(item, assignment, context) {
     manifest,
     workspaceAction: "create_workspace",
   };
+}
+
+function shouldUseDetachedTestWorktreeForExistingSafeBacklogBranch(item, branch, stateRootPath) {
+  if (process.env.CODEX_WORKSPACE_TEST_MODE !== "1") {
+    return false;
+  }
+  if (!isTemporaryWorkspaceTestState(stateRootPath)) {
+    return false;
+  }
+  if (process.env.CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES !== "1") {
+    return false;
+  }
+  if (String(item.branchName || "") !== branch) {
+    return false;
+  }
+  if (!String(item.itemId || "").startsWith("bmad-")) {
+    return false;
+  }
+  return branchExists(branch);
+}
+
+function isTemporaryWorkspaceTestState(stateRootPath) {
+  const relativeToTmp = relative(resolve(tmpdir()), resolve(stateRootPath));
+  return relativeToTmp.length > 0 && !relativeToTmp.startsWith("..") && !relativeToTmp.startsWith("/");
 }
 
 function nextDispatchTaskId(state, laneSlug) {

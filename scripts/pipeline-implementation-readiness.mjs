@@ -167,7 +167,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
       { file: "apps/dashboard/src/app/pipeline/page.tsx", tokens: ["PipelineCockpit", "realtimeRefresh={false}"] },
       { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline route map", "Pipeline operational strip", "Mission control focus strip", "Pipeline board"] },
       { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Packet detail", "Packet 5 Whys", "Gate, memory, recovery"] },
-      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["fixture-only cockpit frame without supervisor calls", "fetch\\s*\\("] },
+      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["supervisor WorkPacketV0 projections with fixture fallback", "fetch\\s*\\("] },
     ],
     summary: "The dashboard exposes a static fixture-only cockpit route without supervisor/provider/worker calls.",
   },
