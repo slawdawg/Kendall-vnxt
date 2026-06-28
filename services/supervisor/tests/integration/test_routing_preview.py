@@ -2560,6 +2560,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "queue-zero-dispatch-continuity-refresh",
         "queue-zero-runway-continuity-refresh",
         "queue-zero-runway-followup-refresh",
+        "queue-zero-runway-successor-refresh",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
     for item in ready_items:
@@ -2598,11 +2599,19 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert queue_zero_successor["nextLane"]["branchName"] == "codex/queue-zero-runway-followup-refresh"
     assert "completed runway evidence" in queue_zero_successor["nextAction"]
     queue_zero_followup = next(item for item in report["items"] if item["itemId"] == "queue-zero-runway-followup-refresh")
-    assert queue_zero_followup["status"] == "ready"
-    assert queue_zero_followup["recommendedSliceSize"] == "medium_to_large"
-    assert queue_zero_followup["nextLane"]["laneSlug"] == "queue-zero-runway-followup-refresh"
-    assert queue_zero_followup["nextLane"]["branchName"] == "codex/queue-zero-runway-followup-refresh"
+    assert queue_zero_followup["status"] == "closed"
+    assert queue_zero_followup["recommendedSliceSize"] == "complete"
+    assert queue_zero_followup["nextLane"]["laneSlug"] == "queue-zero-runway-successor-refresh"
+    assert queue_zero_followup["nextLane"]["branchName"] == "codex/queue-zero-runway-successor-refresh"
+    assert "completed runway evidence only" in queue_zero_followup["nextAction"]
+    assert "without runtime execution" in queue_zero_followup["nextAction"]
     assert "metadata-only" in queue_zero_followup["nextAction"]
+    queue_zero_successor_refresh = next(item for item in report["items"] if item["itemId"] == "queue-zero-runway-successor-refresh")
+    assert queue_zero_successor_refresh["status"] == "ready"
+    assert queue_zero_successor_refresh["recommendedSliceSize"] == "medium_to_large"
+    assert queue_zero_successor_refresh["nextLane"]["laneSlug"] == "queue-zero-runway-successor-refresh"
+    assert queue_zero_successor_refresh["nextLane"]["branchName"] == "codex/queue-zero-runway-successor-refresh"
+    assert "metadata-only" in queue_zero_successor_refresh["nextAction"]
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
     assert verification_item["status"] == "closed"
     assert verification_item["recommendedSliceSize"] == "complete"
@@ -9155,8 +9164,8 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     )
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "bmad-1-1-validate-the-pipeline-work-packet-read-contract"
-    assert continuity["selectedBranch"] == "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract"
+    assert continuity["selectedBacklogItemId"] == "queue-zero-runway-successor-refresh"
+    assert continuity["selectedBranch"] == "codex/queue-zero-runway-successor-refresh"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["summaryDryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner <owner>"
     assert continuity["assignableCount"] == len(BMAD_STORY_BACKLOG_ITEM_IDS) + 3
