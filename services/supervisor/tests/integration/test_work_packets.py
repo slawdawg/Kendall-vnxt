@@ -62,6 +62,41 @@ def _update_execution_attempt_fixture(db_path: str, attempt_id: str, **fields: o
         conn.commit()
 
 
+def _update_workflow_event_fixture(db_path: str, event_id: str, **fields: object) -> None:
+    assignments = []
+    values = []
+    for key, value in fields.items():
+        assignments.append(f"{key} = ?")
+        values.append(json.dumps(value) if key == "payload" else value)
+    values.append(event_id)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(f"update workflow_events set {', '.join(assignments)} where id = ?", values)
+        conn.commit()
+
+
+def _insert_workflow_event_fixture(
+    db_path: str,
+    work_item_id: str,
+    *,
+    event_id: str,
+    event_type: str,
+    summary: str,
+    payload: dict,
+    created_at: str = "2026-06-28 00:00:00.000000",
+) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            insert into workflow_events (
+                id, work_item_id, event_type, actor_type, actor_id, actor_label,
+                correlation_id, summary, payload, created_at
+            ) values (?, ?, ?, 'system', null, null, ?, ?, ?, ?)
+            """,
+            (event_id, work_item_id, event_type, f"corr-{event_id}", summary, json.dumps(payload), created_at),
+        )
+        conn.commit()
+
+
 def _sqlite_table_columns(db_path: str, table_name: str) -> set[str]:
     with sqlite3.connect(db_path) as conn:
         return {row[1] for row in conn.execute(f"pragma table_info({table_name})").fetchall()}
@@ -192,6 +227,7 @@ def test_work_packets_include_candidate_only_work_item_only_combined_and_danglin
         assert candidate_packet["taskPacket"] is None
         assert candidate_packet["routingPreview"] is None
         assert candidate_packet["executionAttempts"] == []
+        assert candidate_packet["transitionEvents"] == []
         assert candidate_packet["currentStage"] == "capture"
         assert candidate_packet["currentOwner"] == "kendall"
         assert candidate_packet["status"] == "waiting"
@@ -276,8 +312,32 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
                 {"artifactType": "missing_fixture"},
             ],
         )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-routing-preview",
+            event_type="routing.preview_recorded",
+            summary="Routing preview recorded.",
+            payload={"selectedLane": "utility", "reasonCodes": ["task.deterministic_check"]},
+            created_at="2026-06-27 23:59:58.000000",
+        )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-routing-outcome",
+            event_type="routing.outcome_recorded",
+            summary="Routing outcome recorded.",
+            payload={"selectedLane": "utility", "reasonCodes": ["task.deterministic_check"]},
+            created_at="2026-06-27 23:59:59.000000",
+        )
 
         before_attempts = client.get(f"/work-items/{work_item['id']}/execution-attempts").json()["data"]
+        before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
+        same_timestamp = "2026-06-28 00:00:00.000000"
+        planned_event = next(event for event in before_events if event["eventType"] == "execution_attempt.planned")
+        failed_event = next(event for event in before_events if event["eventType"] == "execution_attempt.failed")
+        _update_workflow_event_fixture(db_path, planned_event["id"], created_at=same_timestamp)
+        _update_workflow_event_fixture(db_path, failed_event["id"], created_at=same_timestamp)
         before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
 
         packets_response = client.get("/work-packets")
@@ -307,6 +367,31 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         assert attempt_summary["evidenceRefs"]
         assert attempt_summary["artifactRefs"]
         assert all("workspaceIsolationPlan" not in summary for summary in packet["executionAttempts"])
+        transition_events = packet["transitionEvents"]
+        assert transition_events
+        event_types = [transition["eventType"] for transition in transition_events]
+        assert "execution_attempt.planned" in event_types
+        assert "execution_attempt.failed" in event_types
+        durable_event_ids = {f"event:{event['id']}" for event in before_events}
+        routing_event_ids = {
+            f"event:{event['id']}" for event in before_events if event["eventType"].startswith("routing.")
+        }
+        assert routing_event_ids
+        failed_transition = next(transition for transition in transition_events if transition["eventType"] == "execution_attempt.failed")
+        assert event_types.index("execution_attempt.planned") < event_types.index("execution_attempt.failed")
+        assert failed_transition["sourceStage"] == "shape"
+        assert failed_transition["sourceOwner"] == "kendall"
+        assert failed_transition["sourceStatus"] == "waiting"
+        assert failed_transition["targetStage"] == "execute"
+        assert failed_transition["targetOwner"] == "blocked"
+        assert failed_transition["targetStatus"] == "failed"
+        assert failed_transition["sourceEventId"] in {event["id"] for event in before_events}
+        assert failed_transition["evidenceRefs"][0] in durable_event_ids
+        assert f"attempt:{attempt['attemptId']}" in failed_transition["evidenceRefs"]
+        assert failed_transition["durable"] is True
+        assert all("workspaceIsolationPlan" not in transition for transition in transition_events)
+        packet_evidence_ref_ids = {ref["refId"] for ref in packet["evidenceRefs"]}
+        assert routing_event_ids <= packet_evidence_ref_ids
         assert any(ref["evidenceType"] == "attempt" for ref in packet["evidenceRefs"])
         attempt_artifacts = [ref for ref in packet["artifactRefs"] if ref["refId"].startswith(f"artifact:attempt:{attempt['attemptId']}")]
         assert attempt_artifacts
@@ -320,6 +405,195 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
 
         assert client.get(f"/work-items/{work_item['id']}/execution-attempts").json()["data"] == before_attempts
         assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == before_events
+
+
+def test_work_packet_transition_events_replay_work_item_and_subscription_launch_events(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-transition-event-replay.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Transition replay packet")
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-work-item-ready",
+            event_type="work_item.ready",
+            summary="Work item moved to ready.",
+            payload={"state": "ready", "lane": "utility"},
+            created_at="2026-06-28 00:00:01.000000",
+        )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-recipe-ready",
+            event_type="recipe.ready",
+            summary="Recipe moved to ready.",
+            payload={"state": "ready", "lane": "local_patch_draft"},
+            created_at="2026-06-28 00:00:01.250000",
+        )
+        for event_id, event_type in [
+            ("event-work-item-assigned", "work_item.assigned"),
+            ("event-work-item-unassigned", "work_item.unassigned"),
+            ("event-work-item-escalated", "work_item.escalated"),
+        ]:
+            _insert_workflow_event_fixture(
+                db_path,
+                work_item["id"],
+                event_id=event_id,
+                event_type=event_type,
+                summary="Work item bookkeeping changed without a state transition.",
+                payload={"state": "ready", "lane": "utility", "assigneeLabel": "Operator"},
+                created_at="2026-06-28 00:00:01.500000",
+            )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-supervised-codex-started",
+            event_type="execution_attempt.supervised_codex_launch_started",
+            summary="Supervised Codex launch started.",
+            payload={
+                "attemptId": "attempt-supervised-codex",
+                "selectedLane": "codex_cli_worker",
+                "status": "completed",
+            },
+            created_at="2026-06-28 00:00:01.750000",
+        )
+        for event_id, event_type, summary in [
+            (
+                "event-subscription-z-started",
+                "execution_attempt.subscription_launch_fixture_started",
+                "Subscription-agent artifact-only fixture started.",
+            ),
+            (
+                "event-subscription-b-timeout-policy",
+                "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+                "Subscription-agent timeout policy recorded.",
+            ),
+            (
+                "event-subscription-c-cancellation-policy",
+                "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+                "Subscription-agent cancellation policy recorded.",
+            ),
+            (
+                "event-subscription-d-rollback-disabled",
+                "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+                "Subscription-agent rollback-disabled policy recorded.",
+            ),
+        ]:
+            _insert_workflow_event_fixture(
+                db_path,
+                work_item["id"],
+                event_id=event_id,
+                event_type=event_type,
+                summary=summary,
+                payload={
+                    "executionAttemptId": "attempt-subscription-fixture",
+                    "approvalBinding": {"lane": "subscription_agent"},
+                },
+                created_at="2026-06-28 00:00:02.000000",
+            )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-subscription-completed",
+            event_type="execution_attempt.subscription_launch_fixture_completed",
+            summary="Subscription-agent artifact-only fixture completed.",
+            payload={
+                "executionAttemptId": "attempt-subscription-fixture",
+                "attemptStatus": "completed",
+                "approvalBinding": {"lane": "subscription_agent"},
+            },
+            created_at="2026-06-28 00:00:02.000000",
+        )
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        transition_by_type = {transition["eventType"]: transition for transition in packet["transitionEvents"]}
+
+        ready_transition = transition_by_type["work_item.ready"]
+        assert ready_transition["targetStage"] == "human_gate"
+        assert ready_transition["targetOwner"] == "operator"
+        assert ready_transition["targetStatus"] == "waiting"
+        assert ready_transition["evidenceRefs"] == ["event:event-work-item-ready"]
+        recipe_transition = transition_by_type["recipe.ready"]
+        assert recipe_transition["targetStage"] == "human_gate"
+        assert recipe_transition["targetOwner"] == "operator"
+        assert recipe_transition["targetStatus"] == "waiting"
+        assert recipe_transition["evidenceRefs"] == ["event:event-recipe-ready"]
+        for bookkeeping_event_type in ["work_item.assigned", "work_item.unassigned", "work_item.escalated"]:
+            assert bookkeeping_event_type not in transition_by_type
+
+        supervised_transition = transition_by_type["execution_attempt.supervised_codex_launch_started"]
+        assert supervised_transition["targetStage"] == "execute"
+        assert supervised_transition["targetOwner"] == "codex_worker"
+        assert supervised_transition["targetStatus"] == "active"
+        assert "attempt:attempt-supervised-codex" in supervised_transition["evidenceRefs"]
+
+        subscription_transition = transition_by_type["execution_attempt.subscription_launch_fixture_completed"]
+        assert subscription_transition["targetStage"] == "review"
+        assert subscription_transition["targetOwner"] == "kendall"
+        assert subscription_transition["targetStatus"] == "complete"
+        assert "event:event-subscription-completed" in subscription_transition["evidenceRefs"]
+        assert "attempt:attempt-subscription-fixture" in subscription_transition["evidenceRefs"]
+        subscription_order = [
+            transition["eventType"]
+            for transition in packet["transitionEvents"]
+            if transition["eventType"].startswith("execution_attempt.subscription_launch_fixture_")
+        ]
+        assert subscription_order == [
+            "execution_attempt.subscription_launch_fixture_started",
+            "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+            "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+            "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+            "execution_attempt.subscription_launch_fixture_completed",
+        ]
+
+        packet_evidence_ref_ids = {ref["refId"] for ref in packet["evidenceRefs"]}
+        assert "event:event-work-item-ready" in packet_evidence_ref_ids
+        assert "event:event-subscription-completed" in packet_evidence_ref_ids
+
+
+def test_work_packet_list_replays_gate_state_from_descending_events(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-list-event-order.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="List replay ordering packet")
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-list-triaged",
+            event_type="work_item.triaged",
+            summary="Work item moved to triaged.",
+            payload={"state": "triaged"},
+            created_at="2027-06-28 00:00:01.000000",
+        )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-list-ready",
+            event_type="work_item.ready",
+            summary="Work item moved to ready.",
+            payload={"state": "ready"},
+            created_at="2027-06-28 00:00:02.000000",
+        )
+        _update_work_item_fixture(db_path, work_item["id"], state="ready")
+
+        list_response = client.get("/work-packets")
+        assert list_response.status_code == 200
+        list_packet = next(packet for packet in list_response.json()["data"] if packet["packetId"] == f"work_item:{work_item['id']}")
+        single_packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+
+        for packet in [list_packet, single_packet]:
+            validation = packet["gateStateValidation"]
+            assert validation["status"] == "matched"
+            assert validation["latestEventType"] == "work_item.ready"
+            assert validation["derivedStage"] == "human_gate"
+            assert validation["derivedOwner"] == "operator"
+            assert validation["derivedStatus"] == "waiting"
+            assert validation["mismatchReasons"] == []
+
+        list_event_types = [transition["eventType"] for transition in list_packet["transitionEvents"]]
+        assert list_event_types.index("work_item.triaged") < list_event_types.index("work_item.ready")
 
 
 def test_work_packet_gate_state_validation_matches_event_replay_without_mutation(tmp_path, monkeypatch) -> None:

@@ -658,6 +658,24 @@ export interface WorkPacketExecutionAttemptSummaryV0 {
   artifactRefs: WorkPacketRefIdV0[];
 }
 
+export interface WorkPacketStageTransitionEventV0 {
+  eventId: string;
+  eventType: string;
+  summary: string;
+  createdAt: string;
+  sourceStage?: PipelineStage | null;
+  targetStage: PipelineStage;
+  sourceOwner?: WorkPacketOwner | null;
+  targetOwner: WorkPacketOwner;
+  sourceStatus?: WorkPacketStatus | null;
+  targetStatus: WorkPacketStatus;
+  reasonCodes: string[];
+  evidenceRefs: WorkPacketRefIdV0[];
+  durable: boolean;
+  sourceEventId?: string | null;
+  actorLabel?: string | null;
+}
+
 export type GateReplayRefStateV0 =
   | "allowed"
   | "blocked"
@@ -710,6 +728,7 @@ export interface WorkPacketV0View {
   routingPreview?: RoutingPreviewView | null;
   routeSummary?: WorkPacketRouteSummaryV0 | null;
   executionAttempts: WorkPacketExecutionAttemptSummaryV0[];
+  transitionEvents: WorkPacketStageTransitionEventV0[];
   sourceRefs: SourceRefV0[];
   evidenceRefs: EvidenceRefV0[];
   artifactRefs: ArtifactRefV0[];
