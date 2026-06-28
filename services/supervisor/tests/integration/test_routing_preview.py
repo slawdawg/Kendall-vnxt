@@ -2436,8 +2436,10 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert {item["itemId"] for item in report["items"]} == BMAD_STORY_BACKLOG_ITEM_IDS | {
         "safe-backlog-report-alignment",
         "verification-surface-hardening",
+        "verification-surface-hardening-followup",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
+        "read-only-evidence-polish-followup",
         "worker-backlog-queue-refresh",
         "lane-handoff-evidence-refresh",
         "report-catalog-shortcut-refresh",
@@ -2552,6 +2554,13 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "/controls#supervisor-report-catalog",
         "/controls#development-runway-report",
     ]
+    verification_followup = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening-followup")
+    assert verification_followup["status"] == "ready"
+    assert verification_followup["recommendedSliceSize"] == "medium_to_large"
+    assert verification_followup["nextLane"]["laneSlug"] == "verification-surface-hardening-followup"
+    assert verification_followup["nextLane"]["branchName"] == "codex/verification-surface-hardening-followup"
+    assert "distinct successor lane" in verification_followup["nextAction"]
+    assert "GET /supervisor/runner-assignment-status-report" in verification_followup["relatedReports"]
     github_item = next(item for item in report["items"] if item["itemId"] == "github-delivery-hygiene")
     assert github_item["status"] == "closed"
     assert github_item["recommendedSliceSize"] == "complete"
@@ -2586,6 +2595,13 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
     assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
+    evidence_followup = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish-followup")
+    assert evidence_followup["status"] == "ready"
+    assert evidence_followup["recommendedSliceSize"] == "medium_to_large"
+    assert evidence_followup["nextLane"]["laneSlug"] == "read-only-evidence-polish-followup"
+    assert evidence_followup["nextLane"]["branchName"] == "codex/read-only-evidence-polish-followup"
+    assert "distinct successor lane" in evidence_followup["nextAction"]
+    assert "GET /supervisor/runner-assignment-status-report" in evidence_followup["relatedReports"]
     worker_queue_item = next(item for item in report["items"] if item["itemId"] == "worker-backlog-queue-refresh")
     assert worker_queue_item["priority"] == "P1"
     assert worker_queue_item["status"] == "closed"
@@ -9062,7 +9078,7 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     assert continuity["selectedBranch"] == "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["summaryDryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner <owner>"
-    assert continuity["assignableCount"] == len(BMAD_STORY_BACKLOG_ITEM_IDS) + 1
+    assert continuity["assignableCount"] == len(BMAD_STORY_BACKLOG_ITEM_IDS) + 3
     assert "blocked-authority" not in continuity["blockerCodes"]
     queue_proof_rows = {row["backlogItemId"]: row for row in continuity["queueProofRows"]}
     assert queue_proof_rows["bmad-1-1-validate-the-pipeline-work-packet-read-contract"]["classification"] == "assignable"
