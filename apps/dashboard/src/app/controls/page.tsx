@@ -14,6 +14,7 @@ import { ExecutionReadinessReportPanel } from "../../components/execution-readin
 import { GitHubDeliveryAuthorityReportPanel } from "../../components/github-delivery-authority-report-panel";
 import { GitHubWorkflowPolicyReportPanel } from "../../components/github-workflow-policy-report-panel";
 import { GitHygieneReportPanel } from "../../components/git-hygiene-report-panel";
+import { LegacyPlanningArtifactInventoryReportPanel } from "../../components/legacy-planning-artifact-inventory-report-panel";
 import { LocalCleanupReadinessReportPanel } from "../../components/local-cleanup-readiness-report-panel";
 import { MaintenanceActionPlanReportPanel } from "../../components/maintenance-action-plan-report-panel";
 import { MaintenanceReadinessReportPanel } from "../../components/maintenance-readiness-report-panel";
@@ -48,6 +49,7 @@ import {
   getGitHubDeliveryAuthorityReport,
   getGitHubWorkflowPolicyReport,
   getGitHygieneReport,
+  getLegacyPlanningArtifactInventoryReport,
   getLocalCleanupReadinessReport,
   getMaintenanceActionPlanReport,
   getMaintenanceReadinessReport,
@@ -75,6 +77,7 @@ export default async function ControlsPage() {
     laneProfiles,
     readinessReport,
     documentationAuthorityReport,
+    legacyPlanningArtifactInventoryReport,
     verificationReadinessReport,
     authorityReadinessMatrixReport,
     dashboardE2EReport,
@@ -108,6 +111,7 @@ export default async function ControlsPage() {
     getRoutingLaneProfiles(),
     getExecutionReadinessReport(),
     getDocumentationAuthorityReport(),
+    getLegacyPlanningArtifactInventoryReport(),
     getVerificationReadinessReport(),
     getAuthorityReadinessMatrixReport(),
     getDashboardE2EReport(),
@@ -158,6 +162,9 @@ export default async function ControlsPage() {
       </div>
       <div id="documentation-authority-report" className="scroll-mt-28">
         <DocumentationAuthorityReportPanel report={documentationAuthorityReport} />
+      </div>
+      <div id="legacy-planning-artifact-inventory" className="scroll-mt-28">
+        <LegacyPlanningArtifactInventoryReportPanel report={legacyPlanningArtifactInventoryReport} />
       </div>
       <div id="verification-readiness-report" className="scroll-mt-28">
         <VerificationReadinessReportPanel report={verificationReadinessReport} />

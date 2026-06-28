@@ -48,6 +48,13 @@ const reports = [
     dashboardFetch: "getDocumentationAuthorityReport",
   },
   {
+    reportId: "legacy-planning-artifact-inventory-report-v1",
+    endpoint: "GET /supervisor/legacy-planning-artifact-inventory",
+    apiPath: "/supervisor/legacy-planning-artifact-inventory",
+    story: "docs/workflows/implementation-evidence-boundary.md",
+    dashboardFetch: "getLegacyPlanningArtifactInventoryReport",
+  },
+  {
     reportId: "verification-readiness-report-v1",
     endpoint: "GET /supervisor/verification-readiness-report",
     apiPath: "/supervisor/verification-readiness-report",
@@ -273,6 +280,7 @@ for (const report of reports) {
 
 for (const visibleEndpoint of [
   "GET /supervisor/execution-readiness-report",
+  "GET /supervisor/legacy-planning-artifact-inventory",
   "GET /supervisor/verification-readiness-report",
   "GET /supervisor/authority-readiness-matrix-report",
   "GET /supervisor/dashboard-e2e-report",
@@ -349,6 +357,7 @@ for (const visibleOverviewText of ["Report shortcuts", "Open catalog", "/control
 
 for (const controlsAnchor of [
   'id="execution-readiness-report"',
+  'id="legacy-planning-artifact-inventory"',
   'id="verification-readiness-report"',
   'id="authority-readiness-matrix-report"',
   'id="supervisor-report-catalog"',

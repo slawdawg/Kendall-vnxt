@@ -3,6 +3,7 @@ export const reportAnchorByEndpoint: Record<string, string> = {
   "GET /supervisor/threat-boundary": "#execution-readiness-report",
   "GET /supervisor/execution-readiness-report": "#execution-readiness-report",
   "GET /supervisor/documentation-authority-report": "#documentation-authority-report",
+  "GET /supervisor/legacy-planning-artifact-inventory": "#legacy-planning-artifact-inventory",
   "GET /supervisor/verification-readiness-report": "#verification-readiness-report",
   "GET /supervisor/authority-readiness-matrix-report": "#authority-readiness-matrix-report",
   "GET /supervisor/dashboard-e2e-report": "#dashboard-e2e-report",

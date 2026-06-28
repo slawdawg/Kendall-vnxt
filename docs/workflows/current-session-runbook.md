@@ -44,6 +44,7 @@ asks for takeover.
 `pnpm run check` includes `pnpm run check:docs`,
 `pnpm run check:governed-worker-execution-dry-run`,
 `pnpm run check:documentation-authority`,
+`pnpm run check:legacy-planning-inventory`,
 `pnpm run check:verification-readiness`,
 `pnpm run check:pipeline-implementation-readiness`,
 `pnpm run check:dashboard-pipeline-boundary`,

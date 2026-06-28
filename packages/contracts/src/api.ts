@@ -812,6 +812,33 @@ export interface DocumentationAuthorityReportView {
   executionAuthorityApproved: boolean;
 }
 
+export interface LegacyPlanningArtifactCandidateView {
+  candidateId: string;
+  path: string;
+  artifactType: string;
+  freshness: string;
+  summaryLabel: string;
+  sourceAccessState: string;
+  evidenceBoundary: string;
+  localPlanningState: boolean;
+}
+
+export interface LegacyPlanningArtifactInventoryReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  candidates: LegacyPlanningArtifactCandidateView[];
+  artifactTypes: string[];
+  sourceAccessStates: string[];
+  relatedReports: string[];
+  relatedDocs: string[];
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  executionAuthorityApproved: boolean;
+  rawContentRetained: boolean;
+}
+
 export interface VerificationCommandView {
   commandId: string;
   label: string;
