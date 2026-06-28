@@ -56,8 +56,8 @@ export function PacketDetailPage({
 
         <DetailSection title="Evidence and artifacts">
           <RefList title="Sources" values={packet.sourceRefs.map((ref) => `${ref.label}; ${ref.sourceType}; ${ref.freshness}; ${ref.accessState}`)} />
-          <RefList title="Evidence" values={packet.evidenceRefs.map((ref) => `${ref.label}; ${ref.evidenceType}; retained ${String(ref.rawPayloadRetained)}`)} />
-          <RefList title="Artifacts" values={packet.artifactRefs.map((ref) => `${ref.label}; ${ref.artifactType}; ${ref.status}`)} />
+          <EvidenceTrace packet={packet} />
+          <ArtifactTrace packet={packet} />
         </DetailSection>
 
         <DetailSection title="Workers and review">
@@ -75,20 +75,9 @@ export function PacketDetailPage({
         </DetailSection>
 
         <DetailSection title="Gate, memory, recovery">
-          <RefList
-            title="Human Gate actions"
-            values={packet.humanGateActions.map((action) =>
-              [
-                `${action.label}: ${action.status}; ${action.disabledReason ?? action.resultingStage}`,
-                `required evidence: ${action.requiredEvidenceRefs.join(", ") || "none"}`,
-                `stop lines: ${action.stopLines.join(" | ") || "none"}`,
-                `rollback: ${action.rollbackPath}`,
-                `audit: ${action.auditEventType}`,
-              ].join("; ")
-            )}
-          />
-          <RefList title="Memory proposals" values={packet.memoryProposals.map(formatMemoryProposal)} empty="No memory proposal for this packet." />
-          <RefList title="Recovery actions" values={packet.recoveryActions.map((action) => formatRecoveryAction(packet, action.actionId))} empty="No recovery action for this packet." />
+          <HumanGateActionList packet={packet} />
+          <MemoryProposalList packet={packet} />
+          <RecoveryActionList packet={packet} />
         </DetailSection>
       </section>
 
@@ -207,39 +196,162 @@ function RefList({ empty = "None.", title, values }: { empty?: string; title: st
   );
 }
 
-function formatMemoryProposal(proposal: PipelineFixturePacket["memoryProposals"][number]) {
-  return [
-    `${proposal.label}: ${proposal.status}; ${proposal.targetVaultPath ?? proposal.targetVaultFolder}`,
-    `proposal type: ${proposal.proposalType}`,
-    `sensitivity: ${proposal.sensitivity}`,
-    `contradiction: ${proposal.contradictionStatus}`,
-    `write-back allowed: ${String(proposal.writeBackAllowed)}`,
-    `write-back status: ${proposal.writeBackStatus}`,
-    `operator action: ${proposal.operatorAction}`,
-    `backup: ${proposal.backupRecoveryPath}`,
-  ].join("; ");
+function EvidenceTrace({ packet }: { packet: PipelineFixturePacket }) {
+  return (
+    <DetailCard title="Evidence trace" empty={packet.evidenceRefs.length === 0 ? "No evidence refs for this packet." : null}>
+      {packet.evidenceRefs.map((ref) => (
+        <TraceBlock
+          key={ref.refId}
+          title={ref.label}
+          fields={[
+            ["Evidence type", ref.evidenceType],
+            ["Ref id", ref.refId],
+            ["Retention class", ref.retentionClass],
+            ["Raw payload retained", String(ref.rawPayloadRetained)],
+            ["Artifact path", ref.artifactPath ?? "none"],
+          ]}
+        />
+      ))}
+    </DetailCard>
+  );
 }
 
-function formatRecoveryAction(packet: PipelineFixturePacket, actionId: string) {
-  const action = packet.recoveryActions.find((candidate) => candidate.actionId === actionId);
-  if (!action) {
-    return `Unknown recovery action: ${actionId}`;
-  }
-  const guard = packet.actionGuardFixtures.find(
-    (candidate) => candidate.actionSurface === "recovery" && (candidate.actionId === action.actionId || candidate.expectedActionId === action.actionId || candidate.actualActionId === action.actionId)
+function ArtifactTrace({ packet }: { packet: PipelineFixturePacket }) {
+  return (
+    <DetailCard title="Artifact trace" empty={packet.artifactRefs.length === 0 ? "No artifacts for this packet." : null}>
+      {packet.artifactRefs.map((ref) => (
+        <TraceBlock
+          key={ref.refId}
+          title={ref.label}
+          fields={[
+            ["Artifact type", ref.artifactType],
+            ["Ref id", ref.refId],
+            ["Status", ref.status],
+            ["Path or URL", ref.pathOrUrl ?? "none"],
+          ]}
+        />
+      ))}
+    </DetailCard>
   );
-  const event = packet.recoveryFixtureEvents.find((candidate) => candidate.actionId === action.actionId);
-  return [
-    `${action.label}: ${action.availability}; ${action.resultingStage}`,
-    `action type: ${action.actionType}`,
-    `consequence: ${action.consequence}`,
-    `evidence refs: ${action.evidenceRefs.join(", ") || "none"}`,
-    `guard classification: ${guard?.classification ?? "none"}`,
-    `expected binding: ${guard ? `${guard.expectedPacketId} / ${guard.expectedActionId} / ${guard.expectedState}` : "none"}`,
-    `actual binding: ${guard ? `${guard.actualPacketId} / ${guard.actualActionId} / ${guard.actualState}` : "none"}`,
-    `primary risk: ${guard?.primaryRisk ?? "none"}`,
-    `stop line: ${guard?.stopLine ?? "none"}`,
-    `safe next option: ${guard?.safeNextOption ?? "none"}`,
-    `fixture event: ${event?.eventId ?? "none"}`,
-  ].join("; ");
+}
+
+function HumanGateActionList({ packet }: { packet: PipelineFixturePacket }) {
+  return (
+    <DetailCard title="Human Gate actions" empty={packet.humanGateActions.length === 0 ? "No Human Gate action for this packet." : null}>
+      {packet.humanGateActions.map((action) => {
+        const event = packet.humanGateFixtureEvents.find((candidate) => candidate.actionId === action.actionId);
+        const guards = packet.actionGuardFixtures.filter(
+          (candidate) => candidate.actionSurface === "human_gate" && (candidate.actionId === action.actionId || candidate.expectedActionId === action.actionId || candidate.actualActionId === action.actionId)
+        );
+        return (
+          <TraceBlock
+            key={action.actionId}
+            title={action.label}
+            fields={[
+              ["Typed action", action.type],
+              ["Status", action.status],
+              ["Family", action.family],
+              ["Decision id", action.payload.decisionId],
+              ["Required evidence", action.requiredEvidenceRefs.join(", ") || "none"],
+              ["Disabled reason", action.disabledReason ?? "none"],
+              ["Resulting state", `${action.resultingStage} / ${action.resultingOwner}`],
+              ["Rollback", action.rollbackPath],
+              ["Audit", action.auditEventType],
+              ["Action guard previews", guards.length > 0 ? guards.map(formatActionGuardSummary).join(" | ") : "none"],
+              ["Preview event", event ? `${event.eventId}; ${event.summary}` : "none"],
+              ["Stop lines", action.stopLines.join(" | ") || "none"],
+            ]}
+          />
+        );
+      })}
+    </DetailCard>
+  );
+}
+
+function MemoryProposalList({ packet }: { packet: PipelineFixturePacket }) {
+  return (
+    <DetailCard title="Memory proposals" empty={packet.memoryProposals.length === 0 ? "No memory proposal for this packet." : null}>
+      {packet.memoryProposals.map((proposal) => (
+        <TraceBlock
+          key={proposal.proposalId}
+          title={proposal.label}
+          fields={[
+            ["Proposal type", proposal.proposalType],
+            ["Status", proposal.status],
+            ["Target", proposal.targetVaultPath ?? proposal.targetVaultFolder ?? "none"],
+            ["Sensitivity", proposal.sensitivity],
+            ["Freshness", proposal.freshness],
+            ["Contradiction", proposal.contradictionStatus],
+            ["Write-back allowed", String(proposal.writeBackAllowed)],
+            ["Write-back status", proposal.writeBackStatus],
+            ["Operator action", proposal.operatorAction],
+            ["Backup", proposal.backupRecoveryPath],
+          ]}
+        />
+      ))}
+    </DetailCard>
+  );
+}
+
+function RecoveryActionList({ packet }: { packet: PipelineFixturePacket }) {
+  return (
+    <DetailCard title="Recovery actions" empty={packet.recoveryActions.length === 0 ? "No recovery action for this packet." : null}>
+      {packet.recoveryActions.map((action) => {
+        const guard = packet.actionGuardFixtures.find(
+          (candidate) => candidate.actionSurface === "recovery" && (candidate.actionId === action.actionId || candidate.expectedActionId === action.actionId || candidate.actualActionId === action.actionId)
+        );
+        const event = packet.recoveryFixtureEvents.find((candidate) => candidate.actionId === action.actionId);
+        return (
+          <TraceBlock
+            key={action.actionId}
+            title={action.label}
+            fields={[
+              ["Action type", action.actionType],
+              ["Availability", action.availability],
+              ["Consequence", action.consequence],
+              ["Resulting state", `${action.resultingStage} / ${action.resultingOwner}`],
+              ["Evidence refs", action.evidenceRefs.join(", ") || "none"],
+              ["Action guard preview", guard ? `${guard.classification}; ${guard.primaryRisk}; ${guard.safeNextOption}` : "none"],
+              ["Expected binding", guard ? `${guard.expectedPacketId} / ${guard.expectedActionId} / ${guard.expectedState}` : "none"],
+              ["Actual binding", guard ? `${guard.actualPacketId} / ${guard.actualActionId} / ${guard.actualState}` : "none"],
+              ["Primary risk", guard?.primaryRisk ?? "none"],
+              ["Stop line", guard?.stopLine ?? "none"],
+              ["Safe next option", guard?.safeNextOption ?? "none"],
+              ["Recovery preview event", event ? `${event.eventId}; ${event.summary}` : "none"],
+              ["Human Gate binding", event?.humanGateActionId ?? "none"],
+            ]}
+          />
+        );
+      })}
+    </DetailCard>
+  );
+}
+
+function formatActionGuardSummary(guard: PipelineFixturePacket["actionGuardFixtures"][number]) {
+  return `${guard.classification}; ${guard.primaryRisk}; ${guard.safeNextOption}`;
+}
+
+function DetailCard({ children, empty, title }: { children: ReactNode; empty: string | null; title: string }) {
+  return (
+    <div className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      {empty ? <p className="mt-2 text-xs text-[var(--muted)]">{empty}</p> : <div className="mt-2 grid gap-2">{children}</div>}
+    </div>
+  );
+}
+
+function TraceBlock({ fields, title }: { fields: Array<[string, string]>; title: string }) {
+  return (
+    <article className="rounded-[0.375rem] bg-[var(--background-elevated)] px-2 py-2">
+      <h4 className="break-words text-xs font-semibold">{title}</h4>
+      <dl className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
+        {fields.map(([label, value]) => (
+          <div className="grid gap-1 md:grid-cols-[9rem_minmax(0,1fr)]" key={label}>
+            <dt>{label}</dt>
+            <dd className="break-words text-[var(--foreground)]">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </article>
+  );
 }
