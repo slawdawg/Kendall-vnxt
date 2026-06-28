@@ -24,7 +24,7 @@ export const REQUIRED_PIPELINE_READINESS_CATEGORY_IDS = [
 export const PIPELINE_READINESS_CATEGORY_METADATA = {
   contracts: {
     ownerEpic: "epic-1",
-    ownerStory: "1-1-define-work-packet-view-contracts",
+    ownerStory: "1-1-validate-the-pipeline-work-packet-read-contract",
     failureClass: "blocker",
   },
   "stage-mapping": {
@@ -110,16 +110,18 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     categoryId: "contracts",
     label: "WorkPacketV0 and memory/source contracts",
     ownerEpic: "epic-1",
-    ownerStory: "1-1-define-work-packet-view-contracts",
+    ownerStory: "1-1-validate-the-pipeline-work-packet-read-contract",
     status: "satisfied",
     failureClass: "blocker",
-    requiredCommands: ["pnpm run test:work-packet-contracts"],
-    sourceFiles: ["packages/contracts/src/work-packet.ts", "tests/work-packet-contracts.test.mjs"],
+    requiredCommands: ["pnpm run test:work-packet-contracts", "pnpm run test:dashboard-pipeline-fixtures"],
+    sourceFiles: ["packages/contracts/src/work-packet.ts", "apps/dashboard/src/lib/pipeline-fixtures.ts", "tests/work-packet-contracts.test.mjs", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "packages/contracts/src/work-packet.ts", tokens: ["export interface WorkPacketV0View", "export interface MemoryProposalV0"] },
+      { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["export type PipelineReadPacketContractV0 = WorkPacketV0View", "export type PipelineFixturePacket = PipelineReadPacketContractV0"] },
       { file: "tests/work-packet-contracts.test.mjs", tokens: ["metadata-only evidence", "MemoryProposalV0"] },
+      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["PipelineReadPacketContractV0", "parallel dashboard model"] },
     ],
-    summary: "Shared Work Packet and Memory Proposal contracts exist and are tested as metadata-only evidence surfaces.",
+    summary: "Shared Work Packet and Memory Proposal contracts exist, and /pipeline fixture packets are anchored to WorkPacketV0View instead of a parallel dashboard packet model.",
   },
   {
     id: "epic1.stage-mapping",

@@ -319,6 +319,21 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   }
 
   assert.match(fixtureSource, /WorkPacketV0View/);
+  assert.match(fixtureSource, /import type \{[\s\S]*WorkPacketV0View[\s\S]*\} from "@kendall\/contracts";/);
+  assert.match(fixtureSource, /export type PipelineReadPacketContractV0 = WorkPacketV0View;/);
+  assert.match(fixtureSource, /export type PipelineFixturePacket = PipelineReadPacketContractV0 & \{/);
+  assert.doesNotMatch(
+    fixtureSource,
+    /export type Pipeline(Read)?Packet(V0|View)?\s*=\s*\{/,
+    "dashboard fixtures should not define a parallel dashboard model"
+  );
+  assert.doesNotMatch(
+    fixtureSource,
+    /export interface Pipeline(Read)?Packet(V0|View)?\s*\{/,
+    "dashboard fixtures should not define a parallel dashboard model"
+  );
+  assert.match(cockpitSource, /import type \{ PipelineFixturePacket \}/);
+  assert.match(packetDetailSource, /import type \{ PipelineFixturePacket, PipelineGoldenPathSnapshot, SourceBoundaryDeclarationV0 \}/);
   assert.match(fixtureSource, /type: "approve_execution"/);
   assert.match(fixtureSource, /type: "approve_delivery"/);
   assert.match(fixtureSource, /type: "request_clarification"/);

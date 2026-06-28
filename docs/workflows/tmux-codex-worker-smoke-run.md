@@ -46,17 +46,17 @@ Do not claim a second lane during a smoke run.
 Prefer Codex's normal sandbox and approval model for the first worker:
 
 ```bash
-KENDALL_NXT_REPO="${KENDALL_NXT_REPO:?set repo checkout path}"
-KENDALL_CODEX_STATE_ROOT="${KENDALL_CODEX_STATE_ROOT:?set Codex workspace state root}"
+KENDALL_NXT_ROOT="${KENDALL_NXT_ROOT:?Set KENDALL_NXT_ROOT to the Kendall_Nxt checkout path}"
+CODEX_WORKSPACES_ROOT="${CODEX_WORKSPACES_ROOT:?Set CODEX_WORKSPACES_ROOT to the Codex workspace state root}"
 
-[ -d "$KENDALL_NXT_REPO" ] || { echo "Missing repo checkout: $KENDALL_NXT_REPO" >&2; exit 1; }
-[ -d "$KENDALL_CODEX_STATE_ROOT" ] || { echo "Missing Codex state root: $KENDALL_CODEX_STATE_ROOT" >&2; exit 1; }
+[ -d "$KENDALL_NXT_ROOT" ] || { echo "Missing repo checkout: $KENDALL_NXT_ROOT" >&2; exit 1; }
+[ -d "$CODEX_WORKSPACES_ROOT" ] || { echo "Missing Codex state root: $CODEX_WORKSPACES_ROOT" >&2; exit 1; }
 
-tmux new-session -d -s codex-1 -c "$KENDALL_NXT_REPO" \
+tmux new-session -d -s codex-1 -c "$KENDALL_NXT_ROOT" \
   env CODEX_WORKSPACE_OWNER=codex-1 CODEX_THREAD_ID=tmux-codex-1 \
   codex --no-alt-screen \
-    --cd "$KENDALL_NXT_REPO" \
-    --add-dir "$KENDALL_CODEX_STATE_ROOT" \
+    --cd "$KENDALL_NXT_ROOT" \
+    --add-dir "$CODEX_WORKSPACES_ROOT" \
     --sandbox workspace-write \
     --ask-for-approval on-request \
     "<worker prompt>"
