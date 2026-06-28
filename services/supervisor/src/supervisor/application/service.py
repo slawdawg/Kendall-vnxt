@@ -2674,6 +2674,7 @@ class SupervisorService:
                     "check-governed-worker-execution-dry-run",
                     "check-documentation-authority",
                     "check-legacy-planning-inventory",
+                    "check-review-resource-policy",
                     "check-verification-readiness",
                     "check-pipeline-implementation-readiness",
                     "check-dashboard-pipeline-boundary",
