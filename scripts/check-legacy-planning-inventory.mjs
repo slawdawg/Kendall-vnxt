@@ -37,6 +37,11 @@ assertCondition(
   "pnpm run check:static must include pnpm run check:legacy-planning-inventory",
   failures,
 );
+assertCondition(
+  packageJson.scripts?.check?.includes("pnpm run check:legacy-planning-inventory"),
+  "pnpm run check must include pnpm run check:legacy-planning-inventory",
+  failures,
+);
 
 for (const typeName of ["LegacyPlanningArtifactCandidateView", "LegacyPlanningArtifactInventoryReportView"]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
@@ -70,6 +75,11 @@ assertCondition(
   "Controls page must fetch and render the legacy planning artifact inventory report",
   failures,
 );
+assertCondition(
+  !inventoryPanel.includes(".slice(0, 12)") && inventoryPanel.includes("report.candidates.map"),
+  "Legacy planning inventory panel must render the full candidate list without silently truncating candidates",
+  failures,
+);
 for (const panelText of [
   "LegacyPlanningArtifactInventoryReportView",
   "Metadata-only candidates",
@@ -95,12 +105,20 @@ for (const requiredText of [
   "local_metadata_available",
   "source_owned_metadata_available",
   "artifactBodyRetained=False",
+  'commandId="check-legacy-planning-inventory"',
   "_bmad-output/planning-artifacts",
   "_bmad-output/implementation-artifacts",
   "_bmad-output/brainstorming",
+  "_bmad-output/research",
+  "_bmad-output/handoffs",
+  "_bmad-output/approval-packets",
+  "_bmad-output/reviews",
   "docs/workflows",
   "docs/architecture",
   "brainstorming_session",
+  "research_packet",
+  "handoff",
+  "approval_packet",
   "decision_record",
 ]) {
   assertCondition(serviceSource.includes(requiredText), `Inventory service must include ${requiredText}`, failures);

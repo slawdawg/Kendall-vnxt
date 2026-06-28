@@ -38,7 +38,7 @@ export function LegacyPlanningArtifactInventoryReportPanel({ report }: { report:
         <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Discovered candidates</h4>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
-            {report.candidates.slice(0, 12).map((candidate) => (
+            {report.candidates.map((candidate) => (
               <article key={candidate.candidateId} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>

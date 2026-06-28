@@ -1639,6 +1639,10 @@ class SupervisorService:
             "_bmad-output/planning-artifacts",
             "_bmad-output/implementation-artifacts",
             "_bmad-output/brainstorming",
+            "_bmad-output/research",
+            "_bmad-output/handoffs",
+            "_bmad-output/approval-packets",
+            "_bmad-output/reviews",
         ]
         source_roots = [
             "docs/workflows",
@@ -1703,6 +1707,12 @@ class SupervisorService:
         name = Path(path).name.lower()
         if "brainstorm" in lowered:
             return "brainstorming_session"
+        if "research" in lowered:
+            return "research_packet"
+        if "handoff" in lowered:
+            return "handoff"
+        if "approval" in lowered:
+            return "approval_packet"
         if "/prds/" in lowered or name.startswith("prd"):
             return "prd"
         if "architecture" in lowered:
@@ -2646,6 +2656,7 @@ class SupervisorService:
                     "check-docs",
                     "check-governed-worker-execution-dry-run",
                     "check-documentation-authority",
+                    "check-legacy-planning-inventory",
                     "check-verification-readiness",
                     "check-pipeline-implementation-readiness",
                     "check-dashboard-pipeline-boundary",
