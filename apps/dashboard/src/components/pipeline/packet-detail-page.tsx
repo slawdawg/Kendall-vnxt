@@ -77,6 +77,7 @@ export function PacketDetailPage({
         <DetailSection title="Gate, memory, recovery">
           <LoopStopStateList packet={packet} />
           <DeliveryEvidenceList packet={packet} />
+          <LearnOutcomeList packet={packet} />
           <HumanGateActionList packet={packet} />
           <HumanGateActionRequestList packet={packet} />
           <MemoryProposalList packet={packet} />
@@ -411,6 +412,37 @@ function MemoryProposalList({ packet }: { packet: PipelineFixturePacket }) {
           ]}
         />
       ))}
+    </DetailCard>
+  );
+}
+
+function LearnOutcomeList({ packet }: { packet: PipelineFixturePacket }) {
+  const outcome = packet.learnOutcome;
+  return (
+    <DetailCard title="Learn outcome" empty={!outcome ? "No Learn outcome has been recorded for this packet." : null}>
+      {outcome ? (
+        <TraceBlock
+          title={`${outcome.status}; ${outcome.learningProposalCount} learning proposals`}
+          fields={[
+            ["Outcome id", outcome.outcomeId],
+            ["Retention", outcome.retentionClass],
+            ["Documentation proposal", outcome.documentationProposalStatus],
+            ["Automation authority", outcome.automationAuthorityChangeStatus],
+            ["Blocked write-back state", outcome.blockedWriteBackState],
+            ["Next safe action", outcome.nextSafeAction],
+            ["Source refs", outcome.sourceRefs.join(", ") || "none"],
+            ["Evidence refs", outcome.evidenceRefs.join(", ") || "none"],
+            ["Canonical mutation", outcome.canonicalMutationAllowed ? "allowed" : "blocked"],
+            ["Source mutation", outcome.sourceMutationAllowed ? "allowed" : "blocked"],
+            ["Provider calls", outcome.providerCallsAllowed ? "allowed" : "blocked"],
+            ["Durable writes", outcome.durableWriteAllowed ? "allowed" : "blocked"],
+            [
+              "Decision records",
+              outcome.decisionRecords.map((decision) => `${decision.actor}: ${decision.proposalId} -> ${decision.result}; ${decision.recoveryPath}`).join(" | ") || "none",
+            ],
+          ]}
+        />
+      ) : null}
     </DetailCard>
   );
 }
