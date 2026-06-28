@@ -19,6 +19,7 @@ const cockpitPath = new URL("pipeline-cockpit.tsx", pipelineComponentsPath);
 const packetDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPath);
 const fixturesPath = new URL("../apps/dashboard/src/lib/pipeline-fixtures.ts", import.meta.url);
 const pipelineEvidenceSourcePath = new URL("../apps/dashboard/src/lib/pipeline-evidence-source.ts", import.meta.url);
+const supervisorSchemasPath = new URL("../services/supervisor/src/supervisor/api/schemas.py", import.meta.url);
 const globalsPath = new URL("../apps/dashboard/src/app/globals.css", import.meta.url);
 const shellPath = new URL("../apps/dashboard/src/components/shell.tsx", import.meta.url);
 const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-graph-background.tsx", import.meta.url);
@@ -975,6 +976,66 @@ test("pipeline Codex and Claude lane fixtures stay distinct and metadata-only", 
       assert.ok(packet.claudeReview.allowedContextRefs.every((ref) => ref.includes(packet.packetId)), `${packet.packetId} Claude allowed context should be packet-local`);
     }
   }
+});
+
+test("pipeline loop stop state fixtures surface metadata-only stop evidence", async () => {
+  const { pipelineCockpitPackets, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
+  const cockpitSource = await readFile(cockpitPath, "utf8");
+  const packetDetailSource = await readFile(packetDetailPath, "utf8");
+  const fixtureSource = await readFile(fixturesPath, "utf8");
+
+  assert.match(fixtureSource, /loopStopStates/);
+  assert.match(cockpitSource, /Loop stop states/);
+  assert.match(packetDetailSource, /LoopStopStateList/);
+  assert.match(packetDetailSource, /Next safe action/);
+  assert.match(packetDetailSource, /Provider calls/);
+  assert.match(packetDetailSource, /Worker launch/);
+  assert.match(packetDetailSource, /metadataOnly/);
+  assert.match(packetDetailSource, /githubMutationAllowed/);
+  assert.match(packetDetailSource, /cleanupAllowed/);
+
+  const stopPacket = pipelineFixturePackets.find((packet) => packet.packetId === "fixture:loop-stop-limit-window");
+  assert.ok(stopPacket, "pipeline fixtures should include a loop stop-state packet");
+  assert.equal(stopPacket.status, "blocked");
+  assert.equal(stopPacket.currentOwner, "codex_worker");
+  assert.equal(stopPacket.codexWorker?.readiness, "blocked");
+  assert.ok(stopPacket.artifactRefs.some((ref) => ref.refId === "fixture:loop-stop-limit-window:artifact:progress" && ref.artifactType === "progress"));
+  assert.ok(stopPacket.loopStopStates.length > 0, "loop stop packet should expose stop states");
+
+  const [stopState] = stopPacket.loopStopStates;
+  assert.equal(stopState.kind, "limit_window");
+  assert.equal(stopState.severity, "blocking");
+  assert.equal(stopState.metadataOnly, true);
+  assert.equal(stopState.sourceMutationAllowed, false);
+  assert.equal(stopState.providerCallsAllowed, false);
+  assert.equal(stopState.workerLaunchAllowed, false);
+  assert.equal(stopState.githubMutationAllowed, false);
+  assert.equal(stopState.cleanupAllowed, false);
+  assert.match(stopState.stopLine, /Pause in place/);
+  assert.match(stopState.nextSafeAction, /MANAGER_STATUS phase=blocked/);
+  assert.ok(stopState.evidenceRefs.length > 0);
+  assert.ok(stopState.evidenceRefs.every((refId) => refId.includes(":loop-stop:")), "loop stop state should use dedicated stop evidence refs");
+  for (const refId of stopState.evidenceRefs) {
+    const evidenceRef = stopPacket.evidenceRefs.find((ref) => ref.refId === refId);
+    assert.ok(evidenceRef, `loop stop state evidence ref ${refId} should be materialized`);
+    assert.equal(evidenceRef.retentionClass, "metadata_only");
+    assert.equal(evidenceRef.rawPayloadRetained, false);
+  }
+
+  const cockpitStopPacket = pipelineCockpitPackets.find((packet) => packet.packetId === stopPacket.packetId);
+  assert.equal(cockpitStopPacket?.loopStopStates[0]?.kind, "limit_window");
+});
+
+test("supervisor WorkPacket schema defaults loop stop states for real packet payloads", async () => {
+  const supervisorSchemaSource = await readFile(supervisorSchemasPath, "utf8");
+
+  assert.match(supervisorSchemaSource, /class WorkPacketLoopStopStateV0View\(BaseModel\):/);
+  assert.match(supervisorSchemaSource, /loopStopStates:\s*list\[WorkPacketLoopStopStateV0View\]\s*=\s*Field\(default_factory=list\)/);
+  assert.match(supervisorSchemaSource, /metadataOnly:\s*Literal\[True\]\s*=\s*True/);
+  assert.match(supervisorSchemaSource, /providerCallsAllowed:\s*Literal\[False\]\s*=\s*False/);
+  assert.match(supervisorSchemaSource, /workerLaunchAllowed:\s*Literal\[False\]\s*=\s*False/);
+  assert.match(supervisorSchemaSource, /githubMutationAllowed:\s*Literal\[False\]\s*=\s*False/);
+  assert.match(supervisorSchemaSource, /cleanupAllowed:\s*Literal\[False\]\s*=\s*False/);
 });
 
 test("pipeline memory proposal fixtures stay review-gated and proposal-only", async () => {
