@@ -963,6 +963,8 @@ class WorkPacketDeliveryEvidenceV0View(BaseModel):
     mergeResult: str | None = None
     cleanupDryRunStatus: str | None = None
     cleanupTarget: str | None = None
+    mergeGate: "WorkPacketDeliveryMergeGateV0View | None" = None
+    cleanupDryRunGate: "WorkPacketCleanupDryRunGateV0View | None" = None
     readyForApproval: bool = False
     hasDeliveryExecutionEvidence: bool = False
     evidenceRefs: list[str] = Field(default_factory=list)
@@ -974,6 +976,39 @@ class WorkPacketDeliveryEvidenceV0View(BaseModel):
     rawPayloadRetained: Literal[False] = False
     remoteMutationApproved: Literal[False] = False
     mergeApproved: Literal[False] = False
+    cleanupApproved: Literal[False] = False
+
+
+class WorkPacketDeliveryGateCriterionV0View(BaseModel):
+    criterionId: str
+    label: str
+    status: Literal["passed", "blocked"]
+    evidence: list[str] = Field(default_factory=list)
+    blockedReason: str | None = None
+
+
+class WorkPacketDeliveryMergeGateV0View(BaseModel):
+    status: Literal["passed", "blocked"]
+    lowRiskReady: bool
+    criteria: list[WorkPacketDeliveryGateCriterionV0View] = Field(default_factory=list)
+    blockedReasons: list[str] = Field(default_factory=list)
+    recoveryPath: str
+    metadataOnly: Literal[True] = True
+    mergeApproved: Literal[False] = False
+
+
+class WorkPacketCleanupDryRunGateV0View(BaseModel):
+    status: Literal["passed", "blocked"]
+    dryRunMatchesPolicy: bool
+    expectedPr: str | None = None
+    expectedOwner: str | None = None
+    expectedWorktree: str | None = None
+    expectedLocalBranch: str | None = None
+    expectedRemoteBranch: str | None = None
+    expectedHeadRevision: str | None = None
+    blockedReasons: list[str] = Field(default_factory=list)
+    recoveryPath: str
+    metadataOnly: Literal[True] = True
     cleanupApproved: Literal[False] = False
 
 
@@ -2578,6 +2613,39 @@ class LowRiskDeliveryPlanActionView(BaseModel):
     readOnly: bool = True
 
 
+class DeliveryGateCriterionView(BaseModel):
+    criterionId: str
+    label: str
+    status: str
+    evidence: list[str] = Field(default_factory=list)
+    blockedReason: str | None = None
+
+
+class DeliveryMergeGateEvidenceView(BaseModel):
+    status: str
+    lowRiskReady: bool
+    criteria: list[DeliveryGateCriterionView] = Field(default_factory=list)
+    blockedReasons: list[str] = Field(default_factory=list)
+    recoveryPath: str
+    metadataOnly: bool = True
+    mergeApproved: bool = False
+
+
+class CleanupDryRunGateEvidenceView(BaseModel):
+    status: str
+    dryRunMatchesPolicy: bool
+    expectedPr: str | None = None
+    expectedOwner: str | None = None
+    expectedWorktree: str | None = None
+    expectedLocalBranch: str | None = None
+    expectedRemoteBranch: str | None = None
+    expectedHeadRevision: str | None = None
+    blockedReasons: list[str] = Field(default_factory=list)
+    recoveryPath: str
+    metadataOnly: bool = True
+    cleanupApproved: bool = False
+
+
 class LowRiskDeliveryPlanReportView(BaseModel):
     reportId: str
     generatedAt: datetime
@@ -2589,6 +2657,8 @@ class LowRiskDeliveryPlanReportView(BaseModel):
     workingTreeStatus: str
     prRef: str | None = None
     actions: list[LowRiskDeliveryPlanActionView]
+    mergeGate: DeliveryMergeGateEvidenceView
+    cleanupDryRunGate: CleanupDryRunGateEvidenceView
     hardStops: list[str]
     nextSafeActions: list[str]
     readOnly: bool = True
