@@ -20470,6 +20470,7 @@ class SupervisorService:
             evidenceRefs=evidence_refs,
             artifactRefs=artifact_refs,
             humanGateActions=[],
+            humanGateActionRequests=[],
             laneCards=self._work_packet_lane_cards(attempts, routing_preview),
             memoryProposals=memory_proposal_views,
             alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs, memory_proposal_views),

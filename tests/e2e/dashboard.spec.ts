@@ -868,10 +868,25 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gatePacketDetail).toBeVisible();
     await expect(gatePacketDetail.getByText("Required evidence", { exact: true }).first()).toBeVisible();
     await expect(gatePacketDetail.getByText("Stop lines", { exact: true }).first()).toBeVisible();
-    await expect(gatePacketDetail.getByText("Do not launch a real worker from fixture mode.", { exact: false })).toBeVisible();
+    await expect(gatePacketDetail.getByText("Do not launch a real worker from fixture mode.", { exact: false }).first()).toBeVisible();
     await expect(gatePacketDetail.getByText("Rollback", { exact: true }).first()).toBeVisible();
     await expect(gatePacketDetail.getByText("Audit", { exact: true }).first()).toBeVisible();
     await expect(gatePacketDetail.getByText("Action guard previews", { exact: true }).first()).toBeVisible();
+    const actionRequestLedger = gatePacketDetail.getByRole("region", { name: "Action request ledger" });
+    await expect(actionRequestLedger).toBeVisible();
+    const actionRequestState = await actionRequestLedger.locator("article").first().evaluate((article) =>
+      Object.fromEntries(
+        Array.from(article.querySelectorAll("dt")).map((label) => [
+          label.textContent ?? "",
+          label.nextElementSibling?.textContent ?? "",
+        ])
+      )
+    );
+    expect(actionRequestState).toMatchObject({
+      "Request status": "recorded",
+      "Execution started": "false",
+      "Resulting state applied": "false",
+    });
     await gatePacketDetail.getByRole("link", { name: "Back to pipeline", exact: true }).click();
     await expect(page).toHaveURL(/\/pipeline$/);
     await page.goto("/pipeline/packets/fixture:learn-memory");
