@@ -3154,6 +3154,20 @@ try {
         existsSync(join(dispatchStateRoot, "assignments", `${selectedBmadLane.slug}.json`)),
         "dispatch did not create BMAD assignment metadata",
       );
+      const assignment = readJson(join(dispatchStateRoot, "assignments", `${selectedBmadLane.slug}.json`));
+      assert(assignment.status === "active", "dispatch assignment should be active after handoff");
+      assert(assignment.phase === "handoff", "dispatch assignment phase missing");
+      assert(assignment.runner_kind === "codex-cli", "dispatch assignment runner kind missing");
+      assert(assignment.last_heartbeat_at === assignment.updated_at, "dispatch assignment heartbeat timestamp missing");
+      assert(assignment.stale_after_seconds === 86400, "dispatch assignment stale threshold missing");
+      assert(assignment.heartbeat_count === 2, "dispatch assignment should include claim and handoff heartbeats");
+      assert(assignment.events.some((event) => event.type === "heartbeat"), "dispatch assignment heartbeat event missing");
+      const dispatchedManifest = readJson(join(tasksDir, `${assignment.task_id}.json`));
+      assert(dispatchedManifest.phase === "handoff", "dispatch manifest phase missing");
+      assert(dispatchedManifest.last_heartbeat_at === dispatchedManifest.updated_at, "dispatch manifest heartbeat timestamp missing");
+      assert(dispatchedManifest.stale_after_seconds === 86400, "dispatch manifest stale threshold missing");
+      assert(dispatchedManifest.heartbeat_count === 1, "dispatch manifest heartbeat count missing");
+      assert(dispatchedManifest.events.some((event) => event.type === "heartbeat"), "dispatch manifest heartbeat event missing");
     } finally {
       rmSync(dispatchStateRoot, { recursive: true, force: true });
       spawnSync("git", ["worktree", "prune"], {
