@@ -76,6 +76,7 @@ export function PacketDetailPage({
 
         <DetailSection title="Gate, memory, recovery">
           <LoopStopStateList packet={packet} />
+          <DeliveryEvidenceList packet={packet} />
           <HumanGateActionList packet={packet} />
           <HumanGateActionRequestList packet={packet} />
           <MemoryProposalList packet={packet} />
@@ -299,6 +300,47 @@ function LoopStopStateList({ packet }: { packet: PipelineFixturePacket }) {
   );
 }
 
+function DeliveryEvidenceList({ packet }: { packet: PipelineFixturePacket }) {
+  const evidence = packet.deliveryEvidence;
+  return (
+    <DetailCard title="Delivery and cleanup evidence" empty={evidence ? null : "No delivery or cleanup evidence for this packet."}>
+      {evidence ? (
+        <TraceBlock
+          title={evidence.evidenceId}
+          fields={[
+            ["Mode", evidence.mode],
+            ["Action", evidence.actionId ?? "none"],
+            ["Status", evidence.status],
+            ["Target branch", evidence.targetBranch ?? "none"],
+            ["Base branch", evidence.baseBranch ?? "none"],
+            ["Pull request", evidence.pullRequestUrl ?? "none"],
+            ["Expected head", evidence.expectedHeadRevision ?? "none"],
+            ["PR head", evidence.pullRequestHeadRevision ?? "none"],
+            ["CI status", evidence.ciStatus ?? "none"],
+            ["Review state", evidence.reviewState ?? "none"],
+            ["Merge status", evidence.mergeStatus ?? "none"],
+            ["Merge result", evidence.mergeResult ?? "none"],
+            ["Cleanup dry-run", evidence.cleanupDryRunStatus ?? "none"],
+            ["Cleanup target", evidence.cleanupTarget ?? "none"],
+            ["Ready for approval", String(evidence.readyForApproval)],
+            ["Delivery execution evidence", String(evidence.hasDeliveryExecutionEvidence)],
+            ["Evidence refs", formatRefList(evidence.evidenceRefs)],
+            ["Artifact refs", formatRefList(evidence.artifactRefs)],
+            ["Retained evidence", formatRefList(evidence.retainedEvidence)],
+            ["Blocked reasons", formatRefList(evidence.blockedReasons)],
+            ["Recovery path", evidence.recoveryPath],
+            ["Delivery rails grant authority", String(evidence.deliveryRailsGrantAuthority)],
+            ["Raw payload retained", String(evidence.rawPayloadRetained)],
+            ["Remote mutation approved", String(evidence.remoteMutationApproved)],
+            ["Merge approved", String(evidence.mergeApproved)],
+            ["Cleanup approved", String(evidence.cleanupApproved)],
+          ]}
+        />
+      ) : null}
+    </DetailCard>
+  );
+}
+
 function HumanGateActionRequestList({ packet }: { packet: PipelineFixturePacket }) {
   const requests = packet.humanGateActionRequests ?? [];
   return (
@@ -395,6 +437,10 @@ function RecoveryActionList({ packet }: { packet: PipelineFixturePacket }) {
 
 function formatActionGuardSummary(guard: PipelineFixturePacket["actionGuardFixtures"][number]) {
   return `${guard.classification}; ${guard.primaryRisk}; ${guard.safeNextOption}`;
+}
+
+function formatRefList(values?: readonly string[] | null) {
+  return values?.join(", ") || "none";
 }
 
 function formatReasonCodes(reasonCodes: unknown) {
