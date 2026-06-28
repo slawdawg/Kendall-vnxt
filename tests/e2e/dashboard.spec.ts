@@ -1433,6 +1433,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:docs", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:governed-worker-execution-dry-run", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:legacy-planning-inventory", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:pipeline-implementation-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:dashboard-pipeline-boundary", { exact: true })).toBeVisible();
@@ -1562,6 +1563,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("Report catalog", { exact: true })).toBeVisible();
     await expect(reportCatalogPanel.getByText("Supervisor evidence map")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-readiness-report")).toBeVisible();
+    await expect(reportCatalogPanel.getByText("GET /supervisor/legacy-planning-artifact-inventory")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/verification-readiness-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/authority-readiness-matrix-report")).toBeVisible();
     await expect(reportCatalogPanel.getByText("GET /supervisor/dashboard-e2e-report")).toBeVisible();
@@ -1588,6 +1590,11 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reportCatalogPanel.getByText("GET /supervisor/execution-state-boundary")).toBeVisible();
     await expect(reportCatalogPanel.getByText("Catalog entries are references, not approvals.")).toBeVisible();
     await expect(page.locator("#supervisor-report-catalog")).toBeVisible();
+    const legacyInventoryPanel = page.locator("#legacy-planning-artifact-inventory");
+    await expect(legacyInventoryPanel.getByText("Legacy planning inventory")).toBeVisible();
+    await expect(legacyInventoryPanel.getByText("Metadata-only candidates", { exact: true })).toBeVisible();
+    await expect(legacyInventoryPanel.getByText("Discovered candidates", { exact: true })).toBeVisible();
+    await expect(legacyInventoryPanel.getByText("metadata_only_no_raw_content_retained").first()).toBeVisible();
 
     const maintenancePanel = page.locator("section").filter({ hasText: "Safe work map" }).first();
     await expect(maintenancePanel.getByText("Maintenance readiness", { exact: true })).toBeVisible();

@@ -21,6 +21,7 @@ import type {
   GitHubWorkflowPolicyReportView,
   GitHygieneReportView,
   CleanupPlanView,
+  LegacyPlanningArtifactInventoryReportView,
   LocalCleanupReadinessReportView,
   LocalEvidenceExplanationPayload,
   LocalEvidenceExplanationView,
@@ -227,6 +228,10 @@ export async function getExecutionReadinessReport(): Promise<ExecutionReadinessR
 
 export async function getDocumentationAuthorityReport(): Promise<DocumentationAuthorityReportView> {
   return requestJson<DocumentationAuthorityReportView>("/supervisor/documentation-authority-report");
+}
+
+export async function getLegacyPlanningArtifactInventoryReport(): Promise<LegacyPlanningArtifactInventoryReportView> {
+  return requestJson<LegacyPlanningArtifactInventoryReportView>("/supervisor/legacy-planning-artifact-inventory");
 }
 
 export async function getVerificationReadinessReport(): Promise<VerificationReadinessReportView> {

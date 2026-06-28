@@ -79,6 +79,8 @@ from supervisor.api.schemas import (
     GitHygieneReportView,
     GitHygieneSignalView,
     GitHygieneWorktreeView,
+    LegacyPlanningArtifactCandidateView,
+    LegacyPlanningArtifactInventoryReportView,
     LocalEvidenceExplanationView,
     LocalEvidenceItemView,
     LocalEvidencePacketItemView,
@@ -1597,6 +1599,170 @@ class SupervisorService:
             ],
         )
 
+    def get_legacy_planning_artifact_inventory_report(self) -> LegacyPlanningArtifactInventoryReportView:
+        candidates = self._legacy_planning_artifact_candidates()
+        return LegacyPlanningArtifactInventoryReportView(
+            reportId="legacy-planning-artifact-inventory-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary="Metadata-only inventory of legacy and local planning artifacts that may seed Candidate Work without retaining raw artifact content.",
+            candidates=candidates,
+            artifactTypes=sorted({candidate.artifactType for candidate in candidates}),
+            sourceAccessStates=sorted({candidate.sourceAccessState for candidate in candidates}),
+            relatedReports=[
+                "GET /supervisor/legacy-planning-artifact-inventory",
+                "GET /supervisor/documentation-authority-report",
+                "GET /supervisor/safe-development-backlog",
+                "GET /supervisor/development-runway-report",
+            ],
+            relatedDocs=[
+                "docs/workflows/implementation-evidence-boundary.md",
+                "docs/workflows/end-to-end-lane-runner.md",
+            ],
+            stopLines=[
+                "This report is inventory-only and does not import, promote, rewrite, or delete planning artifacts.",
+                "Do not retain raw prompts, raw provider payloads, secrets, or full source copies in inventory candidates.",
+                "Local BMAD output remains local planning state unless a later approved lane rewrites decisions as source-owned docs, tests, scripts, policy, or an Obsidian-facing documentation proposal.",
+            ],
+            nextSafeActions=[
+                "Use candidate metadata to choose a later disposition lane; do not treat inventory as approval to mutate sources.",
+                "Promote only metadata-only candidates through the existing Candidate Work lifecycle when a scoped import lane is approved.",
+                "Run pnpm run check:legacy-planning-inventory after changing inventory paths, report fields, or evidence boundaries.",
+            ],
+            readOnly=True,
+            executionAuthorityApproved=False,
+            artifactBodyRetained=False,
+        )
+
+    def _legacy_planning_artifact_candidates(self) -> list[LegacyPlanningArtifactCandidateView]:
+        root_dir = Path(os.getenv("SUPERVISOR_LEGACY_PLANNING_ROOT") or Path(__file__).resolve().parents[5])
+        local_roots = [
+            "_bmad-output/planning-artifacts",
+            "_bmad-output/implementation-artifacts",
+            "_bmad-output/brainstorming",
+            "_bmad-output/research",
+            "_bmad-output/handoffs",
+            "_bmad-output/approval-packets",
+            "_bmad-output/reviews",
+        ]
+        source_roots = [
+            "docs/workflows",
+            "docs/architecture",
+        ]
+        candidates: list[LegacyPlanningArtifactCandidateView] = []
+
+        for root in local_roots:
+            candidates.extend(self._discover_legacy_planning_artifacts(root_dir=root_dir, relative_root=root, local_planning_state=True))
+        for root in source_roots:
+            candidates.extend(self._discover_legacy_planning_artifacts(root_dir=root_dir, relative_root=root, local_planning_state=False))
+
+        unique: dict[str, LegacyPlanningArtifactCandidateView] = {}
+        for candidate in candidates:
+            unique[candidate.path] = candidate
+        return sorted(unique.values(), key=lambda candidate: (not candidate.localPlanningState, candidate.path))
+
+    def _discover_legacy_planning_artifacts(
+        self,
+        *,
+        root_dir: Path,
+        relative_root: str,
+        local_planning_state: bool,
+    ) -> list[LegacyPlanningArtifactCandidateView]:
+        artifact_root = root_dir / relative_root
+        if not artifact_root.exists():
+            return [
+                self._legacy_planning_artifact_candidate(
+                    root_dir=root_dir,
+                    path=relative_root,
+                    artifact_type="local_planning_root" if local_planning_state else "source_owned_root",
+                    label=f"{relative_root} root",
+                    local_planning_state=local_planning_state,
+                )
+            ]
+
+        discovered = [
+            self._legacy_planning_artifact_candidate(
+                root_dir=root_dir,
+                path=path.relative_to(root_dir).as_posix(),
+                artifact_type=self._legacy_planning_artifact_type(path.relative_to(root_dir).as_posix()),
+                label=self._legacy_planning_artifact_label(path),
+                local_planning_state=local_planning_state,
+            )
+            for path in sorted(artifact_root.rglob("*.md"))
+            if path.is_file()
+        ]
+        if discovered:
+            return discovered
+        return [
+            self._legacy_planning_artifact_candidate(
+                root_dir=root_dir,
+                path=relative_root,
+                artifact_type="local_planning_root" if local_planning_state else "source_owned_root",
+                label=f"{relative_root} root",
+                local_planning_state=local_planning_state,
+            )
+        ]
+
+    def _legacy_planning_artifact_type(self, path: str) -> str:
+        lowered = path.lower()
+        name = Path(path).name.lower()
+        if "brainstorm" in lowered:
+            return "brainstorming_session"
+        if "research" in lowered:
+            return "research_packet"
+        if "handoff" in lowered:
+            return "handoff"
+        if "approval" in lowered:
+            return "approval_packet"
+        if "/prds/" in lowered or name.startswith("prd"):
+            return "prd"
+        if "architecture" in lowered:
+            return "architecture"
+        if "ux-design" in lowered or name in {"design.md", "experience.md"}:
+            return "ux_design"
+        if "/implementation-artifacts/" in lowered and re.match(r"^\d+-\d+-", name):
+            return "story"
+        if "review" in lowered or "readiness-report" in lowered:
+            return "review"
+        if "decision" in lowered or "reconciliation" in lowered or "checkpoint" in lowered or "runbook" in lowered:
+            return "decision_record"
+        if lowered.startswith("docs/workflows/"):
+            return "workflow_policy"
+        if lowered.startswith("docs/architecture/"):
+            return "architecture"
+        return "plan"
+
+    def _legacy_planning_artifact_label(self, path: Path) -> str:
+        stem = path.stem.replace("-", " ").replace("_", " ").strip()
+        return stem[:1].upper() + stem[1:] if stem else path.name
+
+    def _legacy_planning_artifact_candidate(
+        self,
+        *,
+        root_dir: Path,
+        path: str,
+        artifact_type: str,
+        label: str,
+        local_planning_state: bool,
+    ) -> LegacyPlanningArtifactCandidateView:
+        artifact_path = root_dir / path
+        if artifact_path.exists():
+            source_access_state = "local_metadata_available" if local_planning_state else "source_owned_metadata_available"
+            freshness = datetime.fromtimestamp(artifact_path.stat().st_mtime, timezone.utc).isoformat()
+        else:
+            source_access_state = "local_source_root_not_present" if local_planning_state else "source_owned_artifact_not_present"
+            freshness = "missing"
+        candidate_id = re.sub(r"[^a-z0-9]+", "-", f"{artifact_type}-{path.lower()}").strip("-")
+        return LegacyPlanningArtifactCandidateView(
+            candidateId=candidate_id,
+            path=path,
+            artifactType=artifact_type,
+            freshness=freshness,
+            summaryLabel=label,
+            sourceAccessState=source_access_state,
+            evidenceBoundary="metadata_only_no_raw_content_retained",
+            localPlanningState=local_planning_state,
+        )
+
     def get_verification_readiness_report(self) -> VerificationReadinessReportView:
         required_commands = [
             VerificationCommandView(
@@ -1641,6 +1807,17 @@ class SupervisorService:
                 evidence=[
                     "Validates documentation authority contracts, schemas, API route, service report, dashboard rendering, browser assertions, and story evidence stay aligned.",
                     "Runs as part of the full local verification command.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-legacy-planning-inventory",
+                label="Legacy planning artifact inventory drift",
+                command="pnpm run check:legacy-planning-inventory",
+                status="required",
+                requiredFor=["legacy planning artifact inventory changes", "metadata-only planning artifact boundary changes"],
+                evidence=[
+                    "Validates inventory contracts, schemas, API route, service report, metadata-only boundaries, dashboard client wiring, and story evidence stay aligned.",
+                    "Runs as part of the static and full local verification commands.",
                 ],
             ),
             VerificationCommandView(
@@ -2479,6 +2656,7 @@ class SupervisorService:
                     "check-docs",
                     "check-governed-worker-execution-dry-run",
                     "check-documentation-authority",
+                    "check-legacy-planning-inventory",
                     "check-verification-readiness",
                     "check-pipeline-implementation-readiness",
                     "check-dashboard-pipeline-boundary",
@@ -4243,6 +4421,18 @@ class SupervisorService:
                 summary="Indexes architecture, PRD, story, approval checkpoint, blocked story, and documentation drift status.",
                 evidenceScope=["documentation indexes", "blocked authority stories", "approval checkpoint"],
                 relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="legacy-planning-artifact-inventory-report-v1",
+                label="Legacy planning artifact inventory",
+                endpoint="GET /supervisor/legacy-planning-artifact-inventory",
+                status="active",
+                summary="Discovers legacy planning artifacts as metadata-only candidates without importing or retaining raw artifact content.",
+                evidenceScope=["artifact path", "artifact type", "freshness", "summary label", "source access state"],
+                relatedDocs=[
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/pipeline-default-workflow-implementation-plan.md",
+                ],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="verification-readiness-report-v1",

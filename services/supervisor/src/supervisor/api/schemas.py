@@ -1425,6 +1425,33 @@ class DocumentationAuthorityReportView(BaseModel):
     executionAuthorityApproved: bool = False
 
 
+class LegacyPlanningArtifactCandidateView(BaseModel):
+    candidateId: str
+    path: str
+    artifactType: str
+    freshness: str
+    summaryLabel: str
+    sourceAccessState: str
+    evidenceBoundary: str
+    localPlanningState: bool = True
+
+
+class LegacyPlanningArtifactInventoryReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    candidates: list[LegacyPlanningArtifactCandidateView]
+    artifactTypes: list[str] = Field(default_factory=list)
+    sourceAccessStates: list[str] = Field(default_factory=list)
+    relatedReports: list[str] = Field(default_factory=list)
+    relatedDocs: list[str] = Field(default_factory=list)
+    stopLines: list[str] = Field(default_factory=list)
+    nextSafeActions: list[str] = Field(default_factory=list)
+    readOnly: bool = True
+    executionAuthorityApproved: bool = False
+    artifactBodyRetained: Literal[False] = False
+
+
 class VerificationCommandView(BaseModel):
     commandId: str
     label: str

@@ -723,6 +723,11 @@ async def get_documentation_authority_report():
     return ApiEnvelope(data=service.get_documentation_authority_report())
 
 
+@app.get("/supervisor/legacy-planning-artifact-inventory", response_model=ApiEnvelope)
+async def get_legacy_planning_artifact_inventory_report():
+    return ApiEnvelope(data=service.get_legacy_planning_artifact_inventory_report())
+
+
 @app.get("/supervisor/verification-readiness-report", response_model=ApiEnvelope)
 async def get_verification_readiness_report():
     return ApiEnvelope(data=service.get_verification_readiness_report())

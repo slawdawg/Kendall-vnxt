@@ -1607,6 +1607,78 @@ def test_documentation_authority_report_surfaces_indexes_and_blocked_stories_wit
     assert "pnpm run check:docs" in " ".join(report["nextSafeActions"])
 
 
+def test_legacy_planning_artifact_inventory_report_discovers_metadata_only_candidates_without_mutation(tmp_path, monkeypatch) -> None:
+    db_path = (tmp_path / "legacy-planning-artifact-inventory.db").as_posix()
+    inventory_root = tmp_path / "inventory-root"
+    for relative_path in [
+        "_bmad-output/planning-artifacts/epics.md",
+        "_bmad-output/planning-artifacts/prds/prd-Kendall_Nxt-2026-06-27/prd.md",
+        "_bmad-output/planning-artifacts/architecture.md",
+        "_bmad-output/brainstorming/brainstorming-session-2026-06-26-014054.md",
+        "_bmad-output/implementation-artifacts/2-3-inventory-legacy-planning-artifacts.md",
+        "_bmad-output/implementation-artifacts/implementation-readiness-report-2026-06-27.md",
+        "docs/workflows/legacy-decision-record.md",
+        "docs/workflows/end-to-end-lane-runner.md",
+    ]:
+        target = inventory_root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# Metadata fixture\n", encoding="utf-8")
+    monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("SUPERVISOR_ENABLE_BACKGROUND", "false")
+    monkeypatch.setenv("SUPERVISOR_LEGACY_PLANNING_ROOT", inventory_root.as_posix())
+
+    _reset_supervisor_modules()
+
+    from supervisor.api.main import app
+
+    with TestClient(app) as client:
+        work_item_id = _create_routing_work_item(client)
+        before_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+        response = client.get("/supervisor/legacy-planning-artifact-inventory")
+        after_events = client.get(f"/work-items/{work_item_id}/events").json()["data"]
+
+    assert response.status_code == 200
+    assert before_events == after_events
+
+    report = response.json()["data"]
+    assert report["reportId"] == "legacy-planning-artifact-inventory-report-v1"
+    assert report["readOnly"] is True
+    assert report["executionAuthorityApproved"] is False
+    assert report["artifactBodyRetained"] is False
+    assert "plan" in report["artifactTypes"]
+    assert "prd" in report["artifactTypes"]
+    assert "architecture" in report["artifactTypes"]
+    assert "brainstorming_session" in report["artifactTypes"]
+    assert "story" in report["artifactTypes"]
+    assert "review" in report["artifactTypes"]
+    assert "decision_record" in report["artifactTypes"]
+    assert "local_metadata_available" in report["sourceAccessStates"]
+    assert "source_owned_metadata_available" in report["sourceAccessStates"]
+    assert "GET /supervisor/legacy-planning-artifact-inventory" in report["relatedReports"]
+    assert "GET /supervisor/documentation-authority-report" in report["relatedReports"]
+    assert "docs/workflows/implementation-evidence-boundary.md" in report["relatedDocs"]
+    assert any("inventory-only" in stop_line for stop_line in report["stopLines"])
+    assert any("metadata-only candidates" in action for action in report["nextSafeActions"])
+
+    candidates = report["candidates"]
+    assert candidates
+    assert all(set(candidate) >= {"path", "artifactType", "freshness", "summaryLabel", "sourceAccessState"} for candidate in candidates)
+    assert all(candidate["evidenceBoundary"] == "metadata_only_no_raw_content_retained" for candidate in candidates)
+    assert all("raw" not in candidate for candidate in candidates)
+
+    bmad_story = next(
+        candidate for candidate in candidates if candidate["path"] == "_bmad-output/implementation-artifacts/2-3-inventory-legacy-planning-artifacts.md"
+    )
+    assert bmad_story["artifactType"] == "story"
+    assert bmad_story["localPlanningState"] is True
+    assert bmad_story["sourceAccessState"] in {"local_metadata_available", "local_artifact_not_present"}
+
+    source_doc = next(candidate for candidate in candidates if candidate["path"] == "docs/workflows/end-to-end-lane-runner.md")
+    assert source_doc["artifactType"] == "workflow_policy"
+    assert source_doc["localPlanningState"] is False
+    assert source_doc["sourceAccessState"] == "source_owned_metadata_available"
+
+
 def test_verification_readiness_report_surfaces_required_checks_without_mutation(tmp_path, monkeypatch) -> None:
     db_path = (tmp_path / "verification-readiness-report.db").as_posix()
     monkeypatch.setenv("SUPERVISOR_DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -1634,6 +1706,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-docs",
         "check-governed-worker-execution-dry-run",
         "check-documentation-authority",
+        "check-legacy-planning-inventory",
         "check-verification-readiness",
         "check-pipeline-implementation-readiness",
         "check-dashboard-pipeline-boundary",
@@ -1847,6 +1920,7 @@ def test_supervisor_report_catalog_indexes_report_endpoints_without_mutation(tmp
         "GET /supervisor/epic-6-completion-audit-report",
         "GET /supervisor/epic-6-mvp-proof-trial-report",
         "GET /supervisor/delivery-readiness-policy-report",
+        "GET /supervisor/legacy-planning-artifact-inventory",
         "GET /supervisor/disabled-provider-proofs",
         "GET /supervisor/execution-state-boundary",
         "GET /supervisor/threat-boundary",
