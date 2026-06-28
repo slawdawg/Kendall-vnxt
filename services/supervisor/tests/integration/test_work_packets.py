@@ -434,6 +434,49 @@ def test_work_packet_transition_events_replay_work_item_and_subscription_launch_
         assert "event:event-subscription-completed" in packet_evidence_ref_ids
 
 
+def test_work_packet_list_replays_gate_state_from_descending_events(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-list-event-order.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="List replay ordering packet")
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-list-triaged",
+            event_type="work_item.triaged",
+            summary="Work item moved to triaged.",
+            payload={"state": "triaged"},
+            created_at="2027-06-28 00:00:01.000000",
+        )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-list-ready",
+            event_type="work_item.ready",
+            summary="Work item moved to ready.",
+            payload={"state": "ready"},
+            created_at="2027-06-28 00:00:02.000000",
+        )
+        _update_work_item_fixture(db_path, work_item["id"], state="ready")
+
+        list_response = client.get("/work-packets")
+        assert list_response.status_code == 200
+        list_packet = next(packet for packet in list_response.json()["data"] if packet["packetId"] == f"work_item:{work_item['id']}")
+        single_packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+
+        for packet in [list_packet, single_packet]:
+            validation = packet["gateStateValidation"]
+            assert validation["status"] == "matched"
+            assert validation["latestEventType"] == "work_item.ready"
+            assert validation["derivedStage"] == "human_gate"
+            assert validation["derivedOwner"] == "operator"
+            assert validation["derivedStatus"] == "waiting"
+            assert validation["mismatchReasons"] == []
+
+        list_event_types = [transition["eventType"] for transition in list_packet["transitionEvents"]]
+        assert list_event_types.index("work_item.triaged") < list_event_types.index("work_item.ready")
+
+
 def test_work_packet_gate_state_validation_matches_event_replay_without_mutation(tmp_path, monkeypatch) -> None:
     db_name = "work-packet-gate-replay-match.db"
     with _client(tmp_path, monkeypatch, db_name) as client:

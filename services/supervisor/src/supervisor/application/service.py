@@ -13147,7 +13147,7 @@ class SupervisorService:
         result = await session.execute(
             select(WorkflowEvent)
             .where(WorkflowEvent.work_item_id.in_(work_item_ids))
-            .order_by(WorkflowEvent.work_item_id.asc(), WorkflowEvent.created_at.asc(), WorkflowEvent.id.asc())
+            .order_by(WorkflowEvent.work_item_id.asc(), WorkflowEvent.created_at.desc(), WorkflowEvent.id.desc())
         )
         events_by_work_item_id: dict[str, list[WorkflowEvent]] = {work_item_id: [] for work_item_id in work_item_ids}
         for event in result.scalars():
