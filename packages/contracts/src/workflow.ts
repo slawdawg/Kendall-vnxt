@@ -35,7 +35,7 @@ export type RunMode = (typeof RUN_MODES)[number];
 export const RISK_LEVELS = ["low", "medium", "high"] as const;
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
-export const CANDIDATE_WORK_SOURCES = ["bmad", "chief_of_staff", "operator", "supervisor"] as const;
+export const CANDIDATE_WORK_SOURCES = ["bmad", "chief_of_staff", "obsidian", "operator", "supervisor"] as const;
 export type CandidateWorkSource = (typeof CANDIDATE_WORK_SOURCES)[number];
 
 export const CANDIDATE_WORK_ARTIFACT_TYPES = [
@@ -43,7 +43,8 @@ export const CANDIDATE_WORK_ARTIFACT_TYPES = [
   "bmad_research",
   "bmad_workflow_output",
   "chief_of_staff_request",
-  "manual_note"
+  "manual_note",
+  "obsidian_metadata"
 ] as const;
 export type CandidateWorkArtifactType = (typeof CANDIDATE_WORK_ARTIFACT_TYPES)[number];
 

@@ -4222,13 +4222,14 @@ function dispatchManifestForAssignment(state, assignment) {
 }
 
 function createDispatchWorkspace(item, assignment, context) {
-  const branch = String(item.branchName || assignment.branch || "");
-  assertSafeBranch(branch);
+  const requestedBranch = String(item.branchName || assignment.branch || "");
+  assertSafeBranch(requestedBranch);
   const usingDefaultBase = !context.options.base;
   const baseBranch = String(context.options.base || defaultBaseBranch);
   assertSafeBaseBranch(baseBranch);
-  const taskId = String(context.options.taskId || nextDispatchTaskId(context.state, laneSlugFromBranch(branch)));
+  const taskId = String(context.options.taskId || nextDispatchTaskId(context.state, laneSlugFromBranch(requestedBranch)));
   assertSafeTaskId(taskId);
+  const branch = dispatchWorkspaceBranchForFixture(requestedBranch, taskId);
   const worktreePath = resolve(String(context.options.worktree || join(context.state.worktreesDir, taskId)));
   const manifestPath = join(context.state.tasksDir, `${taskId}.json`);
   const shouldFetch = !context.options.noFetch;
@@ -4299,6 +4300,16 @@ function createDispatchWorkspace(item, assignment, context) {
     manifest,
     workspaceAction: "create_workspace",
   };
+}
+
+function dispatchWorkspaceBranchForFixture(branch, taskId) {
+  const ignoreFixtureBranches = process.env.CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES === "1";
+  if (!ignoreFixtureBranches || (!branchExists(branch) && !remoteBranchExists(branch))) {
+    return branch;
+  }
+  const fixtureBranch = `${branch}-fixture-${process.pid}-${taskId}`;
+  assertSafeBranch(fixtureBranch);
+  return fixtureBranch;
 }
 
 function nextDispatchTaskId(state, laneSlug) {
@@ -4424,6 +4435,7 @@ function recordAssignmentDispatchHandoff(assignment, packet, manifest, context) 
   assignment.owner = context.currentOwner;
   assignment.owner_thread_id = process.env.CODEX_THREAD_ID || null;
   assignment.task_id = manifest.task_id;
+  assignment.branch = manifest.branch;
   assignment.worktree_path = manifest.worktree_path;
   assignment.status = "active";
   assignment.phase = "handoff";

@@ -8,6 +8,7 @@ import { promoteCandidateWork, updateCandidateWork } from "../lib/supervisor";
 const sourceLabels: Record<CandidateWorkView["source"], string> = {
   bmad: "BMAD",
   chief_of_staff: "Chief of Staff",
+  obsidian: "Obsidian",
   operator: "Dev Console",
   supervisor: "System",
 };

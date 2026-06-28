@@ -45,6 +45,21 @@ export interface CandidateWorkBmadImportPayload {
   sortOrder?: number;
 }
 
+export interface CandidateWorkObsidianMetadataImportPayload {
+  title: string;
+  requestedOutcome: string;
+  sourceArtifactPath: string;
+  sourceRef: string;
+  evidenceRefs: string[];
+  approvalStatus: string;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  freshness?: "fresh" | "stale" | "unknown" | "not_applicable";
+  riskLevel?: RiskLevel;
+  priority?: CandidateWorkPriority;
+  sortOrder?: number;
+}
+
 export interface CandidateWorkView {
   id: string;
   title: string;

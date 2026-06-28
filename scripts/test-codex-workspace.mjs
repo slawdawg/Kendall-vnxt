@@ -2849,6 +2849,7 @@ try {
         encoding: "utf8",
         stdio: "pipe",
       });
+      deleteLocalBranchesMatching("codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract-fixture-*");
       rmSync(worktreePath, { recursive: true, force: true });
     }
   });
@@ -4512,6 +4513,25 @@ function seedClaimedVerificationAssignment(stateRootPath, owner) {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function deleteLocalBranchesMatching(pattern) {
+  const listed = spawnSync("git", ["branch", "--list", pattern, "--format=%(refname:short)"], {
+    cwd: rootDir,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (listed.status !== 0) {
+    return;
+  }
+  for (const branch of listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
+    const deleted = spawnSync("git", ["branch", "-D", branch], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    assert(deleted.status === 0, deleted.stderr || `Failed to delete ${branch}`);
+  }
 }
 
 function test(name, fn) {
