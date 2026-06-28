@@ -484,6 +484,7 @@ export type MemoryProposalTypeV0 =
 
 export type MemoryProposalSensitivityV0 = "low" | "medium" | "high";
 export type MemoryProposalFreshnessV0 = "fresh" | "stale" | "conflicting" | "unknown";
+export type LlmWikiRebuildBasisV0 = "approved-memory-proposals" | "source-evidence-crosswalk";
 export type MemoryProposalContradictionStatusV0 = "none" | "possible" | "confirmed";
 export type MemoryProposalConfidenceV0 = "low" | "medium" | "high";
 export type MemoryProposalOperatorActionV0 = "approve" | "edit" | "reject" | "defer" | "blocked";
@@ -543,6 +544,9 @@ export interface LlmWikiRebuildPreviewV0 {
   inputRefs: WorkPacketRefIdV0[];
   memoryProposalRefs: WorkPacketRefIdV0[];
   plannedOutputScope: string;
+  derivedTargetFolder: string;
+  freshness: MemoryProposalFreshnessV0;
+  rebuildBasis: LlmWikiRebuildBasisV0[];
   retentionClass: "metadata_only";
   stopLine: string;
   auditEventSummary: string;
@@ -562,6 +566,9 @@ export interface LlmWikiRebuildDryRunPlanV0 {
   memoryProposalRefs: WorkPacketRefIdV0[];
   plannedDerivedSections: string[];
   disposableTargetNamespace: string;
+  derivedTargetFolder: string;
+  freshness: MemoryProposalFreshnessV0;
+  rebuildBasis: LlmWikiRebuildBasisV0[];
   retentionClass: "metadata_only";
   stopLines: string[];
   discardRecoveryPath: string;

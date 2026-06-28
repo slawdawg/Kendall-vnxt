@@ -259,6 +259,9 @@ ACTIVE_EXECUTION_ATTEMPT_STATUSES = {
     ExecutionAttemptStatus.CANCEL_REQUESTED.value,
 }
 
+DEFAULT_LLM_WIKI_DERIVED_FOLDER = "01 Dashboard Queue/LLM Wiki Derived"
+LLM_WIKI_REBUILD_BASIS = ("approved-memory-proposals", "source-evidence-crosswalk")
+
 
 def _slugify_memory_draft(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:80]
@@ -708,6 +711,13 @@ class SupervisorService:
             "proposal_queue_folder": proposal_queue_folder,
             "llm_wiki_folder": f"{proposal_queue_folder}/LLM Wiki Derived",
         }
+
+    def _llm_wiki_derived_target_folder(self) -> str:
+        try:
+            config = self._load_obsidian_memory_draft_config()
+        except ValueError:
+            return DEFAULT_LLM_WIKI_DERIVED_FOLDER
+        return str(config.get("llm_wiki_folder") or DEFAULT_LLM_WIKI_DERIVED_FOLDER)
 
     async def create_memory_proposal_ai_draft(
         self,
@@ -22364,6 +22374,9 @@ class SupervisorService:
                 "Derived LLM-Wiki index preview from approved memory proposal metadata; "
                 "no durable index path is allocated."
             ),
+            derivedTargetFolder=self._llm_wiki_derived_target_folder(),
+            freshness="fresh",
+            rebuildBasis=list(LLM_WIKI_REBUILD_BASIS),
             stopLine=(
                 "Preview only; do not write LLM-Wiki index, mutate Obsidian, call providers, "
                 "launch workers, call GitHub, use network egress, or retain source content."
@@ -22389,6 +22402,9 @@ class SupervisorService:
                 "operator-review-index",
             ],
             disposableTargetNamespace=f"derived://llm-wiki/dry-run/{packet_id}",
+            derivedTargetFolder=rebuild_preview.derivedTargetFolder,
+            freshness=rebuild_preview.freshness,
+            rebuildBasis=list(rebuild_preview.rebuildBasis),
             stopLines=[
                 "Dry-run only; do not write LLM-Wiki index files.",
                 "Do not mutate Obsidian, source refs, or canonical memory.",
