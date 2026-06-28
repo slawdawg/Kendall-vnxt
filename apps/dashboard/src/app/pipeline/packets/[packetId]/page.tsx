@@ -6,6 +6,7 @@ import {
   pipelineGoldenPathSnapshots,
   pipelineSourceBoundaryChecklist,
 } from "../../../../lib/pipeline-fixtures";
+import { loadPipelineCockpitPackets } from "../../../../lib/pipeline-packet-loader";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ export default async function PipelinePacketPage({
 }) {
   const { packetId } = await params;
   const decodedPacketId = decodeURIComponent(packetId);
-  const packets = pipelineCockpitPackets;
+  const { packets } = await loadPipelineCockpitPackets();
   const packet = packets.find((candidate) => candidate.packetId === decodedPacketId);
 
   if (!packet) {

@@ -10,6 +10,7 @@ const PIPELINE_SOURCE_TARGETS = [
   "apps/dashboard/src/app/pipeline",
   "apps/dashboard/src/components/pipeline",
   "apps/dashboard/src/lib/pipeline-fixtures.ts",
+  "apps/dashboard/src/lib/pipeline-packet-loader.ts",
 ];
 
 const forbiddenImportPatterns = [
@@ -94,7 +95,7 @@ console.log(
       status: "PASS",
       scannedFiles: scannedFiles.length,
       boundary:
-        "No direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network calls from /pipeline dashboard code.",
+        "No direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network calls from /pipeline dashboard code outside the read-only supervisor WorkPacketV0 projection loader.",
     },
     null,
     2
@@ -146,6 +147,9 @@ function checkImports(displayPath, source) {
       const specifier = importMatch[1];
       specifiers.push(specifier);
       for (const { id, pattern } of forbiddenImportPatterns) {
+        if (id === "supervisor-client" && isAllowedReadOnlySupervisorProjection(displayPath, specifier)) {
+          continue;
+        }
         if (pattern.test(specifier)) {
           failures.push(`${displayPath}: forbidden import boundary ${id}: ${specifier}`);
         }
@@ -255,6 +259,10 @@ function isPipelineBoundaryPath(filePath) {
   return (
     relativePath.startsWith("apps/dashboard/src/app/pipeline/") ||
     relativePath.startsWith("apps/dashboard/src/components/pipeline/") ||
-    relativePath.startsWith("apps/dashboard/src/lib/")
+    relativePath.startsWith("apps/dashboard/src/lib/pipeline-")
   );
+}
+
+function isAllowedReadOnlySupervisorProjection(displayPath, specifier) {
+  return displayPath === "apps/dashboard/src/lib/pipeline-packet-loader.ts" && specifier === "./supervisor";
 }

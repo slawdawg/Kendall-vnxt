@@ -234,6 +234,132 @@ def test_candidate_work_promotes_once_into_active_work_with_metadata(tmp_path, m
         assert promotion_event["payload"]["sourceArtifactType"] == "bmad_story"
 
 
+def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "candidate-work-source-ref-promotion.db") as client:
+        created_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Promote sourced work",
+                "requestedOutcome": "Keep source provenance attached to active work.",
+                "source": "bmad",
+                "sourceArtifactPath": "_bmad-output/implementation-artifacts/2-2-preserve-source-refs-through-candidate-promotion.md",
+                "sourceArtifactType": "bmad_story",
+                "riskLevel": "medium",
+                "priority": "high",
+                "sortOrder": 3,
+                "importMetadata": {
+                    "verificationSummary": "Candidate source refs were approved for metadata-only promotion.",
+                    "workPacketSourceRefs": [
+                        {
+                            "refId": "obsidian:00-inbox/customer-signal",
+                            "sourceType": "obsidian",
+                            "label": "Customer signal",
+                            "pathOrUrl": "00 Inbox/customer-signal.md",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                            "canonical": True,
+                            "summaryOnly": True,
+                        },
+                        {
+                            "refId": "source:malformed",
+                            "sourceType": "private_vault",
+                            "label": "Malformed source ref",
+                            "pathOrUrl": "Private/raw-note.md",
+                            "freshness": "ancient",
+                            "accessState": "allowed",
+                            "canonical": False,
+                            "summaryOnly": False,
+                        },
+                        {
+                            "refId": "llm-wiki:derived-summary",
+                            "sourceType": "llm_wiki",
+                            "label": "Derived LLM-Wiki summary",
+                            "pathOrUrl": "llm-wiki/derived-summary.md",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                            "canonical": True,
+                            "summaryOnly": True,
+                        },
+                        {
+                            "refId": "github:missing-pr",
+                            "sourceType": "github",
+                            "label": "Missing GitHub PR",
+                            "pathOrUrl": "https://github.com/slawdawg/Kendall-vnxt/pull/0",
+                            "freshness": "unknown",
+                            "accessState": "missing",
+                            "canonical": False,
+                            "summaryOnly": True,
+                        },
+                    ],
+                    "promotionEvidenceRefs": ["candidate-import:source-ref-check"],
+                },
+            },
+        )
+        assert created_response.status_code == 200
+        candidate_id = created_response.json()["data"]["id"]
+        assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
+
+        promoted_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promoted_response.status_code == 200
+        promoted = promoted_response.json()["data"]
+        work_item_id = promoted["workItem"]["id"]
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item_id}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        refs_by_id = {ref["refId"]: ref for ref in packet["sourceRefs"]}
+        assert refs_by_id["obsidian:00-inbox/customer-signal"] == {
+            "refId": "obsidian:00-inbox/customer-signal",
+            "sourceType": "obsidian",
+            "label": "Customer signal",
+            "pathOrUrl": "00 Inbox/customer-signal.md",
+            "freshness": "fresh",
+            "accessState": "allowed",
+            "canonical": True,
+            "summaryOnly": True,
+            "blockedReason": None,
+        }
+        blocked_ref = refs_by_id["source:malformed"]
+        assert blocked_ref["sourceType"] == "manual"
+        assert blocked_ref["freshness"] == "unknown"
+        assert blocked_ref["accessState"] == "blocked"
+        assert blocked_ref["canonical"] is False
+        assert blocked_ref["summaryOnly"] is True
+        assert blocked_ref["pathOrUrl"] is None
+        assert blocked_ref["blockedReason"] == "invalid source type; invalid freshness; unsafe non-summary source metadata"
+        llm_wiki_ref = refs_by_id["llm-wiki:derived-summary"]
+        assert llm_wiki_ref["accessState"] == "allowed"
+        assert llm_wiki_ref["canonical"] is False
+        assert llm_wiki_ref["summaryOnly"] is True
+        assert llm_wiki_ref["blockedReason"] is None
+        missing_ref = refs_by_id["github:missing-pr"]
+        assert missing_ref["sourceType"] == "github"
+        assert missing_ref["accessState"] == "missing"
+        assert missing_ref["canonical"] is False
+        assert missing_ref["pathOrUrl"] is None
+        assert missing_ref["blockedReason"] == "source ref is missing or unavailable"
+
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        assert events_response.status_code == 200
+        promotion_event = next(event for event in events_response.json()["data"] if event["eventType"] == "candidate_work.promoted")
+        assert promotion_event["actorType"] == "system"
+        assert promotion_event["payload"]["actor"] == {"type": "system", "id": None, "label": None}
+        assert promotion_event["payload"]["authority"] == {
+            "operation": "candidate_work.promotion",
+            "mode": "explicit_candidate_approval",
+        }
+        assert promotion_event["payload"]["before"] == {"candidateStatus": "approved", "promotedWorkItemId": None}
+        assert promotion_event["payload"]["after"]["candidateStatus"] == "approved"
+        assert promotion_event["payload"]["after"]["promotedWorkItemId"] == work_item_id
+        assert promotion_event["payload"]["evidenceRefs"] == ["candidate-import:source-ref-check"]
+        assert promotion_event["payload"]["workPacketSourceRefs"] == [
+            "obsidian:00-inbox/customer-signal",
+            "source:malformed",
+            "llm-wiki:derived-summary",
+            "github:missing-pr",
+        ]
+
+
 def test_candidate_work_list_uses_sort_order(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "candidate-work-order.db") as client:
         for title, sort_order in (("Second", 20), ("First", 10)):
@@ -374,3 +500,164 @@ def test_source_owned_boundary_docs_are_not_imported_as_bmad_artifacts(tmp_path,
         assert import_response.status_code == 400
         assert import_response.json()["detail"]["error"]["code"] == "invalid_bmad_import"
         assert "outside supported artifact roots" in import_response.json()["detail"]["error"]["message"]
+
+
+def test_approved_obsidian_metadata_import_flows_into_candidate_work_and_packets(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "obsidian-metadata-import.db") as client:
+        import_response = client.post(
+            "/candidate-work/import-obsidian-metadata",
+            json={
+                "title": "Review source reconciliation note",
+                "requestedOutcome": "Turn approved Obsidian metadata into Candidate Work without copying note content.",
+                "sourceArtifactPath": "00 Inbox/source-reconciliation.md",
+                "sourceRef": "obsidian:00 Inbox/source-reconciliation.md",
+                "evidenceRefs": ["evidence:obsidian-approval:source-reconciliation"],
+                "approvalStatus": "approved",
+                "approvedBy": "operator",
+                "approvedAt": "2026-06-27T00:00:00Z",
+                "freshness": "fresh",
+                "riskLevel": "medium",
+                "priority": "high",
+                "sortOrder": 4,
+            },
+        )
+        assert import_response.status_code == 200
+        candidate = import_response.json()["data"]
+        candidate_id = candidate["id"]
+        assert candidate["source"] == "obsidian"
+        assert candidate["sourceArtifactPath"] == "00 Inbox/source-reconciliation.md"
+        assert candidate["sourceArtifactType"] == "obsidian_metadata"
+        assert candidate["riskLevel"] == "medium"
+        assert candidate["priority"] == "high"
+        assert candidate["status"] == "proposed"
+        assert candidate["sortOrder"] == 4
+        assert candidate["importMetadata"]["retentionPolicy"] == "metadata_only_no_raw_obsidian_content"
+        assert candidate["importMetadata"]["approvalStatus"] == "approved"
+        assert candidate["importMetadata"]["approvedBy"] == "operator"
+        assert candidate["importMetadata"]["approvedAt"] == "2026-06-27T00:00:00+00:00"
+        assert candidate["importMetadata"]["canonicalMutationAllowed"] is False
+        assert candidate["importMetadata"]["sourceMutationAllowed"] is False
+        assert candidate["importMetadata"]["workPacketSourceRefs"] == [
+            {
+                "refId": "obsidian:00 Inbox/source-reconciliation.md",
+                "sourceType": "obsidian",
+                "label": "Approved Obsidian metadata: Review source reconciliation note",
+                "pathOrUrl": "00 Inbox/source-reconciliation.md",
+                "freshness": "fresh",
+                "accessState": "allowed",
+            }
+        ]
+        assert "rawContent" not in candidate["importMetadata"]
+        assert "content" not in candidate["importMetadata"]
+
+        candidate_packet = client.get(f"/work-packets/candidate_work:{candidate_id}").json()["data"]
+        candidate_source_types = {ref["sourceType"] for ref in candidate_packet["sourceRefs"]}
+        assert candidate_source_types == {"candidate_work", "obsidian"}
+        assert candidate_packet["alphaMemorySourceStatus"]["decisionState"] == "blocked"
+        assert "approval_metadata.missing" in candidate_packet["alphaMemorySourceStatus"]["blockedReasons"]
+        assert "evidence:obsidian-approval:source-reconciliation" in [
+            ref["refId"] for ref in candidate_packet["evidenceRefs"]
+        ]
+
+        invalid_response = client.post(
+            "/candidate-work/import-obsidian-metadata",
+            json={
+                "title": "Rejected metadata",
+                "requestedOutcome": "This must not import.",
+                "sourceArtifactPath": "00 Inbox/rejected.md",
+                "sourceRef": "obsidian:00 Inbox/rejected.md",
+                "evidenceRefs": ["evidence:obsidian-approval:rejected"],
+                "approvalStatus": "pending",
+                "approvedBy": "operator",
+                "approvedAt": "2026-06-27T00:00:00Z",
+            },
+        )
+        assert invalid_response.status_code == 400
+        assert invalid_response.json()["detail"]["error"]["code"] == "invalid_obsidian_metadata_import"
+
+        invalid_cases = [
+            (
+                "missing approvedBy",
+                {
+                    "approvedAt": "2026-06-27T00:00:00Z",
+                },
+                "approvedBy provenance",
+            ),
+            (
+                "missing approvedAt",
+                {
+                    "approvedBy": "operator",
+                },
+                "approvedAt provenance",
+            ),
+            (
+                "unsafe source path",
+                {
+                    "sourceArtifactPath": "../secrets.md",
+                    "approvedBy": "operator",
+                    "approvedAt": "2026-06-27T00:00:00Z",
+                },
+                "vault-relative",
+            ),
+            (
+                "invalid source ref",
+                {
+                    "sourceRef": "manual:00 Inbox/source-reconciliation.md",
+                    "approvedBy": "operator",
+                    "approvedAt": "2026-06-27T00:00:00Z",
+                },
+                "sourceRef must start with obsidian:",
+            ),
+            (
+                "mismatched source ref",
+                {
+                    "sourceRef": "obsidian:00 Inbox/other-note.md",
+                    "approvedBy": "operator",
+                    "approvedAt": "2026-06-27T00:00:00Z",
+                },
+                "sourceRef must match sourceArtifactPath",
+            ),
+            (
+                "empty evidence refs",
+                {
+                    "evidenceRefs": [],
+                    "approvedBy": "operator",
+                    "approvedAt": "2026-06-27T00:00:00Z",
+                },
+                "at least one evidence ref",
+            ),
+        ]
+        base_payload = {
+            "title": "Invalid approved metadata",
+            "requestedOutcome": "This must not import.",
+            "sourceArtifactPath": "00 Inbox/source-reconciliation.md",
+            "sourceRef": "obsidian:00 Inbox/source-reconciliation.md",
+            "evidenceRefs": ["evidence:obsidian-approval:source-reconciliation"],
+            "approvalStatus": "approved",
+        }
+        for _case_name, overrides, expected_message in invalid_cases:
+            invalid_case_response = client.post(
+                "/candidate-work/import-obsidian-metadata",
+                json={**base_payload, **overrides},
+            )
+            assert invalid_case_response.status_code == 400
+            assert invalid_case_response.json()["detail"]["error"]["code"] == "invalid_obsidian_metadata_import"
+            assert expected_message in invalid_case_response.json()["detail"]["error"]["message"]
+
+        assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
+        promote_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promote_response.status_code == 200
+        work_item = promote_response.json()["data"]["workItem"]
+        assert work_item["source"] == f"candidate_work:{candidate_id}"
+        assert work_item["metadata"]["source"] == "obsidian"
+        assert work_item["metadata"]["sourceArtifactType"] == "obsidian_metadata"
+        assert work_item["metadata"]["workPacketSourceRefs"][0]["sourceType"] == "obsidian"
+        assert work_item["metadata"]["importMetadata"]["retentionPolicy"] == "metadata_only_no_raw_obsidian_content"
+
+        packet = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
+        assert {ref["sourceType"] for ref in packet["sourceRefs"]} == {"candidate_work", "work_item", "obsidian"}
+        obsidian_ref = next(ref for ref in packet["sourceRefs"] if ref["sourceType"] == "obsidian")
+        assert obsidian_ref["summaryOnly"] is True
+        assert obsidian_ref["accessState"] == "allowed"
+        assert obsidian_ref["pathOrUrl"] == "00 Inbox/source-reconciliation.md"
+        assert "evidence:obsidian-approval:source-reconciliation" in [ref["refId"] for ref in packet["evidenceRefs"]]

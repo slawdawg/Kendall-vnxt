@@ -2784,6 +2784,8 @@ try {
   test("dispatch-next apply does not claim unowned workspace when source lane is closed", () => {
     const dispatchStateRoot = mkdtempSync(join(tmpdir(), "codex-dispatch-apply-workspace-"));
     const worktreePath = mkdtempSync(join(tmpdir(), "codex-dispatch-worktree-"));
+    let selectedBmadLane = null;
+    let selectedBmadLaneExistedBefore = false;
     try {
       runGit(worktreePath, ["init", "-q"]);
       runGit(worktreePath, ["config", "user.email", "codex-workspace-test@example.com"]);
@@ -2796,6 +2798,22 @@ try {
       mkdirSync(tasksDir, { recursive: true });
       const manifestPath = join(tasksDir, "dispatch-workspace.json");
       const expected = expectedAuthorityClaimCandidate();
+      const bmadCandidates = bmadPipelineBacklogSlugs().map((slug) => ({
+        slug,
+        title: slug.replaceAll("-", " "),
+        branch: `codex/${slug}`,
+      }));
+      selectedBmadLane = bmadCandidates.find((candidate) => !branchExists(rootDir, candidate.branch) && !remoteBranchExists(rootDir, candidate.branch));
+      if (!selectedBmadLane) {
+        assert(
+          bmadCandidates.every((candidate) => branchExists(rootDir, candidate.branch) || remoteBranchExists(rootDir, candidate.branch)),
+          "saturated BMAD branch fixture should mean every BMAD backlog branch exists locally or remotely",
+        );
+        return;
+      }
+      for (const candidate of bmadCandidates.slice(0, bmadCandidates.indexOf(selectedBmadLane))) {
+        seedClosedSourceCompletion(dispatchStateRoot, candidate);
+      }
       seedClaimedSafeBacklogAssignment(dispatchStateRoot, "read-only-evidence-polish", "runner-b");
       writeFileSync(
         manifestPath,
@@ -2816,6 +2834,7 @@ try {
         )}\n`,
       );
       const before = readFileSync(manifestPath, "utf8");
+      selectedBmadLaneExistedBefore = branchExists(rootDir, selectedBmadLane.branch);
 
       const result = run([
         "dispatch-next",
@@ -2830,11 +2849,11 @@ try {
       const after = readFileSync(manifestPath, "utf8");
 
       assert(result.code === 0, result.stderr || result.stdout);
-      assert(result.stdout.includes("selected lane bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
+      assert(result.stdout.includes(`selected lane ${selectedBmadLane.slug}`), result.stdout || result.stderr);
       assert(after === before, "dispatch mutated unowned workspace manifest for closed source lane");
       assert(!existsSync(join(dispatchStateRoot, "assignments", `${expected.slug}.json`)), "workspace dispatch created closed-source assignment metadata");
       assert(
-        existsSync(join(dispatchStateRoot, "assignments", "bmad-1-1-validate-the-pipeline-work-packet-read-contract.json")),
+        existsSync(join(dispatchStateRoot, "assignments", `${selectedBmadLane.slug}.json`)),
         "dispatch did not create BMAD assignment metadata",
       );
     } finally {
@@ -2844,11 +2863,13 @@ try {
         encoding: "utf8",
         stdio: "pipe",
       });
-      spawnSync("git", ["branch", "-D", "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract"], {
-        cwd: rootDir,
-        encoding: "utf8",
-        stdio: "pipe",
-      });
+      if (selectedBmadLane && !selectedBmadLaneExistedBefore) {
+        spawnSync("git", ["branch", "-D", selectedBmadLane.branch], {
+          cwd: rootDir,
+          encoding: "utf8",
+          stdio: "pipe",
+        });
+      }
       rmSync(worktreePath, { recursive: true, force: true });
     }
   });
@@ -3862,6 +3883,7 @@ function run(args) {
     encoding: "utf8",
     env: {
       ...process.env,
+      CODEX_WORKSPACE_TEST_MODE: "1",
       CODEX_WORKSPACE_TEST_IGNORE_SAFE_BACKLOG_LOCAL_BRANCHES: "1",
     },
     stdio: "pipe",

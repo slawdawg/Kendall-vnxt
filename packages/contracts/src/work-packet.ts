@@ -59,16 +59,21 @@ export interface AllowedSourceRefV0 {
   pathOrUrl?: string | null;
   freshness: WorkPacketFreshnessV0;
   accessState: "allowed";
+  canonical: boolean;
   summaryOnly: boolean;
+  blockedReason?: string | null;
 }
 
 export interface RestrictedSourceRefV0 {
   refId: string;
   sourceType: SourceRefTypeV0;
   label: string;
+  pathOrUrl?: null;
   freshness: WorkPacketFreshnessV0;
   accessState: "excluded" | "missing" | "blocked";
+  canonical: boolean;
   summaryOnly: true;
+  blockedReason: string;
 }
 
 export type SourceRefV0 = AllowedSourceRefV0 | RestrictedSourceRefV0;

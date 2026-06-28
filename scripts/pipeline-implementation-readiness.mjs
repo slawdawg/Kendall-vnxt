@@ -24,7 +24,7 @@ export const REQUIRED_PIPELINE_READINESS_CATEGORY_IDS = [
 export const PIPELINE_READINESS_CATEGORY_METADATA = {
   contracts: {
     ownerEpic: "epic-1",
-    ownerStory: "1-1-define-work-packet-view-contracts",
+    ownerStory: "1-1-validate-the-pipeline-work-packet-read-contract",
     failureClass: "blocker",
   },
   "stage-mapping": {
@@ -110,16 +110,18 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     categoryId: "contracts",
     label: "WorkPacketV0 and memory/source contracts",
     ownerEpic: "epic-1",
-    ownerStory: "1-1-define-work-packet-view-contracts",
+    ownerStory: "1-1-validate-the-pipeline-work-packet-read-contract",
     status: "satisfied",
     failureClass: "blocker",
-    requiredCommands: ["pnpm run test:work-packet-contracts"],
-    sourceFiles: ["packages/contracts/src/work-packet.ts", "tests/work-packet-contracts.test.mjs"],
+    requiredCommands: ["pnpm run test:work-packet-contracts", "pnpm run test:dashboard-pipeline-fixtures"],
+    sourceFiles: ["packages/contracts/src/work-packet.ts", "apps/dashboard/src/lib/pipeline-fixtures.ts", "tests/work-packet-contracts.test.mjs", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "packages/contracts/src/work-packet.ts", tokens: ["export interface WorkPacketV0View", "export interface MemoryProposalV0"] },
+      { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["export type PipelineReadPacketContractV0 = WorkPacketV0View", "export type PipelineFixturePacket = PipelineReadPacketContractV0"] },
       { file: "tests/work-packet-contracts.test.mjs", tokens: ["metadata-only evidence", "MemoryProposalV0"] },
+      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["PipelineReadPacketContractV0", "parallel dashboard model"] },
     ],
-    summary: "Shared Work Packet and Memory Proposal contracts exist and are tested as metadata-only evidence surfaces.",
+    summary: "Shared Work Packet and Memory Proposal contracts exist, and /pipeline fixture packets are anchored to WorkPacketV0View instead of a parallel dashboard packet model.",
   },
   {
     id: "epic1.stage-mapping",
@@ -162,14 +164,15 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     status: "satisfied",
     failureClass: "blocker",
     requiredCommands: ["pnpm run test:dashboard-pipeline-fixtures"],
-    sourceFiles: ["apps/dashboard/src/app/pipeline/page.tsx", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
+    sourceFiles: ["apps/dashboard/src/app/pipeline/page.tsx", "apps/dashboard/src/lib/pipeline-packet-loader.ts", "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", "tests/dashboard-pipeline-fixtures.test.mjs"],
     requiredTokens: [
       { file: "apps/dashboard/src/app/pipeline/page.tsx", tokens: ["PipelineCockpit", "realtimeRefresh={false}"] },
+      { file: "apps/dashboard/src/lib/pipeline-packet-loader.ts", tokens: ["getWorkPackets", "pipelineCockpitPackets", "Supervisor packets"] },
       { file: "apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx", tokens: ["Pipeline command strip", "Pipeline route map", "Pipeline operational strip", "Mission control focus strip", "Pipeline board"] },
       { file: "apps/dashboard/src/components/pipeline/packet-detail-page.tsx", tokens: ["Packet detail", "Packet 5 Whys", "Gate, memory, recovery"] },
-      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["fixture-only cockpit frame without supervisor calls", "fetch\\s*\\("] },
+      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["supervisor WorkPacketV0 projections with fixture fallback", "fetch\\s*\\("] },
     ],
-    summary: "The dashboard exposes a static fixture-only cockpit route without supervisor/provider/worker calls.",
+    summary: "The dashboard exposes a cockpit route backed by read-only supervisor WorkPacketV0 projections with static fixture fallback and no provider, worker, GitHub, or Obsidian calls.",
   },
   {
     id: "epic2.accessibility-density",
@@ -289,7 +292,7 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
   {
     id: "cross.no-live-call-boundary",
     categoryId: "no-live-call-boundary",
-    label: "No live provider, worker, source, vault, network, or process calls from /pipeline",
+    label: "No live provider, worker, source mutation, vault, GitHub, or process calls from /pipeline",
     ownerEpic: "epic-2",
     ownerStory: "2-8-verify-cockpit-accessibility-and-responsiveness",
     status: "satisfied",
@@ -298,15 +301,16 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     sourceFiles: [
       "scripts/check-dashboard-pipeline-import-boundary.mjs",
       "tests/dashboard-pipeline-fixtures.test.mjs",
-      "apps/dashboard/src/app/pipeline/page.tsx",
+      "apps/dashboard/src/lib/pipeline-packet-loader.ts",
       "apps/dashboard/src/lib/pipeline-fixtures.ts",
     ],
     requiredTokens: [
       { file: "scripts/check-dashboard-pipeline-import-boundary.mjs", tokens: ["PIPELINE_SOURCE_TARGETS", "forbiddenImportPatterns", "forbiddenCallPatterns"] },
-      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["fetch\\s*\\(", "writeObsidian", "provider execution from dashboard"] },
+      { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["getWorkPackets", "writeObsidian", "provider execution from dashboard"] },
+      { file: "apps/dashboard/src/lib/pipeline-packet-loader.ts", tokens: ["Read-only supervisor WorkPacketV0 projections", "No provider, worker, GitHub, or Obsidian calls"] },
       { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["No provider, worker, GitHub, or Obsidian calls"] },
     ],
-    summary: "Static tests deny hidden live calls and mutation paths in the fixture-backed cockpit.",
+    summary: "Static tests permit only the bounded read-only supervisor WorkPacketV0 read while denying provider, worker, GitHub, Obsidian, mutation, and process paths in the cockpit.",
   },
   {
     id: "meta.verification-readiness-report",

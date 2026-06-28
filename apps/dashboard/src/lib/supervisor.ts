@@ -2,6 +2,7 @@ import type {
   ApiEnvelope,
   AuthorityReadinessMatrixReportView,
   CandidateWorkBmadImportPayload,
+  CandidateWorkObsidianMetadataImportPayload,
   CandidateWorkPromotionView,
   CandidateWorkUpdatePayload,
   CandidateWorkView,
@@ -108,6 +109,20 @@ export async function importBmadCandidateWork(payload: CandidateWorkBmadImportPa
   return envelope.data;
 }
 
+export async function importObsidianMetadataCandidateWork(payload: CandidateWorkObsidianMetadataImportPayload): Promise<CandidateWorkView> {
+  const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/import-obsidian-metadata`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to import Obsidian metadata: ${response.status}`);
+  }
+  const envelope = (await response.json()) as ApiEnvelope<CandidateWorkView>;
+  return envelope.data;
+}
+
 export async function updateCandidateWork(candidateWorkId: string, payload: CandidateWorkUpdatePayload): Promise<CandidateWorkView> {
   const response = await fetch(`${getSupervisorBaseUrl()}/candidate-work/${candidateWorkId}`, {
     method: "PATCH",
@@ -145,6 +160,10 @@ export async function getWorkItemEvents(id: string): Promise<WorkflowEventView[]
 
 export async function getWorkPacket(packetId: string): Promise<WorkPacketV0View> {
   return requestJson<WorkPacketV0View>(`/work-packets/${encodeURIComponent(packetId)}`);
+}
+
+export async function getWorkPackets(): Promise<WorkPacketV0View[]> {
+  return requestJson<WorkPacketV0View[]>("/work-packets");
 }
 
 export async function getExecutionAttempts(workItemId: string): Promise<ExecutionAttemptView[]> {

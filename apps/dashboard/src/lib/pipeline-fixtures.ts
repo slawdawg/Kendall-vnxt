@@ -23,7 +23,9 @@ export type PipelineFixtureKind =
   | "local-readiness"
   | "future-real-source";
 
-export type PipelineFixturePacket = WorkPacketV0View & {
+export type PipelineReadPacketContractV0 = WorkPacketV0View;
+
+export type PipelineFixturePacket = PipelineReadPacketContractV0 & {
   fixtureId: string;
   fixtureKind: PipelineFixtureKind;
   fixtureLabel: string;
@@ -1124,6 +1126,15 @@ export const pipelineCockpitPackets: PipelineFixturePacket[] = [
 
 export const selectedPipelinePacket = requireSelectedPipelinePacket(pipelineCockpitPackets);
 
+export function projectSupervisorWorkPacketsToCockpitPackets(
+  packets: readonly WorkPacketV0View[]
+): PipelineFixturePacket[] {
+  return packets.flatMap((packet) => {
+    const projectedPacket = safeProjectSupervisorWorkPacketToCockpitPacket(packet);
+    return projectedPacket ? [projectedPacket] : [];
+  });
+}
+
 export function projectGovernedCopiedWorktreeExecutionEvidence(
   evidence: readonly GovernedCopiedWorktreeExecutionEvidenceV0[]
 ): PipelineFixturePacket[] {
@@ -1148,6 +1159,64 @@ export function projectGovernedCopiedWorktreeExecutionEvidenceSnapshot(
     return [];
   }
   return projectGovernedCopiedWorktreeExecutionEvidence(snapshot.attempts);
+}
+
+function safeProjectSupervisorWorkPacketToCockpitPacket(packet: WorkPacketV0View): PipelineFixturePacket | null {
+  try {
+    return projectSupervisorWorkPacketToCockpitPacket(packet);
+  } catch {
+    return null;
+  }
+}
+
+function projectSupervisorWorkPacketToCockpitPacket(packet: WorkPacketV0View): PipelineFixturePacket {
+  const sourceTrustStates = sourceTrustStatesFor(packet);
+  const freshnessLabel = freshnessLabelFor(packet);
+  const confidenceScore = packet.routeSummary?.confidenceScore ?? 0.5;
+  const reasonCodes = supervisorReasonCodes(packet);
+  return {
+    ...packet,
+    fixtureId: `supervisor:${packet.packetId}`,
+    fixtureKind: "future-real-source",
+    fixtureLabel: "supervisor WorkPacketV0 projection",
+    summary: packet.routeSummary?.recommendation
+      ? `Supervisor route recommendation: ${packet.routeSummary.recommendation}.`
+      : packet.requestedOutcome,
+    nextAction: supervisorNextAction(packet),
+    confidenceLabel: packet.routeSummary?.confidenceBand ?? confidenceLabelFor(confidenceScore),
+    freshnessLabel,
+    sourceTrustState: sourceTrustStates[0] ?? "included",
+    sourceTrustStates,
+    sourceTrustSummary: sourceTrustSummaryFor(packet),
+    routeFork: {
+      selectedRoute: packet.routeSummary?.recommendation ?? packet.currentStage,
+      rejectedRoutes: rejectedRoutesFor(packet.currentStage),
+      tags: ["supervisor", packet.currentStage, packet.currentOwner, packet.status],
+      sourceContext: sourceTrustSummaryFor(packet),
+      lowConfidenceActions: confidenceScore < 0.5 ? ["Clarify", "Downgrade to reference", "Send back to Research"] : [],
+    },
+    lastEvent: `Supervisor Work Packet projection rendered from ${reasonCodes[0]}.`,
+    riskFlags: riskFlagsFor({
+      riskLevel: packet.riskLevel,
+      freshnessLabel,
+      fixtureKind: "future-real-source",
+    }),
+    matrixRowIds: reasonCodes,
+    humanGateFixtureEvents: [],
+    recoveryFixtureEvents: [],
+    actionGuardFixtures: [],
+    localModelHealth: null,
+    hermesJob: null,
+    codexWorker: null,
+    claudeReview: null,
+  };
+}
+
+function supervisorReasonCodes(packet: WorkPacketV0View): string[] {
+  const reasonCodes = packet.routeSummary?.reasonCodes
+    ?.filter((code): code is string => typeof code === "string" && code.trim().length > 0)
+    .map((code) => code.trim());
+  return reasonCodes?.length ? reasonCodes : [`supervisor.${packet.currentStage}`];
 }
 
 export function evaluateFixtureActionDecision(
@@ -1587,6 +1656,76 @@ function safeEvidencePacketSuffix(value: string): string {
   return suffix.length > 0 ? suffix.slice(0, 80) : "unknown";
 }
 
+function sourceTrustStatesFor(packet: WorkPacketV0View): PipelineSourceTrustState[] {
+  const states = packet.sourceRefs.map((ref): PipelineSourceTrustState => {
+    if (ref.accessState === "missing" || ref.accessState === "blocked") {
+      return "unavailable";
+    }
+    if (ref.accessState === "excluded") {
+      return "excluded";
+    }
+    if (ref.freshness === "stale") {
+      return "stale";
+    }
+    if (ref.sourceType === "llm_wiki") {
+      return "derived-only";
+    }
+    return "included";
+  });
+  return Array.from(new Set(states.length > 0 ? states : ["included"]));
+}
+
+function sourceTrustSummaryFor(packet: WorkPacketV0View): string {
+  const sourceCount = packet.sourceRefs.length;
+  const restrictedCount = packet.sourceRefs.filter((ref) => ref.accessState !== "allowed").length;
+  if (sourceCount === 0) {
+    return "Supervisor packet has no source refs attached yet.";
+  }
+  if (restrictedCount > 0) {
+    return `${restrictedCount} of ${sourceCount} supervisor source refs are restricted or unavailable.`;
+  }
+  return `${sourceCount} supervisor source refs are available as summary-only metadata.`;
+}
+
+function freshnessLabelFor(packet: WorkPacketV0View): string {
+  if (packet.sourceRefs.some((ref) => ref.freshness === "stale")) {
+    return "stale";
+  }
+  if (packet.sourceRefs.some((ref) => ref.freshness === "unknown")) {
+    return "unknown";
+  }
+  return "fresh";
+}
+
+function confidenceLabelFor(confidenceScore: number): string {
+  if (confidenceScore >= 0.75) {
+    return "High confidence";
+  }
+  if (confidenceScore < 0.5) {
+    return "Low confidence";
+  }
+  return "Medium confidence";
+}
+
+function supervisorNextAction(packet: WorkPacketV0View): string {
+  const availableHumanGateAction = packet.humanGateActions.find((action) => action.status === "available");
+  if (availableHumanGateAction) {
+    return availableHumanGateAction.label;
+  }
+  const recoveryAction = packet.recoveryActions.find((action) => action.availability === "available");
+  if (recoveryAction) {
+    return recoveryAction.label;
+  }
+  return packet.routeSummary?.recommendation ?? plainStageLabel(packet.currentStage);
+}
+
+function plainStageLabel(stage: PipelineStage): string {
+  return stage
+    .split("_")
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function packetFixture(input: {
   packetId: string;
   title: string;
@@ -1626,7 +1765,9 @@ function packetFixture(input: {
       pathOrUrl: "_bmad-output/implementation-artifacts/1-5-define-pipeline-state-evidence-and-fixture-matrix.md",
       freshness: input.freshnessLabel === "stale" ? "stale" : "fresh",
       accessState: "allowed",
+      canonical: true,
       summaryOnly: true,
+      blockedReason: null,
     },
   ];
 
@@ -1637,7 +1778,9 @@ function packetFixture(input: {
       label: "Stale research summary",
       freshness: "stale",
       accessState: "blocked",
+      canonical: false,
       summaryOnly: true,
+      blockedReason: "stale research source must be refreshed before promotion",
     });
   }
   if (input.fixtureId === "obsidian_proposal_pending_approval" || input.fixtureId === "corrupted_incomplete_aggregate") {
@@ -1648,7 +1791,9 @@ function packetFixture(input: {
         label: "Obsidian human-owned memory",
         freshness: "fresh",
         accessState: "excluded",
+        canonical: true,
         summaryOnly: true,
+        blockedReason: "human-owned Obsidian source is excluded from automated mutation",
       },
       {
         refId: `${input.packetId}:source:llm-wiki-derived-only`,
@@ -1656,7 +1801,9 @@ function packetFixture(input: {
         label: "LLM-Wiki derived-only digest",
         freshness: "fresh",
         accessState: "blocked",
+        canonical: false,
         summaryOnly: true,
+        blockedReason: "LLM-Wiki is derived-only and cannot be treated as source of truth",
       }
     );
   }
@@ -1667,7 +1814,9 @@ function packetFixture(input: {
       label: "Approved Obsidian memory metadata",
       freshness: "fresh",
       accessState: "allowed",
+      canonical: true,
       summaryOnly: true,
+      blockedReason: null,
     });
   }
   const evidenceRefs: WorkPacketV0View["evidenceRefs"] = [

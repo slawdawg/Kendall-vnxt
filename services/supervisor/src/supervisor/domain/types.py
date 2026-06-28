@@ -38,6 +38,7 @@ class RiskLevel(StrEnum):
 class CandidateWorkSource(StrEnum):
     BMAD = "bmad"
     CHIEF_OF_STAFF = "chief_of_staff"
+    OBSIDIAN = "obsidian"
     OPERATOR = "operator"
     SUPERVISOR = "supervisor"
 
@@ -48,6 +49,7 @@ class CandidateWorkArtifactType(StrEnum):
     BMAD_WORKFLOW_OUTPUT = "bmad_workflow_output"
     CHIEF_OF_STAFF_REQUEST = "chief_of_staff_request"
     MANUAL_NOTE = "manual_note"
+    OBSIDIAN_METADATA = "obsidian_metadata"
 
 
 class CandidateWorkPriority(StrEnum):
