@@ -1868,6 +1868,15 @@ try {
       const packet = JSON.parse(result.stdout);
       assert(packet.currentOwner === "runner-a", result.stdout || result.stderr);
       assert(packet.selected?.itemId === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.proposedRunner === "runner-a", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.targetLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.targetBranch === "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.rationale.includes("ready safe backlog lane"), result.stdout || result.stderr);
+      assert(Array.isArray(packet.assignmentPreview.blockedReasons), result.stdout || result.stderr);
+      assert(packet.assignmentPreview.blockedReasons.length === 0, result.stdout || result.stderr);
+      assert(packet.assignmentPreview.requiredEvidence.includes("safe backlog item bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
+      assert(packet.assignmentPreview.mutation === "none; preview only", result.stdout || result.stderr);
+      assert(!("assignedLane" in packet.assignmentPreview), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
       assert(packet.counts.claimable === 34, result.stdout || result.stderr);
       assert(packet.counts.excluded >= 1, result.stdout || result.stderr);
@@ -1886,6 +1895,34 @@ try {
       assert(typeof packet.sourceDriftTruncated === "boolean", result.stdout || result.stderr);
       assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
       assert(before === after, "claim-next --summary-json mutated workspace manifests");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next summary-json explains blocked preview when no safe lane is claimable", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-no-safe-preview-"));
+    try {
+      const assignmentsDir = join(claimStateRoot, "assignments");
+      for (const laneSlug of safeBacklogReadyItemIds()) {
+        seedClaimedSafeBacklogAssignment(claimStateRoot, laneSlug, "runner-b");
+      }
+      const before = taskSnapshot(assignmentsDir);
+
+      const result = run(["claim-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      const after = taskSnapshot(assignmentsDir);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.selected === null, result.stdout || result.stderr);
+      assert(packet.assignmentPreview.proposedRunner === "runner-a", result.stdout || result.stderr);
+      assert(packet.assignmentPreview.targetLane === null, result.stdout || result.stderr);
+      assert(packet.assignmentPreview.targetBranch === null, result.stdout || result.stderr);
+      assert(packet.assignmentPreview.blockedReasons.some((reason) => reason.includes("assigned to runner-b")), result.stdout || result.stderr);
+      assert(packet.assignmentPreview.requiredEvidence.includes("resolve blockers before applying claim-next"), result.stdout || result.stderr);
+      assert(packet.assignmentPreview.mutation === "none; preview only", result.stdout || result.stderr);
+      assert(!("assignedLane" in packet.assignmentPreview), result.stdout || result.stderr);
+      assert(before === after, "claim-next blocked summary preview mutated assignments");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }
@@ -1980,6 +2017,9 @@ try {
       const packet = JSON.parse(dispatchSummary.stdout);
       assert(packet.dispatch.allowed === true, dispatchSummary.stdout);
       assert(packet.dispatch.selectedLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", dispatchSummary.stdout);
+      assert(packet.laneAssignmentPreview.targetLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", dispatchSummary.stdout);
+      assert(Array.isArray(packet.laneAssignmentPreview.blockedReasons), dispatchSummary.stdout);
+      assert(packet.laneAssignmentPreview.blockedReasons.length === 0, dispatchSummary.stdout);
       assert(beforeTasks === taskSnapshot(tasksDir), "closed source guard dry-runs mutated task manifests");
       assert(beforeAssignments === taskSnapshot(assignmentsDir), "closed source guard dry-runs mutated assignments");
     } finally {
@@ -2102,6 +2142,17 @@ try {
       const packet = JSON.parse(result.stdout);
       assert(packet.dispatch.allowed === false, result.stdout);
       assert(packet.dispatch.selectedLane === null, result.stdout);
+      assert(packet.laneAssignmentPreview.proposedRunner === "runner-a", result.stdout);
+      assert(packet.laneAssignmentPreview.targetLane === null, result.stdout);
+      assert(
+        packet.laneAssignmentPreview.blockedReasons.includes(
+          "finish open delivery lanes first: verify PR checks, review threads, exact head, merge evidence, then run merged-lane cleanup",
+        ),
+        result.stdout,
+      );
+      assert(packet.laneAssignmentPreview.requiredEvidence.includes("resolve blockers before applying dispatch-next"), result.stdout);
+      assert(packet.laneAssignmentPreview.mutation === "none; preview only", result.stdout);
+      assert(!("assignedLane" in packet.laneAssignmentPreview), result.stdout);
       assert(packet.candidateStateCounts.delivery === 1, result.stdout);
       assert(
         packet.dispatch.nextActionGuidance ===
@@ -2132,6 +2183,13 @@ try {
       const packet = JSON.parse(result.stdout);
       assert(packet.dispatch.allowed === false, result.stdout);
       assert(packet.dispatch.selectedLane === null, result.stdout);
+      assert(packet.laneAssignmentPreview.targetLane === null, result.stdout);
+      assert(
+        packet.laneAssignmentPreview.blockedReasons.includes(
+          "finish open delivery lanes first: verify PR checks, review threads, exact head, merge evidence, then run merged-lane cleanup",
+        ),
+        result.stdout,
+      );
       assert(packet.candidateStateCounts.delivery === 1, result.stdout);
       assert(packet.candidateStateCounts.closed >= 1, result.stdout);
       assert(
@@ -2735,6 +2793,15 @@ try {
       assert(packet.selected?.itemId === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
       assert(packet.dispatch.allowed === true, result.stdout || result.stderr);
       assert(packet.dispatch.selectedLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.proposedRunner === "runner-a", result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.targetLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.targetBranch === "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.rationale.includes("ready safe backlog lane"), result.stdout || result.stderr);
+      assert(Array.isArray(packet.laneAssignmentPreview.blockedReasons), result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.blockedReasons.length === 0, result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.requiredEvidence.includes("dispatch-next dry-run summary-json"), result.stdout || result.stderr);
+      assert(packet.laneAssignmentPreview.mutation === "none; preview only", result.stdout || result.stderr);
+      assert(!("assignedLane" in packet.laneAssignmentPreview), result.stdout || result.stderr);
       assert(packet.dispatch.workspaceAction === "claim_and_create_workspace", result.stdout || result.stderr);
       assert(packet.dispatch.nextActionGuidance.includes("run dispatch-next --apply"), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
@@ -4338,6 +4405,27 @@ function bmadPipelineBacklogSlugs() {
     "bmad-7-4-deauthorize-unsafe-or-regressing-automation",
     "bmad-7-5-close-the-learn-loop-in-pipeline",
   ];
+}
+
+function safeBacklogReadyItemIds() {
+  const servicePath = join(rootDir, "services", "supervisor", "src", "supervisor", "application", "service.py");
+  const source = readFileSync(servicePath, "utf8");
+  const reportMatch = source.match(/def get_safe_development_backlog_report[\s\S]*?return SafeDevelopmentBacklogReportView/);
+  assert(reportMatch, "safe backlog source not found");
+  return reportMatch[0]
+    .split("SafeDevelopmentBacklogItemView(")
+    .slice(1)
+    .map((block) => ({
+      itemId: pythonStringFieldFromSource(block, "itemId"),
+      status: pythonStringFieldFromSource(block, "status"),
+    }))
+    .filter((item) => item.itemId && item.status === "ready")
+    .map((item) => item.itemId);
+}
+
+function pythonStringFieldFromSource(source, fieldName) {
+  const match = source.match(new RegExp(`${fieldName}=["']([^"']*)["']`));
+  return match?.[1] || "";
 }
 
 function seedClosedSafeBacklogManifests(stateRootPath) {
