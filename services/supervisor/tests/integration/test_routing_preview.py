@@ -1605,6 +1605,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-documentation-authority",
         "check-verification-readiness",
         "check-pipeline-implementation-readiness",
+        "check-dashboard-pipeline-boundary",
         "test-pipeline-implementation-readiness",
         "test-live-memory-source-enforcement",
         "test-bounded-live-memory-source",
@@ -1691,6 +1692,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "check-governed-worker-execution-dry-run" in static_group["commandIds"]
     assert "check-runtime-review" in static_group["commandIds"]
     assert "check-pipeline-implementation-readiness" in static_group["commandIds"]
+    assert "check-dashboard-pipeline-boundary" in static_group["commandIds"]
     assert "test-pipeline-implementation-readiness" in static_group["commandIds"]
     assert "test-live-memory-source-enforcement" in static_group["commandIds"]
     assert "test-bounded-live-memory-source" in static_group["commandIds"]

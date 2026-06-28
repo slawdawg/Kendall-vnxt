@@ -1547,6 +1547,17 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="check-dashboard-pipeline-boundary",
+                label="Dashboard pipeline import boundary",
+                command="pnpm run check:dashboard-pipeline-boundary",
+                status="required",
+                requiredFor=["pipeline cockpit code changes", "dashboard import-boundary changes", "pipeline UX safety changes"],
+                evidence=[
+                    "Scans /pipeline routes, pipeline components, and fixture sources for direct provider, shell, filesystem, GitHub, Obsidian, runner launch, cleanup, or live network boundaries.",
+                    "Runs as part of the static and full local verification commands without approving execution authority.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="test-pipeline-implementation-readiness",
                 label="Pipeline implementation readiness tests",
                 command="pnpm run test:pipeline-implementation-readiness",
@@ -2351,6 +2362,7 @@ class SupervisorService:
                     "check-documentation-authority",
                     "check-verification-readiness",
                     "check-pipeline-implementation-readiness",
+                    "check-dashboard-pipeline-boundary",
                     "test-pipeline-implementation-readiness",
                     "test-live-memory-source-enforcement",
                     "test-bounded-live-memory-source",

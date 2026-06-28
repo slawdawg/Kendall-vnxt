@@ -1,9 +1,9 @@
 import {
+  pipelineCockpitPackets,
   pipelineFixtureMode,
   projectSupervisorWorkPacketsToCockpitPackets,
   type PipelineFixturePacket,
 } from "./pipeline-fixtures";
-import { pipelinePacketsWithPersistedGovernedWorkerEvidence } from "./pipeline-evidence-source";
 import { getWorkPackets } from "./supervisor";
 
 export type PipelineCockpitPacketLoad = {
@@ -12,7 +12,7 @@ export type PipelineCockpitPacketLoad = {
 };
 
 export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacketLoad> {
-  const fallbackPackets = pipelinePacketsWithPersistedGovernedWorkerEvidence();
+  const fallbackPackets = pipelineCockpitPackets;
   try {
     const supervisorPackets = projectSupervisorWorkPacketsToCockpitPackets(await getWorkPackets());
     if (supervisorPackets.length === 0) {

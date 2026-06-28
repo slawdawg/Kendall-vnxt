@@ -1,8 +1,6 @@
 import { Shell } from "../../components/shell";
 import { PipelineCockpit } from "../../components/pipeline/pipeline-cockpit";
-import {
-  selectedPipelinePacket,
-} from "../../lib/pipeline-fixtures";
+import { selectedPipelinePacket } from "../../lib/pipeline-fixtures";
 import { loadPipelineCockpitPackets } from "../../lib/pipeline-packet-loader";
 
 export const dynamic = "force-dynamic";

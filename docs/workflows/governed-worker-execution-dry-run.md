@@ -411,12 +411,14 @@ and containment authority are proven. The dashboard must not launch workers,
 probe commands, read live process state, fetch provider output, infer trust, or
 trigger routing/retry decisions from these retained metadata packets.
 
-The `/pipeline` cockpit may read persisted copied-worktree evidence snapshots
-from `.kendall-local/governed-worker-evidence/` or a safe `/tmp` evidence
-directory. This read is local file metadata consumption only: it must reject raw
-markers, source worktree paths, unsafe realpath escapes, oversized evidence
-files, and malformed snapshots; it must not call workers, providers,
-supervisor APIs, GitHub, network endpoints, or process launch primitives.
+Persisted copied-worktree evidence snapshots may be prepared and validated from
+`.kendall-local/governed-worker-evidence/` or a safe `/tmp` evidence directory,
+but the `/pipeline` dashboard render path remains fixture-backed. Dashboard
+code must not directly read filesystem evidence, call workers, providers,
+supervisor APIs, GitHub, network endpoints, cleanup paths, Obsidian mutation, or
+process launch primitives. Any future persisted-evidence projection into
+`/pipeline` needs a source-owned supervisor projection contract and a separate
+reviewed boundary check.
 
 A UI label such as `running` may describe an active non-executing dry-run
 attempt only when the same packet also displays the dry-run authority mode and
