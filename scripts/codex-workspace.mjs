@@ -163,6 +163,9 @@ heartbeat options:
   --runner-kind <kind>      Runner kind. Defaults to codex-cli.
   --current-command <text>  Current command or wait state summary.
   --last-result <text>      Last result summary.
+  --decision <text>         Best-judgment decision summary to retain as metadata-only evidence.
+  --decision-rationale <text> Rationale for the best-judgment decision.
+  --next-safe-action <text> Next bounded action after the decision.
   --stale-after-seconds <n> Stale owner threshold to record. Defaults to 86400.
 
 close-assignments options:
@@ -1440,7 +1443,27 @@ function buildHeartbeatPacket({ kind, result, currentOwner }) {
     lastHeartbeatAt: record.last_heartbeat_at || null,
     staleAfterSeconds: Number.isInteger(record.stale_after_seconds) ? record.stale_after_seconds : null,
     heartbeatCount: Number.isInteger(record.heartbeat_count) ? record.heartbeat_count : null,
+    bestJudgmentDecisionCount: Array.isArray(record.best_judgment_decisions)
+      ? record.best_judgment_decisions.length
+      : 0,
+    latestBestJudgmentDecision: latestBestJudgmentDecision(record),
     mutation: "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
+  };
+}
+
+function latestBestJudgmentDecision(record) {
+  const decisions = Array.isArray(record.best_judgment_decisions) ? record.best_judgment_decisions : [];
+  const latest = decisions.at(-1);
+  if (!latest) {
+    return null;
+  }
+  return {
+    recordedAt: latest.recorded_at || null,
+    owner: latest.owner || null,
+    phase: latest.phase || null,
+    decision: latest.decision || null,
+    rationale: latest.rationale || null,
+    nextSafeAction: latest.next_safe_action || null,
   };
 }
 
@@ -4937,6 +4960,19 @@ function assignmentPath(state, assignmentId) {
 }
 
 function normalizeHeartbeatOptions(options = {}) {
+  const decision = optionalHeartbeatText(options.decision);
+  const decisionRationale = optionalHeartbeatText(options.decisionRationale);
+  const nextSafeAction = optionalHeartbeatText(options.nextSafeAction);
+  if (decision || decisionRationale || nextSafeAction) {
+    const missing = [
+      decision ? null : "--decision",
+      decisionRationale ? null : "--decision-rationale",
+      nextSafeAction ? null : "--next-safe-action",
+    ].filter(Boolean);
+    if (missing.length > 0) {
+      throw new Error(`Best-judgment decision evidence requires ${missing.join(", ")}.`);
+    }
+  }
   return {
     phase: safeHeartbeatToken(options.phase || "active", "phase"),
     runnerKind: safeHeartbeatToken(options.runnerKind || "codex-cli", "runner kind"),
@@ -4944,6 +4980,9 @@ function normalizeHeartbeatOptions(options = {}) {
     currentCommandProvided: options.currentCommand !== undefined && options.currentCommand !== true,
     lastResult: optionalHeartbeatText(options.lastResult),
     lastResultProvided: options.lastResult !== undefined && options.lastResult !== true,
+    decision,
+    decisionRationale,
+    nextSafeAction,
     staleAfterSeconds: positiveInteger(options.staleAfterSeconds, 86_400),
   };
 }
@@ -4978,6 +5017,9 @@ function heartbeatAssignment(state, assignmentRecord, { currentOwner, options, h
       ...(Array.isArray(assignment.events) ? assignment.events : []),
       taskEvent("heartbeat", `owner ${currentOwner} phase ${heartbeatOptions.phase}`),
     ];
+    if (heartbeatOptions.decision) {
+      assignment.events.push(taskEvent("best_judgment_decision", `owner ${currentOwner} phase ${heartbeatOptions.phase}`));
+    }
     writeAssignment(path, assignment);
     return {
       path,
@@ -4997,6 +5039,9 @@ function heartbeatManifest(state, taskId, { currentOwner, options, heartbeatOpti
     manifest.owner_updated_at = manifest.last_heartbeat_at;
     manifest.updated_at = manifest.last_heartbeat_at;
     appendTaskEvent(manifest, "heartbeat", `owner ${currentOwner} phase ${heartbeatOptions.phase}`);
+    if (heartbeatOptions.decision) {
+      appendTaskEvent(manifest, "best_judgment_decision", `owner ${currentOwner} phase ${heartbeatOptions.phase}`);
+    }
     writeManifest(path, manifest);
     return {
       path,
@@ -5016,6 +5061,22 @@ function updateHeartbeatFields(target, heartbeatOptions) {
   }
   if (heartbeatOptions.lastResultProvided) {
     target.last_result = heartbeatOptions.lastResult;
+  }
+  if (heartbeatOptions.decision) {
+    target.best_judgment_decisions = [
+      ...(Array.isArray(target.best_judgment_decisions) ? target.best_judgment_decisions : []),
+      {
+        recorded_at: now,
+        owner: target.owner || null,
+        phase: heartbeatOptions.phase,
+        runner_kind: heartbeatOptions.runnerKind,
+        current_command: target.current_command || null,
+        last_result: target.last_result || null,
+        decision: heartbeatOptions.decision,
+        rationale: heartbeatOptions.decisionRationale,
+        next_safe_action: heartbeatOptions.nextSafeAction,
+      },
+    ];
   }
   target.heartbeat_count = Number.isInteger(target.heartbeat_count) ? target.heartbeat_count + 1 : 1;
 }
