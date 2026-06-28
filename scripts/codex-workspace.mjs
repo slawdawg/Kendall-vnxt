@@ -4591,7 +4591,9 @@ function recordManifestDispatchHandoff(manifest, packet, context) {
   manifest.runner_kind = "codex-cli";
   manifest.current_command = "handoff ready";
   manifest.last_result = packet.readiness.summary;
+  writeClaimHeartbeatEvidence(manifest, context.options, now);
   manifest.dispatch_handoffs = [...(Array.isArray(manifest.dispatch_handoffs) ? manifest.dispatch_handoffs : []), packet];
+  appendTaskEvent(manifest, "heartbeat", `owner ${context.currentOwner} phase ${manifest.phase}`);
   appendTaskEvent(manifest, "dispatch_handoff", `${packet.lane} ${packet.workspace_action} readiness ${packet.readiness.status}`);
 }
 
@@ -4608,12 +4610,14 @@ function recordAssignmentDispatchHandoff(assignment, packet, manifest, context) 
   assignment.updated_at = now;
   assignment.current_command = "handoff ready";
   assignment.last_result = packet.readiness.summary;
+  writeClaimHeartbeatEvidence(assignment, context.options, now);
   assignment.dispatch_handoffs = [
     ...(Array.isArray(assignment.dispatch_handoffs) ? assignment.dispatch_handoffs : []),
     packet,
   ];
   assignment.events = [
     ...(Array.isArray(assignment.events) ? assignment.events : []),
+    taskEvent("heartbeat", `owner ${context.currentOwner} phase ${assignment.phase}`),
     taskEvent("dispatch_handoff", `${packet.lane} ${packet.workspace_action} readiness ${packet.readiness.status}`),
   ];
 }
