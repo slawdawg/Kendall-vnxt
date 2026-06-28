@@ -1,4 +1,8 @@
-import type { TrustedAutonomyReadinessGateView, TrustedAutonomyReadinessReportView } from "@kendall/contracts";
+import type {
+  TrustedAutonomyDeauthorizationTriggerView,
+  TrustedAutonomyReadinessGateView,
+  TrustedAutonomyReadinessReportView,
+} from "@kendall/contracts";
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
@@ -47,6 +51,45 @@ function ListPanel({ title, items, warn = false }: { title: string; items: strin
   );
 }
 
+function TriggerCard({ trigger }: { trigger: TrustedAutonomyDeauthorizationTriggerView }) {
+  return (
+    <article className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--warn)]">{trigger.triggerId}</p>
+          <h4 className="mt-1 text-base font-semibold">{trigger.label}</h4>
+        </div>
+        <span className="w-fit max-w-full break-words rounded-full bg-[color-mix(in_srgb,var(--warn)_16%,transparent)] px-3 py-1 font-mono text-[11px] text-[var(--warn)]">
+          {trigger.status}
+        </span>
+      </div>
+      <p className="mt-3 text-xs leading-5 text-[var(--muted)]">{trigger.summary}</p>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <div>
+          <h5 className="text-sm font-semibold">Deauthorized operations</h5>
+          <div className="mt-2 space-y-2">
+            {trigger.deauthorizedOperations.map((operation, index) => (
+              <p key={`${trigger.triggerId}:operation:${operation}:${index}`} className="text-xs leading-5 text-[var(--warn)]">
+                {operation}
+              </p>
+            ))}
+          </div>
+        </div>
+        <div>
+          <h5 className="text-sm font-semibold">Recovery evidence</h5>
+          <div className="mt-2 space-y-2">
+            {trigger.recoveryEvidence.map((evidence, index) => (
+              <p key={`${trigger.triggerId}:recovery:${evidence}:${index}`} className="text-xs leading-5 text-[var(--muted)]">
+                {evidence}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 export function TrustedAutonomyReadinessReportPanel({ report }: { report: TrustedAutonomyReadinessReportView }) {
   return (
     <section className="rounded-[0.5rem] border bg-[var(--panel)] p-4 shadow-sm">
@@ -78,6 +121,12 @@ export function TrustedAutonomyReadinessReportPanel({ report }: { report: Truste
       <div className="mt-5 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
         {report.autonomyGates.map((gate) => (
           <GateCard key={gate.gateId} gate={gate} />
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-4">
+        {report.deauthorizationTriggers.map((trigger) => (
+          <TriggerCard key={trigger.triggerId} trigger={trigger} />
         ))}
       </div>
 

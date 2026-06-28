@@ -1904,11 +1904,21 @@ export interface TrustedAutonomyReadinessGateView {
   evidence: string[];
 }
 
+export interface TrustedAutonomyDeauthorizationTriggerView {
+  triggerId: string;
+  label: string;
+  status: string;
+  summary: string;
+  deauthorizedOperations: string[];
+  recoveryEvidence: string[];
+}
+
 export interface TrustedAutonomyReadinessReportView {
   reportId: string;
   generatedAt: string;
   summary: string;
   autonomyGates: TrustedAutonomyReadinessGateView[];
+  deauthorizationTriggers: TrustedAutonomyDeauthorizationTriggerView[];
   eligibleWork: string[];
   blockedWork: string[];
   requiredEvidence: string[];
