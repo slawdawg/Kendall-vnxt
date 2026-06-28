@@ -947,6 +947,36 @@ class WorkPacketReviewSummaryV0View(BaseModel):
     artifactRefs: list[str] = Field(default_factory=list)
 
 
+class WorkPacketDeliveryEvidenceV0View(BaseModel):
+    evidenceId: str
+    mode: Literal["metadata_only"] = "metadata_only"
+    actionId: Literal["pr", "merge", "cleanup"] | None = None
+    status: str
+    targetBranch: str | None = None
+    baseBranch: str | None = None
+    pullRequestUrl: str | None = None
+    expectedHeadRevision: str | None = None
+    pullRequestHeadRevision: str | None = None
+    ciStatus: str | None = None
+    reviewState: str | None = None
+    mergeStatus: str | None = None
+    mergeResult: str | None = None
+    cleanupDryRunStatus: str | None = None
+    cleanupTarget: str | None = None
+    readyForApproval: bool = False
+    hasDeliveryExecutionEvidence: bool = False
+    evidenceRefs: list[str] = Field(default_factory=list)
+    artifactRefs: list[str] = Field(default_factory=list)
+    retainedEvidence: list[str] = Field(default_factory=list)
+    blockedReasons: list[str] = Field(default_factory=list)
+    recoveryPath: str
+    deliveryRailsGrantAuthority: Literal[False] = False
+    rawPayloadRetained: Literal[False] = False
+    remoteMutationApproved: Literal[False] = False
+    mergeApproved: Literal[False] = False
+    cleanupApproved: Literal[False] = False
+
+
 class WorkPacketExecutionAttemptSummaryV0View(BaseModel):
     attemptId: str
     workItemId: str
@@ -1042,6 +1072,7 @@ class WorkPacketV0View(BaseModel):
     humanGateActionRequests: list[HumanGateActionRequestV0View] = Field(default_factory=list)
     laneCards: list[WorkPacketLaneCardV0View] = Field(default_factory=list)
     memoryProposals: list[MemoryProposalV0View] = Field(default_factory=list)
+    deliveryEvidence: WorkPacketDeliveryEvidenceV0View | None = None
     alphaMemorySourceStatus: AlphaMemorySourceStatusV0View | None = None
     gateStateValidation: WorkPacketGateStateValidationV0View | None = None
     reviewSummaries: list[WorkPacketReviewSummaryV0View] = Field(default_factory=list)

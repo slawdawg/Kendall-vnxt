@@ -1868,3 +1868,17 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
             ref["artifactType"] == "pull_request" and ref["pathOrUrl"] == "https://github.com/example/repo/pull/42"
             for ref in done_packet["artifactRefs"]
         )
+        delivery_evidence = done_packet["deliveryEvidence"]
+        assert delivery_evidence["evidenceId"] == f"delivery-evidence:{done_item['id']}"
+        assert delivery_evidence["mode"] == "metadata_only"
+        assert delivery_evidence["pullRequestUrl"] == "https://github.com/example/repo/pull/42"
+        assert delivery_evidence["ciStatus"] == "passed"
+        assert delivery_evidence["mergeStatus"] == "ready"
+        assert delivery_evidence["readyForApproval"] is True
+        assert delivery_evidence["deliveryRailsGrantAuthority"] is False
+        assert delivery_evidence["rawPayloadRetained"] is False
+        assert delivery_evidence["remoteMutationApproved"] is False
+        assert delivery_evidence["mergeApproved"] is False
+        assert delivery_evidence["cleanupApproved"] is False
+        assert f"delivery:{done_item['id']}" in delivery_evidence["evidenceRefs"]
+        assert f"artifact:delivery:{done_item['id']}:pull_request" in delivery_evidence["artifactRefs"]
