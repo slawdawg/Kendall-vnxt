@@ -867,7 +867,7 @@ export interface LegacyPlanningArtifactInventoryReportView {
   nextSafeActions: string[];
   readOnly: boolean;
   executionAuthorityApproved: boolean;
-  rawContentRetained: boolean;
+  artifactBodyRetained: boolean;
 }
 
 export interface VerificationCommandView {

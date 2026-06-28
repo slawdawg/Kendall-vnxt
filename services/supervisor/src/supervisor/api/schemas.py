@@ -1449,7 +1449,7 @@ class LegacyPlanningArtifactInventoryReportView(BaseModel):
     nextSafeActions: list[str] = Field(default_factory=list)
     readOnly: bool = True
     executionAuthorityApproved: bool = False
-    rawContentRetained: bool = False
+    artifactBodyRetained: Literal[False] = False
 
 
 class VerificationCommandView(BaseModel):

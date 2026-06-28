@@ -76,7 +76,7 @@ for (const panelText of [
   "Discovered candidates",
   "sourceAccessState",
   "evidenceBoundary",
-  "rawContentRetained",
+  "artifactBodyRetained",
 ]) {
   assertCondition(inventoryPanel.includes(panelText), `Legacy planning inventory panel must render ${panelText}`, failures);
 }
@@ -94,7 +94,7 @@ for (const requiredText of [
   "local_source_root_not_present",
   "local_metadata_available",
   "source_owned_metadata_available",
-  "rawContentRetained=False",
+  "artifactBodyRetained=False",
   "_bmad-output/planning-artifacts",
   "_bmad-output/implementation-artifacts",
   "_bmad-output/brainstorming",
@@ -107,7 +107,7 @@ for (const requiredText of [
 }
 
 const inventoryMethod = serviceSource.split("def get_legacy_planning_artifact_inventory_report")[1]?.split("def get_verification_readiness_report")[0] ?? "";
-for (const forbiddenText of ["read_text(", ".read_text", "open(", "rawPayload=", "rawContentRetained=True"]) {
+for (const forbiddenText of ["read_text(", ".read_text", "open(", "rawPayload=", "artifactBodyRetained=True"]) {
   assertCondition(!inventoryMethod.includes(forbiddenText), `Inventory service must not retain raw artifact content via ${forbiddenText}`, failures);
 }
 

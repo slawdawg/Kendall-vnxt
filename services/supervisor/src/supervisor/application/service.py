@@ -1630,7 +1630,7 @@ class SupervisorService:
             ],
             readOnly=True,
             executionAuthorityApproved=False,
-            rawContentRetained=False,
+            artifactBodyRetained=False,
         )
 
     def _legacy_planning_artifact_candidates(self) -> list[LegacyPlanningArtifactCandidateView]:

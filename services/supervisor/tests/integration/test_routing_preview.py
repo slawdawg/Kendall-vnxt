@@ -1644,7 +1644,7 @@ def test_legacy_planning_artifact_inventory_report_discovers_metadata_only_candi
     assert report["reportId"] == "legacy-planning-artifact-inventory-report-v1"
     assert report["readOnly"] is True
     assert report["executionAuthorityApproved"] is False
-    assert report["rawContentRetained"] is False
+    assert report["artifactBodyRetained"] is False
     assert "plan" in report["artifactTypes"]
     assert "prd" in report["artifactTypes"]
     assert "architecture" in report["artifactTypes"]

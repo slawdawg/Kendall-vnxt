@@ -25,7 +25,7 @@ export function LegacyPlanningArtifactInventoryReportPanel({ report }: { report:
           ["Candidates", String(report.candidates.length)],
           ["Local state", String(localCount)],
           ["Artifact types", String(report.artifactTypes.length)],
-          ["Raw retained", report.rawContentRetained ? "yes" : "no"],
+          ["Artifact body retained", report.artifactBodyRetained ? "yes" : "no"],
         ].map(([label, value]) => (
           <div key={label} className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
             <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
