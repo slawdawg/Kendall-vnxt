@@ -10,6 +10,7 @@ const packageJsonPath = new URL("../package.json", import.meta.url);
 const nextConfigPath = new URL("../apps/dashboard/next.config.ts", import.meta.url);
 const routePath = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta.url);
 const packetDetailRoutePath = new URL("../apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx", import.meta.url);
+const pipelinePacketLoaderPath = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
 const settingsRoutePath = new URL("../apps/dashboard/src/app/settings/page.tsx", import.meta.url);
 const settingsUsageVisibilityPath = new URL("../apps/dashboard/src/components/settings/usage-visibility-settings.tsx", import.meta.url);
 const layoutPath = new URL("../apps/dashboard/src/app/layout.tsx", import.meta.url);
@@ -51,6 +52,7 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
 test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fallback", async () => {
   const routeSource = await readFile(routePath, "utf8");
   const packetDetailRouteSource = await readFile(packetDetailRoutePath, "utf8");
+  const pipelinePacketLoaderSource = await readFile(pipelinePacketLoaderPath, "utf8");
   const settingsRouteSource = await readFile(settingsRoutePath, "utf8");
   const settingsUsageVisibilitySource = await readFile(settingsUsageVisibilityPath, "utf8");
   const layoutSource = await readFile(layoutPath, "utf8");
@@ -66,7 +68,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   const pipelineComponentSource = (
     await Promise.all(componentFiles.map((file) => readFile(new URL(file, pipelineComponentsPath), "utf8")))
   ).join("\n");
-  const allPipelineSource = `${routeSource}\n${packetDetailRouteSource}\n${fixtureSource}\n${pipelineComponentSource}`;
+  const allPipelineSource = `${routeSource}\n${packetDetailRouteSource}\n${pipelinePacketLoaderSource}\n${fixtureSource}\n${pipelineComponentSource}`;
 
   assert.match(routeSource, /<Shell\b/);
   assert.match(routeSource, /<Shell\b[^>]*realtimeRefresh=\{false\}[^>]*wide/);
@@ -88,18 +90,21 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(realtimeRefreshSource, /EventSource/);
   assert.match(layoutSource, /data-scroll-behavior="smooth"/);
   assert.match(routeSource, /PipelineCockpit/);
-  assert.match(routeSource, /getWorkPackets/);
-  assert.match(routeSource, /projectSupervisorWorkPacketsToCockpitPackets/);
-  assert.match(routeSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
-  assert.match(routeSource, /catch/);
-  assert.match(routeSource, /Supervisor packets/);
-  assert.match(routeSource, /Supervisor unavailable/);
+  assert.match(routeSource, /loadPipelineCockpitPackets/);
+  assert.match(routeSource, /fixtureMode=\{fixtureMode\}/);
+  assert.match(pipelinePacketLoaderSource, /getWorkPackets/);
+  assert.match(pipelinePacketLoaderSource, /projectSupervisorWorkPacketsToCockpitPackets/);
+  assert.match(pipelinePacketLoaderSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
+  assert.match(pipelinePacketLoaderSource, /catch/);
+  assert.match(pipelinePacketLoaderSource, /Supervisor packets/);
+  assert.match(pipelinePacketLoaderSource, /Supervisor unavailable/);
   assert.doesNotMatch(routeSource, /getRunStatus|getWorkItems|fetch\s*\(/);
   assert.match(packetDetailRouteSource, /PacketDetailPage/);
   assert.match(packetDetailRouteSource, /<Shell\b[^>]*compactHeader[^>]*realtimeRefresh=\{false\}[^>]*wide/);
   assert.match(packetDetailRouteSource, /realtimeRefresh=\{false\}/);
   assert.match(packetDetailRouteSource, /generateStaticParams/);
-  assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
+  assert.match(packetDetailRouteSource, /loadPipelineCockpitPackets/);
+  assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|fetch\s*\(/);
 
   for (const regionName of [
     "Refined pipeline cockpit frame",
@@ -546,8 +551,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /findTopAttentionPacket/);
   assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
   assert.match(fixtureSource, /Density \$\{ordinal\}:/);
-  assert.match(routeSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
-  assert.match(routeSource, /mergePipelinePackets/);
+  assert.match(pipelinePacketLoaderSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
+  assert.match(pipelinePacketLoaderSource, /mergePipelinePackets/);
   assert.match(fixtureSource, /projectSupervisorWorkPacketsToCockpitPackets/);
   assert.match(fixtureSource, /safeProjectSupervisorWorkPacketToCockpitPacket/);
   assert.match(fixtureSource, /supervisorReasonCodes/);
