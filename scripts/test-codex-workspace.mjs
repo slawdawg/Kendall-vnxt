@@ -1981,7 +1981,7 @@ try {
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("DRY RUN: claim-next"), result.stdout || result.stderr);
       assert(result.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
-      assert(result.stdout.includes("claimable=34"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claimable=36"), result.stdout || result.stderr);
       assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
       assert(result.stdout.includes("- bmad-1-2-expose-read-only-supervisor-packet-projections | assignable"), result.stdout || result.stderr);
       assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
@@ -2026,12 +2026,12 @@ try {
       assert(packet.assignmentPreview.mutation === "none; preview only", result.stdout || result.stderr);
       assert(!("assignedLane" in packet.assignmentPreview), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
-      assert(packet.counts.claimable === 34, result.stdout || result.stderr);
+      assert(packet.counts.claimable === 36, result.stdout || result.stderr);
       assert(packet.counts.excluded >= 1, result.stdout || result.stderr);
       assert(packet.counts.sourceDrift === 0, result.stdout || result.stderr);
       assert(packet.nextActionSummary.action === "claim selected lane", result.stdout || result.stderr);
       assert(packet.nextActionSummary.sourceDrift === 0, result.stdout || result.stderr);
-      assert(packet.statusCounts.assignable === 34, result.stdout || result.stderr);
+      assert(packet.statusCounts.assignable === 36, result.stdout || result.stderr);
       assert(!packet.blockerStatusCounts.closed, result.stdout || result.stderr);
       assert(packet.excludedStatusCounts.closed >= 1, result.stdout || result.stderr);
       assert(packet.blockers.length <= 10, result.stdout || result.stderr);
@@ -2108,7 +2108,7 @@ try {
 
       assert(result.code === 0, result.stderr || result.stdout);
       assert(result.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
-      assert(result.stdout.includes("claimable=34"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claimable=36"), result.stdout || result.stderr);
       assert(result.stdout.includes("- authority-blocked-work | closed"), result.stdout || result.stderr);
       assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
       assert(!result.stdout.includes("claim candidate worker-backlog-queue-refresh"), result.stdout || result.stderr);
@@ -3139,7 +3139,7 @@ try {
       assert(result.stdout.includes("- allowed true"), result.stdout || result.stderr);
       assert(result.stdout.includes("- blockers none"), result.stdout || result.stderr);
       assert(result.stdout.includes("- queue states "), result.stdout || result.stderr);
-      assert(result.stdout.includes("assignable=34"), result.stdout || result.stderr);
+      assert(result.stdout.includes("assignable=36"), result.stdout || result.stderr);
       assert(result.stdout.includes("closed="), result.stdout || result.stderr);
       assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch dry-run mutated assignments");
       assert(taskSnapshot(tasksDir) === beforeTasks, "dispatch dry-run mutated manifests");
@@ -3185,8 +3185,8 @@ try {
       assert(packet.dispatch.workspaceAction === "claim_and_create_workspace", result.stdout || result.stderr);
       assert(packet.dispatch.nextActionGuidance.includes("run dispatch-next --apply"), result.stdout || result.stderr);
       assert(packet.counts.total > 0, result.stdout || result.stderr);
-      assert(packet.counts.dispatchable === 34, result.stdout || result.stderr);
-      assert(packet.candidateStateCounts.assignable === 34, result.stdout || result.stderr);
+      assert(packet.counts.dispatchable === 36, result.stdout || result.stderr);
+      assert(packet.candidateStateCounts.assignable === 36, result.stdout || result.stderr);
       assert(packet.candidateStateCounts.closed >= 1, result.stdout || result.stderr);
       assert(packet.blockedCandidates.length <= 10, result.stdout || result.stderr);
       assert(typeof packet.blockedCandidatesTruncated === "boolean", result.stdout || result.stderr);
@@ -3404,8 +3404,10 @@ try {
         ...bmadPipelineBacklogBranches(),
         "codex/queue-zero-runway-continuity-refresh",
         "codex/queue-zero-runway-followup-refresh",
+        "codex/verification-surface-hardening-followup",
         "codex/verification-surface-hardening",
         "codex/github-delivery-hygiene",
+        "codex/read-only-evidence-polish-followup",
         "codex/read-only-evidence-polish",
         "codex/worker-backlog-queue-refresh",
         "codex/lane-handoff-evidence-refresh",
@@ -3546,7 +3548,9 @@ try {
         ...bmadPipelineBacklogSlugs(),
         "queue-zero-runway-continuity-refresh",
         "queue-zero-runway-followup-refresh",
+        "verification-surface-hardening-followup",
         "github-delivery-hygiene",
+        "read-only-evidence-polish-followup",
         "read-only-evidence-polish",
         "worker-backlog-queue-refresh",
         "lane-handoff-evidence-refresh",
@@ -3603,7 +3607,9 @@ try {
         ...bmadPipelineBacklogSlugs(),
         "queue-zero-runway-continuity-refresh",
         "queue-zero-runway-followup-refresh",
+        "verification-surface-hardening-followup",
         "github-delivery-hygiene",
+        "read-only-evidence-polish-followup",
         "read-only-evidence-polish",
         "worker-backlog-queue-refresh",
         "lane-handoff-evidence-refresh",
@@ -4058,8 +4064,10 @@ try {
         ...bmadPipelineBacklogSlugs(),
         "queue-zero-runway-continuity-refresh",
         "queue-zero-runway-followup-refresh",
+        "verification-surface-hardening-followup",
         "verification-surface-hardening",
         "github-delivery-hygiene",
+        "read-only-evidence-polish-followup",
         "read-only-evidence-polish",
         "worker-backlog-queue-refresh",
         "lane-handoff-evidence-refresh",
@@ -5210,8 +5218,10 @@ function seedClosedSafeBacklogManifests(stateRootPath) {
   mkdirSync(tasksDir, { recursive: true });
 
   for (const laneSlug of [
+    "verification-surface-hardening-followup",
     "verification-surface-hardening",
     "github-delivery-hygiene",
+    "read-only-evidence-polish-followup",
     "read-only-evidence-polish",
     "worker-backlog-queue-refresh",
     "lane-handoff-evidence-refresh",

@@ -6652,6 +6652,48 @@ class SupervisorService:
                 "Do not launch subscription-agent, Codex CLI, Claude CLI, worker processes, provider calls, or premium execution.",
             ],
         )
+        verification_surface_hardening_followup_lane = self._safe_backlog_next_lane(
+            lane_slug="verification-surface-hardening-followup",
+            lane_title="Verification surface hardening follow-up",
+            scope=[
+                "successor verification-readiness hardening after the original completed lane remains closed evidence",
+                "focused drift evidence for dashboard e2e, supervisor report catalog, runtime export, safe backlog, managed recipe policy, and delivery readiness policy coverage",
+                "metadata-only verification runway updates without granting worker launch, provider calls, premium execution, or runtime authority",
+            ],
+            verification_commands=[
+                "node ./scripts/check-safe-development-backlog.mjs",
+                "node ./scripts/check-development-runway-report.mjs",
+                "node ./scripts/check-runner-assignment-status-report.mjs",
+                "node ./scripts/test-codex-workspace.mjs",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not reopen, requeue, or mutate closed verification-surface-hardening completion evidence.",
+                "Do not launch workers, invoke providers, access credentials, or expand runtime execution authority from this metadata lane.",
+            ],
+        )
+        read_only_evidence_polish_followup_lane = self._safe_backlog_next_lane(
+            lane_slug="read-only-evidence-polish-followup",
+            lane_title="Read-only evidence polish follow-up",
+            scope=[
+                "successor read-only evidence polish after the original completed lane remains closed evidence",
+                "operator-visible report shortcut and runtime export evidence improvements that remain metadata-only",
+                "focused drift evidence that read-only panels stay linked to supervisor reports without enabling execution",
+            ],
+            verification_commands=[
+                "node ./scripts/check-safe-development-backlog.mjs",
+                "node ./scripts/check-development-runway-report.mjs",
+                "node ./scripts/check-runner-assignment-status-report.mjs",
+                "node ./scripts/test-codex-workspace.mjs",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not reopen, requeue, or mutate closed read-only-evidence-polish completion evidence.",
+                "Do not enable runtime execution, provider calls, worker launch, credential access, or source-boundary expansion from this metadata lane.",
+            ],
+        )
 
         # BEGIN BMAD pipeline-default story lanes
         bmad_1_1_validate_the_pipeline_work_packet_read_contract_lane = self._safe_backlog_next_lane(
@@ -8549,6 +8591,37 @@ class SupervisorService:
                 nextAction="Use this completed verification lane as evidence only; do not requeue codex/verification-surface-hardening as a new lane.",
             ),
             SafeDevelopmentBacklogItemView(
+                itemId="verification-surface-hardening-followup",
+                label="Verification surface hardening follow-up",
+                priority="P1",
+                status="ready",
+                summary="Add an explicit successor queue item for verification surface hardening without reopening the completed original lane.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Historical assignment state still contains verification-surface-hardening as an old active/stale lane, while source-owned backlog evidence marks the original lane complete.",
+                    "This follow-up keeps verification hardening dispatchable under a distinct branch and leaves closed completion evidence untouched.",
+                    "The lane remains metadata-only and does not grant worker launch, provider calls, premium execution, credential access, or runtime authority.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/dashboard-e2e-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#verification-readiness-report",
+                    "/controls#dashboard-e2e-report",
+                    "/controls#safe-development-backlog",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=verification_surface_hardening_followup_lane,
+                nextAction="Dispatch verification-surface-hardening-followup as the distinct successor lane; keep verification-surface-hardening closed as completion evidence.",
+            ),
+            SafeDevelopmentBacklogItemView(
                 itemId="github-delivery-hygiene",
                 label="GitHub delivery hygiene",
                 priority="P1",
@@ -8617,6 +8690,39 @@ class SupervisorService:
                     "/controls#delivery-readiness-policy-report",
                 ],
                 nextAction="Use this completed read-only evidence polish as evidence only; do not requeue read-only-evidence-polish.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="read-only-evidence-polish-followup",
+                label="Read-only evidence polish follow-up",
+                priority="P2",
+                status="ready",
+                summary="Add an explicit successor queue item for read-only evidence polish without reopening the completed original lane.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "Historical assignment state still contains read-only-evidence-polish as an old active/stale lane, while source-owned backlog evidence marks the original lane complete.",
+                    "This follow-up keeps read-only evidence polish dispatchable under a distinct branch and leaves closed completion evidence untouched.",
+                    "The lane remains metadata-only and does not grant runtime execution, provider calls, worker launch, credential access, or source-boundary expansion.",
+                ],
+                relatedReports=[
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/documentation-authority-report",
+                    "GET /supervisor/maintenance-readiness-report",
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#supervisor-report-catalog",
+                    "/controls#documentation-authority-report",
+                    "/controls#maintenance-readiness-report",
+                    "/controls#safe-development-backlog",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=read_only_evidence_polish_followup_lane,
+                nextAction="Dispatch read-only-evidence-polish-followup as the distinct successor lane; keep read-only-evidence-polish closed as completion evidence.",
             ),
             SafeDevelopmentBacklogItemView(
                 itemId="worker-backlog-queue-refresh",
