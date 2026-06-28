@@ -48,6 +48,22 @@ class CandidateWorkUpdate(BaseModel):
     sortOrder: int | None = None
 
 
+class CandidateWorkSourceSummaryView(BaseModel):
+    label: str
+    summary: str
+    sourceType: CandidateWorkSource
+    sourceRef: str
+    sourceArtifactPath: str
+    freshness: Literal["fresh", "stale", "unknown", "not_applicable"]
+    accessState: Literal["allowed", "excluded", "missing", "blocked"]
+    retentionPolicy: str
+    boundarySummary: str
+    evidenceRefs: list[str]
+    approvalStatus: str
+    approvedBy: str
+    approvedAt: str
+
+
 class CandidateWorkView(BaseModel):
     id: str
     title: str
@@ -63,6 +79,7 @@ class CandidateWorkView(BaseModel):
     updatedAt: datetime
     approvedAt: datetime | None = None
     promotedWorkItemId: str | None = None
+    sourceSummary: CandidateWorkSourceSummaryView | None = None
     importMetadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1382,6 +1399,19 @@ class DocumentationAuthorityBlockedStoryView(BaseModel):
     status: str
 
 
+class DocumentationAuthorityLegacyArtifactDispositionView(BaseModel):
+    artifactId: str
+    label: str
+    currentLocation: str
+    recommendedDisposition: str
+    retentionPolicy: str
+    sourceOwnedReplacements: list[str] = Field(default_factory=list)
+    operatorActions: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    sourceMutationAllowed: bool = False
+    rawPayloadRetained: bool = False
+
+
 class DocumentationAuthorityReportView(BaseModel):
     reportId: str
     generatedAt: datetime
@@ -1389,6 +1419,7 @@ class DocumentationAuthorityReportView(BaseModel):
     indexes: list[DocumentationAuthorityDocumentView]
     approvalCheckpoint: DocumentationAuthorityDocumentView
     blockedStories: list[DocumentationAuthorityBlockedStoryView]
+    legacyArtifactDispositions: list[DocumentationAuthorityLegacyArtifactDispositionView] = Field(default_factory=list)
     driftChecks: list[ProviderEnablementPolicyStepView]
     nextSafeActions: list[str]
     executionAuthorityApproved: bool = False

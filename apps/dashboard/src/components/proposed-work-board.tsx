@@ -111,6 +111,13 @@ export function ProposedWorkBoard({ candidates }: { candidates: CandidateWorkVie
               </div>
               <h3 className="mt-4 text-xl font-semibold leading-7">{candidate.title}</h3>
               <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{candidate.requestedOutcome}</p>
+              {candidate.sourceSummary ? (
+                <div className="mt-3 border-l-2 border-[var(--accent)] pl-3 text-sm leading-6">
+                  <p className="font-medium text-[var(--foreground)]">{candidate.sourceSummary.label}</p>
+                  <p className="mt-1 text-[var(--muted)]">{candidate.sourceSummary.summary}</p>
+                  <p className="mt-1 text-xs text-[var(--muted)]">{candidate.sourceSummary.boundarySummary}</p>
+                </div>
+              ) : null}
             </div>
             <div className="grid min-w-36 grid-cols-2 gap-2 text-xs sm:grid-cols-1">
               <span className={`rounded-md border px-3 py-2 ${chipTone(candidate.riskLevel)}`}>{riskLabels[candidate.riskLevel]}</span>

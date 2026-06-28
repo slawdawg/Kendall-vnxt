@@ -1138,7 +1138,9 @@ function claimNext(argv) {
       ...plan,
       `wrote ${applied.path}`,
       applied.message,
-      "assignment metadata only; no branch, PR, worktree, worker, or implementation mutation",
+      selected.mutation === "manifest_owner_claim"
+        ? "workspace manifest owner metadata only; no branch, PR, worktree, worker, or implementation mutation"
+        : "assignment metadata only; no branch, PR, worktree, worker, or implementation mutation",
     ]);
   }
 
@@ -4589,7 +4591,9 @@ function recordManifestDispatchHandoff(manifest, packet, context) {
   manifest.runner_kind = "codex-cli";
   manifest.current_command = "handoff ready";
   manifest.last_result = packet.readiness.summary;
+  writeClaimHeartbeatEvidence(manifest, context.options, now);
   manifest.dispatch_handoffs = [...(Array.isArray(manifest.dispatch_handoffs) ? manifest.dispatch_handoffs : []), packet];
+  appendTaskEvent(manifest, "heartbeat", `owner ${context.currentOwner} phase ${manifest.phase}`);
   appendTaskEvent(manifest, "dispatch_handoff", `${packet.lane} ${packet.workspace_action} readiness ${packet.readiness.status}`);
 }
 
@@ -4606,12 +4610,14 @@ function recordAssignmentDispatchHandoff(assignment, packet, manifest, context) 
   assignment.updated_at = now;
   assignment.current_command = "handoff ready";
   assignment.last_result = packet.readiness.summary;
+  writeClaimHeartbeatEvidence(assignment, context.options, now);
   assignment.dispatch_handoffs = [
     ...(Array.isArray(assignment.dispatch_handoffs) ? assignment.dispatch_handoffs : []),
     packet,
   ];
   assignment.events = [
     ...(Array.isArray(assignment.events) ? assignment.events : []),
+    taskEvent("heartbeat", `owner ${context.currentOwner} phase ${assignment.phase}`),
     taskEvent("dispatch_handoff", `${packet.lane} ${packet.workspace_action} readiness ${packet.readiness.status}`),
   ];
 }
@@ -4781,12 +4787,12 @@ function buildLaneAssignment(item, existingAssignment, options = {}) {
     assigned_at: existingAssignment?.assigned_at || now,
     updated_at: now,
     phase: existingAssignment?.phase || "claimed",
-    runner_kind: existingAssignment?.runner_kind || null,
-    last_heartbeat_at: existingAssignment?.last_heartbeat_at || null,
-    stale_after_seconds: existingAssignment?.stale_after_seconds || null,
+    runner_kind: existingAssignment?.runner_kind || "codex-cli",
+    last_heartbeat_at: now,
+    stale_after_seconds: positiveInteger(options.staleAfterSeconds, 86_400),
     current_command: existingAssignment?.current_command || null,
     last_result: existingAssignment?.last_result || null,
-    heartbeat_count: Number.isInteger(existingAssignment?.heartbeat_count) ? existingAssignment.heartbeat_count : 0,
+    heartbeat_count: Number.isInteger(existingAssignment?.heartbeat_count) ? existingAssignment.heartbeat_count + 1 : 1,
     source_backlog_item: {
       item_id: item.itemId,
       status: item.status || null,
@@ -4802,6 +4808,7 @@ function buildLaneAssignment(item, existingAssignment, options = {}) {
         isRefresh ? "claim_refreshed" : "claimed",
         `${item.itemId} claimed by ${currentOwner}; metadata only, no dispatch`,
       ),
+      taskEvent("heartbeat", `owner ${currentOwner} phase ${existingAssignment?.phase || "claimed"}`),
     ],
   };
 }
@@ -5431,7 +5438,10 @@ function positiveInteger(value, fallback) {
 function claimLaneOwner(manifest, options = {}) {
   const currentOwner = currentLaneOwner(options);
   if (manifest.owner === currentOwner) {
-    manifest.owner_updated_at = new Date().toISOString();
+    const now = new Date().toISOString();
+    manifest.owner_updated_at = now;
+    writeClaimHeartbeatEvidence(manifest, options, now);
+    appendTaskEvent(manifest, "heartbeat", `owner ${currentOwner} phase ${manifest.phase || "claimed"}`);
     return;
   }
 
@@ -5445,6 +5455,8 @@ function claimLaneOwner(manifest, options = {}) {
   manifest.owner_thread_id = process.env.CODEX_THREAD_ID || null;
   manifest.owner_acquired_at = new Date().toISOString();
   manifest.owner_updated_at = manifest.owner_acquired_at;
+  writeClaimHeartbeatEvidence(manifest, options, manifest.owner_acquired_at);
+  appendTaskEvent(manifest, "heartbeat", `owner ${currentOwner} phase ${manifest.phase || "claimed"}`);
   if (!manifest.ownership_takeovers) {
     manifest.ownership_takeovers = [];
   }
@@ -5459,6 +5471,14 @@ function claimLaneOwner(manifest, options = {}) {
     "ownership_claimed",
     `owner ${previousOwner} -> ${currentOwner}${reason ? `: ${reason}` : ""}`,
   );
+}
+
+function writeClaimHeartbeatEvidence(record, options = {}, timestamp = new Date().toISOString()) {
+  record.last_heartbeat_at = timestamp;
+  record.stale_after_seconds = positiveInteger(options.staleAfterSeconds, 86_400);
+  record.phase = record.phase || "claimed";
+  record.runner_kind = record.runner_kind || "codex-cli";
+  record.heartbeat_count = Number.isInteger(record.heartbeat_count) ? record.heartbeat_count + 1 : 1;
 }
 
 function reconcileManifest(manifest, options = {}) {

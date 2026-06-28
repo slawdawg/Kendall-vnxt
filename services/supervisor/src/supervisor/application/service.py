@@ -59,6 +59,7 @@ from supervisor.api.schemas import (
     DevelopmentRunwaySliceView,
     DocumentationAuthorityBlockedStoryView,
     DocumentationAuthorityDocumentView,
+    DocumentationAuthorityLegacyArtifactDispositionView,
     DocumentationAuthorityReportView,
     ExecutionConfigurationCheckView,
     ExecutionConfigurationChecksView,
@@ -224,7 +225,7 @@ from supervisor.domain.subscription_launch import (
     SupervisedSubscriptionLaunchAdapter,
     SubscriptionLaunchRegistry,
 )
-from supervisor.domain.types import AuditMode, BmadLane, CandidateWorkStatus, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
+from supervisor.domain.types import AuditMode, BmadLane, CandidateWorkSource, CandidateWorkStatus, ExecutionAttemptStatus, RunMode, WorkItemFilterScope, WorkflowAction, WorkflowState
 from supervisor.domain.utility_worker import UtilityWorkerAdapter, UtilityWorkerResult, UtilityWorkerStatus, UtilityWorkerTask
 from supervisor.domain.worker_registry import StaticWorkerRegistry, WorkerAdapterType, WorkerHealthStatus, WorkerRegistryEntry
 from supervisor.infrastructure.db.models import AuditEvent, CandidateWork, ExecutionAttempt, MemoryProposal, OperatorView, QueueLease, SupervisorControl, WorkItem, WorkflowEvent
@@ -1426,6 +1427,74 @@ class SupervisorService:
             ("4.4", "docs/workflows/implementation-evidence-boundary.md", "Ollama local provider"),
             ("5.5", "docs/workflows/implementation-evidence-boundary.md", "Subscription-agent launch"),
         ]
+        legacy_artifact_dispositions = [
+            DocumentationAuthorityLegacyArtifactDispositionView(
+                artifactId="local-bmad-story-files",
+                label="Local BMAD story files",
+                currentLocation="_bmad-output/implementation-artifacts/*.md",
+                recommendedDisposition="keep_local_only",
+                retentionPolicy="metadata_only_labels_no_raw_artifact_content",
+                sourceOwnedReplacements=[
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "services/supervisor/src/supervisor/application/service.py#get_safe_development_backlog_report",
+                    "services/supervisor/tests/integration/test_routing_preview.py",
+                ],
+                operatorActions=[
+                    "Import approved story metadata as Candidate Work when the operator wants it in the pipeline.",
+                    "Rewrite durable decisions as source-owned docs, tests, scripts, or policy before delivery.",
+                    "Leave raw story bodies in local BMAD output; do not promote them as tracked source artifacts.",
+                ],
+                evidence=[
+                    "AGENTS.md treats BMAD-created work products as local Kendall planning state.",
+                    "Implementation evidence boundary preserves story labels without requiring tracked local story files.",
+                    "Candidate Work import stores metadata and verification summaries without copying full artifacts.",
+                ],
+            ),
+            DocumentationAuthorityLegacyArtifactDispositionView(
+                artifactId="local-sprint-status",
+                label="Local BMAD sprint status",
+                currentLocation="_bmad-output/implementation-artifacts/sprint-status.yaml",
+                recommendedDisposition="keep_local_only",
+                retentionPolicy="metadata_only_status_labels",
+                sourceOwnedReplacements=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/runner-assignment-status-report",
+                    "scripts/codex-workspace.mjs",
+                ],
+                operatorActions=[
+                    "Use supervisor safe backlog and managed workspace manifests for dispatchable lane state.",
+                    "Preserve sprint-status as local BMAD context only; do not use it as a GitHub delivery gate.",
+                    "Record lane ownership, PR, merge, and cleanup evidence in managed workspace state.",
+                ],
+                evidence=[
+                    "Safe backlog items expose source evidence labels and next-lane instructions.",
+                    "Runner assignment status report exposes active managed workspace ownership without reading raw story bodies.",
+                    "Codex workspace manifests are the delivery lifecycle source for this operator loop.",
+                ],
+            ),
+            DocumentationAuthorityLegacyArtifactDispositionView(
+                artifactId="planning-research-packets",
+                label="Planning, research, and review packets",
+                currentLocation="_bmad-output/planning-artifacts/**",
+                recommendedDisposition="rewrite_durable_decisions",
+                retentionPolicy="metadata_only_summary_refs",
+                sourceOwnedReplacements=[
+                    "docs/workflows/implementation-evidence-boundary.md",
+                    "docs/workflows/planning-doc-clean-install-boundary.md",
+                    "docs/workflows/generated-agent-artifacts.md",
+                ],
+                operatorActions=[
+                    "Keep planning packets local unless a decision must survive clean install.",
+                    "Rewrite durable decisions into source-owned docs, tests, scripts, or policy.",
+                    "Never retain raw prompts, completions, reasoning traces, provider payloads, secrets, or unnecessary source copies.",
+                ],
+                evidence=[
+                    "Planning clean-install boundary defines tracked artifact policy.",
+                    "Generated agent artifact workflow protects local planning outputs from accidental source control.",
+                    "Documentation authority report remains read-only and creates no mutation events.",
+                ],
+            ),
+        ]
 
         def document_view(path: str, label: str, extra_evidence: list[str] | None = None) -> DocumentationAuthorityDocumentView:
             exists = (root_dir / path).exists()
@@ -1444,6 +1513,21 @@ class SupervisorService:
         missing_paths.extend(path for _story_id, path, _family in blocked_stories if not (root_dir / path).exists())
         authority_story_count = len(blocked_stories)
         drift_status = "passed" if not missing_paths else "blocked"
+        legacy_disposition_required_evidence = [
+            "docs/workflows/implementation-evidence-boundary.md",
+            "docs/workflows/planning-doc-clean-install-boundary.md",
+            "docs/workflows/generated-agent-artifacts.md",
+        ]
+        legacy_disposition_missing_evidence = [
+            path for path in legacy_disposition_required_evidence if not (root_dir / path).exists()
+        ]
+        legacy_disposition_safety_passed = all(
+            not disposition.sourceMutationAllowed and not disposition.rawPayloadRetained
+            for disposition in legacy_artifact_dispositions
+        )
+        legacy_disposition_status = (
+            "passed" if not legacy_disposition_missing_evidence and legacy_disposition_safety_passed else "blocked"
+        )
 
         return DocumentationAuthorityReportView(
             reportId="documentation-authority-report-v1",
@@ -1468,6 +1552,7 @@ class SupervisorService:
                 )
                 for story_id, path, family in blocked_stories
             ],
+            legacyArtifactDispositions=legacy_artifact_dispositions,
             driftChecks=[
                 ProviderEnablementPolicyStepView(
                     stepId="required-documents-present",
@@ -1482,6 +1567,13 @@ class SupervisorService:
                     status="passed" if authority_story_count == 2 else "blocked",
                     summary=f"{authority_story_count} blocked stories are represented for remaining Ollama execution and supervised subscription-agent process authority.",
                     requiredEvidence=[path for _story_id, path, _family in blocked_stories],
+                ),
+                ProviderEnablementPolicyStepView(
+                    stepId="legacy-artifact-dispositions",
+                    label="Legacy artifact dispositions",
+                    status=legacy_disposition_status,
+                    summary="Local BMAD artifacts stay local-only; durable decisions must be rewritten into source-owned docs, tests, scripts, or policy without source mutation or raw payload retention.",
+                    requiredEvidence=legacy_disposition_required_evidence,
                 ),
                 ProviderEnablementPolicyStepView(
                     stepId="check-docs-command",
@@ -1503,6 +1595,7 @@ class SupervisorService:
                 "Run `pnpm run check:documentation-authority` after changing documentation authority report surfaces.",
                 "Run `pnpm run check:docs` after changing architecture, PRD, story, or approval checkpoint references.",
                 "Use the documentation indexes before starting new execution-authority work.",
+                "Use legacy artifact dispositions to decide whether a local BMAD artifact stays local-only or must be rewritten into source-owned policy before delivery.",
             ],
         )
 
@@ -21343,7 +21436,62 @@ class SupervisorService:
             safe_notes = [note for note in notes if isinstance(note, str) and note][:10]
             if safe_notes:
                 promoted["notes"] = safe_notes
+        source_summary = self._safe_user_facing_source_summary(import_metadata.get("userFacingSourceSummary"))
+        if source_summary:
+            promoted["userFacingSourceSummary"] = source_summary
         return promoted
+
+    def _safe_user_facing_source_summary(self, value: object) -> dict[str, object] | None:
+        if not isinstance(value, dict):
+            return None
+        string_fields = [
+            "label",
+            "summary",
+            "sourceType",
+            "sourceRef",
+            "sourceArtifactPath",
+            "freshness",
+            "accessState",
+            "retentionPolicy",
+            "boundarySummary",
+            "approvalStatus",
+            "approvedBy",
+            "approvedAt",
+        ]
+        summary: dict[str, object] = {}
+        for field in string_fields:
+            field_value = value.get(field)
+            if isinstance(field_value, str) and field_value:
+                summary[field] = field_value
+        evidence_refs = value.get("evidenceRefs")
+        if isinstance(evidence_refs, list):
+            safe_evidence_refs = [ref for ref in evidence_refs if isinstance(ref, str) and ref][:20]
+            if safe_evidence_refs:
+                summary["evidenceRefs"] = list(dict.fromkeys(safe_evidence_refs))
+        required = {
+            "label",
+            "summary",
+            "sourceType",
+            "sourceRef",
+            "sourceArtifactPath",
+            "freshness",
+            "accessState",
+            "retentionPolicy",
+            "boundarySummary",
+            "approvalStatus",
+            "approvedBy",
+            "approvedAt",
+            "evidenceRefs",
+        }
+        if not required <= set(summary):
+            return None
+        if summary["sourceType"] not in {source.value for source in CandidateWorkSource}:
+            return None
+        if summary["freshness"] not in {"fresh", "stale", "unknown", "not_applicable"}:
+            return None
+        if summary["accessState"] not in {"allowed", "excluded", "missing", "blocked"}:
+            return None
+        return summary
 
     def _work_packet_alpha_memory_source_status(
         self,
@@ -21932,6 +22080,9 @@ class SupervisorService:
         ]
 
     def to_candidate_work_view(self, candidate: CandidateWork) -> CandidateWorkView:
+        import_metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+        source_summary = import_metadata.get("userFacingSourceSummary")
+        safe_source_summary = self._safe_user_facing_source_summary(source_summary)
         return CandidateWorkView(
             id=candidate.id,
             title=candidate.title,
@@ -21947,7 +22098,8 @@ class SupervisorService:
             updatedAt=self._normalize_timestamp(candidate.updated_at),
             approvedAt=self._normalize_timestamp(candidate.approved_at) if candidate.approved_at else None,
             promotedWorkItemId=candidate.promoted_work_item_id,
-            importMetadata=candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {},
+            sourceSummary=safe_source_summary,
+            importMetadata=import_metadata,
         )
 
     def to_memory_proposal_view(self, proposal: MemoryProposal, *, packet_id: str) -> MemoryProposalV0View:

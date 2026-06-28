@@ -50,11 +50,27 @@ def build_obsidian_metadata_import_package(
     if safe_source_ref != f"obsidian:{safe_path}":
         raise ObsidianMetadataImportError("Obsidian metadata sourceRef must match sourceArtifactPath.")
 
+    approved_at_iso = approved_at.isoformat()
+    source_summary = {
+        "label": f"Approved Obsidian metadata: {safe_title}",
+        "summary": f"{safe_title} is represented by approved Obsidian metadata only; raw note content was not copied.",
+        "sourceType": "obsidian",
+        "sourceRef": safe_source_ref,
+        "sourceArtifactPath": safe_path,
+        "freshness": safe_freshness,
+        "accessState": "allowed",
+        "retentionPolicy": "metadata_only_no_raw_obsidian_content",
+        "boundarySummary": "Canonical Obsidian memory remains human-owned and unchanged.",
+        "evidenceRefs": safe_evidence_refs,
+        "approvalStatus": approval_status,
+        "approvedBy": safe_approved_by,
+        "approvedAt": approved_at_iso,
+    }
     source_refs = [
         {
             "refId": safe_source_ref,
             "sourceType": "obsidian",
-            "label": f"Approved Obsidian metadata: {safe_title}",
+            "label": source_summary["label"],
             "pathOrUrl": safe_path,
             "freshness": safe_freshness,
             "accessState": "allowed",
@@ -65,8 +81,9 @@ def build_obsidian_metadata_import_package(
         "evidenceRefs": safe_evidence_refs,
         "approvalStatus": approval_status,
         "approvedBy": safe_approved_by,
-        "approvedAt": approved_at.isoformat(),
+        "approvedAt": approved_at_iso,
         "freshness": safe_freshness,
+        "userFacingSourceSummary": source_summary,
         "workPacketSourceRefs": source_refs,
         "retentionPolicy": "metadata_only_no_raw_obsidian_content",
         "canonicalMutationAllowed": False,

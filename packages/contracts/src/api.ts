@@ -60,6 +60,22 @@ export interface CandidateWorkObsidianMetadataImportPayload {
   sortOrder?: number;
 }
 
+export interface CandidateWorkSourceSummaryView {
+  label: string;
+  summary: string;
+  sourceType: CandidateWorkSource;
+  sourceRef: string;
+  sourceArtifactPath: string;
+  freshness: "fresh" | "stale" | "unknown" | "not_applicable";
+  accessState: "allowed" | "excluded" | "missing" | "blocked";
+  retentionPolicy: string;
+  boundarySummary: string;
+  evidenceRefs: string[];
+  approvalStatus: string;
+  approvedBy: string;
+  approvedAt: string;
+}
+
 export interface CandidateWorkView {
   id: string;
   title: string;
@@ -75,6 +91,7 @@ export interface CandidateWorkView {
   updatedAt: string;
   approvedAt?: string | null;
   promotedWorkItemId?: string | null;
+  sourceSummary?: CandidateWorkSourceSummaryView | null;
   importMetadata: Record<string, unknown>;
 }
 
@@ -800,6 +817,19 @@ export interface DocumentationAuthorityBlockedStoryView {
   status: string;
 }
 
+export interface DocumentationAuthorityLegacyArtifactDispositionView {
+  artifactId: string;
+  label: string;
+  currentLocation: string;
+  recommendedDisposition: string;
+  retentionPolicy: string;
+  sourceOwnedReplacements: string[];
+  operatorActions: string[];
+  evidence: string[];
+  sourceMutationAllowed: boolean;
+  rawPayloadRetained: boolean;
+}
+
 export interface DocumentationAuthorityReportView {
   reportId: string;
   generatedAt: string;
@@ -807,6 +837,7 @@ export interface DocumentationAuthorityReportView {
   indexes: DocumentationAuthorityDocumentView[];
   approvalCheckpoint: DocumentationAuthorityDocumentView;
   blockedStories: DocumentationAuthorityBlockedStoryView[];
+  legacyArtifactDispositions: DocumentationAuthorityLegacyArtifactDispositionView[];
   driftChecks: ProviderEnablementPolicyStepView[];
   nextSafeActions: string[];
   executionAuthorityApproved: boolean;
