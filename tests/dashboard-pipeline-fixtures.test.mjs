@@ -522,24 +522,33 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.doesNotMatch(cockpitSource, /import\s+\{\s*pipelineStages\s+\}\s+from\s+"..\/..\/lib\/pipeline-fixtures"/);
   assert.match(packetDetailSource, /Packet 5 Whys/);
   assert.match(packetDetailSource, /Evidence and artifacts/);
+  assert.match(packetDetailSource, /Evidence trace/);
+  assert.match(packetDetailSource, /Artifact trace/);
+  assert.match(packetDetailSource, /Retention class/);
+  assert.match(packetDetailSource, /Raw payload retained/);
+  assert.match(packetDetailSource, /Artifact type/);
+  assert.match(packetDetailSource, /Path or URL/);
+  assert.match(packetDetailSource, /Action guard previews/);
+  assert.match(packetDetailSource, /Recovery preview event/);
+  assert.match(packetDetailSource, /Human Gate binding/);
   assert.match(packetDetailSource, /Workers and review/);
   assert.match(packetDetailSource, /Gate, memory, recovery/);
-  assert.match(packetDetailSource, /required evidence:/);
-  assert.match(packetDetailSource, /stop lines:/);
-  assert.match(packetDetailSource, /rollback:/);
-  assert.match(packetDetailSource, /audit:/);
-  assert.match(packetDetailSource, /proposal type:/);
-  assert.match(packetDetailSource, /sensitivity:/);
-  assert.match(packetDetailSource, /contradiction:/);
-  assert.match(packetDetailSource, /write-back allowed:/);
-  assert.match(packetDetailSource, /write-back status:/);
-  assert.match(packetDetailSource, /guard classification:/);
-  assert.match(packetDetailSource, /expected binding:/);
-  assert.match(packetDetailSource, /actual binding:/);
-  assert.match(packetDetailSource, /primary risk:/);
-  assert.match(packetDetailSource, /stop line:/);
-  assert.match(packetDetailSource, /safe next option:/);
-  assert.match(packetDetailSource, /fixture event:/);
+  assert.match(packetDetailSource, /Required evidence/);
+  assert.match(packetDetailSource, /Stop lines/);
+  assert.match(packetDetailSource, /Rollback/);
+  assert.match(packetDetailSource, /Audit/);
+  assert.match(packetDetailSource, /Proposal type/);
+  assert.match(packetDetailSource, /Sensitivity/);
+  assert.match(packetDetailSource, /Contradiction/);
+  assert.match(packetDetailSource, /Write-back allowed/);
+  assert.match(packetDetailSource, /Write-back status/);
+  assert.match(packetDetailSource, /Action guard previews/);
+  assert.match(packetDetailSource, /Expected binding/);
+  assert.match(packetDetailSource, /Actual binding/);
+  assert.match(packetDetailSource, /Primary risk/);
+  assert.match(packetDetailSource, /Stop line/);
+  assert.match(packetDetailSource, /Safe next option/);
+  assert.match(packetDetailSource, /Recovery preview event/);
   assert.match(packetDetailSource, /Packet source boundaries/);
   assert.doesNotMatch(cockpitSource, /FixtureScenarioSelector|GoldenPathLifecycle|ActivePacketDrawer|RecoveryDrawerPanel|ActionGuardPanel|EvidenceDetailList|evaluateFixtureActionDecision/);
   assert.match(fixtureSource, /routeFork/);
@@ -916,8 +925,8 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
   const allPipelineSource = `${routeSource}\n${fixtureSource}\n${pipelineComponentSource}\n${packetDetailSource}`;
 
   assert.match(packetDetailSource, /Memory proposals/);
-  assert.match(packetDetailSource, /packet\.memoryProposals\.map\(formatMemoryProposal\)/);
-  assert.match(packetDetailSource, /function formatMemoryProposal/);
+  assert.match(packetDetailSource, /MemoryProposalList/);
+  assert.match(packetDetailSource, /packet\.memoryProposals\.map\(\(proposal\)/);
 
   for (const visibleLabel of [
     "Packet id",
