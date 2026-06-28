@@ -4492,6 +4492,7 @@ class SupervisorService:
         summary = self._runner_summary(all_rows, degraded_inputs)
         source_completion_rollup = self._runner_source_completion_rollup(all_rows)
         preferred_successor_ids = (
+            "queue-zero-runway-carryover-refresh",
             "queue-zero-runway-spillover-refresh",
             "queue-zero-runway-overflow-refresh",
             "queue-zero-runway-buffer-refresh",
@@ -6940,6 +6941,29 @@ class SupervisorService:
             stop_lines=[
                 "Do not reopen, requeue, or mutate closed backlog source-completion evidence.",
                 "Do not reuse the closed codex/queue-zero-runway-overflow-refresh branch for spillover work.",
+                "Do not launch subscription-agent, Codex CLI, Claude CLI, worker processes, provider calls, or premium execution.",
+            ],
+        )
+        queue_zero_carryover_lane = self._safe_backlog_next_lane(
+            lane_slug="queue-zero-runway-carryover-refresh",
+            lane_title="Queue-zero runway carryover refresh",
+            scope=[
+                "carryover safe backlog source metadata after the spillover runway lane closes",
+                "development runway carryover evidence that keeps dispatcher capacity nonzero without reusing closed lanes",
+                "runner assignment status continuity expectations for the next distinct metadata-only lane",
+                "focused drift and workspace runner tests",
+            ],
+            verification_commands=[
+                "node ./scripts/check-safe-development-backlog.mjs",
+                "node ./scripts/check-development-runway-report.mjs",
+                "node ./scripts/check-runner-assignment-status-report.mjs",
+                "node ./scripts/test-codex-workspace.mjs",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not reopen, requeue, or mutate closed backlog source-completion evidence.",
+                "Do not reuse the closed codex/queue-zero-runway-spillover-refresh branch for carryover work.",
                 "Do not launch subscription-agent, Codex CLI, Claude CLI, worker processes, provider calls, or premium execution.",
             ],
         )
@@ -10467,12 +10491,42 @@ class SupervisorService:
                 itemId="queue-zero-runway-spillover-refresh",
                 label="Queue-zero runway spillover refresh",
                 priority="P2",
-                status="ready",
-                summary="Keep one distinct source-owned metadata lane available after the overflow runway lane closes so the runner runway does not return to zero.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Completed the queue-zero runway spillover lane as source-owned metadata evidence so dispatcher capacity advances to a distinct carryover branch.",
+                recommendedSliceSize="complete",
                 evidence=[
                     "The queue-zero runway overflow lane was claimed and converted to completed source evidence.",
-                    "This spillover lane keeps dispatch continuity source-owned without reopening closed generated backlog candidates.",
+                    "The queue-zero runway spillover lane is now completed source evidence and must not be requeued under codex/queue-zero-runway-spillover-refresh.",
+                    "A distinct carryover lane preserves metadata-only dispatcher continuity without reopening closed generated backlog candidates.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=queue_zero_carryover_lane,
+                nextAction="Use queue-zero-runway-spillover-refresh as completed runway evidence only; dispatch queue-zero-runway-carryover-refresh as the next metadata-only lane without runtime execution.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="queue-zero-runway-carryover-refresh",
+                label="Queue-zero runway carryover refresh",
+                priority="P2",
+                status="ready",
+                summary="Keep one distinct source-owned metadata lane available after the spillover runway lane closes so the runner runway does not return to zero.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "The queue-zero runway spillover lane was claimed and converted to completed source evidence.",
+                    "This carryover lane keeps dispatch continuity source-owned without reopening closed generated backlog candidates.",
                     "The lane remains metadata-only and does not grant worker launch, provider calls, premium execution, or process authority.",
                 ],
                 relatedReports=[
@@ -10490,8 +10544,8 @@ class SupervisorService:
                     "/controls#development-runway-report",
                     "/controls#runner-assignment-status",
                 ],
-                nextLane=queue_zero_spillover_lane,
-                nextAction="Dispatch queue-zero-runway-spillover-refresh as the next metadata-only lane; keep all closed backlog candidates closed and do not perform runtime execution.",
+                nextLane=queue_zero_carryover_lane,
+                nextAction="Dispatch queue-zero-runway-carryover-refresh as the next metadata-only lane; keep all closed backlog candidates closed and do not perform runtime execution.",
             ),
         ]
 
