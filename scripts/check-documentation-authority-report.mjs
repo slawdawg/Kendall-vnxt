@@ -43,6 +43,7 @@ assertCondition(
 for (const typeName of [
   "DocumentationAuthorityDocumentView",
   "DocumentationAuthorityBlockedStoryView",
+  "DocumentationAuthorityLegacyArtifactDispositionView",
   "DocumentationAuthorityReportView",
 ]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
@@ -62,7 +63,14 @@ for (const serviceText of [
   "docs/workflows/product-requirements-boundary.md",
   "docs/workflows/implementation-evidence-boundary.md",
   "blocked_pending_explicit_approval",
+  "legacyArtifactDispositions",
+  "local-bmad-story-files",
+  "local-sprint-status",
+  "planning-research-packets",
+  "metadata_only_labels_no_raw_artifact_content",
   "docs/workflows/implementation-evidence-boundary.md",
+  "docs/workflows/planning-doc-clean-install-boundary.md",
+  "docs/workflows/generated-agent-artifacts.md",
 ]) {
   assertCondition(serviceSource.includes(serviceText), `Documentation authority service must include ${serviceText}`, failures);
 }
@@ -74,13 +82,20 @@ assertCondition(
   failures,
 );
 
-for (const panelText of ["DocumentationAuthorityReportView", "Current indexes", "Blocked authority stories", "Drift checks"]) {
+for (const panelText of [
+  "DocumentationAuthorityReportView",
+  "Current indexes",
+  "Legacy artifact dispositions",
+  "Blocked authority stories",
+  "Drift checks",
+]) {
   assertCondition(documentationPanel.includes(panelText), `Documentation authority panel must render ${panelText}`, failures);
 }
 
 for (const browserText of [
   "Documentation authority",
   "Indexes and approval stop lines",
+  "Legacy artifact dispositions",
   "Blocked authority stories",
   "Documentation drift command",
   "pnpm run check:documentation-authority",
@@ -94,6 +109,9 @@ for (const testText of [
   '"docs/architecture/index.md"',
   '"docs/workflows/product-requirements-boundary.md"',
   '"docs/workflows/implementation-evidence-boundary.md"',
+  '"legacyArtifactDispositions"',
+  '"local-bmad-story-files"',
+  '"legacy-artifact-dispositions"',
   "docs/workflows/implementation-evidence-boundary.md",
 ]) {
   assertCondition(supervisorTests.includes(testText), `Supervisor tests must assert ${testText}`, failures);
