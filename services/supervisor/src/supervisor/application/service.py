@@ -1298,6 +1298,23 @@ class SupervisorService:
             raise ValueError("Candidate work has already been promoted.")
 
         import_metadata = candidate.import_metadata_json if isinstance(candidate.import_metadata_json, dict) else {}
+        normalized_work_packet_source_refs = self._normalized_work_packet_metadata_source_refs(import_metadata)
+        promotion_evidence_refs = import_metadata.get("promotionEvidenceRefs")
+        normalized_promotion_evidence_refs = (
+            [ref for ref in promotion_evidence_refs if isinstance(ref, str) and ref]
+            if isinstance(promotion_evidence_refs, list)
+            else []
+        )
+        promoted_import_metadata = self._promotion_import_metadata(import_metadata)
+        if normalized_work_packet_source_refs:
+            promoted_import_metadata["workPacketSourceRefs"] = normalized_work_packet_source_refs
+        else:
+            promoted_import_metadata.pop("workPacketSourceRefs", None)
+        if normalized_promotion_evidence_refs:
+            promoted_import_metadata["promotionEvidenceRefs"] = normalized_promotion_evidence_refs
+        else:
+            promoted_import_metadata.pop("promotionEvidenceRefs", None)
+
         item_metadata = {
             "candidateWorkId": candidate.id,
             "candidatePriority": candidate.priority,
@@ -1305,20 +1322,18 @@ class SupervisorService:
             "sourceArtifactPath": candidate.source_artifact_path,
             "sourceArtifactType": candidate.source_artifact_type,
             "source": candidate.source,
-            "importMetadata": import_metadata,
+            "importMetadata": promoted_import_metadata,
         }
         verification_summary = import_metadata.get("verificationSummary")
         acceptance_criteria = import_metadata.get("acceptanceCriteria")
-        work_packet_source_refs = import_metadata.get("workPacketSourceRefs")
-        promotion_evidence_refs = import_metadata.get("promotionEvidenceRefs")
         if isinstance(verification_summary, str) and verification_summary:
             item_metadata["verificationSummary"] = verification_summary
         if isinstance(acceptance_criteria, str) and acceptance_criteria:
             item_metadata["acceptanceCriteriaSummary"] = acceptance_criteria
-        if isinstance(work_packet_source_refs, list):
-            item_metadata["workPacketSourceRefs"] = work_packet_source_refs
-        if isinstance(promotion_evidence_refs, list):
-            item_metadata["promotionEvidenceRefs"] = [ref for ref in promotion_evidence_refs if isinstance(ref, str) and ref]
+        if normalized_work_packet_source_refs:
+            item_metadata["workPacketSourceRefs"] = normalized_work_packet_source_refs
+        if normalized_promotion_evidence_refs:
+            item_metadata["promotionEvidenceRefs"] = normalized_promotion_evidence_refs
 
         item = WorkItem(
             title=candidate.title,
@@ -1352,22 +1367,22 @@ class SupervisorService:
                 "sourceArtifactType": candidate.source_artifact_type,
                 "candidatePriority": candidate.priority,
                 "candidateSortOrder": candidate.sort_order,
-                "importMetadata": import_metadata,
+                "importMetadata": promoted_import_metadata,
                 "actor": {"type": "system", "id": None, "label": None},
                 "authority": {
                     "operation": "candidate_work.promotion",
                     "mode": "explicit_candidate_approval",
                 },
+                "approval": {
+                    "status": candidate.status,
+                    "approvedAt": candidate.approved_at.isoformat() if candidate.approved_at else None,
+                    "approvedBy": promoted_import_metadata.get("approvedBy"),
+                    "approvalReference": promoted_import_metadata.get("approvalStatus"),
+                },
                 "before": before_state,
                 "after": after_state,
-                "evidenceRefs": item_metadata.get("promotionEvidenceRefs", []),
-                "workPacketSourceRefs": [
-                    raw_ref.get("refId")
-                    for raw_ref in work_packet_source_refs
-                    if isinstance(raw_ref, dict) and isinstance(raw_ref.get("refId"), str) and raw_ref.get("refId")
-                ]
-                if isinstance(work_packet_source_refs, list)
-                else [],
+                "evidenceRefs": normalized_promotion_evidence_refs,
+                "workPacketSourceRefs": [ref["refId"] for ref in normalized_work_packet_source_refs],
             },
         )
         await session.commit()
@@ -20871,10 +20886,14 @@ class SupervisorService:
                 invalid_reasons.append("unsafe non-summary source metadata")
             elif summary_only is not None and summary_only is not True:
                 invalid_reasons.append("invalid summary-only flag")
+            contradiction_status = raw_ref.get("contradictionStatus")
+            if isinstance(contradiction_status, str) and contradiction_status not in {"", "none"}:
+                invalid_reasons.append(f"contradictory source metadata: {contradiction_status}")
             ref_id = raw_ref.get("refId")
             label = raw_ref.get("label")
             path_or_url = raw_ref.get("pathOrUrl")
             canonical = raw_ref.get("canonical")
+            blocked_reason = raw_ref.get("blockedReason")
             safe_source_type = source_type if source_type in allowed_source_types else "manual"
             safe_freshness = freshness if freshness in allowed_freshness else "unknown"
             if access_state == "unavailable":
@@ -20890,11 +20909,15 @@ class SupervisorService:
                 safe_label = f"{safe_label} ({', '.join(invalid_reasons)})"
             safe_blocked_reason = "; ".join(invalid_reasons) if invalid_reasons else None
             if safe_access_state != "allowed" and not safe_blocked_reason:
-                safe_blocked_reason = {
-                    "excluded": "source ref is excluded from automated mutation",
-                    "missing": "source ref is missing or unavailable",
-                    "blocked": "source ref is blocked by source boundary",
-                }[safe_access_state]
+                safe_blocked_reason = (
+                    blocked_reason
+                    if isinstance(blocked_reason, str) and blocked_reason
+                    else {
+                        "excluded": "source ref is excluded from automated mutation",
+                        "missing": "source ref is missing or unavailable",
+                        "blocked": "source ref is blocked by source boundary",
+                    }[safe_access_state]
+                )
             safe_canonical = False if safe_source_type == "llm_wiki" else canonical if isinstance(canonical, bool) else True
             refs.append(
                 SourceRefV0View(
@@ -20912,6 +20935,39 @@ class SupervisorService:
                 )
             )
         return refs
+
+    def _normalized_work_packet_metadata_source_refs(self, metadata: dict) -> list[dict[str, object]]:
+        return [ref.model_dump(mode="json") for ref in self._work_packet_metadata_source_refs(metadata)]
+
+    def _promotion_import_metadata(self, import_metadata: dict) -> dict[str, object]:
+        promoted: dict[str, object] = {}
+        string_fields = {
+            "verificationSummary",
+            "acceptanceCriteria",
+            "retentionPolicy",
+            "artifactTitle",
+            "storyId",
+            "epicId",
+            "allowedScope",
+            "approvalStatus",
+            "approvedBy",
+            "approvedAt",
+        }
+        bool_fields = {"canonicalMutationAllowed", "sourceMutationAllowed"}
+        for field in string_fields:
+            value = import_metadata.get(field)
+            if isinstance(value, str) and value:
+                promoted[field] = value
+        for field in bool_fields:
+            value = import_metadata.get(field)
+            if isinstance(value, bool):
+                promoted[field] = value
+        notes = import_metadata.get("notes")
+        if isinstance(notes, list):
+            safe_notes = [note for note in notes if isinstance(note, str) and note][:10]
+            if safe_notes:
+                promoted["notes"] = safe_notes
+        return promoted
 
     def _work_packet_alpha_memory_source_status(
         self,
