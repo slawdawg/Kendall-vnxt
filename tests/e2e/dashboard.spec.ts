@@ -906,13 +906,38 @@ test.describe("dashboard workflow coverage", () => {
     await page.goto("/pipeline/packets/fixture:learn-memory");
     const memoryPacketDetail = page.getByRole("main", { name: "Packet detail" });
     await expect(memoryPacketDetail).toBeVisible();
-    const pendingMemoryProposal = memoryPacketDetail.locator("article").filter({ hasText: "Memory proposal pending review" });
+    await expect(memoryPacketDetail.getByRole("heading", { name: "Learn panel: Memory proposals", exact: true })).toBeVisible();
+    const pendingMemoryProposal = memoryPacketDetail.locator("article").filter({ hasText: "Memory proposal pending review" }).first();
+    await expect(pendingMemoryProposal.getByText("Proposal surface", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Reviewable memory proposals", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Proposal state", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("pending_human_approval", { exact: true }).first()).toBeVisible();
     await expect(pendingMemoryProposal.getByText("Proposal type", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("error_book_entry", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Obsidian/Kendall_Nxt/Inbox/fixture-learn-memory.md", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Source refs", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("fixture:learn-memory:source:obsidian-human-owned", { exact: false }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Evidence refs", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("fixture:learn-memory:evidence:fixture", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Decision context", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("no extra decision context", { exact: true }).first()).toBeVisible();
     await expect(pendingMemoryProposal.getByText("Sensitivity", { exact: true })).toBeVisible();
     await expect(pendingMemoryProposal.getByText("Contradiction", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Confidence", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("medium", { exact: true }).first()).toBeVisible();
     await expect(pendingMemoryProposal.getByText("Write-back allowed", { exact: true })).toBeVisible();
     await expect(pendingMemoryProposal.getByText("false", { exact: true })).toBeVisible();
     await expect(pendingMemoryProposal.getByText("Write-back status", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("review_gated", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Canonical Obsidian write-back", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("blocked; writeBackAllowed=false", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Operator action", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("approve", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Available review actions", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("defer, reject, request edit", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Reject available", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Backup / recovery", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Preserve proposal evidence, leave Obsidian unchanged, and rerun review from packet metadata.", { exact: true }).first()).toBeVisible();
     await page.goto("/pipeline/packets/fixture:failed-stage");
     const recoveryPacketDetail = page.getByRole("main", { name: "Packet detail" });
     await expect(recoveryPacketDetail).toBeVisible();
@@ -3177,5 +3202,44 @@ test.describe("dashboard workflow coverage", () => {
     await expect(gateAudit.getByText("Resolve blocked policy gate")).toBeVisible();
     await expect(gateAudit.getByText("Review branch ownership")).toBeVisible();
     await expect(gateAudit.getByText("operator-checkpoint")).toBeVisible();
+  });
+
+  test("renders reviewable memory proposals in packet detail without write-back controls", async ({ page }) => {
+    await page.goto("/pipeline/packets/fixture:learn-memory");
+
+    const memoryPacketDetail = page.getByRole("main", { name: "Packet detail" });
+    await expect(memoryPacketDetail).toBeVisible();
+    await expect(memoryPacketDetail.getByRole("heading", { name: "Learn panel: Memory proposals", exact: true })).toBeVisible();
+
+    const pendingMemoryProposal = memoryPacketDetail.locator("article").filter({ hasText: "Memory proposal pending review" }).first();
+    await expect(pendingMemoryProposal.getByText("Proposal surface", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Reviewable memory proposals", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Proposal state", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("pending_human_approval", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Proposal type", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("error_book_entry", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Obsidian/Kendall_Nxt/Inbox/fixture-learn-memory.md", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Source refs", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("fixture:learn-memory:source:obsidian-human-owned", { exact: false }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Evidence refs", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("fixture:learn-memory:evidence:fixture", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Decision context", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("no extra decision context", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Write-back allowed", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("false", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Write-back status", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("review_gated", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Canonical Obsidian write-back", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("blocked; writeBackAllowed=false", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Operator action", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("approve", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Available review actions", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("defer, reject, request edit", { exact: true }).first()).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Reject available", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Backup / recovery", { exact: true })).toBeVisible();
+    await expect(pendingMemoryProposal.getByText("Preserve proposal evidence, leave Obsidian unchanged, and rerun review from packet metadata.", { exact: true }).first()).toBeVisible();
+    await expect(
+      memoryPacketDetail.locator("button, a, [role='button'], [role='link'], [role='menuitem'], input[type='submit']").filter({ hasText: /write|write-back|obsidian/i })
+    ).toHaveCount(0);
   });
 });

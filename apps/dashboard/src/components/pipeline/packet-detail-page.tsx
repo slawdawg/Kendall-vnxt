@@ -378,27 +378,65 @@ function HumanGateActionRequestList({ packet }: { packet: PipelineFixturePacket 
 
 function MemoryProposalList({ packet }: { packet: PipelineFixturePacket }) {
   return (
-    <DetailCard title="Memory proposals" empty={packet.memoryProposals.length === 0 ? "No memory proposal for this packet." : null}>
+    <DetailCard title="Learn panel: Memory proposals" empty={packet.memoryProposals.length === 0 ? "No memory proposal for this packet." : null}>
       {packet.memoryProposals.map((proposal) => (
         <TraceBlock
           key={proposal.proposalId}
           title={proposal.label}
           fields={[
+            ["Proposal surface", "Reviewable memory proposals"],
+            ["Proposal state", proposal.status],
+            ["Packet id", proposal.packetId],
+            ["Proposal id", proposal.proposalId],
             ["Proposal type", proposal.proposalType],
             ["Status", proposal.status],
             ["Target", proposal.targetVaultPath ?? proposal.targetVaultFolder ?? "none"],
+            ["Target folder", proposal.targetVaultFolder ?? "none"],
             ["Sensitivity", proposal.sensitivity],
             ["Freshness", proposal.freshness],
             ["Contradiction", proposal.contradictionStatus],
+            ["Confidence", proposal.confidence],
+            ["Source refs", proposal.sourceRefs.join(", ")],
+            ["Evidence refs", proposal.evidenceRefs.join(", ")],
+            ["Suggested content", proposal.suggestedContentSummary],
+            ["Patch summary", proposal.patchSummary ?? "summary only"],
+            ["Decision context", proposal.decisionNeededContext ?? "no extra decision context"],
             ["Write-back allowed", String(proposal.writeBackAllowed)],
             ["Write-back status", proposal.writeBackStatus],
+            ["Canonical Obsidian write-back", memoryProposalCanonicalGateState(proposal)],
             ["Operator action", proposal.operatorAction],
-            ["Backup", proposal.backupRecoveryPath],
+            ["Available review actions", memoryProposalReviewActions(proposal)],
+            ["Reject available", memoryProposalRejectAvailable(proposal) ? "yes; review action only" : "no"],
+            ["Backup / recovery", proposal.backupRecoveryPath],
           ]}
         />
       ))}
     </DetailCard>
   );
+}
+
+function memoryProposalReviewActions(proposal: PipelineFixturePacket["memoryProposals"][number]) {
+  const actions = ["defer"];
+  if (memoryProposalRejectAvailable(proposal)) {
+    actions.push("reject");
+  }
+  if (!["blocked", "stale", "contradictory", "rejected"].includes(proposal.status) && proposal.freshness === "fresh" && proposal.contradictionStatus === "none") {
+    actions.push("approve future draft");
+  }
+  if (proposal.status !== "rejected") {
+    actions.push("request edit");
+  }
+  return actions.join(", ");
+}
+
+function memoryProposalRejectAvailable(proposal: PipelineFixturePacket["memoryProposals"][number]) {
+  return proposal.status !== "rejected";
+}
+
+function memoryProposalCanonicalGateState(proposal: PipelineFixturePacket["memoryProposals"][number]) {
+  return proposal.writeBackAllowed === false
+    ? "blocked; writeBackAllowed=false"
+    : "blocked; invalid proposal writeBackAllowed state requires separate gated review";
 }
 
 function RecoveryActionList({ packet }: { packet: PipelineFixturePacket }) {

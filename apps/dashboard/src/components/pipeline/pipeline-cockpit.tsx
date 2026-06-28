@@ -75,8 +75,12 @@ export function PipelineCockpit({
         : packets.filter((packet) => searchablePacketText(packet).includes(normalizedSearchQuery)),
     [normalizedSearchQuery, packets]
   );
-  const selectedMapPacket = selectedItem?.type === "packet"
-    ? packets.find((packet) => packet.packetId === selectedItem.id) ?? null
+  const activeSelectedItem =
+    selectedItem?.type === "packet" && !visiblePackets.some((packet) => packet.packetId === selectedItem.id)
+      ? null
+      : selectedItem;
+  const selectedMapPacket = activeSelectedItem?.type === "packet"
+    ? packets.find((packet) => packet.packetId === activeSelectedItem.id) ?? null
     : null;
   const blockedGateCount = packets.filter((packet) => packet.currentStage === "human_gate").length;
   const topBlockedPacket = findTopBlockedPacket(packets);
@@ -199,15 +203,6 @@ export function PipelineCockpit({
     mediaQuery.addEventListener("change", updateCompactRouteMap);
     return () => mediaQuery.removeEventListener("change", updateCompactRouteMap);
   }, []);
-
-  useEffect(() => {
-    if (selectedItem?.type !== "packet") {
-      return;
-    }
-    if (!visiblePackets.some((packet) => packet.packetId === selectedItem.id)) {
-      setSelectedItem(null);
-    }
-  }, [selectedItem, visiblePackets]);
 
   const updateConnectorPaths = useCallback(() => {
     const routeMap = routeMapRef.current;
@@ -405,7 +400,7 @@ export function PipelineCockpit({
                       packets={visiblePackets.filter((packet) => packet.currentStage === stage)}
                       registerStageButton={registerStageButton}
                       registerStageStation={registerStageStation}
-                      selectedItem={selectedItem}
+                      selectedItem={activeSelectedItem}
                       stage={stage}
                       visibleLimit={stagePacketLimit}
                     />
