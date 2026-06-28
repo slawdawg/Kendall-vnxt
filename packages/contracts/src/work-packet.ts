@@ -391,6 +391,7 @@ export interface HumanGateActionV0 {
   resultingStage: PipelineStage;
   resultingOwner: WorkPacketOwner;
   auditEventType: string;
+  reasonCodes: string[];
   disabledReason?: string;
 }
 
