@@ -4970,6 +4970,7 @@ def test_runtime_evidence_export_returns_attempts_events_and_boundaries_without_
     assert "GET /supervisor/codex-implementation-approval-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/claude-review-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/claude-review-approval-report" in export["boundary"]["relatedSupervisorReports"]
+    assert "GET /supervisor/review-resource-policy-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/github-delivery-authority-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/local-cleanup-readiness-report" in export["boundary"]["relatedSupervisorReports"]
     assert "GET /supervisor/remote-cleanup-sync-readiness-report" in export["boundary"]["relatedSupervisorReports"]
@@ -5386,6 +5387,7 @@ def test_review_resource_policy_report_maps_triggers_to_bounded_review_routes_wi
     assert claude_route["budgetCap"] == "--max-budget-usd 1"
     assert "claude -p" in claude_route["commandPolicy"]
     assert "--max-budget-usd 1" in claude_route["commandPolicy"]
+    assert "--tools Read,Grep" in claude_route["commandPolicy"]
     assert "GitHub mutation" in claude_route["blockedCapabilities"]
     assert "secret access" in claude_route["blockedCapabilities"]
     assert "filesystem mutation" in claude_route["blockedCapabilities"]
@@ -5416,6 +5418,9 @@ def test_review_resource_policy_report_maps_triggers_to_bounded_review_routes_wi
     assert any("Do not launch Claude" in stop_line for stop_line in authority_packet["stopLines"])
 
     assert report["claudeReadOnlyCommand"][:2] == ["claude -p", "--max-budget-usd 1"]
+    assert "--tools Read,Grep" in report["claudeReadOnlyCommand"]
+    assert not any("--allowedTools" in command_part for command_part in report["claudeReadOnlyCommand"])
+    assert not any("--disallowedTools" in command_part for command_part in report["claudeReadOnlyCommand"])
     assert any("Do not retain raw prompts" in stop_line for stop_line in report["stopLines"])
     assert any("does not approve Claude process launch" in stop_line for stop_line in report["stopLines"])
     assert any("separate Claude review approval packet" in action for action in report["nextSafeActions"])

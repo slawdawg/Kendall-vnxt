@@ -22,7 +22,7 @@ function TriggerCard({ trigger }: { trigger: ReviewResourcePolicyTriggerView }) 
 
 function RouteCard({ route }: { route: ReviewResourcePolicyRouteView }) {
   return (
-    <article className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
+    <article data-testid={`review-resource-policy-route-${route.routeId}`} className="rounded-[0.5rem] border bg-[var(--panel)] p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">{route.routeId}</p>
@@ -111,7 +111,7 @@ export function ReviewResourcePolicyReportPanel({ report }: { report: ReviewReso
         </div>
         <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Claude read-only command</h4>
-          <div className="mt-3 space-y-2">
+          <div data-testid="review-resource-policy-claude-command" className="mt-3 space-y-2">
             {report.claudeReadOnlyCommand.map((part) => (
               <p key={part} className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 font-mono text-xs text-[var(--muted)]">
                 {part}
@@ -136,7 +136,7 @@ export function ReviewResourcePolicyReportPanel({ report }: { report: ReviewReso
       <div className="mt-5 grid gap-4 xl:grid-cols-2">
         <div className="rounded-[0.5rem] border bg-[var(--surface)] p-4">
           <h4 className="text-base font-semibold">Stop lines</h4>
-          <div className="mt-3 space-y-2">
+          <div data-testid="review-resource-policy-stop-lines" className="mt-3 space-y-2">
             {report.stopLines.map((line) => (
               <p key={line} className="rounded-[0.5rem] border bg-[var(--panel)] px-3 py-2 text-xs leading-5 text-[var(--warn)]">
                 {line}

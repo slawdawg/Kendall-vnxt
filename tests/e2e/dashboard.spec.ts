@@ -2416,11 +2416,12 @@ test.describe("dashboard workflow coverage", () => {
     await expect(reviewResourcePolicyPanel.getByRole("heading", { name: "Review routes" })).toBeVisible();
     await expect(reviewResourcePolicyPanel.getByRole("heading", { name: "Packet evaluations" })).toBeVisible();
     await expect(reviewResourcePolicyPanel.getByRole("heading", { name: "Claude read-only command" })).toBeVisible();
-    await expect(reviewResourcePolicyPanel.getByText("BMAD party mode")).toBeVisible();
-    await expect(reviewResourcePolicyPanel.getByText("Claude read-only")).toBeVisible();
-    await expect(reviewResourcePolicyPanel.getByText("sample-authority-security-packet")).toBeVisible();
-    await expect(reviewResourcePolicyPanel.getByText("--max-budget-usd 1").first()).toBeVisible();
-    await expect(reviewResourcePolicyPanel.getByText("Do not retain raw prompts")).toBeVisible();
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-route-bmad_party_mode")).toContainText("BMAD party mode");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-route-claude_readonly_review")).toContainText("Claude read-only");
+    await expect(reviewResourcePolicyPanel.getByText("sample-authority-security-packet", { exact: true })).toBeVisible();
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-claude-command")).toContainText("--tools Read,Grep");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-claude-command")).toContainText("--max-budget-usd 1");
+    await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-stop-lines")).toContainText("Do not retain raw prompts");
     await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-processLaunchApproved")).toContainText("blocked");
     await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-sourceMutationApproved")).toContainText("blocked");
     await expect(reviewResourcePolicyPanel.getByTestId("review-resource-policy-githubMutationApproved")).toContainText("blocked");

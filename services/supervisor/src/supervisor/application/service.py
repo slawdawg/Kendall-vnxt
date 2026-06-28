@@ -10662,7 +10662,7 @@ class SupervisorService:
                 commandPolicy=[
                     "claude -p",
                     "--max-budget-usd 1",
-                    "read/search tools only",
+                    "--tools Read,Grep",
                     "scoped prompt naming files, diff, or artifact packet",
                     "findings and recommendations only",
                 ],
@@ -10765,8 +10765,7 @@ class SupervisorService:
             claudeReadOnlyCommand=[
                 "claude -p",
                 "--max-budget-usd 1",
-                "--allowedTools Read,Grep",
-                "--disallowedTools Edit,Bash,WebFetch,Write,GitHub",
+                "--tools Read,Grep",
                 "<bounded review prompt naming approved files or diff>",
             ],
             retentionPolicy=retention_policy,
@@ -13860,6 +13859,7 @@ class SupervisorService:
             "GET /supervisor/codex-implementation-approval-report",
             "GET /supervisor/claude-review-readiness-report",
             "GET /supervisor/claude-review-approval-report",
+            "GET /supervisor/review-resource-policy-report",
             "GET /supervisor/github-delivery-authority-report",
             "GET /supervisor/trusted-delivery-eligibility-report",
             "GET /supervisor/local-cleanup-readiness-report",

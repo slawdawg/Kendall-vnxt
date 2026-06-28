@@ -80,6 +80,7 @@ for (const policyText of [
   "external-review-readonly",
   "claude -p",
   "--max-budget-usd 1",
+  "--tools Read,Grep",
   'retention_policy = "summaries_findings_paths_command_metadata_verification_policy_basis_only"',
   "retentionPolicy=retention_policy",
   "rawProviderPayloadsRetained=False",
@@ -90,6 +91,8 @@ for (const policyText of [
 ]) {
   assertCondition(serviceSource.includes(policyText), `Review resource policy service must include ${policyText}`, failures);
 }
+assertCondition(!serviceSource.includes("--allowedTools"), "Review resource policy service must not use Claude --allowedTools as a restriction", failures);
+assertCondition(!serviceSource.includes("--disallowedTools"), "Review resource policy service must not rely on a finite Claude disallow list", failures);
 
 assertCondition(
   dashboardClient.includes("getReviewResourcePolicyReport"),
@@ -115,6 +118,9 @@ for (const panelText of [
   "githubMutationApproved",
   "rawProviderPayloadsRetained",
   "rawReasoningRetained",
+  "review-resource-policy-route-",
+  "review-resource-policy-claude-command",
+  "review-resource-policy-stop-lines",
 ]) {
   assertCondition(policyPanel.includes(panelText), `Review resource policy panel must render ${panelText}`, failures);
 }
