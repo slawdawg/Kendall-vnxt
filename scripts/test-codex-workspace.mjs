@@ -2299,6 +2299,12 @@ try {
       const assignment = readJson(join(assignmentsDir, "bmad-1-1-validate-the-pipeline-work-packet-read-contract.json"));
       assert(assignment.owner === "runner-a", result.stdout || result.stderr);
       assert(assignment.branch === "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
+      assert(assignment.phase === "claimed", "claim heartbeat phase missing");
+      assert(assignment.runner_kind === "codex-cli", "claim heartbeat runner kind missing");
+      assert(Boolean(assignment.last_heartbeat_at), "claim heartbeat timestamp missing");
+      assert(assignment.stale_after_seconds === 86400, "claim heartbeat stale threshold missing");
+      assert(assignment.heartbeat_count === 1, "claim heartbeat count missing");
+      assert(assignment.events.some((event) => event.type === "heartbeat"), "claim heartbeat event missing");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next --apply created worktrees");
       assert(taskSnapshot(tasksDir) === beforeTasks, "claim-next --apply mutated workspace task manifests");
     } finally {
@@ -2331,15 +2337,20 @@ try {
       assert(manifest.owner === "runner-a", result.stdout || result.stderr);
       assert(manifest.owner_acquired_at, "owner acquisition timestamp missing");
       assert(manifest.owner_updated_at === manifest.owner_acquired_at, "owner updated timestamp should match claim timestamp");
+      assert(manifest.last_heartbeat_at === manifest.owner_acquired_at, "owner claim heartbeat timestamp missing");
+      assert(manifest.stale_after_seconds === 86400, "owner claim stale threshold missing");
+      assert(manifest.phase === "claimed", "owner claim phase missing");
+      assert(manifest.runner_kind === "codex-cli", "owner claim runner kind missing");
+      assert(manifest.heartbeat_count === 1, "owner claim heartbeat count missing");
       assert(manifest.ownership_takeovers?.[0]?.previous_owner === "unowned", "previous owner evidence missing");
       assert(manifest.ownership_takeovers?.[0]?.new_owner === "runner-a", "new owner evidence missing");
       assert(manifest.ownership_takeovers?.[0]?.reason === "unowned legacy lane claimed", "claim reason evidence missing");
       assert(manifest.events.some((event) => event.type === "ownership_claimed"), "ownership claim event missing");
+      assert(manifest.events.some((event) => event.type === "heartbeat"), "owner claim heartbeat event missing");
       assert(manifest.branch === expected.branch, "claim changed manifest branch");
       assert(manifest.worktree_path === rootDir, "claim changed manifest worktree path");
       assert(!manifest.pr_url, "claim wrote PR URL evidence");
       assert(!manifest.pr_number, "claim wrote PR number evidence");
-      assert(manifest.runner_kind === undefined, "claim wrote runner evidence");
       assert(!existsSync(join(assignmentsDir, `${expected.slug}.json`)), "manifest owner claim should not create assignment metadata");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "manifest owner claim should not create a worktree");
       const afterTasksWithoutClaimedManifest = taskSnapshot(tasksDir).replace(readFileSync(manifestPath, "utf8"), "");
@@ -2404,6 +2415,8 @@ try {
       assert(second.stdout.includes("refreshed existing assignment bmad-1-1-validate-the-pipeline-work-packet-read-contract"), second.stdout || second.stderr);
       const assignment = readJson(join(assignmentsDir, "bmad-1-1-validate-the-pipeline-work-packet-read-contract.json"));
       assert(assignment.assignment_id === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", second.stdout || second.stderr);
+      assert(assignment.last_heartbeat_at, "idempotent claim heartbeat missing");
+      assert(assignment.heartbeat_count === 2, "idempotent claim should refresh heartbeat evidence");
       assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next idempotent apply created worktrees");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
