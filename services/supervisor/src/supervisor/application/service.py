@@ -6630,6 +6630,28 @@ class SupervisorService:
                 "Do not launch subscription-agent, Codex CLI, Claude CLI, worker processes, provider calls, or premium execution.",
             ],
         )
+        queue_zero_followup_lane = self._safe_backlog_next_lane(
+            lane_slug="queue-zero-runway-followup-refresh",
+            lane_title="Queue-zero runway follow-up refresh",
+            scope=[
+                "successor safe backlog source metadata after the runway continuity lane closes",
+                "development runway successor evidence that keeps dispatcher capacity nonzero",
+                "runner assignment status continuity expectations for the next metadata-only lane",
+                "focused drift and workspace runner tests",
+            ],
+            verification_commands=[
+                "node ./scripts/check-safe-development-backlog.mjs",
+                "node ./scripts/check-development-runway-report.mjs",
+                "node ./scripts/check-runner-assignment-status-report.mjs",
+                "node ./scripts/test-codex-workspace.mjs",
+                "uv run --directory services/supervisor pytest tests/integration/test_routing_preview.py",
+                "pnpm run check:static",
+            ],
+            stop_lines=[
+                "Do not reopen, requeue, or mutate closed backlog source-completion evidence.",
+                "Do not launch subscription-agent, Codex CLI, Claude CLI, worker processes, provider calls, or premium execution.",
+            ],
+        )
 
         # BEGIN BMAD pipeline-default story lanes
         bmad_1_1_validate_the_pipeline_work_packet_read_contract_lane = self._safe_backlog_next_lane(
@@ -9811,12 +9833,42 @@ class SupervisorService:
                 itemId="queue-zero-runway-continuity-refresh",
                 label="Queue-zero runway continuity refresh",
                 priority="P2",
-                status="ready",
-                summary="Keep one distinct source-owned metadata lane available so the runner runway does not return to zero after the seed lane is cleaned up.",
-                recommendedSliceSize="medium_to_large",
+                status="closed",
+                summary="Completed the queue-zero runway continuity lane as source-owned metadata evidence so dispatcher capacity advances instead of reusing the same branch.",
+                recommendedSliceSize="complete",
                 evidence=[
                     "The first queue-zero dispatch seed was claimed and converted to completed source evidence.",
-                    "This successor lane keeps dispatch continuity source-owned without reopening closed generated backlog candidates.",
+                    "The runway continuity lane is now completed source evidence and must not be requeued under codex/queue-zero-runway-continuity-refresh.",
+                    "A distinct follow-up lane preserves metadata-only dispatcher continuity without reopening closed generated backlog candidates.",
+                ],
+                relatedReports=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                relatedDocs=[
+                    "docs/workflows/end-to-end-lane-runner.md",
+                    "docs/workflows/current-session-runbook.md",
+                    "docs/workflows/implementation-evidence-boundary.md",
+                ],
+                dashboardAnchors=[
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                    "/controls#runner-assignment-status",
+                ],
+                nextLane=queue_zero_followup_lane,
+                nextAction="Use queue-zero-runway-continuity-refresh as completed runway evidence only; dispatch queue-zero-runway-followup-refresh as the next metadata-only lane without runtime execution.",
+            ),
+            SafeDevelopmentBacklogItemView(
+                itemId="queue-zero-runway-followup-refresh",
+                label="Queue-zero runway follow-up refresh",
+                priority="P2",
+                status="ready",
+                summary="Keep one distinct source-owned metadata lane available after the runway continuity lane closes so the runner runway does not return to zero.",
+                recommendedSliceSize="medium_to_large",
+                evidence=[
+                    "The queue-zero runway continuity lane was claimed and converted to completed source evidence.",
+                    "This follow-up lane keeps dispatch continuity source-owned without reopening closed generated backlog candidates.",
                     "The lane remains metadata-only and does not grant worker launch, provider calls, premium execution, or process authority.",
                 ],
                 relatedReports=[
@@ -9834,8 +9886,8 @@ class SupervisorService:
                     "/controls#development-runway-report",
                     "/controls#runner-assignment-status",
                 ],
-                nextLane=queue_zero_runway_lane,
-                nextAction="Dispatch queue-zero-runway-continuity-refresh as the next metadata-only lane; keep all closed backlog candidates closed and do not perform runtime execution.",
+                nextLane=queue_zero_followup_lane,
+                nextAction="Dispatch queue-zero-runway-followup-refresh as the next metadata-only lane; keep all closed backlog candidates closed and do not perform runtime execution.",
             ),
         ]
 

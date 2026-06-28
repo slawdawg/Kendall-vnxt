@@ -3403,6 +3403,7 @@ try {
       const blockedBranches = [
         ...bmadPipelineBacklogBranches(),
         "codex/queue-zero-runway-continuity-refresh",
+        "codex/queue-zero-runway-followup-refresh",
         "codex/verification-surface-hardening",
         "codex/github-delivery-hygiene",
         "codex/read-only-evidence-polish",
@@ -3544,6 +3545,7 @@ try {
       for (const laneSlug of [
         ...bmadPipelineBacklogSlugs(),
         "queue-zero-runway-continuity-refresh",
+        "queue-zero-runway-followup-refresh",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
         "worker-backlog-queue-refresh",
@@ -3600,6 +3602,7 @@ try {
       const assignmentFiles = [
         ...bmadPipelineBacklogSlugs(),
         "queue-zero-runway-continuity-refresh",
+        "queue-zero-runway-followup-refresh",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
         "worker-backlog-queue-refresh",
@@ -4054,6 +4057,7 @@ try {
       const manifestPaths = [
         ...bmadPipelineBacklogSlugs(),
         "queue-zero-runway-continuity-refresh",
+        "queue-zero-runway-followup-refresh",
         "verification-surface-hardening",
         "github-delivery-hygiene",
         "read-only-evidence-polish",
