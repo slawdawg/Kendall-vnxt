@@ -62,6 +62,18 @@ def _update_execution_attempt_fixture(db_path: str, attempt_id: str, **fields: o
         conn.commit()
 
 
+def _update_workflow_event_fixture(db_path: str, event_id: str, **fields: object) -> None:
+    assignments = []
+    values = []
+    for key, value in fields.items():
+        assignments.append(f"{key} = ?")
+        values.append(json.dumps(value) if key == "payload" else value)
+    values.append(event_id)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(f"update workflow_events set {', '.join(assignments)} where id = ?", values)
+        conn.commit()
+
+
 def _sqlite_table_columns(db_path: str, table_name: str) -> set[str]:
     with sqlite3.connect(db_path) as conn:
         return {row[1] for row in conn.execute(f"pragma table_info({table_name})").fetchall()}
@@ -192,6 +204,7 @@ def test_work_packets_include_candidate_only_work_item_only_combined_and_danglin
         assert candidate_packet["taskPacket"] is None
         assert candidate_packet["routingPreview"] is None
         assert candidate_packet["executionAttempts"] == []
+        assert candidate_packet["transitionEvents"] == []
         assert candidate_packet["currentStage"] == "capture"
         assert candidate_packet["currentOwner"] == "kendall"
         assert candidate_packet["status"] == "waiting"
@@ -279,6 +292,12 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
 
         before_attempts = client.get(f"/work-items/{work_item['id']}/execution-attempts").json()["data"]
         before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
+        same_timestamp = "2026-06-28 00:00:00.000000"
+        planned_event = next(event for event in before_events if event["eventType"] == "execution_attempt.planned")
+        failed_event = next(event for event in before_events if event["eventType"] == "execution_attempt.failed")
+        _update_workflow_event_fixture(db_path, planned_event["id"], created_at=same_timestamp)
+        _update_workflow_event_fixture(db_path, failed_event["id"], created_at=same_timestamp)
+        before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
 
         packets_response = client.get("/work-packets")
         assert packets_response.status_code == 200
@@ -307,6 +326,25 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         assert attempt_summary["evidenceRefs"]
         assert attempt_summary["artifactRefs"]
         assert all("workspaceIsolationPlan" not in summary for summary in packet["executionAttempts"])
+        transition_events = packet["transitionEvents"]
+        assert transition_events
+        event_types = [transition["eventType"] for transition in transition_events]
+        assert "execution_attempt.planned" in event_types
+        assert "execution_attempt.failed" in event_types
+        durable_event_ids = {f"event:{event['id']}" for event in before_events}
+        failed_transition = next(transition for transition in transition_events if transition["eventType"] == "execution_attempt.failed")
+        assert event_types.index("execution_attempt.planned") < event_types.index("execution_attempt.failed")
+        assert failed_transition["sourceStage"] == "shape"
+        assert failed_transition["sourceOwner"] == "kendall"
+        assert failed_transition["sourceStatus"] == "waiting"
+        assert failed_transition["targetStage"] == "execute"
+        assert failed_transition["targetOwner"] == "blocked"
+        assert failed_transition["targetStatus"] == "failed"
+        assert failed_transition["sourceEventId"] in {event["id"] for event in before_events}
+        assert failed_transition["evidenceRefs"][0] in durable_event_ids
+        assert f"attempt:{attempt['attemptId']}" in failed_transition["evidenceRefs"]
+        assert failed_transition["durable"] is True
+        assert all("workspaceIsolationPlan" not in transition for transition in transition_events)
         assert any(ref["evidenceType"] == "attempt" for ref in packet["evidenceRefs"])
         attempt_artifacts = [ref for ref in packet["artifactRefs"] if ref["refId"].startswith(f"artifact:attempt:{attempt['attemptId']}")]
         assert attempt_artifacts

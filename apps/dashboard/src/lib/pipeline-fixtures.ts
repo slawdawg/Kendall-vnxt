@@ -1846,6 +1846,27 @@ function packetFixture(input: {
         eventRef: governedAttemptEventRef,
       })
     : null;
+  const transitionEvents: WorkPacketV0View["transitionEvents"] = governedWorkerAttempt
+    ? [
+        {
+          eventId: `${input.packetId}:transition:${governedWorkerAttempt.status}`,
+          eventType: `execution_attempt.${governedWorkerAttempt.status}`,
+          summary: `Governed ${input.governedWorkerAttempt?.worker} ${governedWorkerAttempt.status} transition metadata.`,
+          createdAt: governedWorkerAttempt.updatedAt,
+          sourceStage: null,
+          targetStage: input.currentStage,
+          sourceOwner: null,
+          targetOwner: input.currentOwner,
+          sourceStatus: null,
+          targetStatus: input.status,
+          reasonCodes: input.matrixRowIds,
+          evidenceRefs: governedWorkerAttempt.evidenceRefs,
+          durable: true,
+          sourceEventId: governedAttemptEventRef,
+          actorLabel: null,
+        },
+      ]
+    : [];
   if (localModelHealth) {
     evidenceRefs.push({
       refId: localModelHealth.evidenceRef,
@@ -1944,6 +1965,7 @@ function packetFixture(input: {
       reasonCodes: input.matrixRowIds,
     },
     executionAttempts: governedWorkerAttempt ? [governedWorkerAttempt] : [],
+    transitionEvents,
     sourceRefs,
     evidenceRefs,
     artifactRefs,
@@ -3519,6 +3541,12 @@ function cloneDensityPacket(packet: PipelineFixturePacket, ordinal: number): Pip
       ...ref,
       refId: remapId(ref.refId),
       label: `Density ${ordinal}: ${ref.label}`,
+    })),
+    transitionEvents: (packet.transitionEvents ?? []).map((event) => ({
+      ...event,
+      eventId: remapId(event.eventId),
+      evidenceRefs: event.evidenceRefs.map(remapId),
+      sourceEventId: event.sourceEventId ? remapId(event.sourceEventId) : null,
     })),
     humanGateActions: packet.humanGateActions.map((action) => ({
       ...action,

@@ -99,6 +99,9 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /backupCreated:\s*false;/);
   assert.match(workPacketSource, /durableWriteAllowed:\s*false;/);
   assert.match(workPacketSource, /executionAttempts:\s*WorkPacketExecutionAttemptSummaryV0\[\];/);
+  assert.match(workPacketSource, /export interface WorkPacketStageTransitionEventV0/);
+  assert.match(workPacketSource, /transitionEvents:\s*WorkPacketStageTransitionEventV0\[\];/);
+  assert.match(workPacketSource, /durable:\s*boolean;/);
   assert.doesNotMatch(workPacketSource, /executionAttempts:\s*ExecutionAttemptView\[\];/);
   assert.match(workPacketSource, /accessState:\s*"allowed";/);
   assert.match(workPacketSource, /accessState:\s*"excluded" \| "missing" \| "blocked";/);

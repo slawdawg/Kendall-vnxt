@@ -889,6 +889,44 @@ class WorkPacketExecutionAttemptSummaryV0View(BaseModel):
     artifactRefs: list[str] = Field(default_factory=list)
 
 
+class WorkPacketStageTransitionEventV0View(BaseModel):
+    eventId: str
+    eventType: str
+    summary: str
+    createdAt: datetime
+    sourceStage: Literal["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"] | None = None
+    targetStage: Literal["capture", "classify", "route", "shape", "human_gate", "execute", "review", "promote", "deliver", "learn"]
+    sourceOwner: Literal[
+        "kendall",
+        "operator",
+        "local_model",
+        "hermes_worker_mock",
+        "codex_worker",
+        "claude_reviewer",
+        "github",
+        "memory_review",
+        "blocked",
+    ] | None = None
+    targetOwner: Literal[
+        "kendall",
+        "operator",
+        "local_model",
+        "hermes_worker_mock",
+        "codex_worker",
+        "claude_reviewer",
+        "github",
+        "memory_review",
+        "blocked",
+    ]
+    sourceStatus: Literal["active", "waiting", "blocked", "failed", "complete", "deferred"] | None = None
+    targetStatus: Literal["active", "waiting", "blocked", "failed", "complete", "deferred"]
+    reasonCodes: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    durable: bool
+    sourceEventId: str | None = None
+    actorLabel: str | None = None
+
+
 class WorkPacketV0View(BaseModel):
     packetId: str
     title: str
@@ -914,6 +952,7 @@ class WorkPacketV0View(BaseModel):
     routingPreview: RoutingPreviewView | None = None
     routeSummary: WorkPacketRouteSummaryV0View | None = None
     executionAttempts: list[WorkPacketExecutionAttemptSummaryV0View] = Field(default_factory=list)
+    transitionEvents: list[WorkPacketStageTransitionEventV0View] = Field(default_factory=list)
     sourceRefs: list[SourceRefV0View] = Field(default_factory=list)
     evidenceRefs: list[EvidenceRefV0View] = Field(default_factory=list)
     artifactRefs: list[ArtifactRefV0View] = Field(default_factory=list)

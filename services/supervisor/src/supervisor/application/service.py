@@ -195,6 +195,7 @@ from supervisor.api.schemas import (
     WorkPacketLaneCardV0View,
     WorkPacketRouteSummaryV0View,
     WorkPacketReviewSummaryV0View,
+    WorkPacketStageTransitionEventV0View,
     WorkPacketV0View,
     WorkItemView,
 )
@@ -1223,6 +1224,7 @@ class SupervisorService:
         candidates = await self.list_candidate_work(session)
         items = await self.list_work_items(session)
         candidate_by_work_item_id = self._candidate_by_work_item_id(candidates, items)
+        events_by_work_item_id = await self._workflow_events_by_work_item_id(session, [item.id for item in items])
         item_ids = {item.id for item in items}
         packet_views: list[WorkPacketV0View] = []
         emitted_candidate_ids: set[str] = set()
@@ -1231,7 +1233,14 @@ class SupervisorService:
             candidate = candidate_by_work_item_id.get(item.id)
             if candidate:
                 emitted_candidate_ids.add(candidate.id)
-            packet_views.append(await self._assemble_work_packet(session, candidate=candidate, item=item))
+            packet_views.append(
+                await self._assemble_work_packet(
+                    session,
+                    candidate=candidate,
+                    item=item,
+                    workflow_events=events_by_work_item_id.get(item.id, []),
+                )
+            )
 
         for candidate in candidates:
             if candidate.id in emitted_candidate_ids:
@@ -13115,6 +13124,19 @@ class SupervisorService:
         )
         return list(result.scalars())
 
+    async def _workflow_events_by_work_item_id(self, session: AsyncSession, work_item_ids: list[str]) -> dict[str, list[WorkflowEvent]]:
+        if not work_item_ids:
+            return {}
+        result = await session.execute(
+            select(WorkflowEvent)
+            .where(WorkflowEvent.work_item_id.in_(work_item_ids))
+            .order_by(WorkflowEvent.work_item_id.asc(), WorkflowEvent.created_at.asc(), WorkflowEvent.id.asc())
+        )
+        events_by_work_item_id: dict[str, list[WorkflowEvent]] = {work_item_id: [] for work_item_id in work_item_ids}
+        for event in result.scalars():
+            events_by_work_item_id.setdefault(event.work_item_id, []).append(event)
+        return events_by_work_item_id
+
     async def list_execution_attempts(self, session: AsyncSession, work_item_id: str) -> list[ExecutionAttemptView]:
         result = await session.execute(
             select(ExecutionAttempt)
@@ -20396,6 +20418,7 @@ class SupervisorService:
         *,
         candidate: CandidateWork | None,
         item: WorkItem | None,
+        workflow_events: list[WorkflowEvent] | None = None,
     ) -> WorkPacketV0View:
         candidate_view = self.to_candidate_work_view(candidate) if candidate else None
         item_view = self.to_work_item_view(item) if item else None
@@ -20414,6 +20437,7 @@ class SupervisorService:
         task_packet = self._task_packet_from_preview(item, routing_preview) if item and routing_preview else None
         memory_proposals = await self.list_memory_proposals(session, item.id) if item else []
         memory_proposal_views = [self.to_memory_proposal_view(proposal, packet_id=f"work_item:{item.id}") for proposal in memory_proposals] if item else []
+        workflow_events = workflow_events if workflow_events is not None else await self.list_work_item_events(session, item.id) if item else []
         stage, owner, status, mapping_reason_codes = self._map_work_packet_state(
             candidate=candidate_view,
             item=item_view,
@@ -20448,6 +20472,7 @@ class SupervisorService:
             routingPreview=routing_preview,
             routeSummary=self._work_packet_route_summary(routing_preview, latest_attempt, mapping_reason_codes),
             executionAttempts=self._work_packet_attempt_summaries(attempts),
+            transitionEvents=self._work_packet_transition_events(workflow_events),
             sourceRefs=source_refs,
             evidenceRefs=evidence_refs,
             artifactRefs=artifact_refs,
@@ -20617,6 +20642,141 @@ class SupervisorService:
             "codex_cli_worker",
         }
         return lane if lane in allowed else "unknown"
+
+    def _work_packet_transition_events(self, events: list[WorkflowEvent]) -> list[WorkPacketStageTransitionEventV0View]:
+        transition_events: list[WorkPacketStageTransitionEventV0View] = []
+        previous_stage: str | None = None
+        previous_owner: str | None = None
+        previous_status: str | None = None
+
+        for event in sorted(events, key=self._work_packet_transition_sort_key):
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            target = self._work_packet_transition_target_for_event(event.event_type, payload)
+            if target is None:
+                continue
+
+            target_stage, target_owner, target_status, reason_codes = target
+            source = self._work_packet_transition_source_for_event(event.event_type, payload)
+            source_stage = source[0] if source else previous_stage
+            source_owner = source[1] if source else previous_owner
+            source_status = source[2] if source else previous_status
+            evidence_refs = [f"event:{event.id}"]
+            attempt_id = payload.get("attemptId")
+            if isinstance(attempt_id, str) and attempt_id:
+                evidence_refs.append(f"attempt:{attempt_id}")
+
+            transition_events.append(
+                WorkPacketStageTransitionEventV0View(
+                    eventId=f"transition:{event.id}",
+                    eventType=event.event_type,
+                    summary=event.summary,
+                    createdAt=self._normalize_timestamp(event.created_at),
+                    sourceStage=source_stage,
+                    targetStage=target_stage,
+                    sourceOwner=source_owner,
+                    targetOwner=target_owner,
+                    sourceStatus=source_status,
+                    targetStatus=target_status,
+                    reasonCodes=reason_codes,
+                    evidenceRefs=evidence_refs,
+                    durable=True,
+                    sourceEventId=event.id,
+                    actorLabel=event.actor_label,
+                )
+            )
+            previous_stage = target_stage
+            previous_owner = target_owner
+            previous_status = target_status
+
+        return transition_events
+
+    def _work_packet_transition_sort_key(self, event: WorkflowEvent) -> tuple[datetime, int, str]:
+        return event.created_at, self._work_packet_transition_rank(event.event_type), event.id
+
+    def _work_packet_transition_rank(self, event_type: str) -> int:
+        if event_type == "routing.preview_recorded":
+            return 10
+        if event_type == "routing.outcome_recorded":
+            return 20
+        if not event_type.startswith("execution_attempt."):
+            return 1000
+        return {
+            "planned": 100,
+            "approved": 110,
+            "starting": 120,
+            "running": 130,
+            "cancel_requested": 140,
+            "cancelled": 150,
+            "timed_out": 150,
+            "failed": 150,
+            "rejected": 150,
+            "completed": 160,
+        }.get(event_type.removeprefix("execution_attempt."), 900)
+
+    def _work_packet_transition_target_for_event(self, event_type: str, payload: dict) -> tuple[str, str, str, list[str]] | None:
+        if event_type == "routing.preview_recorded":
+            selected_lane = payload.get("selectedLane")
+            return "route", "kendall", "active", self._work_packet_transition_reason_codes(
+                payload,
+                selected_lane if isinstance(selected_lane, str) else None,
+                "routing.preview_recorded",
+            )
+        if event_type == "routing.outcome_recorded":
+            selected_lane = payload.get("selectedLane")
+            return "route", "kendall", "active", self._work_packet_transition_reason_codes(
+                payload,
+                selected_lane if isinstance(selected_lane, str) else None,
+                "routing.outcome_recorded",
+            )
+        if not event_type.startswith("execution_attempt."):
+            return None
+
+        status = event_type.removeprefix("execution_attempt.")
+        selected_lane = payload.get("selectedLane")
+        lane = selected_lane if isinstance(selected_lane, str) and selected_lane else None
+        owner = self._owner_for_lane(lane)
+        reason_codes = self._execution_lane_reason_codes(lane, event_type)
+
+        if status == "planned":
+            return "shape", "kendall", "waiting", reason_codes
+        if status == "approved":
+            return "human_gate", "operator", "waiting", reason_codes
+        if status in {"starting", "running"}:
+            return "execute", owner, "active", reason_codes
+        if status == "completed":
+            return "review", "kendall", "complete", reason_codes
+        if status == "cancelled":
+            return "execute", "blocked", "blocked", reason_codes
+        if status in {"cancel_requested", "timed_out", "failed", "rejected"}:
+            return "execute", "blocked", "failed", reason_codes
+        return None
+
+    def _work_packet_transition_source_for_event(self, event_type: str, payload: dict) -> tuple[str, str, str] | None:
+        if not event_type.startswith("execution_attempt."):
+            return None
+        previous_status = payload.get("previousStatus")
+        selected_lane = payload.get("selectedLane")
+        lane = selected_lane if isinstance(selected_lane, str) and selected_lane else None
+        if not isinstance(previous_status, str) or not previous_status:
+            return None
+        previous_target = self._work_packet_transition_target_for_event(f"execution_attempt.{previous_status}", payload)
+        if previous_target:
+            return previous_target[0], previous_target[1], previous_target[2]
+        if previous_status == "planned":
+            return "shape", "kendall", "waiting"
+        if previous_status == "approved":
+            return "human_gate", "operator", "waiting"
+        if previous_status in {"starting", "running"}:
+            return "execute", self._owner_for_lane(lane), "active"
+        return None
+
+    def _work_packet_transition_reason_codes(self, payload: dict, lane: str | None, fallback_reason_code: str) -> list[str]:
+        reason_codes = payload.get("reasonCodes")
+        if isinstance(reason_codes, list):
+            safe_reason_codes = [reason_code for reason_code in reason_codes if isinstance(reason_code, str) and reason_code.strip()]
+            if safe_reason_codes:
+                return safe_reason_codes
+        return self._execution_lane_reason_codes(lane, fallback_reason_code)
 
     def _work_packet_source_refs(
         self,
