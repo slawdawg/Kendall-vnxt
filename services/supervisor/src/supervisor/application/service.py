@@ -20447,7 +20447,7 @@ class SupervisorService:
             attempts=attempts,
             memory_proposals=memory_proposal_views,
         )
-        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, routing_preview, attempts)
+        evidence_refs = self._work_packet_evidence_refs(candidate_view, item_view, routing_preview, attempts, workflow_events)
         artifact_refs = self._work_packet_artifact_refs(candidate_view, item_view, task_packet, attempts)
 
         packet_id = self._work_packet_id(candidate_view, item_view)
@@ -20671,8 +20671,8 @@ class SupervisorService:
             source_owner = source[1] if source else previous_owner
             source_status = source[2] if source else previous_status
             evidence_refs = [f"event:{event.id}"]
-            attempt_id = payload.get("attemptId")
-            if isinstance(attempt_id, str) and attempt_id:
+            attempt_id = self._work_packet_event_attempt_id(payload)
+            if attempt_id:
                 evidence_refs.append(f"attempt:{attempt_id}")
 
             transition_events.append(
@@ -20738,11 +20738,25 @@ class SupervisorService:
                 selected_lane if isinstance(selected_lane, str) else None,
                 "routing.outcome_recorded",
             )
+        state = payload.get("state")
+        if isinstance(state, str):
+            lane = payload.get("lane")
+            mapped = self._gate_state_from_workflow_state(state, lane if isinstance(lane, str) else None)
+            if mapped:
+                return mapped[0], mapped[1], mapped[2], [event_type]
         if not event_type.startswith("execution_attempt."):
             return None
 
         status = event_type.removeprefix("execution_attempt.")
-        selected_lane = payload.get("selectedLane")
+        if status.startswith("subscription_launch_fixture_"):
+            status = "completed" if status == "subscription_launch_fixture_completed" else "running"
+        elif status == "subscription_launch_runtime_recorded":
+            attempt_status = payload.get("attemptStatus")
+            status = attempt_status if isinstance(attempt_status, str) and attempt_status else "completed"
+        selected_lane = payload.get("selectedLane") or payload.get("lane")
+        approval_binding = payload.get("approvalBinding")
+        if not selected_lane and isinstance(approval_binding, dict):
+            selected_lane = approval_binding.get("lane")
         lane = selected_lane if isinstance(selected_lane, str) and selected_lane else None
         owner = self._owner_for_lane(lane)
         reason_codes = self._execution_lane_reason_codes(lane, event_type)
@@ -20759,6 +20773,13 @@ class SupervisorService:
             return "execute", "blocked", "blocked", reason_codes
         if status in {"cancel_requested", "timed_out", "failed", "rejected"}:
             return "execute", "blocked", "failed", reason_codes
+        return None
+
+    def _work_packet_event_attempt_id(self, payload: dict) -> str | None:
+        for key in ("attemptId", "executionAttemptId"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
         return None
 
     def _work_packet_transition_source_for_event(self, event_type: str, payload: dict) -> tuple[str, str, str] | None:
@@ -21292,6 +21313,7 @@ class SupervisorService:
         item: WorkItemView | None,
         routing_preview: RoutingPreviewView | None,
         attempts: list[ExecutionAttemptView],
+        workflow_events: list[WorkflowEvent] | None = None,
     ) -> list[EvidenceRefV0View]:
         refs: list[EvidenceRefV0View] = []
         if candidate:
@@ -21341,6 +21363,20 @@ class SupervisorService:
                             retentionClass="metadata_only",
                         )
                     )
+        known_ref_ids = {ref.refId for ref in refs}
+        for event in workflow_events or []:
+            ref_id = f"event:{event.id}"
+            if ref_id in known_ref_ids:
+                continue
+            refs.append(
+                EvidenceRefV0View(
+                    refId=ref_id,
+                    evidenceType="event",
+                    label=event.event_type,
+                    retentionClass="metadata_only",
+                )
+            )
+            known_ref_ids.add(ref_id)
         return refs
 
     def _work_packet_metadata_evidence_refs(self, metadata: dict) -> list[EvidenceRefV0View]:

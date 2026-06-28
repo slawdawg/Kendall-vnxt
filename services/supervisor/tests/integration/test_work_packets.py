@@ -74,6 +74,29 @@ def _update_workflow_event_fixture(db_path: str, event_id: str, **fields: object
         conn.commit()
 
 
+def _insert_workflow_event_fixture(
+    db_path: str,
+    work_item_id: str,
+    *,
+    event_id: str,
+    event_type: str,
+    summary: str,
+    payload: dict,
+    created_at: str = "2026-06-28 00:00:00.000000",
+) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            insert into workflow_events (
+                id, work_item_id, event_type, actor_type, actor_id, actor_label,
+                correlation_id, summary, payload, created_at
+            ) values (?, ?, ?, 'system', null, null, ?, ?, ?, ?)
+            """,
+            (event_id, work_item_id, event_type, f"corr-{event_id}", summary, json.dumps(payload), created_at),
+        )
+        conn.commit()
+
+
 def _sqlite_table_columns(db_path: str, table_name: str) -> set[str]:
     with sqlite3.connect(db_path) as conn:
         return {row[1] for row in conn.execute(f"pragma table_info({table_name})").fetchall()}
@@ -358,6 +381,57 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
 
         assert client.get(f"/work-items/{work_item['id']}/execution-attempts").json()["data"] == before_attempts
         assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == before_events
+
+
+def test_work_packet_transition_events_replay_work_item_and_subscription_launch_events(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-transition-event-replay.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Transition replay packet")
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-work-item-ready",
+            event_type="work_item.ready",
+            summary="Work item moved to ready.",
+            payload={"state": "ready", "lane": "utility"},
+            created_at="2026-06-28 00:00:01.000000",
+        )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-subscription-completed",
+            event_type="execution_attempt.subscription_launch_fixture_completed",
+            summary="Subscription-agent artifact-only fixture completed.",
+            payload={
+                "executionAttemptId": "attempt-subscription-fixture",
+                "attemptStatus": "completed",
+                "approvalBinding": {"lane": "subscription_agent"},
+            },
+            created_at="2026-06-28 00:00:02.000000",
+        )
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        transition_by_type = {transition["eventType"]: transition for transition in packet["transitionEvents"]}
+
+        ready_transition = transition_by_type["work_item.ready"]
+        assert ready_transition["targetStage"] == "human_gate"
+        assert ready_transition["targetOwner"] == "operator"
+        assert ready_transition["targetStatus"] == "waiting"
+        assert ready_transition["evidenceRefs"] == ["event:event-work-item-ready"]
+
+        subscription_transition = transition_by_type["execution_attempt.subscription_launch_fixture_completed"]
+        assert subscription_transition["targetStage"] == "review"
+        assert subscription_transition["targetOwner"] == "kendall"
+        assert subscription_transition["targetStatus"] == "complete"
+        assert "event:event-subscription-completed" in subscription_transition["evidenceRefs"]
+        assert "attempt:attempt-subscription-fixture" in subscription_transition["evidenceRefs"]
+
+        packet_evidence_ref_ids = {ref["refId"] for ref in packet["evidenceRefs"]}
+        assert "event:event-work-item-ready" in packet_evidence_ref_ids
+        assert "event:event-subscription-completed" in packet_evidence_ref_ids
 
 
 def test_work_packet_gate_state_validation_matches_event_replay_without_mutation(tmp_path, monkeypatch) -> None:
