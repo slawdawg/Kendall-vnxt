@@ -46,6 +46,7 @@ asks for takeover.
 `pnpm run check:documentation-authority`,
 `pnpm run check:verification-readiness`,
 `pnpm run check:pipeline-implementation-readiness`,
+`pnpm run check:dashboard-pipeline-boundary`,
 `pnpm run test:pipeline-implementation-readiness`,
 `pnpm run test:live-memory-source-enforcement`,
 `pnpm run test:bounded-live-memory-source`,

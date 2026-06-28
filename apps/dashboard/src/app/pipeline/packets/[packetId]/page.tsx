@@ -6,7 +6,6 @@ import {
   pipelineGoldenPathSnapshots,
   pipelineSourceBoundaryChecklist,
 } from "../../../../lib/pipeline-fixtures";
-import { pipelinePacketsWithPersistedGovernedWorkerEvidence } from "../../../../lib/pipeline-evidence-source";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +22,7 @@ export default async function PipelinePacketPage({
 }) {
   const { packetId } = await params;
   const decodedPacketId = decodeURIComponent(packetId);
-  const packets = pipelinePacketsWithPersistedGovernedWorkerEvidence();
+  const packets = pipelineCockpitPackets;
   const packet = packets.find((candidate) => candidate.packetId === decodedPacketId);
 
   if (!packet) {

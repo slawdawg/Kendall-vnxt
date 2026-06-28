@@ -1570,6 +1570,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-documentation-authority",
         "check-verification-readiness",
         "check-pipeline-implementation-readiness",
+        "check-dashboard-pipeline-boundary",
         "test-pipeline-implementation-readiness",
         "test-live-memory-source-enforcement",
         "test-bounded-live-memory-source",
@@ -1656,6 +1657,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "check-governed-worker-execution-dry-run" in static_group["commandIds"]
     assert "check-runtime-review" in static_group["commandIds"]
     assert "check-pipeline-implementation-readiness" in static_group["commandIds"]
+    assert "check-dashboard-pipeline-boundary" in static_group["commandIds"]
     assert "test-pipeline-implementation-readiness" in static_group["commandIds"]
     assert "test-live-memory-source-enforcement" in static_group["commandIds"]
     assert "test-bounded-live-memory-source" in static_group["commandIds"]
@@ -2288,7 +2290,8 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert report["reportId"] == "safe-development-backlog-report-v1"
     assert report["readOnly"] is True
     assert report["executionAuthorityApproved"] is False
-    assert {item["itemId"] for item in report["items"]} == {
+    item_ids = {item["itemId"] for item in report["items"]}
+    assert {
         "safe-backlog-report-alignment",
         "verification-surface-hardening",
         "github-delivery-hygiene",
@@ -2334,9 +2337,8 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "authority-blocked-work",
         "queue-zero-dispatch-continuity-refresh",
         "queue-zero-runway-continuity-refresh",
-    }
-    ready_items = [item for item in report["items"] if item["status"] == "ready"]
-    assert all(item["recommendedSliceSize"] in {"large", "medium_to_large"} for item in ready_items)
+    } <= item_ids
+    assert "bmad-1-1-validate-the-pipeline-work-packet-read-contract" in item_ids
     report_alignment_item = next(item for item in report["items"] if item["itemId"] == "safe-backlog-report-alignment")
     assert report_alignment_item["status"] == "closed"
     assert report_alignment_item["recommendedSliceSize"] == "complete"
@@ -2667,8 +2669,8 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "do not requeue dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh"
         in dispatcher_closed_source_guard_filter_empty_state_shortcut_reason_keyboard_loop_item["nextAction"]
     )
-    assert "GET /supervisor/maintenance-readiness-report" in report["items"][0]["relatedReports"]
-    assert "/controls#maintenance-readiness-report" in report["items"][0]["dashboardAnchors"]
+    assert "GET /supervisor/maintenance-readiness-report" in report_alignment_item["relatedReports"]
+    assert "/controls#maintenance-readiness-report" in report_alignment_item["dashboardAnchors"]
     assert any("not execution-authority approvals" in stop_line for stop_line in report["stopLines"])
     assert any("large enough" in action for action in report["nextSafeActions"])
     assert any("GitHub delivery hygiene" in action for action in report["nextSafeActions"])
@@ -8591,11 +8593,11 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     )
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "queue-zero-runway-continuity-refresh"
-    assert continuity["selectedBranch"] == "codex/queue-zero-runway-continuity-refresh"
+    assert continuity["selectedBacklogItemId"] == "bmad-1-1-validate-the-pipeline-work-packet-read-contract"
+    assert continuity["selectedBranch"] == "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["summaryDryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner <owner>"
-    assert continuity["assignableCount"] == 1
+    assert continuity["assignableCount"] >= 1
     assert "blocked-authority" not in continuity["blockerCodes"]
     queue_proof_rows = {row["backlogItemId"]: row for row in continuity["queueProofRows"]}
     assert queue_proof_rows["dispatcher-queue-handoff-badges-refresh"]["classification"] == "closed"

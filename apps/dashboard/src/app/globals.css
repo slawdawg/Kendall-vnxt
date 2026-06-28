@@ -410,7 +410,9 @@ textarea::placeholder {
   border: 1px solid color-mix(in srgb, var(--info) 18%, var(--line));
   border-radius: 999px;
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 0.35rem;
+  min-width: 0;
   min-height: 1.65rem;
   padding: 0.18rem 0.6rem;
 }
@@ -431,6 +433,8 @@ textarea::placeholder {
   color: var(--foreground);
   font-size: 0.75rem;
   font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .pipeline-operational-strip .pipeline-status-key {
@@ -696,11 +700,13 @@ textarea::placeholder {
 }
 
 .pipeline-stage-label {
-  flex: 0 0 auto;
-  min-width: max-content;
+  flex: 1 1 auto;
+  line-height: 1.05;
+  min-width: 0;
+  overflow-wrap: anywhere;
   overflow: visible;
   text-overflow: clip;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .pipeline-stage-info-icon {
@@ -844,11 +850,12 @@ textarea::placeholder {
 .pipeline-mini-packet-label {
   display: block;
   font-size: 0.68rem;
-  line-height: 1;
+  line-height: 1.15;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .pipeline-mini-packet-active .pipeline-mini-packet-dot {

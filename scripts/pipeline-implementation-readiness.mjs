@@ -294,9 +294,15 @@ export const PIPELINE_IMPLEMENTATION_READINESS_EVIDENCE = [
     ownerStory: "2-8-verify-cockpit-accessibility-and-responsiveness",
     status: "satisfied",
     failureClass: "blocker",
-    requiredCommands: ["pnpm run test:dashboard-pipeline-fixtures", "pnpm run check:static"],
-    sourceFiles: ["tests/dashboard-pipeline-fixtures.test.mjs", "apps/dashboard/src/app/pipeline/page.tsx", "apps/dashboard/src/lib/pipeline-fixtures.ts"],
+    requiredCommands: ["pnpm run test:dashboard-pipeline-fixtures", "pnpm run check:dashboard-pipeline-boundary", "pnpm run check:static"],
+    sourceFiles: [
+      "scripts/check-dashboard-pipeline-import-boundary.mjs",
+      "tests/dashboard-pipeline-fixtures.test.mjs",
+      "apps/dashboard/src/app/pipeline/page.tsx",
+      "apps/dashboard/src/lib/pipeline-fixtures.ts",
+    ],
     requiredTokens: [
+      { file: "scripts/check-dashboard-pipeline-import-boundary.mjs", tokens: ["PIPELINE_SOURCE_TARGETS", "forbiddenImportPatterns", "forbiddenCallPatterns"] },
       { file: "tests/dashboard-pipeline-fixtures.test.mjs", tokens: ["fetch\\s*\\(", "writeObsidian", "provider execution from dashboard"] },
       { file: "apps/dashboard/src/lib/pipeline-fixtures.ts", tokens: ["No provider, worker, GitHub, or Obsidian calls"] },
     ],

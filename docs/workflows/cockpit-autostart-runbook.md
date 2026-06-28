@@ -27,9 +27,11 @@ This writes these user systemd units:
 
 The services use `Restart=always`, so systemd restarts them if they crash.
 The dashboard unit also pins `KENDALL_PIPELINE_WORKER_EVIDENCE_DIR` to the
-repo-root `.kendall-local/governed-worker-evidence/` directory so `/pipeline`
-reads the same persisted worker metadata no matter which package directory Next
-uses at runtime.
+repo-root `.kendall-local/governed-worker-evidence/` directory for tools that
+prepare or validate governed-worker metadata. The `/pipeline` dashboard render
+path remains fixture-backed and must not directly read filesystem evidence,
+launch workers, or call provider, GitHub, Obsidian, cleanup, or live network
+boundaries.
 
 ## Boot Behavior
 

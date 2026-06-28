@@ -739,7 +739,6 @@ test.describe("dashboard workflow coverage", () => {
     const captureStage = routeMap.getByRole("button", { name: "Capture", exact: true });
     await captureStage.hover();
     await captureStage.focus();
-    await captureStage.click();
     const captureStageBubble = captureStage.locator(".pipeline-stage-info-bubble");
     await expect(captureStageBubble).toHaveText("New ideas and requests land here before Kendall decides what they are.");
     await expect(captureStageBubble).toBeVisible();
@@ -918,11 +917,10 @@ test.describe("dashboard workflow coverage", () => {
           )
         );
         return {
-          miniPacketLabelsSingleLine: Array.from(document.querySelectorAll(".pipeline-mini-packet-label")).every((label) => {
+          miniPacketLabelsWrappedAndContained: Array.from(document.querySelectorAll(".pipeline-mini-packet-label")).every((label) => {
             const style = window.getComputedStyle(label);
-            const lineHeight = Number.parseFloat(style.lineHeight);
-            const maxSingleLineHeight = Number.isFinite(lineHeight) ? lineHeight * 1.35 : 24;
-            return style.whiteSpace === "nowrap" && label.getBoundingClientRect().height <= maxSingleLineHeight;
+            const htmlLabel = label as HTMLElement;
+            return style.whiteSpace === "normal" && htmlLabel.scrollWidth <= htmlLabel.clientWidth + 1;
           }),
           stageLabelsUntruncated: Array.from(document.querySelectorAll(".pipeline-stage-label")).every((label) => {
             const htmlLabel = label as HTMLElement;
@@ -945,7 +943,7 @@ test.describe("dashboard workflow coverage", () => {
         expect(mobileRouteEvidence.routeMapHasHorizontalScroll, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(false);
         expect(mobileRouteEvidence.maxVisiblePacketsPerStage, JSON.stringify({ viewport, mobileRouteEvidence })).toBeLessThanOrEqual(4);
       }
-      expect(mobileRouteEvidence.miniPacketLabelsSingleLine, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
+      expect(mobileRouteEvidence.miniPacketLabelsWrappedAndContained, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
       expect(mobileRouteEvidence.stageLabelsUntruncated, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
       expect(mobileRouteEvidence.stageCardsHaveVisibleFrames, JSON.stringify({ viewport, mobileRouteEvidence })).toBe(true);
       const visualIntegrityEvidence = await page.evaluate(() => {
@@ -1410,6 +1408,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:documentation-authority", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:verification-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:pipeline-implementation-readiness", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run check:dashboard-pipeline-boundary", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:pipeline-implementation-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:live-memory-source-enforcement", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:bounded-live-memory-source", { exact: true })).toBeVisible();

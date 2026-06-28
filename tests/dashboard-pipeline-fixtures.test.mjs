@@ -24,14 +24,23 @@ const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-
 const realtimeRefreshPath = new URL("../apps/dashboard/src/components/realtime-refresh.tsx", import.meta.url);
 const navPath = new URL("../apps/dashboard/src/components/operational-nav.tsx", import.meta.url);
 const setupE2ePath = new URL("../scripts/setup-e2e.mjs", import.meta.url);
+const boundaryCheckPath = new URL("../scripts/check-dashboard-pipeline-import-boundary.mjs", import.meta.url);
 
 test("dashboard pipeline fixture test is wired into package checks", async () => {
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   const nextConfigSource = await readFile(nextConfigPath, "utf8");
   const globalsSource = await readFile(globalsPath, "utf8");
   const setupE2eSource = await readFile(setupE2ePath, "utf8");
+  const boundaryCheckSource = await readFile(boundaryCheckPath, "utf8");
 
   assert.equal(packageJson.scripts["test:dashboard-pipeline-fixtures"], "node --test tests/dashboard-pipeline-fixtures.test.mjs");
+  assert.equal(packageJson.scripts["check:dashboard-pipeline-boundary"], "node ./scripts/check-dashboard-pipeline-import-boundary.mjs");
+  assert.match(boundaryCheckSource, /resolveLocalImport/);
+  assert.match(boundaryCheckSource, /isInsideDashboardSrc/);
+  assert.match(boundaryCheckSource, /isPipelineBoundaryPath/);
+  assert.ok(boundaryCheckSource.includes("\\brequire\\s*\\("));
+  assert.ok(boundaryCheckSource.includes("export(?:\\s+type)?"));
+  assert.match(boundaryCheckSource, /extractTemplateExpressions/);
   assert.equal(packageJson.scripts["test:e2e:dashboard"], "playwright test");
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /opens fixture-backed pipeline cockpit without live execution framing/);
@@ -42,7 +51,9 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:iphone"], /--project iphone-15-pro-max-safari-ios-27/);
   assert.match(setupE2eSource, /\["install", "chromium", "webkit"\]/);
   assert.match(packageJson.scripts["check:static"], /pnpm run test:dashboard-pipeline-fixtures/);
+  assert.match(packageJson.scripts["check:static"], /pnpm run check:dashboard-pipeline-boundary/);
   assert.match(packageJson.scripts.check, /pnpm run test:dashboard-pipeline-fixtures/);
+  assert.match(packageJson.scripts.check, /pnpm run check:dashboard-pipeline-boundary/);
   assert.match(nextConfigSource, /devIndicators:\s*false/);
   assert.doesNotMatch(globalsSource, /nextjs-portal[\s\S]*display: none !important/);
   assert.match(nextConfigSource + (await readFile(new URL("../playwright.config.ts", import.meta.url), "utf8")), /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS/);
@@ -492,7 +503,10 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.doesNotMatch(cockpitSource, /pipeline-board-flow/);
   assert.match(cockpitSource, /shadow-\[0_0_1rem_color-mix\(in_srgb,var\(--info\)_10%,transparent\)\]/);
   assert.match(cockpitSource, /pipeline-mini-packet-label/);
-  assert.match(globalsSource, /\.pipeline-mini-packet-label[\s\S]*white-space: nowrap/);
+  assert.match(globalsSource, /\.pipeline-mini-packet-label[\s\S]*white-space: normal/);
+  assert.match(globalsSource, /\.pipeline-mini-packet-label[\s\S]*overflow-wrap: anywhere/);
+  assert.match(globalsSource, /\.pipeline-stage-label[\s\S]*white-space: normal/);
+  assert.match(globalsSource, /\.pipeline-mission-value[\s\S]*overflow-wrap: anywhere/);
   assert.doesNotMatch(cockpitSource, /import\s+\{\s*pipelineStages\s+\}\s+from\s+"..\/..\/lib\/pipeline-fixtures"/);
   assert.match(packetDetailSource, /Packet 5 Whys/);
   assert.match(packetDetailSource, /Evidence and artifacts/);
@@ -525,7 +539,8 @@ test("/pipeline route uses fixture-only cockpit frame without supervisor calls",
   assert.match(cockpitSource, /findTopAttentionPacket/);
   assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
   assert.match(fixtureSource, /Density \$\{ordinal\}:/);
-  assert.match(routeSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
+  assert.match(routeSource, /pipelineCockpitPackets/);
+  assert.doesNotMatch(routeSource + packetDetailRouteSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence|pipeline-evidence-source/);
   const fixturePacketCount = (fixtureSource.match(/packetFixture\(\{/g) ?? []).length;
   const densityCloneCountMatch = fixtureSource.match(/Array\.from\(\{ length: (\d+) \}/);
   assert.ok(densityCloneCountMatch, "density fixture clone count should be explicit");
