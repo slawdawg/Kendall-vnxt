@@ -17,6 +17,8 @@ import {
 } from "@kendall/workflow-core";
 
 const FIXTURE_ACTION_REQUESTED_AT = "2026-06-27T00:00:00.000Z";
+const DEFAULT_LLM_WIKI_DERIVED_FOLDER = "01 Dashboard Queue/LLM Wiki Derived";
+const LLM_WIKI_REBUILD_BASIS = ["approved-memory-proposals", "source-evidence-crosswalk"] as const;
 
 type PipelineMatrixRow = (typeof PIPELINE_STATE_EVIDENCE_MATRIX_V0)[number];
 
@@ -2357,6 +2359,9 @@ function buildAlphaMemorySourceStatus(
         ])),
         memoryProposalRefs: readyProposals.map((proposal) => proposal.proposalId),
         plannedOutputScope: "Derived LLM-Wiki index preview from approved memory proposal metadata; no durable index path is allocated.",
+        derivedTargetFolder: DEFAULT_LLM_WIKI_DERIVED_FOLDER,
+        freshness: "fresh" as const,
+        rebuildBasis: [...LLM_WIKI_REBUILD_BASIS],
         retentionClass: "metadata_only" as const,
         stopLine: "Preview only; do not write LLM-Wiki index, mutate Obsidian, call providers, launch workers, call GitHub, use network egress, or retain source content.",
         auditEventSummary: "LLM-Wiki rebuild preview is fixture-backed metadata only; no file, source, provider, worker, GitHub, or network operation is authorized.",
@@ -2377,6 +2382,9 @@ function buildAlphaMemorySourceStatus(
         memoryProposalRefs: rebuildPreview.memoryProposalRefs,
         plannedDerivedSections: ["approved-memory-proposals", "source-evidence-crosswalk", "operator-review-index"],
         disposableTargetNamespace: `derived://llm-wiki/dry-run/${packetId}`,
+        derivedTargetFolder: rebuildPreview.derivedTargetFolder,
+        freshness: rebuildPreview.freshness,
+        rebuildBasis: [...rebuildPreview.rebuildBasis],
         retentionClass: "metadata_only" as const,
         stopLines: [
           "Dry-run only; do not write LLM-Wiki index files.",

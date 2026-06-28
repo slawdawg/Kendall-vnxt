@@ -115,12 +115,18 @@ def _sqlite_has_unique_index(db_path: str, table_name: str, columns: tuple[str, 
     return False
 
 
-def _write_obsidian_memory_config(tmp_path, *, profile: str = "local-folder") -> tuple[str, object, object]:
+def _write_obsidian_memory_config(
+    tmp_path,
+    *,
+    profile: str = "local-folder",
+    proposal_queue_folder: str = "01 Dashboard Queue",
+) -> tuple[str, object, object]:
     vault_root = tmp_path / "obsidian-vault"
     backup_root = tmp_path / "obsidian-backups"
+    draft_folder = f"{proposal_queue_folder}/AI Drafts"
     for folder in [
         "00 Inbox",
-        "01 Dashboard Queue/AI Drafts",
+        draft_folder,
         "02 Customers",
         "Private",
         "Personal",
@@ -133,13 +139,14 @@ def _write_obsidian_memory_config(tmp_path, *, profile: str = "local-folder") ->
         json.dumps(
             {
                 "profile": profile,
+                "proposal_queue_folder": proposal_queue_folder,
                 "vault": {"local_path": vault_root.as_posix()},
                 "access": {
                     "read_allowlist": ["00 Inbox", "02 Customers"],
-                    "excluded": ["01 Dashboard Queue", "Private", "Personal", "Journal", "09 Archive"],
+                    "excluded": [proposal_queue_folder, "Private", "Personal", "Journal", "09 Archive"],
                 },
                 "write_policy": {
-                    "draft_folder": "01 Dashboard Queue/AI Drafts",
+                    "draft_folder": draft_folder,
                     "require_dashboard_approval": True,
                 },
                 "backup": {"destination": backup_root.as_posix()},
@@ -1004,6 +1011,11 @@ def test_ai_draft_write_blocks_without_config_or_approval(tmp_path, monkeypatch)
 
 
 def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, monkeypatch) -> None:
+    config_path, _vault_root, _backup_root = _write_obsidian_memory_config(
+        tmp_path,
+        proposal_queue_folder="03 Operator Review Queue",
+    )
+    monkeypatch.setenv("SUPERVISOR_OBSIDIAN_MEMORY_CONFIG", config_path)
     with _client(tmp_path, monkeypatch, "work-packet-llm-wiki-readiness.db") as client:
         work_item_response = client.post(
             "/work-items",
@@ -1083,6 +1095,9 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert "memory_proposal:mp-llm-wiki-ready" in preview["inputRefs"]
         assert "obsidian:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
         assert "evidence:read-only-proof:00 Inbox/new-customer-insight.md" in preview["inputRefs"]
+        assert preview["derivedTargetFolder"] == "03 Operator Review Queue/LLM Wiki Derived"
+        assert preview["freshness"] == "fresh"
+        assert preview["rebuildBasis"] == ["approved-memory-proposals", "source-evidence-crosswalk"]
         assert "Derived LLM-Wiki index preview" in preview["plannedOutputScope"]
         assert "do not write LLM-Wiki index" in preview["stopLine"]
         assert preview["canonicalMutationAllowed"] is False
@@ -1099,6 +1114,9 @@ def test_llm_wiki_readiness_is_derived_from_approved_memory_metadata(tmp_path, m
         assert plan["memoryProposalRefs"] == ["mp-llm-wiki-ready"]
         assert "memory_proposal:mp-llm-wiki-ready" in plan["inputRefs"]
         assert "approved-memory-proposals" in plan["plannedDerivedSections"]
+        assert plan["derivedTargetFolder"] == "03 Operator Review Queue/LLM Wiki Derived"
+        assert plan["freshness"] == "fresh"
+        assert plan["rebuildBasis"] == preview["rebuildBasis"]
         assert plan["disposableTargetNamespace"] == f"derived://llm-wiki/dry-run/work_item:{work_item['id']}"
         assert any("do not write LLM-Wiki index" in stop_line for stop_line in plan["stopLines"])
         assert "regenerate" in plan["discardRecoveryPath"]

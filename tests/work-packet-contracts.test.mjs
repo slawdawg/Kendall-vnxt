@@ -11,6 +11,8 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
     readFile(workPacketPath, "utf8"),
     readFile(indexPath, "utf8")
   ]);
+  const rebuildPreviewContract = workPacketSource.match(/export interface LlmWikiRebuildPreviewV0 \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const rebuildDryRunPlanContract = workPacketSource.match(/export interface LlmWikiRebuildDryRunPlanV0 \{[\s\S]*?\n\}/)?.[0] ?? "";
 
   for (const exportedName of [
     "HUMAN_GATE_ACTION_TYPES_V0",
@@ -111,17 +113,24 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /writeBackAllowed:\s*false;/);
   assert.match(workPacketSource, /rebuildPreview\?:\s*LlmWikiRebuildPreviewV0 \| null;/);
   assert.match(workPacketSource, /rebuildDryRunPlan\?:\s*LlmWikiRebuildDryRunPlanV0 \| null;/);
-  assert.match(workPacketSource, /previewId:\s*string;/);
-  assert.match(workPacketSource, /inputRefs:\s*WorkPacketRefIdV0\[\];/);
-  assert.match(workPacketSource, /memoryProposalRefs:\s*WorkPacketRefIdV0\[\];/);
-  assert.match(workPacketSource, /plannedOutputScope:\s*string;/);
-  assert.match(workPacketSource, /stopLine:\s*string;/);
-  assert.match(workPacketSource, /planId:\s*string;/);
-  assert.match(workPacketSource, /operationMode:\s*"dry_run";/);
-  assert.match(workPacketSource, /plannedDerivedSections:\s*string\[\];/);
-  assert.match(workPacketSource, /disposableTargetNamespace:\s*string;/);
-  assert.match(workPacketSource, /stopLines:\s*string\[\];/);
-  assert.match(workPacketSource, /discardRecoveryPath:\s*string;/);
+  assert.match(workPacketSource, /export type LlmWikiRebuildBasisV0 = "approved-memory-proposals" \| "source-evidence-crosswalk";/);
+  assert.match(rebuildPreviewContract, /previewId:\s*string;/);
+  assert.match(rebuildPreviewContract, /inputRefs:\s*WorkPacketRefIdV0\[\];/);
+  assert.match(rebuildPreviewContract, /memoryProposalRefs:\s*WorkPacketRefIdV0\[\];/);
+  assert.match(rebuildPreviewContract, /plannedOutputScope:\s*string;/);
+  assert.match(rebuildPreviewContract, /derivedTargetFolder:\s*string;/);
+  assert.match(rebuildPreviewContract, /freshness:\s*MemoryProposalFreshnessV0;/);
+  assert.match(rebuildPreviewContract, /rebuildBasis:\s*LlmWikiRebuildBasisV0\[\];/);
+  assert.match(rebuildPreviewContract, /stopLine:\s*string;/);
+  assert.match(rebuildDryRunPlanContract, /planId:\s*string;/);
+  assert.match(rebuildDryRunPlanContract, /operationMode:\s*"dry_run";/);
+  assert.match(rebuildDryRunPlanContract, /plannedDerivedSections:\s*string\[\];/);
+  assert.match(rebuildDryRunPlanContract, /disposableTargetNamespace:\s*string;/);
+  assert.match(rebuildDryRunPlanContract, /derivedTargetFolder:\s*string;/);
+  assert.match(rebuildDryRunPlanContract, /freshness:\s*MemoryProposalFreshnessV0;/);
+  assert.match(rebuildDryRunPlanContract, /rebuildBasis:\s*LlmWikiRebuildBasisV0\[\];/);
+  assert.match(rebuildDryRunPlanContract, /stopLines:\s*string\[\];/);
+  assert.match(rebuildDryRunPlanContract, /discardRecoveryPath:\s*string;/);
   assert.match(workPacketSource, /writePerformed:\s*false;/);
   assert.match(workPacketSource, /backupCreated:\s*false;/);
   assert.match(workPacketSource, /durableWriteAllowed:\s*false;/);

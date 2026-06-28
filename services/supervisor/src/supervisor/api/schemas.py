@@ -680,6 +680,7 @@ MemoryProposalTypeV0 = Literal[
 ]
 MemoryProposalSensitivityV0 = Literal["low", "medium", "high"]
 MemoryProposalFreshnessV0 = Literal["fresh", "stale", "conflicting", "unknown"]
+LlmWikiRebuildBasisV0 = Literal["approved-memory-proposals", "source-evidence-crosswalk"]
 MemoryProposalContradictionStatusV0 = Literal["none", "possible", "confirmed"]
 MemoryProposalConfidenceV0 = Literal["low", "medium", "high"]
 MemoryProposalOperatorActionV0 = Literal["approve", "edit", "reject", "defer", "blocked"]
@@ -782,6 +783,9 @@ class LlmWikiRebuildPreviewV0View(BaseModel):
     inputRefs: list[str] = Field(default_factory=list)
     memoryProposalRefs: list[str] = Field(default_factory=list)
     plannedOutputScope: str
+    derivedTargetFolder: str
+    freshness: MemoryProposalFreshnessV0
+    rebuildBasis: list[LlmWikiRebuildBasisV0] = Field(min_length=2)
     retentionClass: Literal["metadata_only"] = "metadata_only"
     stopLine: str
     auditEventSummary: str
@@ -801,6 +805,9 @@ class LlmWikiRebuildDryRunPlanV0View(BaseModel):
     memoryProposalRefs: list[str] = Field(default_factory=list)
     plannedDerivedSections: list[str] = Field(default_factory=list)
     disposableTargetNamespace: str
+    derivedTargetFolder: str
+    freshness: MemoryProposalFreshnessV0
+    rebuildBasis: list[LlmWikiRebuildBasisV0] = Field(min_length=2)
     retentionClass: Literal["metadata_only"] = "metadata_only"
     stopLines: list[str] = Field(default_factory=list)
     discardRecoveryPath: str
