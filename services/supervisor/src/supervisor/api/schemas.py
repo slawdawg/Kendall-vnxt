@@ -2849,11 +2849,21 @@ class TrustedAutonomyReadinessGateView(BaseModel):
     evidence: list[str]
 
 
+class TrustedAutonomyDeauthorizationTriggerView(BaseModel):
+    triggerId: str
+    label: str
+    status: str
+    summary: str
+    deauthorizedOperations: list[str]
+    recoveryEvidence: list[str]
+
+
 class TrustedAutonomyReadinessReportView(BaseModel):
     reportId: str
     generatedAt: datetime
     summary: str
     autonomyGates: list[TrustedAutonomyReadinessGateView]
+    deauthorizationTriggers: list[TrustedAutonomyDeauthorizationTriggerView]
     eligibleWork: list[str]
     blockedWork: list[str]
     requiredEvidence: list[str]

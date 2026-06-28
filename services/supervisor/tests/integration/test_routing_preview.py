@@ -5877,6 +5877,45 @@ def test_trusted_autonomy_readiness_report_blocks_autonomous_execution(tmp_path,
         "automatic-stop",
         "operator-visibility",
     }
+    assert {trigger["triggerId"] for trigger in report["deauthorizationTriggers"]} == {
+        "verification-regression",
+        "authority-scope-expansion",
+        "review-or-delivery-ambiguity",
+    }
+    verification_trigger = next(
+        trigger for trigger in report["deauthorizationTriggers"] if trigger["triggerId"] == "verification-regression"
+    )
+    assert verification_trigger["status"] == "deauthorized_until_reverified"
+    assert verification_trigger["deauthorizedOperations"] == [
+        "worker launch",
+        "provider or model call",
+        "GitHub delivery",
+        "cleanup",
+        "source mutation or write continuation",
+        "second-lane dispatch",
+    ]
+    assert any("exact reviewed head" in evidence for evidence in verification_trigger["recoveryEvidence"])
+    authority_trigger = next(
+        trigger for trigger in report["deauthorizationTriggers"] if trigger["triggerId"] == "authority-scope-expansion"
+    )
+    assert authority_trigger["status"] == "deauthorized_pending_operator_approval"
+    assert authority_trigger["deauthorizedOperations"] == [
+        "provider/model expansion",
+        "worker command or network expansion",
+        "GitHub delivery or issue sync expansion",
+        "cleanup or branch deletion expansion",
+        "source mutation expansion",
+        "credential, token, auth, session, or secret handling",
+        "canonical Obsidian memory mutation",
+        "raw provider payload or reasoning-trace retention",
+    ]
+    assert any("metadata-only evidence" in evidence for evidence in authority_trigger["recoveryEvidence"])
+    review_trigger = next(
+        trigger for trigger in report["deauthorizationTriggers"] if trigger["triggerId"] == "review-or-delivery-ambiguity"
+    )
+    assert review_trigger["status"] == "deauthorized_until_gate_proven"
+    assert "PR merge" in review_trigger["deauthorizedOperations"]
+    assert any("thread-aware review query" in evidence for evidence in review_trigger["recoveryEvidence"])
     assert any("Codex or Claude launch" in item for item in report["blockedWork"])
     assert any("authority report says the action is blocked" in condition for condition in report["stopConditions"])
     assert any("one narrow workflow class" in action for action in report["nextSafeActions"])
