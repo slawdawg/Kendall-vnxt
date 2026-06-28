@@ -2566,6 +2566,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "queue-zero-runway-standby-refresh",
         "queue-zero-runway-buffer-refresh",
         "queue-zero-runway-overflow-refresh",
+        "queue-zero-runway-spillover-refresh",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
     for item in ready_items:
@@ -2647,21 +2648,29 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert "completed runway evidence only" in queue_zero_buffer_refresh["nextAction"]
     assert "without runtime execution" in queue_zero_buffer_refresh["nextAction"]
     queue_zero_overflow_refresh = next(item for item in report["items"] if item["itemId"] == "queue-zero-runway-overflow-refresh")
-    assert queue_zero_overflow_refresh["status"] == "ready"
-    assert queue_zero_overflow_refresh["recommendedSliceSize"] == "medium_to_large"
-    assert queue_zero_overflow_refresh["nextLane"]["laneSlug"] == "queue-zero-runway-overflow-refresh"
-    assert queue_zero_overflow_refresh["nextLane"]["branchName"] == "codex/queue-zero-runway-overflow-refresh"
-    assert any(
-        "closed codex/queue-zero-runway-buffer-refresh" in stop_line for stop_line in queue_zero_overflow_refresh["nextLane"]["stopLines"]
-    )
+    assert queue_zero_overflow_refresh["status"] == "closed"
+    assert queue_zero_overflow_refresh["recommendedSliceSize"] == "complete"
+    assert queue_zero_overflow_refresh["nextLane"]["laneSlug"] == "queue-zero-runway-spillover-refresh"
+    assert queue_zero_overflow_refresh["nextLane"]["branchName"] == "codex/queue-zero-runway-spillover-refresh"
+    assert "completed runway evidence only" in queue_zero_overflow_refresh["nextAction"]
+    assert "without runtime execution" in queue_zero_overflow_refresh["nextAction"]
     assert "metadata-only" in queue_zero_overflow_refresh["nextAction"]
+    queue_zero_spillover_refresh = next(item for item in report["items"] if item["itemId"] == "queue-zero-runway-spillover-refresh")
+    assert queue_zero_spillover_refresh["status"] == "ready"
+    assert queue_zero_spillover_refresh["recommendedSliceSize"] == "medium_to_large"
+    assert queue_zero_spillover_refresh["nextLane"]["laneSlug"] == "queue-zero-runway-spillover-refresh"
+    assert queue_zero_spillover_refresh["nextLane"]["branchName"] == "codex/queue-zero-runway-spillover-refresh"
+    assert any(
+        "closed codex/queue-zero-runway-overflow-refresh" in stop_line for stop_line in queue_zero_spillover_refresh["nextLane"]["stopLines"]
+    )
+    assert "metadata-only" in queue_zero_spillover_refresh["nextAction"]
     assert "metadata-only" in queue_zero_buffer_refresh["nextAction"]
     assert "metadata-only" in queue_zero_standby_refresh["nextAction"]
     assert "metadata-only" in queue_zero_reserve_refresh["nextAction"]
-    assert any("worker launch" in evidence for evidence in queue_zero_overflow_refresh["evidence"])
-    assert any("provider calls" in evidence for evidence in queue_zero_overflow_refresh["evidence"])
-    assert any("premium execution" in evidence for evidence in queue_zero_overflow_refresh["evidence"])
-    assert any("process authority" in evidence for evidence in queue_zero_overflow_refresh["evidence"])
+    assert any("worker launch" in evidence for evidence in queue_zero_spillover_refresh["evidence"])
+    assert any("provider calls" in evidence for evidence in queue_zero_spillover_refresh["evidence"])
+    assert any("premium execution" in evidence for evidence in queue_zero_spillover_refresh["evidence"])
+    assert any("process authority" in evidence for evidence in queue_zero_spillover_refresh["evidence"])
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
     assert verification_item["status"] == "closed"
     assert verification_item["recommendedSliceSize"] == "complete"
@@ -9214,15 +9223,17 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
     )
     continuity = report["dispatcherContinuity"]
     assert continuity["snapshotId"] == "dispatcher-continuity-snapshot-v1"
-    assert continuity["selectedBacklogItemId"] == "queue-zero-runway-overflow-refresh"
-    assert continuity["selectedBranch"] == "codex/queue-zero-runway-overflow-refresh"
+    assert continuity["selectedBacklogItemId"] == "queue-zero-runway-spillover-refresh"
+    assert continuity["selectedBranch"] == "codex/queue-zero-runway-spillover-refresh"
     assert continuity["dryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --owner <owner>"
     assert continuity["summaryDryRunCommand"] == "node ./scripts/codex-workspace.mjs dispatch-next --dry-run --summary-json --owner <owner>"
     assert continuity["assignableCount"] == len(BMAD_STORY_BACKLOG_ITEM_IDS) + 3
     assert "blocked-authority" not in continuity["blockerCodes"]
     queue_proof_rows = {row["backlogItemId"]: row for row in continuity["queueProofRows"]}
     assert queue_proof_rows["bmad-1-1-validate-the-pipeline-work-packet-read-contract"]["classification"] == "assignable"
-    assert queue_proof_rows["queue-zero-runway-overflow-refresh"]["classification"] == "assignable"
+    assert queue_proof_rows["queue-zero-runway-spillover-refresh"]["classification"] == "assignable"
+    assert queue_proof_rows["queue-zero-runway-overflow-refresh"]["classification"] == "closed"
+    assert queue_proof_rows["queue-zero-runway-overflow-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["queue-zero-runway-buffer-refresh"]["classification"] == "closed"
     assert queue_proof_rows["queue-zero-runway-buffer-refresh"]["reasonCode"] == "backlog-closed"
     assert queue_proof_rows["queue-zero-runway-standby-refresh"]["classification"] == "closed"
@@ -9238,7 +9249,7 @@ def test_runner_assignment_status_report_reads_claimed_assignment_records(tmp_pa
         for row in continuity["queueProofRows"]
         if row["backlogItemId"].startswith("queue-zero-runway-") and row["classification"] == "assignable"
     ]
-    assert queue_zero_runway_assignable == ["queue-zero-runway-overflow-refresh"]
+    assert queue_zero_runway_assignable == ["queue-zero-runway-spillover-refresh"]
     assert queue_proof_rows["dispatcher-queue-handoff-badges-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-status-refresh"]["classification"] == "closed"
     assert queue_proof_rows["dispatcher-queue-handoff-lifecycle-refresh"]["classification"] == "closed"
