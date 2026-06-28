@@ -34,6 +34,7 @@ const forbiddenCallPatterns = [
   { id: "network-beacon", pattern: /\bsendBeacon\s*\(/ },
   { id: "process-spawn", pattern: /\b(?:spawn|exec|execFile|fork)\s*\(/ },
   { id: "filesystem-mutation", pattern: /\b(?:writeFile|appendFile|mkdir|rename|unlink|rm|rmdir)\s*\(/ },
+  { id: "browser-worker-launch", pattern: /\bnew\s+Worker\s*\(/ },
   { id: "provider-call", pattern: /\b(?:createChatCompletion|chat\.completions\.create|responses\.create|generateContent)\s*\(/ },
   { id: "runner-launch", pattern: /\b(?:runCodex|launchCodex|runClaude|launchClaude|runHermes|launchHermes|startWorker|launchWorker)\s*\(/ },
   { id: "obsidian-mutation", pattern: /\b(?:writeObsidian|mutateObsidian|updateCanonicalMemory|obsidianWriteBack|vaultWrite)\s*\(/ },
@@ -171,11 +172,11 @@ function checkForbiddenCalls(displayPath, source) {
 
 function stripCommentsAndStrings(source) {
   return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\/\/.*$/gm, "")
     .replace(/`(?:\\.|[^`\\])*`/g, (templateSource) => extractTemplateExpressions(templateSource))
     .replace(/"(?:\\.|[^"\\])*"/g, "\"\"")
-    .replace(/'(?:\\.|[^'\\])*'/g, "''");
+    .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
 }
 
 function extractTemplateExpressions(templateSource) {
@@ -210,12 +211,16 @@ function extractTemplateExpressions(templateSource) {
 
 async function resolveLocalImport(fromFile, specifier) {
   if (!specifier.startsWith(".") && !specifier.startsWith("/")) {
-    return null;
+    if (!specifier.startsWith("@/")) {
+      return null;
+    }
   }
 
-  const basePath = specifier.startsWith("/")
-    ? join(dashboardSrcDir, specifier.slice(1))
-    : resolve(dirname(fromFile), specifier);
+  const basePath = specifier.startsWith("@/")
+    ? join(dashboardSrcDir, specifier.slice(2))
+    : specifier.startsWith("/")
+      ? join(dashboardSrcDir, specifier.slice(1))
+      : resolve(dirname(fromFile), specifier);
   if (!isInsideDashboardSrc(basePath) || !isPipelineBoundaryPath(basePath)) {
     return null;
   }

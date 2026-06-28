@@ -41,6 +41,9 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   assert.match(boundaryCheckSource, /isPipelineBoundaryPath/);
   assert.ok(boundaryCheckSource.includes("\\brequire\\s*\\("));
   assert.ok(boundaryCheckSource.includes("export(?:\\s+type)?"));
+  assert.ok(boundaryCheckSource.includes("specifier.startsWith(\"@/\")"));
+  assert.ok(boundaryCheckSource.includes("\\bnew\\s+Worker\\s*\\("));
+  assert.ok(boundaryCheckSource.indexOf("replace(/\"(?:\\\\.|[^\"\\\\])*\"/g") < boundaryCheckSource.indexOf("replace(/\\/\\/.*$/gm"));
   assert.match(boundaryCheckSource, /extractTemplateExpressions/);
   assert.equal(packageJson.scripts["test:e2e:dashboard"], "playwright test");
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
