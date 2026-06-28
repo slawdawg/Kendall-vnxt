@@ -75,6 +75,7 @@ export function PacketDetailPage({
         </DetailSection>
 
         <DetailSection title="Gate, memory, recovery">
+          <LoopStopStateList packet={packet} />
           <HumanGateActionList packet={packet} />
           <HumanGateActionRequestList packet={packet} />
           <MemoryProposalList packet={packet} />
@@ -266,6 +267,34 @@ function HumanGateActionList({ packet }: { packet: PipelineFixturePacket }) {
           />
         );
       })}
+    </DetailCard>
+  );
+}
+
+function LoopStopStateList({ packet }: { packet: PipelineFixturePacket }) {
+  return (
+    <DetailCard title="Loop stop states" empty={packet.loopStopStates.length === 0 ? "No autonomous loop stop state for this packet." : null}>
+      {packet.loopStopStates.map((stopState) => (
+        <TraceBlock
+          key={stopState.stopStateId}
+          title={stopState.label}
+          fields={[
+            ["Kind", stopState.kind],
+            ["Phase", stopState.phase],
+            ["Severity", stopState.severity],
+            ["Summary", stopState.summary],
+            ["Stop line", stopState.stopLine],
+            ["Next safe action", stopState.nextSafeAction],
+            ["Evidence refs", stopState.evidenceRefs.join(", ")],
+            ["Metadata", stopState.metadataOnly ? "metadata_only" : "raw_payload_risk"],
+            ["Source mutation", stopState.sourceMutationAllowed ? "allowed" : "blocked"],
+            ["Provider calls", stopState.providerCallsAllowed ? "allowed" : "blocked"],
+            ["Worker launch", stopState.workerLaunchAllowed ? "allowed" : "blocked"],
+            ["GitHub mutation", stopState.githubMutationAllowed ? "allowed" : "blocked"],
+            ["Cleanup", stopState.cleanupAllowed ? "allowed" : "blocked"],
+          ]}
+        />
+      ))}
     </DetailCard>
   );
 }

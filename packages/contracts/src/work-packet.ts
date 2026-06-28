@@ -634,6 +634,36 @@ export interface WorkPacketReviewSummaryV0 {
   artifactRefs: WorkPacketRefIdV0[];
 }
 
+export interface WorkPacketDeliveryEvidenceV0 {
+  evidenceId: string;
+  mode: "metadata_only";
+  actionId?: "pr" | "merge" | "cleanup" | null;
+  status: string;
+  targetBranch?: string | null;
+  baseBranch?: string | null;
+  pullRequestUrl?: string | null;
+  expectedHeadRevision?: string | null;
+  pullRequestHeadRevision?: string | null;
+  ciStatus?: string | null;
+  reviewState?: string | null;
+  mergeStatus?: string | null;
+  mergeResult?: string | null;
+  cleanupDryRunStatus?: string | null;
+  cleanupTarget?: string | null;
+  readyForApproval: boolean;
+  hasDeliveryExecutionEvidence: boolean;
+  evidenceRefs: WorkPacketRefIdV0[];
+  artifactRefs: WorkPacketRefIdV0[];
+  retainedEvidence: WorkPacketRefIdV0[];
+  blockedReasons: string[];
+  recoveryPath: string;
+  deliveryRailsGrantAuthority: false;
+  rawPayloadRetained: false;
+  remoteMutationApproved: false;
+  mergeApproved: false;
+  cleanupApproved: false;
+}
+
 export interface WorkPacketExecutionAttemptSummaryV0 {
   attemptId: string;
   workItemId: string;
@@ -713,6 +743,34 @@ export interface WorkPacketGateStateValidationV0 {
   workerLaunchAllowed: false;
 }
 
+export type WorkPacketLoopStopStateKindV0 =
+  | "limit_window"
+  | "operator_approval"
+  | "review_thread"
+  | "failed_check"
+  | "tool_churn"
+  | "unsafe_cleanup"
+  | "scope_boundary"
+  | "owner_conflict";
+
+export interface WorkPacketLoopStopStateV0 {
+  stopStateId: string;
+  kind: WorkPacketLoopStopStateKindV0;
+  label: string;
+  phase: string;
+  severity: "info" | "warning" | "blocking";
+  summary: string;
+  stopLine: string;
+  nextSafeAction: string;
+  evidenceRefs: WorkPacketRefIdV0[];
+  metadataOnly: true;
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  workerLaunchAllowed: false;
+  githubMutationAllowed: false;
+  cleanupAllowed: false;
+}
+
 export interface WorkPacketV0View {
   packetId: string;
   title: string;
@@ -736,8 +794,10 @@ export interface WorkPacketV0View {
   humanGateActionRequests: HumanGateActionRequestV0[];
   laneCards: WorkPacketLaneCardV0[];
   memoryProposals: MemoryProposalV0[];
+  deliveryEvidence?: WorkPacketDeliveryEvidenceV0 | null;
   alphaMemorySourceStatus?: AlphaMemorySourceStatusV0 | null;
   gateStateValidation?: WorkPacketGateStateValidationV0 | null;
+  loopStopStates: WorkPacketLoopStopStateV0[];
   reviewSummaries: WorkPacketReviewSummaryV0[];
   recoveryActions: RecoveryActionV0[];
 }

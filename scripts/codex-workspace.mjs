@@ -163,6 +163,9 @@ heartbeat options:
   --runner-kind <kind>      Runner kind. Defaults to codex-cli.
   --current-command <text>  Current command or wait state summary.
   --last-result <text>      Last result summary.
+  --decision <text>         Best-judgment decision summary to retain as metadata-only evidence.
+  --decision-rationale <text> Rationale for the best-judgment decision.
+  --next-safe-action <text> Next bounded action after the decision.
   --stale-after-seconds <n> Stale owner threshold to record. Defaults to 86400.
 
 close-assignments options:
@@ -1440,7 +1443,27 @@ function buildHeartbeatPacket({ kind, result, currentOwner }) {
     lastHeartbeatAt: record.last_heartbeat_at || null,
     staleAfterSeconds: Number.isInteger(record.stale_after_seconds) ? record.stale_after_seconds : null,
     heartbeatCount: Number.isInteger(record.heartbeat_count) ? record.heartbeat_count : null,
+    bestJudgmentDecisionCount: Array.isArray(record.best_judgment_decisions)
+      ? record.best_judgment_decisions.length
+      : 0,
+    latestBestJudgmentDecision: latestBestJudgmentDecision(record),
     mutation: "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
+  };
+}
+
+function latestBestJudgmentDecision(record) {
+  const decisions = Array.isArray(record.best_judgment_decisions) ? record.best_judgment_decisions : [];
+  const latest = decisions.at(-1);
+  if (!latest) {
+    return null;
+  }
+  return {
+    recordedAt: latest.recorded_at || null,
+    owner: latest.owner || null,
+    phase: latest.phase || null,
+    decision: latest.decision || null,
+    rationale: latest.rationale || null,
+    nextSafeAction: latest.next_safe_action || null,
   };
 }
 
@@ -1816,6 +1839,7 @@ function finishPr(argv) {
         cwd: manifest.worktree_path,
       }).stdout.trim();
       appendTaskEvent(manifest, "committed", manifest.last_commit);
+      worktreeStatus = parseStatus(manifest.worktree_path);
     }
 
     runChecked("git", ["push", "-u", "origin", manifest.branch], { cwd: manifest.worktree_path });
@@ -1847,8 +1871,23 @@ function finishPr(argv) {
       );
       manifest.pr_url = result.stdout.trim().split(/\r?\n/).at(-1);
       manifest.pr_number = prNumberFromUrl(manifest.pr_url);
+      if (!manifest.pr_url || !manifest.pr_number) {
+        throw new Error("Could not parse created PR URL from GitHub CLI output.");
+      }
     }
 
+    manifest.pr_delivery_evidence = shapePrDeliveryEvidence(manifest, {
+      existingPr,
+      prTitle,
+      prBody,
+      verifyCommand,
+      noVerify: Boolean(options.noVerify),
+    });
+    manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, antiChurn.manifestRecord, {
+      worktreeStatus,
+      prDeliveryEvidence: manifest.pr_delivery_evidence,
+    });
+    appendTaskEvent(manifest, "pr_delivery_evidence_recorded", manifest.pr_url || manifest.branch);
     manifest.status = "pr_open";
     manifest.updated_at = new Date().toISOString();
     appendTaskEvent(manifest, "pr_open", manifest.pr_url || manifest.branch);
@@ -2141,6 +2180,58 @@ function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
     worktree_path: manifest.worktree_path,
     updated_at: antiChurnRecord.updated_at || new Date().toISOString(),
     anti_churn_finalization: shapeAntiChurnEvidencePacket(antiChurnRecord, options),
+    pr_delivery: options.prDeliveryEvidence || null,
+  };
+}
+
+function shapePrDeliveryEvidence(manifest, options = {}) {
+  const prBody = typeof options.prBody === "string" ? options.prBody : "";
+  const verifyCommand = Array.isArray(options.verifyCommand) ? options.verifyCommand.filter(Boolean).join(" ") : "";
+  return {
+    schemaVersion: 1,
+    operation: options.existingPr ? "update-existing-pr-reference" : "create-pr",
+    status: "recorded",
+    authorityProfile: "standard-delivery",
+    taskId: manifest.task_id,
+    branch: manifest.pr_delivery_branch || manifest.branch,
+    baseBranch: manifest.pr_delivery_base_branch || manifest.base_branch || null,
+    headRevision: manifest.pr_delivery_head_sha || null,
+    pushedAt: manifest.pr_delivery_pushed_at || null,
+    pullRequestUrl: manifest.pr_url || null,
+    pullRequestNumber: manifest.pr_number || null,
+    pullRequestTitle: typeof options.prTitle === "string" ? options.prTitle : null,
+    pullRequestBodyLineCount: prBody ? prBody.split(/\r?\n/).length : 0,
+    pullRequestBodyCharCount: prBody.length,
+    verificationGate: verifyCommand
+      ? {
+          status: "passed",
+          command: verifyCommand,
+          verifiedAt: manifest.last_verified_at || null,
+        }
+      : {
+          status: "not-run",
+          decision: options.noVerify ? "explicit-no-verify" : "no-verification-profile",
+          recordedAt: new Date().toISOString(),
+        },
+    requiredGates: [
+      "clean worktree or intentionally staged changes",
+      "configured verification command or explicitly recorded no-verify decision",
+      "anti-churn finalization before delivery mutation",
+      "safe branch",
+      "expected base branch",
+      "push succeeded before PR evidence is recorded",
+    ],
+    stopLines: [
+      "no provider/model calls",
+      "no paid usage",
+      "no worker launch",
+      "no credential or sensitive-material retention",
+      "no merge or cleanup from finish-pr",
+      "no failed-check bypass",
+      "no review-thread mutation",
+    ],
+    recoveryPath: "If push or PR creation/update fails, leave the local branch and manifest in place, preserve command output, and rerun finish-pr after fixing the gate.",
+    metadataOnly: true,
   };
 }
 
@@ -4937,6 +5028,19 @@ function assignmentPath(state, assignmentId) {
 }
 
 function normalizeHeartbeatOptions(options = {}) {
+  const decision = optionalHeartbeatText(options.decision);
+  const decisionRationale = optionalHeartbeatText(options.decisionRationale);
+  const nextSafeAction = optionalHeartbeatText(options.nextSafeAction);
+  if (decision || decisionRationale || nextSafeAction) {
+    const missing = [
+      decision ? null : "--decision",
+      decisionRationale ? null : "--decision-rationale",
+      nextSafeAction ? null : "--next-safe-action",
+    ].filter(Boolean);
+    if (missing.length > 0) {
+      throw new Error(`Best-judgment decision evidence requires ${missing.join(", ")}.`);
+    }
+  }
   return {
     phase: safeHeartbeatToken(options.phase || "active", "phase"),
     runnerKind: safeHeartbeatToken(options.runnerKind || "codex-cli", "runner kind"),
@@ -4944,6 +5048,9 @@ function normalizeHeartbeatOptions(options = {}) {
     currentCommandProvided: options.currentCommand !== undefined && options.currentCommand !== true,
     lastResult: optionalHeartbeatText(options.lastResult),
     lastResultProvided: options.lastResult !== undefined && options.lastResult !== true,
+    decision,
+    decisionRationale,
+    nextSafeAction,
     staleAfterSeconds: positiveInteger(options.staleAfterSeconds, 86_400),
   };
 }
@@ -4978,6 +5085,9 @@ function heartbeatAssignment(state, assignmentRecord, { currentOwner, options, h
       ...(Array.isArray(assignment.events) ? assignment.events : []),
       taskEvent("heartbeat", `owner ${currentOwner} phase ${heartbeatOptions.phase}`),
     ];
+    if (heartbeatOptions.decision) {
+      assignment.events.push(taskEvent("best_judgment_decision", `owner ${currentOwner} phase ${heartbeatOptions.phase}`));
+    }
     writeAssignment(path, assignment);
     return {
       path,
@@ -4997,6 +5107,9 @@ function heartbeatManifest(state, taskId, { currentOwner, options, heartbeatOpti
     manifest.owner_updated_at = manifest.last_heartbeat_at;
     manifest.updated_at = manifest.last_heartbeat_at;
     appendTaskEvent(manifest, "heartbeat", `owner ${currentOwner} phase ${heartbeatOptions.phase}`);
+    if (heartbeatOptions.decision) {
+      appendTaskEvent(manifest, "best_judgment_decision", `owner ${currentOwner} phase ${heartbeatOptions.phase}`);
+    }
     writeManifest(path, manifest);
     return {
       path,
@@ -5016,6 +5129,22 @@ function updateHeartbeatFields(target, heartbeatOptions) {
   }
   if (heartbeatOptions.lastResultProvided) {
     target.last_result = heartbeatOptions.lastResult;
+  }
+  if (heartbeatOptions.decision) {
+    target.best_judgment_decisions = [
+      ...(Array.isArray(target.best_judgment_decisions) ? target.best_judgment_decisions : []),
+      {
+        recorded_at: now,
+        owner: target.owner || null,
+        phase: heartbeatOptions.phase,
+        runner_kind: heartbeatOptions.runnerKind,
+        current_command: target.current_command || null,
+        last_result: target.last_result || null,
+        decision: heartbeatOptions.decision,
+        rationale: heartbeatOptions.decisionRationale,
+        next_safe_action: heartbeatOptions.nextSafeAction,
+      },
+    ];
   }
   target.heartbeat_count = Number.isInteger(target.heartbeat_count) ? target.heartbeat_count + 1 : 1;
 }

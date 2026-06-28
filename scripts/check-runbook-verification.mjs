@@ -59,8 +59,11 @@ function assertExactList(actual, expected, label) {
 const packageJson = JSON.parse(readWorkspaceFile("package.json"));
 const files = {
   "README.md": readWorkspaceFile("README.md"),
+  "docs/workflows/end-to-end-lane-runner.md": readWorkspaceFile("docs/workflows/end-to-end-lane-runner.md"),
   "docs/workflows/current-session-runbook.md": readWorkspaceFile("docs/workflows/current-session-runbook.md"),
   "docs/workflows/implementation-evidence-boundary.md": readWorkspaceFile("docs/workflows/implementation-evidence-boundary.md"),
+  "scripts/codex-workspace.mjs": readWorkspaceFile("scripts/codex-workspace.mjs"),
+  "scripts/test-codex-workspace.mjs": readWorkspaceFile("scripts/test-codex-workspace.mjs"),
   "services/supervisor/src/supervisor/application/service.py": readWorkspaceFile(
     "services/supervisor/src/supervisor/application/service.py",
   ),
@@ -126,6 +129,31 @@ assertCondition(
 assertCondition(
   files["docs/workflows/current-session-runbook.md"].includes("runbook verification"),
   "current session runbook must mention runbook verification",
+  failures,
+);
+assertCondition(
+  files["docs/workflows/current-session-runbook.md"].includes("metadata-only heartbeat decision evidence"),
+  "current session runbook must mention metadata-only heartbeat decision evidence",
+  failures,
+);
+assertCondition(
+  files["docs/workflows/end-to-end-lane-runner.md"].includes("Best-Judgment Decision Evidence"),
+  "End-to-end lane runner must define best-judgment decision evidence",
+  failures,
+);
+assertCondition(
+  files["docs/workflows/end-to-end-lane-runner.md"].includes("--decision-rationale"),
+  "End-to-end lane runner must document heartbeat decision rationale evidence",
+  failures,
+);
+assertCondition(
+  files["scripts/codex-workspace.mjs"].includes("best_judgment_decisions"),
+  "codex workspace command must persist best-judgment decision evidence",
+  failures,
+);
+assertCondition(
+  files["scripts/test-codex-workspace.mjs"].includes("bestJudgmentDecisionCount"),
+  "codex workspace tests must cover best-judgment decision evidence packets",
   failures,
 );
 assertCondition(

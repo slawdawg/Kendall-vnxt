@@ -648,6 +648,18 @@ function PacketInspection({ packet }: { packet: PipelineFixturePacket }) {
         <InspectionRow label="Next" value={plainNextStageLabel(packet)} />
         <InspectionRow label="Blocked by" value={blockerLabel(packet)} />
       </dl>
+      {packet.loopStopStates.length > 0 ? (
+        <section aria-label="Loop stop states" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
+          <h3 className="text-sm font-semibold">Loop stop states</h3>
+          <ul className="grid gap-2 text-xs leading-5 text-[var(--muted)]">
+            {packet.loopStopStates.map((stopState) => (
+              <li className="break-words" key={stopState.stopStateId}>
+                {stopState.label}; {stopState.phase}; {stopState.summary}; next {stopState.nextSafeAction}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {packet.executionAttempts.length > 0 ? (
         <section aria-label="Execution attempts" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
           <h3 className="text-sm font-semibold">Execution attempts</h3>
