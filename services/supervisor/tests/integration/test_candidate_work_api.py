@@ -290,8 +290,21 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
                             "canonical": False,
                             "summaryOnly": True,
                         },
+                        {
+                            "refId": "obsidian:contradictory-note",
+                            "sourceType": "obsidian",
+                            "label": "Contradictory note",
+                            "pathOrUrl": "00 Inbox/contradictory-note.md",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                            "canonical": True,
+                            "summaryOnly": True,
+                            "contradictionStatus": "confirmed",
+                        },
                     ],
                     "promotionEvidenceRefs": ["candidate-import:source-ref-check"],
+                    "rawContent": "this raw source content must not be promoted",
+                    "providerPayload": {"secret": "must not be retained"},
                 },
             },
         )
@@ -302,7 +315,18 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
         promoted_response = client.post(f"/candidate-work/{candidate_id}/promote")
         assert promoted_response.status_code == 200
         promoted = promoted_response.json()["data"]
+        work_item = promoted["workItem"]
         work_item_id = promoted["workItem"]["id"]
+        persisted_refs_by_id = {ref["refId"]: ref for ref in work_item["metadata"]["workPacketSourceRefs"]}
+        assert persisted_refs_by_id["source:malformed"]["accessState"] == "blocked"
+        assert persisted_refs_by_id["source:malformed"]["summaryOnly"] is True
+        assert persisted_refs_by_id["source:malformed"]["pathOrUrl"] is None
+        assert persisted_refs_by_id["source:malformed"]["blockedReason"] == (
+            "invalid source type; invalid freshness; unsafe non-summary source metadata"
+        )
+        assert work_item["metadata"]["importMetadata"]["workPacketSourceRefs"] == work_item["metadata"]["workPacketSourceRefs"]
+        assert "rawContent" not in work_item["metadata"]["importMetadata"]
+        assert "providerPayload" not in work_item["metadata"]["importMetadata"]
 
         packet_response = client.get(f"/work-packets/work_item:{work_item_id}")
         assert packet_response.status_code == 200
@@ -338,6 +362,12 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
         assert missing_ref["canonical"] is False
         assert missing_ref["pathOrUrl"] is None
         assert missing_ref["blockedReason"] == "source ref is missing or unavailable"
+        contradictory_ref = refs_by_id["obsidian:contradictory-note"]
+        assert contradictory_ref["sourceType"] == "obsidian"
+        assert contradictory_ref["accessState"] == "blocked"
+        assert contradictory_ref["canonical"] is True
+        assert contradictory_ref["pathOrUrl"] is None
+        assert contradictory_ref["blockedReason"] == "contradictory source metadata: confirmed"
 
         events_response = client.get(f"/work-items/{work_item_id}/events")
         assert events_response.status_code == 200
@@ -348,6 +378,10 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
             "operation": "candidate_work.promotion",
             "mode": "explicit_candidate_approval",
         }
+        assert promotion_event["payload"]["approval"]["status"] == "approved"
+        assert promotion_event["payload"]["approval"]["approvedAt"] is not None
+        assert promotion_event["payload"]["approval"]["approvedBy"] is None
+        assert promotion_event["payload"]["approval"]["approvalReference"] is None
         assert promotion_event["payload"]["before"] == {"candidateStatus": "approved", "promotedWorkItemId": None}
         assert promotion_event["payload"]["after"]["candidateStatus"] == "approved"
         assert promotion_event["payload"]["after"]["promotedWorkItemId"] == work_item_id
@@ -357,6 +391,7 @@ def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_p
             "source:malformed",
             "llm-wiki:derived-summary",
             "github:missing-pr",
+            "obsidian:contradictory-note",
         ]
 
 
