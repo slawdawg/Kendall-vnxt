@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 const usageVisibilityOptions = [
   {
@@ -33,16 +33,13 @@ function writeStoredUsageVisible(key: string, checked: boolean) {
 
 export function UsageVisibilitySettings() {
   const [visibility, setVisibility] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(usageVisibilityOptions.map((option) => [option.key, true]))
+    Object.fromEntries(
+      usageVisibilityOptions.map((option) => [
+        option.key,
+        typeof window === "undefined" ? true : readStoredUsageVisible(option.key),
+      ])
+    )
   );
-
-  useEffect(() => {
-    setVisibility(
-      Object.fromEntries(
-        usageVisibilityOptions.map((option) => [option.key, readStoredUsageVisible(option.key)])
-      )
-    );
-  }, []);
 
   function setOption(key: string, checked: boolean) {
     writeStoredUsageVisible(key, checked);

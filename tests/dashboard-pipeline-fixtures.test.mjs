@@ -1114,6 +1114,20 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
   assert.match(packetDetailSource, /Memory proposals/);
   assert.match(packetDetailSource, /MemoryProposalList/);
   assert.match(packetDetailSource, /packet\.memoryProposals\.map\(\(proposal\)/);
+  for (const detailLabel of [
+    "Learn panel",
+    "Reviewable memory proposals",
+    "Proposal state",
+    "Source refs",
+    "Evidence refs",
+    "Decision context",
+    "Available review actions",
+    "Reject available",
+    "Canonical Obsidian write-back",
+    "writeBackAllowed=false",
+  ]) {
+    assert.match(packetDetailSource, new RegExp(detailLabel, "i"));
+  }
 
   for (const visibleLabel of [
     "Packet id",
