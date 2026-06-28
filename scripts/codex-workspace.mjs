@@ -1155,6 +1155,13 @@ function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selecte
     stateRoot: state.root,
     staleAfterSeconds,
     selected: selected ? summarizeClaimEvaluation(selected) : null,
+    assignmentPreview: buildAssignmentPreview({
+      selected,
+      currentOwner,
+      mode: "claim-next",
+      blockedReasons: claimNextBlockedReasons({ selected, blockers, sourceDrift }),
+      blockedRequiredEvidence: claimNextBlockedRequiredEvidence(),
+    }),
     nextActionSummary: buildClaimNextActionSummary({ selected, blockers, excluded, sourceDrift, evaluations }),
     counts: {
       total: evaluations.length,
@@ -1174,6 +1181,48 @@ function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selecte
     sourceDriftTruncated: sourceDrift.length > 10,
     mutation: "none; dry-run summary only",
   };
+}
+
+function buildAssignmentPreview({ selected, currentOwner, mode, blockedReasons = [], blockedRequiredEvidence = [] }) {
+  const targetLane = selected?.item?.itemId || null;
+  return {
+    proposedRunner: currentOwner,
+    targetLane,
+    targetBranch: selected?.item?.branchName || null,
+    rationale: selected
+      ? selected.reason
+      : blockedReasons[0] || "no safe independent lane is available to claim",
+    blockedReasons: selected ? [] : blockedReasons,
+    requiredEvidence: selected
+      ? [`safe backlog item ${targetLane}`, `${mode} dry-run summary-json`]
+      : [`${mode} dry-run summary-json`, ...blockedRequiredEvidence],
+    mutation: "none; preview only",
+  };
+}
+
+function claimNextBlockedReasons({ selected, blockers, sourceDrift }) {
+  if (selected) {
+    return [];
+  }
+  const reasons = blockers.map(previewBlockedReason);
+  if (reasons.length > 0) {
+    return reasons;
+  }
+  return sourceDrift.map(previewBlockedReason);
+}
+
+function claimNextBlockedRequiredEvidence() {
+  return ["resolve blockers before applying claim-next"];
+}
+
+function previewBlockedReason(evaluation) {
+  if (typeof evaluation === "string") {
+    return evaluation;
+  }
+  const itemId = evaluation?.item?.itemId || "unknown";
+  const status = evaluation?.status || "unknown";
+  const reason = evaluation?.reason || evaluation?.nextAction || "no reason recorded";
+  return `${itemId}: ${status} - ${reason}`;
 }
 
 function claimEvaluationIsExcluded(evaluation) {
@@ -4062,6 +4111,13 @@ function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, read
     staleAfterSeconds,
     readinessProfile,
     selected: plan.selected ? summarizeClaimEvaluation(plan.selected) : null,
+    laneAssignmentPreview: buildAssignmentPreview({
+      selected: plan.selected,
+      currentOwner,
+      mode: "dispatch-next",
+      blockedReasons: dispatchNextBlockedReasons(plan.packet),
+      blockedRequiredEvidence: dispatchNextBlockedRequiredEvidence(),
+    }),
     dispatch: {
       allowed: plan.packet.allowed,
       selectedLane: plan.packet.selected_lane,
@@ -4087,6 +4143,27 @@ function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, read
     blockedCandidatesTruncated: plan.packet.blocked_candidates.length > 10,
     mutation: "none; dry-run summary only",
   };
+}
+
+function dispatchNextBlockedReasons(packet) {
+  if (packet.selected_lane) {
+    return [];
+  }
+  const blockers = Array.isArray(packet.blockers) ? packet.blockers : [];
+  const blockedCandidates = Array.isArray(packet.blocked_candidates) ? packet.blocked_candidates : [];
+  const reasons = [
+    packet.next_action_guidance,
+    ...blockers,
+    ...blockedCandidates.slice(0, 10).map((candidate) => {
+      const reason = candidate.reason || candidate.next_action || "no reason recorded";
+      return `${candidate.item_id}: ${candidate.status} - ${reason}`;
+    }),
+  ].filter(Boolean);
+  return [...new Set(reasons)];
+}
+
+function dispatchNextBlockedRequiredEvidence() {
+  return ["resolve blockers before applying dispatch-next"];
 }
 
 function dispatchNextActionGuidance(selected, counts = {}) {
