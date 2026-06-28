@@ -2282,6 +2282,74 @@ class ClaudeReviewApprovalReportView(BaseModel):
     approvalBindingImplemented: bool = False
 
 
+class ReviewResourcePolicyTriggerView(BaseModel):
+    triggerId: str
+    label: str
+    status: str
+    summary: str
+    evidenceSignals: list[str]
+    recommendedRoutes: list[str]
+
+
+class ReviewResourcePolicyRouteView(BaseModel):
+    routeId: str
+    label: str
+    authorityFamily: str
+    status: str
+    summary: str
+    allowedWhen: list[str]
+    commandPolicy: list[str]
+    retainedEvidence: list[str]
+    blockedCapabilities: list[str]
+    budgetCap: str | None = None
+
+
+class ReviewResourcePolicyScenarioView(BaseModel):
+    scenarioId: str
+    label: str
+    triggerIds: list[str]
+    selectedRoutes: list[str]
+    policyBasis: str
+    retentionSummary: str
+    nextSafeAction: str
+
+
+class ReviewResourcePolicyPacketEvaluationView(BaseModel):
+    packetId: str
+    packetKind: str
+    triggerIds: list[str]
+    selectedRoutes: list[str]
+    decisionBasis: str
+    retainedEvidence: list[str]
+    stopLines: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    sourceMutationApproved: bool = False
+    githubMutationApproved: bool = False
+    rawProviderPayloadsRetained: bool = False
+    rawReasoningRetained: bool = False
+
+
+class ReviewResourcePolicyReportView(BaseModel):
+    reportId: str
+    generatedAt: datetime
+    summary: str
+    triggers: list[ReviewResourcePolicyTriggerView]
+    routes: list[ReviewResourcePolicyRouteView]
+    scenarios: list[ReviewResourcePolicyScenarioView]
+    packetEvaluations: list[ReviewResourcePolicyPacketEvaluationView]
+    claudeReadOnlyCommand: list[str]
+    retentionPolicy: str
+    stopLines: list[str]
+    nextSafeActions: list[str]
+    readOnly: bool = True
+    processLaunchApproved: bool = False
+    sourceMutationApproved: bool = False
+    githubMutationApproved: bool = False
+    rawProviderPayloadsRetained: bool = False
+    rawReasoningRetained: bool = False
+
+
 class GitHubDeliveryAuthorityStepView(BaseModel):
     stepId: str
     label: str

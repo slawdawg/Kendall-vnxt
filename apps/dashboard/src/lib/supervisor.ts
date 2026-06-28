@@ -32,6 +32,7 @@ import type {
   MaintenanceReadinessReportView,
   MvpProofTrialReportView,
   RuntimeEvidenceReviewReportView,
+  ReviewResourcePolicyReportView,
   RunnerAssignmentStatusReportView,
   RuntimeEvidenceExportView,
   RemoteCleanupSyncReadinessReportView,
@@ -332,6 +333,10 @@ export async function getClaudeReviewReadinessReport(): Promise<ClaudeReviewRead
 
 export async function getClaudeReviewApprovalReport(): Promise<ClaudeReviewApprovalReportView> {
   return requestJson<ClaudeReviewApprovalReportView>("/supervisor/claude-review-approval-report");
+}
+
+export async function getReviewResourcePolicyReport(): Promise<ReviewResourcePolicyReportView> {
+  return requestJson<ReviewResourcePolicyReportView>("/supervisor/review-resource-policy-report");
 }
 
 export async function getDeliveryReadinessPolicyReport(): Promise<DeliveryReadinessPolicyReportView> {

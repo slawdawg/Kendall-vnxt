@@ -202,6 +202,13 @@ const reports = [
     dashboardFetch: "getClaudeReviewApprovalReport",
   },
   {
+    reportId: "review-resource-policy-report-v1",
+    endpoint: "GET /supervisor/review-resource-policy-report",
+    apiPath: "/supervisor/review-resource-policy-report",
+    story: "docs/workflows/implementation-evidence-boundary.md",
+    dashboardFetch: "getReviewResourcePolicyReport",
+  },
+  {
     reportId: "delivery-readiness-policy-report-v1",
     endpoint: "GET /supervisor/delivery-readiness-policy-report",
     apiPath: "/supervisor/delivery-readiness-policy-report",
@@ -301,6 +308,7 @@ for (const visibleEndpoint of [
   "GET /supervisor/codex-implementation-approval-report",
   "GET /supervisor/claude-review-readiness-report",
   "GET /supervisor/claude-review-approval-report",
+  "GET /supervisor/review-resource-policy-report",
   "GET /supervisor/delivery-readiness-policy-report",
 ]) {
   assertCondition(
@@ -377,6 +385,7 @@ for (const controlsAnchor of [
   'id="codex-implementation-approval-report"',
   'id="claude-review-readiness-report"',
   'id="claude-review-approval-report"',
+  'id="review-resource-policy-report"',
   'id="delivery-readiness-policy-report"',
 ]) {
   assertCondition(

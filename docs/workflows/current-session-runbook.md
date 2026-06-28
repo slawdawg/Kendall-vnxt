@@ -45,6 +45,7 @@ asks for takeover.
 `pnpm run check:governed-worker-execution-dry-run`,
 `pnpm run check:documentation-authority`,
 `pnpm run check:legacy-planning-inventory`,
+`pnpm run check:review-resource-policy`,
 `pnpm run check:verification-readiness`,
 `pnpm run check:pipeline-implementation-readiness`,
 `pnpm run check:dashboard-pipeline-boundary`,

@@ -118,6 +118,11 @@ from supervisor.api.schemas import (
     ProviderEnablementPolicyStepView,
     RemoteCleanupSyncPolicyItemView,
     RemoteCleanupSyncReadinessReportView,
+    ReviewResourcePolicyPacketEvaluationView,
+    ReviewResourcePolicyReportView,
+    ReviewResourcePolicyRouteView,
+    ReviewResourcePolicyScenarioView,
+    ReviewResourcePolicyTriggerView,
     RuntimeEvidenceExportBoundaryView,
     RuntimeEvidenceCrossCheckView,
     RuntimeEvidenceReviewManifestView,
@@ -1818,6 +1823,17 @@ class SupervisorService:
                 evidence=[
                     "Validates inventory contracts, schemas, API route, service report, metadata-only boundaries, dashboard client wiring, and story evidence stay aligned.",
                     "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
+                commandId="check-review-resource-policy",
+                label="Review resource policy drift",
+                command="pnpm run check:review-resource-policy",
+                status="required",
+                requiredFor=["review resource policy changes", "bounded review trigger changes", "Claude read-only review policy changes"],
+                evidence=[
+                    "Validates review trigger contracts, schemas, API route, service report, dashboard rendering, catalog wiring, browser assertions, and supervisor tests stay aligned.",
+                    "Runs as part of the static and full local verification commands without launching review tools.",
                 ],
             ),
             VerificationCommandView(
@@ -4606,6 +4622,15 @@ class SupervisorService:
                 summary="Defines the exact approval packet for a future bounded Claude adversarial review without launching Claude.",
                 evidenceScope=["review trigger", "context scope", "no-edit boundary", "scarcity controls", "output contract"],
                 relatedDocs=["docs/workflows/implementation-evidence-boundary.md"],
+            ),
+            SupervisorReportCatalogEntryView(
+                reportId="review-resource-policy-report-v1",
+                label="Review resource policy report",
+                endpoint="GET /supervisor/review-resource-policy-report",
+                status="active",
+                summary="Maps high-risk work signals to BMAD party mode, BMAD subagent review, or Claude read-only review without launching review tools.",
+                evidenceScope=["review triggers", "route selection policy", "metadata-only retention", "Claude read-only command boundary"],
+                relatedDocs=["docs/workflows/implementation-evidence-boundary.md", "docs/workflows/execution-authority-boundary.md"],
             ),
             SupervisorReportCatalogEntryView(
                 reportId="github-delivery-authority-report-v1",
@@ -10541,6 +10566,227 @@ class SupervisorService:
             sourceMutationApproved=False,
             scarceUseApproved=False,
             approvalBindingImplemented=False,
+        )
+
+    def get_review_resource_policy_report(self) -> ReviewResourcePolicyReportView:
+        retention_policy = "summaries_findings_paths_command_metadata_verification_policy_basis_only"
+        triggers = [
+            ReviewResourcePolicyTriggerView(
+                triggerId="high_risk_diff",
+                label="High-risk diff",
+                status="trigger",
+                summary="Broad, risky, or hard-to-revert diffs can justify multi-agent critique before delivery.",
+                evidenceSignals=["large changed-file set", "cross-module contract change", "rollback uncertainty"],
+                recommendedRoutes=["bmad_party_mode", "bmad_subagent_review", "claude_readonly_review"],
+            ),
+            ReviewResourcePolicyTriggerView(
+                triggerId="authority_expansion",
+                label="Authority expansion",
+                status="trigger",
+                summary="New or widened execution, provider, worker, GitHub, cleanup, or memory authority requires explicit review policy evidence.",
+                evidenceSignals=["new approval surface", "new allow flag", "changed stop line"],
+                recommendedRoutes=["bmad_party_mode", "claude_readonly_review"],
+            ),
+            ReviewResourcePolicyTriggerView(
+                triggerId="source_memory_boundary_change",
+                label="Source or memory boundary change",
+                status="trigger",
+                summary="Changes that affect source ownership, Obsidian-facing proposals, retained evidence, or BMAD artifact handling qualify for bounded review.",
+                evidenceSignals=["source boundary doc change", "memory proposal flow change", "retention policy change"],
+                recommendedRoutes=["bmad_subagent_review", "claude_readonly_review"],
+            ),
+            ReviewResourcePolicyTriggerView(
+                triggerId="security_sensitive_change",
+                label="Security-sensitive change",
+                status="trigger",
+                summary="Credential, secret, session, permission, or command-execution surfaces require adversarial review before trust expansion.",
+                evidenceSignals=["credential path", "shell or process execution", "permission envelope change"],
+                recommendedRoutes=["bmad_party_mode", "claude_readonly_review"],
+            ),
+            ReviewResourcePolicyTriggerView(
+                triggerId="merge_readiness_uncertainty",
+                label="Merge-readiness uncertainty",
+                status="trigger",
+                summary="Ambiguous review threads, exact-head uncertainty, or CI interpretation gaps should trigger review before merge.",
+                evidenceSignals=["unresolved review thread", "mergeStateStatus not clean", "check status ambiguity"],
+                recommendedRoutes=["bmad_subagent_review"],
+            ),
+            ReviewResourcePolicyTriggerView(
+                triggerId="major_architectural_decision",
+                label="Major architectural decision",
+                status="trigger",
+                summary="Durable architecture choices should get multi-perspective review before becoming source-owned policy.",
+                evidenceSignals=["new lifecycle model", "new state owner", "new cross-package contract"],
+                recommendedRoutes=["bmad_party_mode", "claude_readonly_review"],
+            ),
+        ]
+        routes = [
+            ReviewResourcePolicyRouteView(
+                routeId="bmad_party_mode",
+                label="BMAD party mode",
+                authorityFamily="bounded-party-mode",
+                status="allowed_by_standard_delivery_when_bounded",
+                summary="Use a small BMAD round when discovery, planning, or review benefits from multiple configured BMAD perspectives.",
+                allowedWhen=["high_risk_diff", "authority_expansion", "security_sensitive_change", "major_architectural_decision"],
+                commandPolicy=[
+                    "Use configured BMAD provider/model defaults.",
+                    "Normally two to four agents in one round per lane phase.",
+                    "Keep generated BMAD artifacts local.",
+                ],
+                retainedEvidence=["purpose", "agents used", "summarized findings", "file paths", "verification evidence", "policy basis"],
+                blockedCapabilities=["raw provider payload retention", "raw reasoning retention", "secret access", "GitHub mutation", "cleanup"],
+            ),
+            ReviewResourcePolicyRouteView(
+                routeId="bmad_subagent_review",
+                label="BMAD subagent review",
+                authorityFamily="bounded-bmad-subagent-review",
+                status="allowed_by_standard_delivery_when_bounded",
+                summary="Use focused BMAD reviewers for acceptance, edge-case, or implementation-risk checks without changing authority.",
+                allowedWhen=["high_risk_diff", "source_memory_boundary_change", "merge_readiness_uncertainty"],
+                commandPolicy=[
+                    "Scope reviewer prompts to the lane and changed files.",
+                    "Retain findings summaries only.",
+                    "Do not let review findings mutate source without the implementation lane applying and verifying fixes.",
+                ],
+                retainedEvidence=["reviewer lens", "findings summary", "path and line references", "disposition", "verification evidence"],
+                blockedCapabilities=["provider override", "raw transcript retention", "source mutation by reviewer", "GitHub mutation by reviewer"],
+            ),
+            ReviewResourcePolicyRouteView(
+                routeId="claude_readonly_review",
+                label="Claude read-only",
+                authorityFamily="external-review-readonly",
+                status="approval_required_or_policy_triggered_readonly",
+                summary="Use Claude only as a scarce bounded read-only critic for high-risk or explicitly requested review.",
+                allowedWhen=["high_risk_diff", "authority_expansion", "source_memory_boundary_change", "security_sensitive_change", "major_architectural_decision"],
+                commandPolicy=[
+                    "claude -p",
+                    "--max-budget-usd 1",
+                    "read/search tools only",
+                    "scoped prompt naming files, diff, or artifact packet",
+                    "findings and recommendations only",
+                ],
+                retainedEvidence=["purpose", "scope", "command metadata", "budget cap", "summarized findings", "file paths", "line references", "verification follow-up"],
+                blockedCapabilities=["edit tools", "shell tools", "GitHub mutation", "filesystem mutation", "secret access", "credential access", "browser profile access"],
+                budgetCap="--max-budget-usd 1",
+            ),
+        ]
+        scenarios = [
+            ReviewResourcePolicyScenarioView(
+                scenarioId="routine-low-risk-docs",
+                label="Routine low-risk docs",
+                triggerIds=[],
+                selectedRoutes=[],
+                policyBasis="No high-risk, authority, source boundary, security, merge-readiness, or architecture trigger is present.",
+                retentionSummary="No external review evidence is required.",
+                nextSafeAction="Use normal local verification and human-readable summary evidence.",
+            ),
+            ReviewResourcePolicyScenarioView(
+                scenarioId="authority-and-security-change",
+                label="Authority and security change",
+                triggerIds=["authority_expansion", "security_sensitive_change"],
+                selectedRoutes=["bmad_party_mode", "claude_readonly_review"],
+                policyBasis="Authority expansion plus credential or process-adjacent risk requires bounded multi-perspective and scarce read-only critique.",
+                retentionSummary=retention_policy,
+                nextSafeAction="Record the policy basis, run bounded review only when allowed, then apply fixes through the implementation lane.",
+            ),
+            ReviewResourcePolicyScenarioView(
+                scenarioId="merge-thread-ambiguity",
+                label="Merge thread ambiguity",
+                triggerIds=["merge_readiness_uncertainty"],
+                selectedRoutes=["bmad_subagent_review"],
+                policyBasis="Thread-aware review state or exact-head evidence is ambiguous and must be resolved before merge.",
+                retentionSummary=retention_policy,
+                nextSafeAction="Inspect review threads and exact-head checks; do not merge until ambiguity is resolved.",
+            ),
+            ReviewResourcePolicyScenarioView(
+                scenarioId="source-memory-boundary-change",
+                label="Source and memory boundary change",
+                triggerIds=["source_memory_boundary_change"],
+                selectedRoutes=["bmad_subagent_review", "claude_readonly_review"],
+                policyBasis="Source ownership, memory proposal, or retention changes can affect durable safety boundaries.",
+                retentionSummary=retention_policy,
+                nextSafeAction="Keep evidence metadata-only and route any user-facing documentation through proposal gates.",
+            ),
+        ]
+        packet_evaluations = [
+            ReviewResourcePolicyPacketEvaluationView(
+                packetId="sample-authority-security-packet",
+                packetKind="work-packet-review-policy-fixture",
+                triggerIds=["authority_expansion", "security_sensitive_change"],
+                selectedRoutes=["bmad_party_mode", "claude_readonly_review"],
+                decisionBasis=(
+                    "A packet with authority expansion plus security-sensitive command or credential-adjacent risk "
+                    "requires bounded BMAD critique and a separate Claude read-only approval packet before external review."
+                ),
+                retainedEvidence=["policy basis", "trigger ids", "selected route ids", "command metadata", "verification result references"],
+                stopLines=[
+                    "Do not launch Claude from this policy evaluation.",
+                    "Do not mutate source, GitHub, credentials, provider settings, or cleanup state from this policy evaluation.",
+                    "Do not retain raw prompts, raw provider payloads, raw reasoning, secrets, credentials, or full source copies.",
+                ],
+                readOnly=True,
+                processLaunchApproved=False,
+                sourceMutationApproved=False,
+                githubMutationApproved=False,
+                rawProviderPayloadsRetained=False,
+                rawReasoningRetained=False,
+            ),
+            ReviewResourcePolicyPacketEvaluationView(
+                packetId="sample-merge-thread-packet",
+                packetKind="work-packet-review-policy-fixture",
+                triggerIds=["merge_readiness_uncertainty"],
+                selectedRoutes=["bmad_subagent_review"],
+                decisionBasis="A packet with ambiguous review-thread or exact-head evidence routes to focused BMAD review before merge.",
+                retainedEvidence=["policy basis", "thread-aware review state", "exact-head check state", "verification result references"],
+                stopLines=[
+                    "Do not merge while review-thread or exact-head state remains ambiguous.",
+                    "Do not resolve review feedback unless the implementation lane addressed it or the operator made an explicit decision.",
+                ],
+                readOnly=True,
+                processLaunchApproved=False,
+                sourceMutationApproved=False,
+                githubMutationApproved=False,
+                rawProviderPayloadsRetained=False,
+                rawReasoningRetained=False,
+            ),
+        ]
+        return ReviewResourcePolicyReportView(
+            reportId="review-resource-policy-report-v1",
+            generatedAt=datetime.now(timezone.utc),
+            summary=(
+                "Read-only policy map for deciding when high-risk lane work should trigger BMAD party mode, "
+                "spawned BMAD/subagent review, or Claude Code read-only review. It does not launch review tools."
+            ),
+            triggers=triggers,
+            routes=routes,
+            scenarios=scenarios,
+            packetEvaluations=packet_evaluations,
+            claudeReadOnlyCommand=[
+                "claude -p",
+                "--max-budget-usd 1",
+                "--allowedTools Read,Grep",
+                "--disallowedTools Edit,Bash,WebFetch,Write,GitHub",
+                "<bounded review prompt naming approved files or diff>",
+            ],
+            retentionPolicy=retention_policy,
+            stopLines=[
+                "This report does not approve BMAD party-mode provider overrides or expanded rounds.",
+                "This report does not approve Claude process launch by itself.",
+                "This report does not approve source mutation, shell execution, GitHub mutation, merge, or cleanup.",
+                "Do not retain raw prompts, raw completions, raw provider payloads, reasoning traces, secrets, credentials, or full source copies.",
+                "Stop if the review requires more scope, more budget, credentials, provider changes, or mutation authority.",
+            ],
+            nextSafeActions=[
+                "Use the selected scenario to record why review was used or skipped.",
+                "For Claude, use the separate Claude review approval packet before any external review attempt.",
+                "Apply any review fixes through the implementation lane and rerun verification before delivery.",
+            ],
+            readOnly=True,
+            processLaunchApproved=False,
+            sourceMutationApproved=False,
+            githubMutationApproved=False,
+            rawProviderPayloadsRetained=False,
+            rawReasoningRetained=False,
         )
 
     def get_github_delivery_authority_report(self) -> GitHubDeliveryAuthorityReportView:

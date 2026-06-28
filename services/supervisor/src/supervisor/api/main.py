@@ -813,6 +813,11 @@ async def get_claude_review_approval_report():
     return ApiEnvelope(data=service.get_claude_review_approval_report())
 
 
+@app.get("/supervisor/review-resource-policy-report", response_model=ApiEnvelope)
+async def get_review_resource_policy_report():
+    return ApiEnvelope(data=service.get_review_resource_policy_report())
+
+
 @app.get("/supervisor/github-delivery-authority-report", response_model=ApiEnvelope)
 async def get_github_delivery_authority_report():
     return ApiEnvelope(data=service.get_github_delivery_authority_report())

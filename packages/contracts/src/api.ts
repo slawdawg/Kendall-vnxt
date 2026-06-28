@@ -1446,6 +1446,74 @@ export interface ClaudeReviewApprovalReportView {
   approvalBindingImplemented: boolean;
 }
 
+export interface ReviewResourcePolicyTriggerView {
+  triggerId: string;
+  label: string;
+  status: string;
+  summary: string;
+  evidenceSignals: string[];
+  recommendedRoutes: string[];
+}
+
+export interface ReviewResourcePolicyRouteView {
+  routeId: string;
+  label: string;
+  authorityFamily: string;
+  status: string;
+  summary: string;
+  allowedWhen: string[];
+  commandPolicy: string[];
+  retainedEvidence: string[];
+  blockedCapabilities: string[];
+  budgetCap?: string | null;
+}
+
+export interface ReviewResourcePolicyScenarioView {
+  scenarioId: string;
+  label: string;
+  triggerIds: string[];
+  selectedRoutes: string[];
+  policyBasis: string;
+  retentionSummary: string;
+  nextSafeAction: string;
+}
+
+export interface ReviewResourcePolicyPacketEvaluationView {
+  packetId: string;
+  packetKind: string;
+  triggerIds: string[];
+  selectedRoutes: string[];
+  decisionBasis: string;
+  retainedEvidence: string[];
+  stopLines: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  sourceMutationApproved: boolean;
+  githubMutationApproved: boolean;
+  rawProviderPayloadsRetained: boolean;
+  rawReasoningRetained: boolean;
+}
+
+export interface ReviewResourcePolicyReportView {
+  reportId: string;
+  generatedAt: string;
+  summary: string;
+  triggers: ReviewResourcePolicyTriggerView[];
+  routes: ReviewResourcePolicyRouteView[];
+  scenarios: ReviewResourcePolicyScenarioView[];
+  packetEvaluations: ReviewResourcePolicyPacketEvaluationView[];
+  claudeReadOnlyCommand: string[];
+  retentionPolicy: string;
+  stopLines: string[];
+  nextSafeActions: string[];
+  readOnly: boolean;
+  processLaunchApproved: boolean;
+  sourceMutationApproved: boolean;
+  githubMutationApproved: boolean;
+  rawProviderPayloadsRetained: boolean;
+  rawReasoningRetained: boolean;
+}
+
 export interface GitHubDeliveryAuthorityStepView {
   stepId: string;
   label: string;

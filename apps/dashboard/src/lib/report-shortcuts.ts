@@ -29,6 +29,7 @@ export const reportAnchorByEndpoint: Record<string, string> = {
   "GET /supervisor/codex-implementation-approval-report": "#codex-implementation-approval-report",
   "GET /supervisor/claude-review-readiness-report": "#claude-review-readiness-report",
   "GET /supervisor/claude-review-approval-report": "#claude-review-approval-report",
+  "GET /supervisor/review-resource-policy-report": "#review-resource-policy-report",
   "GET /supervisor/delivery-readiness-policy-report": "#delivery-readiness-policy-report",
   "GET /supervisor/execution-state-boundary": "#execution-readiness-report",
   "GET /supervisor/disabled-provider-proofs": "#execution-readiness-report",
