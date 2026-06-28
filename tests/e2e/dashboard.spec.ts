@@ -2798,14 +2798,19 @@ test.describe("dashboard workflow coverage", () => {
     await expect(exportPanel.getByText("Review navigation is not execution-authority approval.")).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Related reports" })).toBeVisible();
     await expect(exportPanel.getByText("GET /supervisor/execution-readiness-report", { exact: true })).toBeVisible();
-    await expect(exportPanel.getByRole("link", { name: "GET /supervisor/execution-readiness-report" })).toHaveAttribute(
+    await expect(exportPanel.getByRole("link", { name: /GET \/supervisor\/execution-readiness-report/ })).toHaveAttribute(
       "href",
       "/controls#execution-readiness-report",
     );
-    await expect(exportPanel.getByRole("link", { name: "GET /supervisor/safe-development-backlog" })).toHaveAttribute(
+    await expect(exportPanel.getByRole("link", { name: /GET \/supervisor\/safe-development-backlog/ })).toHaveAttribute(
       "href",
       "/controls#safe-development-backlog",
     );
+    await expect(exportPanel.getByRole("link", { name: /GET \/supervisor\/runtime-evidence-review-report/ })).toHaveAttribute(
+      "href",
+      "/controls#runtime-evidence-review-report",
+    );
+    await expect(exportPanel.getByText("/controls#runtime-evidence-review-report", { exact: true })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Review manifest" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Review checklist" })).toBeVisible();
     await expect(exportPanel.getByRole("heading", { name: "Retention notes" })).toBeVisible();

@@ -436,6 +436,7 @@ for (const panelText of [
   "crossCheck.relatedDoc",
   "item.stopLines",
   "reportShortcutHref(report)",
+  "break-all font-mono text-[11px] text-[var(--accent)]",
   "Subscription launch evidence",
   "exportView.subscriptionLaunch.status",
   "exportView.subscriptionLaunch.outputArtifactReferences",
@@ -505,7 +506,7 @@ for (const panelText of ["Cross-check path", "Documentation authority", "Confirm
   assertCondition(detailSpec.includes(panelText), `Dashboard e2e must assert runtime evidence cross-check ${panelText}`, failures);
 }
 
-for (const panelText of ["/controls#execution-readiness-report", "/controls#safe-development-backlog"]) {
+for (const panelText of ["/controls#execution-readiness-report", "/controls#safe-development-backlog", "/controls#runtime-evidence-review-report"]) {
   assertCondition(detailSpec.includes(panelText), `Dashboard detail e2e must assert related report link ${panelText}`, failures);
 }
 

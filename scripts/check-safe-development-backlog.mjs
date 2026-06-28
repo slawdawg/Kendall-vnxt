@@ -61,6 +61,14 @@ const githubDeliveryItemMatch = serviceSource.match(
   /SafeDevelopmentBacklogItemView\(\s*itemId="github-delivery-hygiene"[\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/,
 );
 const githubDeliveryItemSource = githubDeliveryItemMatch?.[0] ?? "";
+const readOnlyEvidenceItemMatch = serviceSource.match(
+  /SafeDevelopmentBacklogItemView\(\s*itemId="read-only-evidence-polish"[\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/,
+);
+const readOnlyEvidenceItemSource = readOnlyEvidenceItemMatch?.[0] ?? "";
+const readOnlyEvidenceFollowupItemMatch = serviceSource.match(
+  /SafeDevelopmentBacklogItemView\(\s*itemId="read-only-evidence-polish-followup"[\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/,
+);
+const readOnlyEvidenceFollowupItemSource = readOnlyEvidenceFollowupItemMatch?.[0] ?? "";
 const workerQueueItemMatch = serviceSource.match(
   /SafeDevelopmentBacklogItemView\(\s*itemId="worker-backlog-queue-refresh"[\s\S]*?\n\s*\)(?=,\n\s*SafeDevelopmentBacklogItemView\(|,?\n\s*\])/,
 );
@@ -302,6 +310,28 @@ assertCondition(
     workerQueueItemSource.includes("do not requeue worker-backlog-queue-refresh") &&
     workerQueueItemSource.includes("claim-next should advance to report-catalog-shortcut-refresh"),
   "Worker backlog queue refresh must be closed completion evidence and must not expose a dispatchable next lane",
+  failures,
+);
+assertExactList(
+  extractPythonStringList(readOnlyEvidenceItemSource, "relatedDocs"),
+  ["docs/workflows/implementation-evidence-boundary.md"],
+  "Read-only evidence completed item related docs",
+);
+for (const expectedText of [
+  'itemId="read-only-evidence-polish-followup"',
+  '"GET /supervisor/runtime-evidence-review-report"',
+  '"/controls#runtime-evidence-review-report"',
+  "explicit related-report shortcut targets",
+]) {
+  assertCondition(
+    readOnlyEvidenceFollowupItemSource.includes(expectedText),
+    `Read-only evidence follow-up item must include ${expectedText}`,
+    failures,
+  );
+}
+assertCondition(
+  !readOnlyEvidenceFollowupItemSource.includes('"/work-items/{id}#runtime-evidence-export"'),
+  "Read-only evidence follow-up dashboard anchors must not include templated work-item routes",
   failures,
 );
 

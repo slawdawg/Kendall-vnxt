@@ -2670,16 +2670,19 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert evidence_item["nextLane"] is None
     assert "do not requeue read-only-evidence-polish" in evidence_item["nextAction"]
     assert "/controls#supervisor-report-catalog" in evidence_item["dashboardAnchors"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
-    assert "docs/workflows/implementation-evidence-boundary.md" in evidence_item["relatedDocs"]
+    assert evidence_item["relatedDocs"] == ["docs/workflows/implementation-evidence-boundary.md"]
+    assert len(evidence_item["relatedDocs"]) == len(set(evidence_item["relatedDocs"]))
     evidence_followup = next(item for item in report["items"] if item["itemId"] == "read-only-evidence-polish-followup")
     assert evidence_followup["status"] == "ready"
     assert evidence_followup["recommendedSliceSize"] == "medium_to_large"
     assert evidence_followup["nextLane"]["laneSlug"] == "read-only-evidence-polish-followup"
     assert evidence_followup["nextLane"]["branchName"] == "codex/read-only-evidence-polish-followup"
     assert "distinct successor lane" in evidence_followup["nextAction"]
+    assert "GET /supervisor/runtime-evidence-review-report" in evidence_followup["relatedReports"]
     assert "GET /supervisor/runner-assignment-status-report" in evidence_followup["relatedReports"]
+    assert "/controls#runtime-evidence-review-report" in evidence_followup["dashboardAnchors"]
+    assert "/work-items/{id}#runtime-evidence-export" not in evidence_followup["dashboardAnchors"]
+    assert any("explicit related-report shortcut targets" in evidence for evidence in evidence_followup["evidence"])
     worker_queue_item = next(item for item in report["items"] if item["itemId"] == "worker-backlog-queue-refresh")
     assert worker_queue_item["priority"] == "P1"
     assert worker_queue_item["status"] == "closed"
