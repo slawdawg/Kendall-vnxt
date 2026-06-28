@@ -1382,6 +1382,19 @@ class DocumentationAuthorityBlockedStoryView(BaseModel):
     status: str
 
 
+class DocumentationAuthorityLegacyArtifactDispositionView(BaseModel):
+    artifactId: str
+    label: str
+    currentLocation: str
+    recommendedDisposition: str
+    retentionPolicy: str
+    sourceOwnedReplacements: list[str] = Field(default_factory=list)
+    operatorActions: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    sourceMutationAllowed: bool = False
+    rawPayloadRetained: bool = False
+
+
 class DocumentationAuthorityReportView(BaseModel):
     reportId: str
     generatedAt: datetime
@@ -1389,6 +1402,7 @@ class DocumentationAuthorityReportView(BaseModel):
     indexes: list[DocumentationAuthorityDocumentView]
     approvalCheckpoint: DocumentationAuthorityDocumentView
     blockedStories: list[DocumentationAuthorityBlockedStoryView]
+    legacyArtifactDispositions: list[DocumentationAuthorityLegacyArtifactDispositionView] = Field(default_factory=list)
     driftChecks: list[ProviderEnablementPolicyStepView]
     nextSafeActions: list[str]
     executionAuthorityApproved: bool = False

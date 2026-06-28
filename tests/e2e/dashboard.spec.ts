@@ -1403,6 +1403,12 @@ test.describe("dashboard workflow coverage", () => {
     const documentationPanel = page.locator("section").filter({ hasText: "Indexes and approval stop lines" }).first();
     await expect(documentationPanel.getByText("Documentation authority", { exact: true })).toBeVisible();
     await expect(documentationPanel.getByText("Indexes and approval stop lines")).toBeVisible();
+    await expect(documentationPanel.getByText("Legacy artifact dispositions")).toBeVisible();
+    await expect(documentationPanel.getByText("Local BMAD story files")).toBeVisible();
+    await expect(documentationPanel.getByText("Leave raw story bodies in local BMAD output")).toBeVisible();
+    await expect(documentationPanel.getByText("Never retain raw prompts")).toBeVisible();
+    await expect(documentationPanel.getByText("source mutation blocked").first()).toBeVisible();
+    await expect(documentationPanel.getByText("raw payload not retained").first()).toBeVisible();
     await expect(documentationPanel.getByText("Blocked authority stories")).toBeVisible();
     await expect(documentationPanel.getByText("2 pending approval")).toBeVisible();
     await expect(documentationPanel.getByText("docs/architecture/index.md", { exact: true })).toBeVisible();

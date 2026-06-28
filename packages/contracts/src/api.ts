@@ -800,6 +800,19 @@ export interface DocumentationAuthorityBlockedStoryView {
   status: string;
 }
 
+export interface DocumentationAuthorityLegacyArtifactDispositionView {
+  artifactId: string;
+  label: string;
+  currentLocation: string;
+  recommendedDisposition: string;
+  retentionPolicy: string;
+  sourceOwnedReplacements: string[];
+  operatorActions: string[];
+  evidence: string[];
+  sourceMutationAllowed: boolean;
+  rawPayloadRetained: boolean;
+}
+
 export interface DocumentationAuthorityReportView {
   reportId: string;
   generatedAt: string;
@@ -807,6 +820,7 @@ export interface DocumentationAuthorityReportView {
   indexes: DocumentationAuthorityDocumentView[];
   approvalCheckpoint: DocumentationAuthorityDocumentView;
   blockedStories: DocumentationAuthorityBlockedStoryView[];
+  legacyArtifactDispositions: DocumentationAuthorityLegacyArtifactDispositionView[];
   driftChecks: ProviderEnablementPolicyStepView[];
   nextSafeActions: string[];
   executionAuthorityApproved: boolean;

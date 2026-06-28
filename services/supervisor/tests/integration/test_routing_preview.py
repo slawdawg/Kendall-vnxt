@@ -1567,9 +1567,40 @@ def test_documentation_authority_report_surfaces_indexes_and_blocked_stories_wit
     assert report["approvalCheckpoint"]["path"].endswith("kendall-vnxt-execution-authority-approval-checkpoints-2026-06-08.md")
     assert {story["storyId"] for story in report["blockedStories"]} == {"4.4", "5.5"}
     assert all(story["status"] == "blocked_pending_explicit_approval" for story in report["blockedStories"])
+    assert {disposition["artifactId"] for disposition in report["legacyArtifactDispositions"]} == {
+        "local-bmad-story-files",
+        "local-sprint-status",
+        "planning-research-packets",
+    }
+    local_story_disposition = next(
+        disposition
+        for disposition in report["legacyArtifactDispositions"]
+        if disposition["artifactId"] == "local-bmad-story-files"
+    )
+    assert local_story_disposition["recommendedDisposition"] == "keep_local_only"
+    assert local_story_disposition["sourceMutationAllowed"] is False
+    assert local_story_disposition["rawPayloadRetained"] is False
+    assert "metadata_only" in local_story_disposition["retentionPolicy"]
+    assert any("Candidate Work" in action for action in local_story_disposition["operatorActions"])
+    assert any("raw story bodies" in action for action in local_story_disposition["operatorActions"])
+    assert all("_bmad-output" not in doc for doc in local_story_disposition["sourceOwnedReplacements"])
+    assert all(
+        disposition["sourceMutationAllowed"] is False and disposition["rawPayloadRetained"] is False
+        for disposition in report["legacyArtifactDispositions"]
+    )
+    legacy_disposition_check = next(
+        check for check in report["driftChecks"] if check["stepId"] == "legacy-artifact-dispositions"
+    )
+    assert legacy_disposition_check["status"] == "passed"
+    assert {
+        "docs/workflows/implementation-evidence-boundary.md",
+        "docs/workflows/planning-doc-clean-install-boundary.md",
+        "docs/workflows/generated-agent-artifacts.md",
+    }.issubset(set(legacy_disposition_check["requiredEvidence"]))
     assert {check["stepId"] for check in report["driftChecks"]} == {
         "required-documents-present",
         "blocked-story-count",
+        "legacy-artifact-dispositions",
         "check-docs-command",
         "check-documentation-authority-command",
     }
