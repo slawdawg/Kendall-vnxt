@@ -751,6 +751,28 @@ try {
     }
   });
 
+  test("verify-pr-gates records exact-head check and review-thread evidence without merge mutation", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const gateCommand = source.match(/function verifyPrGates[\s\S]*?function buildPrGateEvidence/);
+    assert(gateCommand, "verifyPrGates source not found");
+    assert(gateCommand[0].includes("manifest.pr_gate_evidence = lockedPacket"), "verify-pr-gates must persist the gate packet");
+    assert(gateCommand[0].includes("manifest.pr_review_state_checked_at = lockedPacket.checkedAt"), "review-thread freshness must be recorded");
+    assert(gateCommand[0].includes("manifest.pr_checks_state_checked_at = lockedPacket.checkedAt"), "check freshness must be recorded");
+    assert(gateCommand[0].includes("manifest.pr_exact_head_checked_at = lockedPacket.checkedAt"), "exact-head freshness must be recorded");
+    assert(!gateCommand[0].includes("gh\", [\"pr\", \"merge\""), "verify-pr-gates must not merge");
+
+    const evidence = source.match(/function buildPrGateEvidence[\s\S]*?function prGateHeadState/);
+    assert(evidence, "buildPrGateEvidence source not found");
+    assert(evidence[0].includes('"exact PR head matches local delivery head"'), "gate evidence must require exact-head proof");
+    assert(evidence[0].includes('"thread-aware review query returned no unresolved non-outdated threads"'), "gate evidence must require thread-aware review proof");
+    assert(evidence[0].includes('"all reported checks completed successfully"'), "gate evidence must require check proof");
+    assert(evidence[0].includes("metadataOnly: true"), "gate evidence must be metadata-only");
+
+    const packetBlock = source.match(/function buildLaneEvidencePacket[\s\S]*?function shapePrDeliveryEvidence/);
+    assert(packetBlock, "lane evidence packet source not found");
+    assert(packetBlock[0].includes("pr_gate: options.prGateEvidence || null"), "lane packet must attach PR gate evidence");
+  });
+
   test("anti-churn evidence packet keeps proposals local and source edits recoverable", () => {
     const source = readFileSync(scriptPath, "utf8");
     const proposalBlock = source.match(/function shapeProposalEvidence[\s\S]*?function shapeNoOpReasonEvidence/);
@@ -4253,6 +4275,151 @@ try {
     }
   });
 
+  test("verify-pr-gates records clean exact-head checks and review-thread evidence", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("APPLY: verify-pr-gates"), result.stdout || result.stderr);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(manifest.pr_gate_evidence?.status === "passed", `gate status is ${manifest.pr_gate_evidence?.status}`);
+      assert(manifest.pr_gate_evidence.lowRiskReady === true, "gate evidence did not mark low-risk ready");
+      assert(manifest.pr_gate_evidence.expectedHeadSha === manifest.pr_gate_evidence.pr.headRefOid, "gate evidence did not prove exact head");
+      assert(manifest.pr_gate_evidence.checks.total === 1, "gate evidence missing check rollup");
+      assert(manifest.pr_gate_evidence.checks.passed.length === 1, "gate evidence did not classify passed check");
+      assert(manifest.pr_gate_evidence.reviewThreads.unresolvedNonOutdatedCount === 0, "gate evidence did not prove resolved review threads");
+      assert(manifest.pr_review_state_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing review-thread freshness timestamp");
+      assert(manifest.pr_checks_state_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing checks freshness timestamp");
+      assert(manifest.pr_exact_head_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing exact-head freshness timestamp");
+      assert(manifest.lane_evidence_packet?.pr_gate?.status === "passed", "lane packet missing PR gate evidence");
+      assert(
+        manifest.events.some((event) => event.type === "pr_gate_evidence_recorded"),
+        "manifest missing PR gate event",
+      );
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates fails closed on unresolved non-outdated review threads", () => {
+    const fixture = createFinishPrExistingCommitFixture({
+      existingPr: true,
+      reviewThreads: [
+        {
+          id: "RT_unresolved",
+          isResolved: false,
+          isOutdated: false,
+          comments: { nodes: [{ url: "https://example.test/pull/456#discussion_r3" }] },
+        },
+      ],
+    });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code !== 0, "verify-pr-gates unexpectedly passed with unresolved review thread");
+      assert(result.stderr.includes("Unresolved non-outdated review threads: 1"), result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(!manifest.pr_gate_evidence, "manifest must not record blocked gate evidence");
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
+  test("verify-pr-gates fails closed without positive base merge review and check evidence", () => {
+    for (const scenario of [
+      {
+        name: "missing-base",
+        options: { existingPr: true, baseRefName: null },
+        expected: "PR baseRefName missing",
+      },
+      {
+        name: "missing-merge-state",
+        options: { existingPr: true, mergeStateStatus: null },
+        expected: "PR mergeStateStatus missing",
+      },
+      {
+        name: "requested-changes",
+        options: { existingPr: true, reviewDecision: "CHANGES_REQUESTED" },
+        expected: "PR reviewDecision is CHANGES_REQUESTED",
+      },
+      {
+        name: "completed-without-conclusion",
+        options: {
+          existingPr: true,
+          statusCheckRollup: [{ name: "unit", status: "COMPLETED", conclusion: null }],
+        },
+        expected: "Failing checks: unit",
+      },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture(scenario.options);
+      try {
+        const result = runFixtureScript(
+          fixture,
+          ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+
+        assert(result.code !== 0, `${scenario.name} unexpectedly passed`);
+        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        assert(!manifest.pr_gate_evidence, `${scenario.name} must not record blocked gate evidence`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
+  test("verify-pr-gates fails closed on stale local head and incomplete review-thread evidence", () => {
+    for (const scenario of [
+      {
+        name: "stale-local-head",
+        mutate: (fixture) => {
+          commitFile(fixture.worktree, "late-change.txt", "late\n", "late local commit");
+        },
+        options: { existingPr: true },
+        expected: "does not match recorded delivery head",
+      },
+      {
+        name: "graphql-errors",
+        options: { existingPr: true, reviewThreadErrors: [{ message: "partial review thread timeout" }] },
+        expected: "Review-thread query returned 1 GraphQL error(s)",
+      },
+      {
+        name: "thread-pagination",
+        options: { existingPr: true, reviewThreadsHasNextPage: true },
+        expected: "Review-thread query returned additional pages",
+      },
+    ]) {
+      const fixture = createFinishPrExistingCommitFixture(scenario.options);
+      try {
+        if (scenario.mutate) {
+          scenario.mutate(fixture);
+        }
+        const result = runFixtureScript(
+          fixture,
+          ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+          { cwd: fixture.worktree, env: fixture.env },
+        );
+
+        assert(result.code !== 0, `${scenario.name} unexpectedly passed`);
+        assert(result.stderr.includes(scenario.expected), result.stderr || result.stdout);
+        const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+        assert(!manifest.pr_gate_evidence, `${scenario.name} must not record blocked gate evidence`);
+      } finally {
+        cleanupFinishPrExistingCommitFixture(fixture);
+      }
+    }
+  });
+
   test("finish-pr rejects unparseable PR creation output before recording delivery evidence", () => {
     const fixture = createFinishPrExistingCommitFixture({ invalidCreateOutput: true });
     try {
@@ -4552,6 +4719,56 @@ function createFinishPrExistingCommitFixture(options = {}) {
   runGit(worktree, ["push", "-q", "-u", "origin", branch]);
   const branchHead = runGit(worktree, ["rev-parse", "HEAD"]).stdout;
 
+  const prViewPayload = {
+    number: 456,
+    url: "https://example.test/pull/456",
+    mergedAt: null,
+    state: "OPEN",
+    baseRefName: Object.hasOwn(options, "baseRefName") ? options.baseRefName : "main",
+    headRefOid: branchHead,
+    mergeStateStatus: Object.hasOwn(options, "mergeStateStatus") ? options.mergeStateStatus : "CLEAN",
+    isDraft: Boolean(options.isDraft),
+    reviewDecision: options.reviewDecision || "APPROVED",
+    statusCheckRollup: options.statusCheckRollup || [
+      {
+        name: "unit",
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+        detailsUrl: "https://example.test/checks/unit",
+      },
+    ],
+  };
+  const reviewThreadsPayload = {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: options.reviewThreads || [
+              {
+                id: "RT_resolved",
+                isResolved: true,
+                isOutdated: false,
+                comments: { nodes: [{ url: "https://example.test/pull/456#discussion_r1" }] },
+              },
+              {
+                id: "RT_outdated",
+                isResolved: false,
+                isOutdated: true,
+                comments: { nodes: [{ url: "https://example.test/pull/456#discussion_r2" }] },
+              },
+            ],
+            pageInfo: {
+              hasNextPage: Boolean(options.reviewThreadsHasNextPage),
+              endCursor: options.reviewThreadsHasNextPage ? "cursor-1" : null,
+            },
+          },
+        },
+      },
+    },
+  };
+  if (options.reviewThreadErrors) {
+    reviewThreadsPayload.errors = options.reviewThreadErrors;
+  }
   const fakeGh = join(fakeBin, "gh");
   writeFileSync(
     fakeGh,
@@ -4560,11 +4777,13 @@ function createFinishPrExistingCommitFixture(options = {}) {
       "const args = process.argv.slice(2);",
       "if (args[0] === '--version') { console.log('gh version test'); process.exit(0); }",
       options.existingPr
-        ? `if (args[0] === 'pr' && args[1] === 'view') { console.log(JSON.stringify({ number: 456, url: 'https://example.test/pull/456', mergedAt: null, state: 'OPEN', baseRefName: 'main', headRefOid: '${branchHead}' })); process.exit(0); }`
+        ? `if (args[0] === 'pr' && args[1] === 'view') { console.log(${JSON.stringify(JSON.stringify(prViewPayload))}); process.exit(0); }`
         : "if (args[0] === 'pr' && args[1] === 'view') { process.exit(1); }",
       options.invalidCreateOutput
         ? "if (args[0] === 'pr' && args[1] === 'create') { console.log('created pull request without url'); process.exit(0); }"
         : "if (args[0] === 'pr' && args[1] === 'create') { console.log('https://example.test/pull/456'); process.exit(0); }",
+      "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ owner: { login: 'slaw-dawg' }, name: 'fixture' })); process.exit(0); }",
+      `if (args[0] === 'api' && args[1] === 'graphql') { console.log(${JSON.stringify(JSON.stringify(reviewThreadsPayload))}); process.exit(0); }`,
       "console.error(`unexpected gh args: ${args.join(' ')}`);",
       "process.exit(1);",
       "",
@@ -4590,6 +4809,7 @@ function createFinishPrExistingCommitFixture(options = {}) {
       status: "active",
       mode: "pr",
       owner: "runner-a",
+      pr_delivery_head_sha: branchHead,
       events: [],
     }, null, 2)}\n`,
   );

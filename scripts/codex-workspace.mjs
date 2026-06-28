@@ -67,6 +67,9 @@ try {
     case "finish-pr":
       finishPr(commandArgs);
       break;
+    case "verify-pr-gates":
+      verifyPrGates(commandArgs);
+      break;
     case "cleanup-merged":
       cleanupMerged(commandArgs);
       break;
@@ -111,6 +114,7 @@ Commands:
   dispatch-next             Claim or resume one safe lane and record handoff evidence.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
+  verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-current           Remove the current clean worktree after its PR is merged.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
@@ -202,6 +206,10 @@ finish-pr options:
   --no-verify               Skip verification command.
   --title <text>            PR title. Defaults to task title.
   --body <text>             PR body.
+
+verify-pr-gates options:
+  --apply                   Record gate evidence in the manifest. Without this, gate check is dry-run.
+  --summary-json            Without --apply, print a compact JSON gate packet.
 
 cleanup-merged options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
@@ -1902,6 +1910,335 @@ function finishPr(argv) {
   console.log(`PR: ${manifest.pr_url}`);
 }
 
+function verifyPrGates(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (options.summaryJson && options.apply) {
+    throw new Error("verify-pr-gates --summary-json is only supported without --apply.");
+  }
+
+  const state = workspaceState(options);
+  const manifestRecord = findManifest(state, positional.join(" "), {
+    preferCurrentWorktree: true,
+  });
+  const { manifest, path: manifestPath } = manifestRecord;
+  assertLaneOwner(manifest, options);
+  requireGh("verify-pr-gates");
+  assertSafeBranch(manifest.branch);
+  assertWorktreeExists(manifest);
+  assertCurrentBranch(manifest);
+  reconcileManifest(manifest, { refreshPr: true });
+
+  const packet = buildPrGateEvidence(manifest);
+  if (options.summaryJson) {
+    console.log(JSON.stringify(packet, null, 2));
+    return;
+  }
+
+  if (!packet.lowRiskReady) {
+    printBlocked("verify-pr-gates", renderPrGateEvidence(packet));
+    throw new Error(`PR gate evidence is not low-risk ready: ${packet.blockers.join("; ")}`);
+  }
+
+  if (!options.apply) {
+    printPlan("verify-pr-gates", renderPrGateEvidence(packet));
+    console.log("Add --apply to record PR gate evidence in the manifest.");
+    return;
+  }
+
+  withManifestLock(state, manifest.task_id, () => {
+    const lockedManifest = readManifest(manifestPath);
+    validateManifest(lockedManifest, manifestPath);
+    assertLaneOwner(lockedManifest, options);
+    claimLaneOwner(lockedManifest, options);
+    Object.assign(manifest, lockedManifest);
+    assertCurrentBranch(manifest);
+    const lockedPacket = buildPrGateEvidence(manifest);
+    if (!lockedPacket.lowRiskReady) {
+      printBlocked("verify-pr-gates", renderPrGateEvidence(lockedPacket));
+      throw new Error(`PR gate evidence changed under lock: ${lockedPacket.blockers.join("; ")}`);
+    }
+    manifest.pr_gate_evidence = lockedPacket;
+    manifest.pr_review_state_checked_at = lockedPacket.checkedAt;
+    manifest.pr_checks_state_checked_at = lockedPacket.checkedAt;
+    manifest.pr_exact_head_checked_at = lockedPacket.checkedAt;
+    manifest.pr_delivery_head_sha = lockedPacket.expectedHeadSha;
+    manifest.pr_url = lockedPacket.pr.url || manifest.pr_url;
+    manifest.pr_number = lockedPacket.pr.number || manifest.pr_number;
+    manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, manifest.anti_churn_finalization || {}, {
+      worktreeStatus: parseStatus(manifest.worktree_path),
+      prDeliveryEvidence: manifest.pr_delivery_evidence || null,
+      prGateEvidence: lockedPacket,
+    });
+    manifest.updated_at = lockedPacket.checkedAt;
+    appendTaskEvent(manifest, "pr_gate_evidence_recorded", `PR ${lockedPacket.pr.number} ${lockedPacket.expectedHeadSha}`);
+    writeManifest(manifestPath, manifest);
+  });
+
+  printApplied("verify-pr-gates", renderPrGateEvidence(manifest.pr_gate_evidence));
+}
+
+function buildPrGateEvidence(manifest) {
+  const checkedAt = new Date().toISOString();
+  const pr = prViewForGates(manifest);
+  if (!pr) {
+    throw new Error("Could not load PR state for gate evidence.");
+  }
+  const headState = prGateHeadState(manifest);
+  const repository = githubRepository(manifest);
+  const reviewThreadState = fetchReviewThreadState(manifest, repository, pr.number);
+  const checks = normalizeStatusCheckRollup(pr.statusCheckRollup);
+  const blockers = prGateBlockers(manifest, pr, {
+    headState,
+    checks,
+    reviewThreadState,
+  });
+
+  return {
+    schemaVersion: 1,
+    status: blockers.length ? "blocked" : "passed",
+    lowRiskReady: blockers.length === 0,
+    checkedAt,
+    authorityProfile: "standard-delivery",
+    taskId: manifest.task_id,
+    branch: manifest.branch,
+    baseBranch: manifest.base_branch || null,
+    expectedHeadSha: headState.expectedHeadSha,
+    localHeadSha: headState.localHeadSha,
+    pr: {
+      number: pr.number || manifest.pr_number || null,
+      url: pr.url || manifest.pr_url || null,
+      state: pr.state || null,
+      isDraft: Boolean(pr.isDraft),
+      mergedAt: pr.mergedAt || null,
+      baseRefName: pr.baseRefName || null,
+      headRefOid: pr.headRefOid || null,
+      mergeStateStatus: pr.mergeStateStatus || null,
+      reviewDecision: pr.reviewDecision || null,
+    },
+    checks,
+    reviewThreads: reviewThreadState,
+    blockers,
+    requiredGates: [
+      "PR open and non-draft",
+      "expected base branch",
+      "exact PR head matches local delivery head",
+      "GitHub merge state clean",
+      "all reported checks completed successfully",
+      "thread-aware review query returned no unresolved non-outdated threads",
+    ],
+    stopLines: [
+      "metadata-only evidence; no merge",
+      "no review-thread mutation",
+      "no check bypass",
+      "no cleanup",
+    ],
+    recoveryPath: "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates before exact-head merge.",
+    metadataOnly: true,
+  };
+}
+
+function prGateHeadState(manifest) {
+  const result = git(["rev-parse", "HEAD"], { cwd: manifest.worktree_path });
+  if (result.code !== 0 || !result.stdout.trim()) {
+    throw new Error("Could not resolve local HEAD for PR gate evidence.");
+  }
+  const localHeadSha = result.stdout.trim();
+  const recorded = String(manifest.pr_delivery_head_sha || "").trim();
+  return {
+    expectedHeadSha: recorded || localHeadSha,
+    localHeadSha,
+    recordedHeadSha: recorded || null,
+    localMatchesExpected: !recorded || recorded === localHeadSha,
+  };
+}
+
+function prGateBlockers(manifest, pr, context) {
+  const blockers = [];
+  if (!pr.number) {
+    blockers.push("PR number missing");
+  }
+  if (pr.state !== "OPEN") {
+    blockers.push(`PR state is ${pr.state || "unknown"}, expected OPEN`);
+  }
+  if (pr.isDraft) {
+    blockers.push("PR is draft");
+  }
+  if (pr.mergedAt) {
+    blockers.push("PR is already merged");
+  }
+  if (!pr.baseRefName) {
+    blockers.push("PR baseRefName missing");
+  } else if (pr.baseRefName !== manifest.base_branch) {
+    blockers.push(`PR base is ${pr.baseRefName}, expected ${manifest.base_branch}`);
+  }
+  if (!pr.headRefOid) {
+    blockers.push("PR headRefOid missing");
+  } else if (pr.headRefOid !== context.headState.expectedHeadSha) {
+    blockers.push(`PR head ${pr.headRefOid} does not match expected head ${context.headState.expectedHeadSha}`);
+  }
+  if (!context.headState.localMatchesExpected) {
+    blockers.push(`Local HEAD ${context.headState.localHeadSha} does not match recorded delivery head ${context.headState.expectedHeadSha}`);
+  }
+  if (!pr.mergeStateStatus) {
+    blockers.push("PR mergeStateStatus missing");
+  } else if (pr.mergeStateStatus !== "CLEAN") {
+    blockers.push(`PR mergeStateStatus is ${pr.mergeStateStatus}`);
+  }
+  if (pr.reviewDecision === "CHANGES_REQUESTED") {
+    blockers.push("PR reviewDecision is CHANGES_REQUESTED");
+  }
+  if (context.checks.total === 0) {
+    blockers.push("No status checks reported for exact head");
+  }
+  if (context.checks.pending.length) {
+    blockers.push(`Pending checks: ${context.checks.pending.map((check) => check.name).join(", ")}`);
+  }
+  if (context.checks.failing.length) {
+    blockers.push(`Failing checks: ${context.checks.failing.map((check) => check.name).join(", ")}`);
+  }
+  if (!context.reviewThreadState.querySucceeded) {
+    blockers.push("Review-thread query did not return thread-aware evidence");
+  }
+  if (context.reviewThreadState.errorCount > 0) {
+    blockers.push(`Review-thread query returned ${context.reviewThreadState.errorCount} GraphQL error(s)`);
+  }
+  if (context.reviewThreadState.hasNextPage) {
+    blockers.push("Review-thread query returned additional pages; complete thread evidence is required");
+  }
+  if (context.reviewThreadState.unresolvedNonOutdatedCount > 0) {
+    blockers.push(`Unresolved non-outdated review threads: ${context.reviewThreadState.unresolvedNonOutdatedCount}`);
+  }
+  return blockers;
+}
+
+function renderPrGateEvidence(packet = {}) {
+  return [
+    `PR ${packet.pr?.number || "unknown"}`,
+    `head ${packet.pr?.headRefOid || "unknown"}`,
+    `expected ${packet.expectedHeadSha || "unknown"}`,
+    `mergeStateStatus ${packet.pr?.mergeStateStatus || "unknown"}`,
+    `checks total=${packet.checks?.total ?? 0} passed=${packet.checks?.passed?.length ?? 0} pending=${packet.checks?.pending?.length ?? 0} failing=${packet.checks?.failing?.length ?? 0}`,
+    `reviewThreads unresolvedNonOutdated=${packet.reviewThreads?.unresolvedNonOutdatedCount ?? "unknown"} outdated=${packet.reviewThreads?.outdatedCount ?? "unknown"}`,
+    `status ${packet.status || "unknown"}`,
+  ];
+}
+
+function normalizeStatusCheckRollup(rollup) {
+  const nodes = Array.isArray(rollup)
+    ? rollup
+    : Array.isArray(rollup?.nodes)
+      ? rollup.nodes
+      : [];
+  const checks = nodes.map((node) => {
+    const name = node.name || node.workflowName || node.context || node.__typename || "unnamed-check";
+    const status = String(node.status || node.state || "").toUpperCase() || null;
+    const rawConclusion = String(node.conclusion || "").toUpperCase() || null;
+    const conclusion = rawConclusion || statusContextConclusion(status);
+    return {
+      name,
+      status,
+      conclusion,
+      detailsUrl: node.detailsUrl || node.targetUrl || null,
+    };
+  });
+  const passed = checks.filter((check) => ["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion));
+  const pending = checks.filter((check) => !check.conclusion && pendingCheckStatus(check.status));
+  const failing = checks.filter((check) => check.conclusion && !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion));
+  const unknown = checks.filter((check) => !check.conclusion && !pendingCheckStatus(check.status));
+  return {
+    total: checks.length,
+    passed,
+    pending,
+    failing: [...failing, ...unknown],
+    checks,
+  };
+}
+
+function statusContextConclusion(status) {
+  if (["SUCCESS", "FAILURE", "ERROR"].includes(status || "")) {
+    return status;
+  }
+  return null;
+}
+
+function pendingCheckStatus(status) {
+  return ["PENDING", "QUEUED", "IN_PROGRESS", "REQUESTED", "WAITING", "EXPECTED", "ACTION_REQUIRED"].includes(status || "");
+}
+
+function githubRepository(manifest) {
+  const result = runChecked("gh", ["repo", "view", "--json", "owner,name"], {
+    cwd: manifest.worktree_path,
+  });
+  const parsed = parseGhJson(result.stdout, "repository metadata");
+  const owner = typeof parsed.owner === "string" ? parsed.owner : parsed.owner?.login;
+  if (!owner || !parsed.name) {
+    throw new Error("GitHub CLI repository metadata omitted owner or name.");
+  }
+  return { owner, name: parsed.name };
+}
+
+function fetchReviewThreadState(manifest, repository, prNumber) {
+  const query = [
+    "query($owner:String!,$name:String!,$number:Int!){",
+    "repository(owner:$owner,name:$name){",
+    "pullRequest(number:$number){",
+    "reviewThreads(first:100){",
+    "nodes{id,isResolved,isOutdated,comments(first:1){nodes{url}}}",
+    "pageInfo{hasNextPage,endCursor}",
+    "}",
+    "}",
+    "}",
+    "}",
+  ].join("");
+  const result = runChecked(
+    "gh",
+    [
+      "api",
+      "graphql",
+      "-f",
+      `query=${query}`,
+      "-F",
+      `owner=${repository.owner}`,
+      "-F",
+      `name=${repository.name}`,
+      "-F",
+      `number=${prNumber}`,
+    ],
+    { cwd: manifest.worktree_path },
+  );
+  const parsed = parseGhJson(result.stdout, "review-thread state");
+  const errors = Array.isArray(parsed?.errors) ? parsed.errors : [];
+  const connection = parsed?.data?.repository?.pullRequest?.reviewThreads;
+  const nodes = Array.isArray(connection?.nodes) ? connection.nodes : [];
+  const threadRefs = nodes.map((thread) => ({
+    id: thread.id || null,
+    isResolved: Boolean(thread.isResolved),
+    isOutdated: Boolean(thread.isOutdated),
+    url: thread.comments?.nodes?.[0]?.url || null,
+  }));
+  const unresolvedNonOutdated = threadRefs.filter((thread) => !thread.isResolved && !thread.isOutdated);
+  return {
+    querySucceeded: Boolean(connection),
+    errorCount: errors.length,
+    errorMessages: errors.map((error) => String(error?.message || "GraphQL error")).filter(Boolean).slice(0, 5),
+    totalCount: threadRefs.length,
+    unresolvedNonOutdatedCount: unresolvedNonOutdated.length,
+    outdatedCount: threadRefs.filter((thread) => thread.isOutdated).length,
+    resolvedCount: threadRefs.filter((thread) => thread.isResolved).length,
+    hasNextPage: Boolean(connection?.pageInfo?.hasNextPage),
+    unresolvedNonOutdatedRefs: unresolvedNonOutdated.map((thread) => thread.url || thread.id).filter(Boolean),
+    threadRefs,
+  };
+}
+
+function parseGhJson(stdout, label) {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error(`GitHub CLI returned invalid JSON for ${label}.`);
+  }
+}
+
 function runAntiChurnFinalization(manifest, state, options = {}) {
   const now = new Date().toISOString();
   const worktreeStatus = options.worktreeStatus || parseStatus(manifest.worktree_path);
@@ -2181,6 +2518,7 @@ function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
     updated_at: antiChurnRecord.updated_at || new Date().toISOString(),
     anti_churn_finalization: shapeAntiChurnEvidencePacket(antiChurnRecord, options),
     pr_delivery: options.prDeliveryEvidence || null,
+    pr_gate: options.prGateEvidence || null,
   };
 }
 
@@ -6006,6 +6344,23 @@ function prView(manifest) {
   } catch {
     throw new Error(`GitHub CLI returned invalid JSON for PR selector ${selector}.`);
   }
+}
+
+function prViewForGates(manifest) {
+  const selector = manifest.pr_number ? String(manifest.pr_number) : manifest.branch;
+  const result = run("gh", [
+    "pr",
+    "view",
+    selector,
+    "--json",
+    "number,url,mergedAt,state,baseRefName,headRefOid,mergeStateStatus,isDraft,statusCheckRollup,reviewDecision",
+  ], {
+    cwd: manifest.worktree_path && existsSync(manifest.worktree_path) ? manifest.worktree_path : repoRoot,
+  });
+  if (result.code !== 0) {
+    return null;
+  }
+  return parseGhJson(result.stdout, `PR selector ${selector}`);
 }
 
 function prNumberFromUrl(url) {
