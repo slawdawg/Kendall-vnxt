@@ -1248,6 +1248,42 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
   );
 });
 
+test("pipeline learn outcome fixtures close the loop without hidden writes", async () => {
+  const { pipelineCockpitPackets } = await loadCompiledDashboardFixtures();
+  const packetDetailSource = await readFile(packetDetailPath, "utf8");
+  const fixtureSource = await readFile(fixturesPath, "utf8");
+
+  assert.match(packetDetailSource, /Learn outcome/);
+  assert.match(packetDetailSource, /LearnOutcomeList/);
+  assert.match(packetDetailSource, /Documentation proposal/);
+  assert.match(packetDetailSource, /Automation authority/);
+  assert.match(packetDetailSource, /Next safe action/);
+  assert.match(packetDetailSource, /Decision records/);
+  assert.match(fixtureSource, /learnOutcome/);
+  assert.match(fixtureSource, /automationAuthorityChangeStatus/);
+
+  const learnPackets = pipelineCockpitPackets.filter((packet) => packet.currentStage === "learn" || packet.memoryProposals.length > 0);
+  assert.ok(learnPackets.length > 0, "fixtures should include learn-stage packets");
+  for (const packet of learnPackets) {
+    assert.ok(packet.learnOutcome, `${packet.packetId} should expose a learn outcome`);
+    assert.equal(packet.learnOutcome.retentionClass, "metadata_only");
+    assert.equal(packet.learnOutcome.canonicalMutationAllowed, false);
+    assert.equal(packet.learnOutcome.sourceMutationAllowed, false);
+    assert.equal(packet.learnOutcome.providerCallsAllowed, false);
+    assert.equal(packet.learnOutcome.durableWriteAllowed, false);
+    assert.equal(packet.learnOutcome.learningProposalCount, packet.memoryProposals.length);
+    assert.ok(packet.learnOutcome.nextSafeAction.length > 0);
+    for (const decision of packet.learnOutcome.decisionRecords) {
+      assert.equal(decision.canonicalMutationAllowed, false);
+      assert.equal(decision.durableWriteAllowed, false);
+      assert.ok(decision.actor.length > 0);
+      assert.notEqual(decision.actor, "system");
+      assert.ok(decision.evidenceRefs.length > 0);
+      assert.ok(decision.recoveryPath.length > 0);
+    }
+  }
+});
+
 test("pipeline source boundary checklist preserves Obsidian and LLM-Wiki ownership", async () => {
   const { pipelineFixturePackets, pipelineSourceBoundaryChecklist } = await loadCompiledDashboardFixtures();
   const pipelineComponentSource = await readPipelineComponentSource();

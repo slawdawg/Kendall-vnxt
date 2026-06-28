@@ -674,6 +674,38 @@ export interface WorkPacketDeliveryEvidenceV0 {
   cleanupApproved: false;
 }
 
+export interface WorkPacketLearnDecisionRecordV0 {
+  decisionId: string;
+  proposalId: string;
+  proposalType: MemoryProposalTypeV0;
+  actor: string;
+  result: MemoryProposalStatusV0;
+  operatorAction: MemoryProposalOperatorActionV0;
+  evidenceRefs: WorkPacketRefIdV0[];
+  recoveryPath: string;
+  writeBackStatus: MemoryProposalWriteBackStatusV0;
+  canonicalMutationAllowed: false;
+  durableWriteAllowed: false;
+}
+
+export interface WorkPacketLearnOutcomeV0 {
+  outcomeId: string;
+  status: "not_applicable" | "pending" | "accepted" | "rejected" | "deferred" | "blocked";
+  retentionClass: "metadata_only";
+  learningProposalCount: number;
+  documentationProposalStatus: MemoryProposalStatusV0 | "not_present";
+  automationAuthorityChangeStatus: "not_requested" | "blocked" | "deauthorized" | "review_gated" | "accepted";
+  blockedWriteBackState: MemoryProposalWriteBackStatusV0 | "not_applicable";
+  nextSafeAction: string;
+  decisionRecords: WorkPacketLearnDecisionRecordV0[];
+  evidenceRefs: WorkPacketRefIdV0[];
+  sourceRefs: WorkPacketRefIdV0[];
+  canonicalMutationAllowed: false;
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  durableWriteAllowed: false;
+}
+
 export interface WorkPacketDeliveryGateCriterionV0 {
   criterionId: string;
   label: string;
@@ -838,6 +870,7 @@ export interface WorkPacketV0View {
   laneCards: WorkPacketLaneCardV0[];
   memoryProposals: MemoryProposalV0[];
   deliveryEvidence?: WorkPacketDeliveryEvidenceV0 | null;
+  learnOutcome?: WorkPacketLearnOutcomeV0 | null;
   alphaMemorySourceStatus?: AlphaMemorySourceStatusV0 | null;
   gateStateValidation?: WorkPacketGateStateValidationV0 | null;
   loopStopStates: WorkPacketLoopStopStateV0[];

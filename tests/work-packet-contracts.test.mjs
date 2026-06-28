@@ -30,6 +30,8 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
     "WorkPacketDeliveryGateCriterionV0",
     "WorkPacketDeliveryMergeGateV0",
     "WorkPacketCleanupDryRunGateV0",
+    "WorkPacketLearnOutcomeV0",
+    "WorkPacketLearnDecisionRecordV0",
     "WorkPacketLaneCardV0",
     "MODEL_ROLES_V0",
     "MODEL_ROLE_POLICIES_V0",
@@ -136,6 +138,15 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /durableWriteAllowed:\s*false;/);
   assert.match(workPacketSource, /executionAttempts:\s*WorkPacketExecutionAttemptSummaryV0\[\];/);
   assert.match(workPacketSource, /deliveryEvidence\?:\s*WorkPacketDeliveryEvidenceV0 \| null;/);
+  assert.match(workPacketSource, /learnOutcome\?:\s*WorkPacketLearnOutcomeV0 \| null;/);
+  assert.match(workPacketSource, /learningProposalCount:\s*number;/);
+  assert.match(workPacketSource, /documentationProposalStatus:\s*MemoryProposalStatusV0 \| "not_present";/);
+  assert.match(workPacketSource, /automationAuthorityChangeStatus:\s*"not_requested" \| "blocked" \| "deauthorized" \| "review_gated" \| "accepted";/);
+  assert.match(workPacketSource, /blockedWriteBackState:\s*MemoryProposalWriteBackStatusV0 \| "not_applicable";/);
+  assert.match(workPacketSource, /nextSafeAction:\s*string;/);
+  assert.match(workPacketSource, /decisionRecords:\s*WorkPacketLearnDecisionRecordV0\[\];/);
+  assert.match(workPacketSource, /actor:\s*string;/);
+  assert.match(workPacketSource, /result:\s*MemoryProposalStatusV0;/);
   assert.match(workPacketSource, /deliveryRailsGrantAuthority:\s*false;/);
   assert.match(workPacketSource, /remoteMutationApproved:\s*false;/);
   assert.match(workPacketSource, /mergeApproved:\s*false;/);

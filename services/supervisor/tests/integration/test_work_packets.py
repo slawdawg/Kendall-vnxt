@@ -862,6 +862,8 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
             json={
                 "status": "approved",
                 "operatorAction": "approve",
+                "actorId": "operator:reviewer",
+                "actorLabel": "Operator Reviewer",
                 "decisionNeededContext": "Approved for a future gated draft preview only.",
                 "writeBackStatus": "approved_for_future",
             },
@@ -876,6 +878,23 @@ def test_work_item_memory_proposal_persists_review_state_and_surfaces_in_packet(
         packet_after_update = client.get(f"/work-packets/work_item:{work_item['id']}").json()["data"]
         assert packet_after_update["memoryProposals"][0]["status"] == "approved"
         assert packet_after_update["memoryProposals"][0]["operatorAction"] == "approve"
+        learn_outcome = packet_after_update["learnOutcome"]
+        assert learn_outcome["outcomeId"] == f"learn-outcome:work_item:{work_item['id']}"
+        assert learn_outcome["retentionClass"] == "metadata_only"
+        assert learn_outcome["learningProposalCount"] == 1
+        assert learn_outcome["documentationProposalStatus"] == "not_present"
+        assert learn_outcome["automationAuthorityChangeStatus"] == "not_requested"
+        assert learn_outcome["blockedWriteBackState"] == "approved_for_future"
+        assert "review-gated" in learn_outcome["nextSafeAction"]
+        assert learn_outcome["canonicalMutationAllowed"] is False
+        assert learn_outcome["sourceMutationAllowed"] is False
+        assert learn_outcome["providerCallsAllowed"] is False
+        assert learn_outcome["durableWriteAllowed"] is False
+        assert learn_outcome["decisionRecords"][0]["proposalId"] == "mp-20260625T000000Z"
+        assert learn_outcome["decisionRecords"][0]["actor"] == "Operator Reviewer"
+        assert learn_outcome["decisionRecords"][0]["result"] == "approved"
+        assert learn_outcome["decisionRecords"][0]["evidenceRefs"] == ["evidence:read-only-proof"]
+        assert learn_outcome["decisionRecords"][0]["canonicalMutationAllowed"] is False
 
 
 def test_approved_memory_proposal_writes_ai_draft_to_configured_queue(tmp_path, monkeypatch) -> None:

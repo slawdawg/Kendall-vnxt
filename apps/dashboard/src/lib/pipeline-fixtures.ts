@@ -2161,6 +2161,7 @@ function packetFixture(input: {
         ? [memoryProposalFixture("blocked", input.packetId, packetSourceRefs, fixtureEvidenceRef)]
         : [];
   const alphaMemorySourceStatus = buildAlphaMemorySourceStatus(input.packetId, sourceRefs, evidenceRefs, memoryProposals);
+  const learnOutcome = buildLearnOutcome(input.packetId, memoryProposals);
 
   return {
     packetId: input.packetId,
@@ -2177,6 +2178,7 @@ function packetFixture(input: {
     taskPacket: null,
     routingPreview: null,
     deliveryEvidence: input.deliveryEvidence ?? null,
+    learnOutcome,
     routeSummary: {
       recommendation: rows[0]?.stage ?? input.currentStage,
       confidenceScore: input.confidenceLabel === "Low confidence" ? 0.36 : 0.82,
@@ -2299,6 +2301,121 @@ function packetFixture(input: {
     riskFlags: input.riskFlags ?? riskFlagsFor(input),
     matrixRowIds: input.matrixRowIds,
   };
+}
+
+function buildLearnOutcome(
+  packetId: string,
+  memoryProposals: MemoryProposalV0[]
+): WorkPacketV0View["learnOutcome"] {
+  if (memoryProposals.length === 0) {
+    return null;
+  }
+  const blockedWriteBackState = learnBlockedWriteBackState(memoryProposals);
+  return {
+    outcomeId: `learn-outcome:${packetId}`,
+    status: learnOutcomeStatus(memoryProposals),
+    retentionClass: "metadata_only",
+    learningProposalCount: memoryProposals.length,
+    documentationProposalStatus: learnDocumentationProposalStatus(memoryProposals),
+    automationAuthorityChangeStatus: learnAutomationAuthorityChangeStatus(memoryProposals),
+    blockedWriteBackState,
+    nextSafeAction: learnNextSafeAction(memoryProposals, blockedWriteBackState),
+    decisionRecords: memoryProposals.map((proposal) => ({
+      decisionId: `learn-decision:${packetId}:${proposal.proposalId}`,
+      proposalId: proposal.proposalId,
+      proposalType: proposal.proposalType,
+      actor: "Fixture Operator",
+      result: proposal.status,
+      operatorAction: proposal.operatorAction,
+      evidenceRefs: [...proposal.evidenceRefs],
+      recoveryPath: proposal.backupRecoveryPath,
+      writeBackStatus: proposal.writeBackStatus,
+      canonicalMutationAllowed: false,
+      durableWriteAllowed: false,
+    })),
+    evidenceRefs: Array.from(new Set(memoryProposals.flatMap((proposal) => proposal.evidenceRefs))),
+    sourceRefs: Array.from(new Set(memoryProposals.flatMap((proposal) => proposal.sourceRefs))),
+    canonicalMutationAllowed: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    durableWriteAllowed: false,
+  };
+}
+
+function learnOutcomeStatus(memoryProposals: MemoryProposalV0[]) {
+  const statuses = new Set(memoryProposals.map((proposal) => proposal.status));
+  if (statuses.has("blocked") || statuses.has("stale") || statuses.has("contradictory")) {
+    return "blocked";
+  }
+  if (statuses.has("edit_needed") || statuses.has("pending_human_approval") || statuses.has("proposed")) {
+    return "pending";
+  }
+  if (statuses.has("deferred")) {
+    return "deferred";
+  }
+  if (statuses.has("rejected")) {
+    return "rejected";
+  }
+  if (statuses.size > 0 && Array.from(statuses).every((status) => status === "approved")) {
+    return "accepted";
+  }
+  return "pending";
+}
+
+function learnBlockedWriteBackState(memoryProposals: MemoryProposalV0[]) {
+  const states = new Set(memoryProposals.map((proposal) => proposal.writeBackStatus));
+  for (const state of ["blocked", "review_gated", "deferred", "not_started", "approved_for_future"] as const) {
+    if (states.has(state)) {
+      return state;
+    }
+  }
+  return "not_applicable";
+}
+
+function learnDocumentationProposalStatus(memoryProposals: MemoryProposalV0[]) {
+  const statuses = new Set(memoryProposals.filter((proposal) => proposal.proposalType === "user_facing_documentation").map((proposal) => proposal.status));
+  if (statuses.size === 0) {
+    return "not_present";
+  }
+  for (const status of ["blocked", "stale", "contradictory", "pending_human_approval", "proposed", "edit_needed", "deferred", "rejected", "approved", "not_applicable"] as const) {
+    if (statuses.has(status)) {
+      return status;
+    }
+  }
+  return "pending_human_approval";
+}
+
+function learnAutomationAuthorityChangeStatus(memoryProposals: MemoryProposalV0[]) {
+  const authorityProposals = memoryProposals.filter((proposal) => proposal.proposalType === "decision_record" || proposal.proposalType === "error_book_entry");
+  if (authorityProposals.length === 0) {
+    return "not_requested";
+  }
+  if (authorityProposals.some((proposal) => proposal.operatorAction === "reject" || proposal.operatorAction === "blocked")) {
+    return "deauthorized";
+  }
+  if (authorityProposals.some((proposal) => ["blocked", "stale", "contradictory", "rejected"].includes(proposal.status))) {
+    return "blocked";
+  }
+  if (authorityProposals.every((proposal) => proposal.status === "approved" && proposal.operatorAction === "approve")) {
+    return "accepted";
+  }
+  return "review_gated";
+}
+
+function learnNextSafeAction(memoryProposals: MemoryProposalV0[], blockedWriteBackState: ReturnType<typeof learnBlockedWriteBackState>) {
+  if (memoryProposals.some((proposal) => ["blocked", "stale", "contradictory"].includes(proposal.status))) {
+    return "Keep canonical memory unchanged and resolve blocked Learn proposal reason codes.";
+  }
+  if (memoryProposals.some((proposal) => proposal.proposalType === "user_facing_documentation")) {
+    return "Review the documentation proposal as draft-plan evidence; do not mutate canonical Obsidian memory.";
+  }
+  if (blockedWriteBackState === "review_gated" || blockedWriteBackState === "approved_for_future") {
+    return "Keep Learn output review-gated and run the matching future write-back authority workflow before any canonical memory mutation.";
+  }
+  if (blockedWriteBackState === "deferred") {
+    return "Leave Learn proposal deferred until the operator reopens it with fresh evidence.";
+  }
+  return "Review Learn proposal evidence and preserve metadata-only recovery notes.";
 }
 
 function isPullRequestArtifactRef(refId: string) {

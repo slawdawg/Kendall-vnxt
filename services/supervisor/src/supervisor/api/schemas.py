@@ -707,6 +707,8 @@ class MemoryProposalCreateRequest(BaseModel):
     contradictionStatus: MemoryProposalContradictionStatusV0
     confidence: MemoryProposalConfidenceV0
     operatorAction: MemoryProposalOperatorActionV0
+    actorId: str | None = None
+    actorLabel: str | None = None
     decisionNeededContext: str | None = None
     backupRecoveryPath: str
     writeBackStatus: MemoryProposalWriteBackStatusV0
@@ -718,6 +720,8 @@ class MemoryProposalUpdateRequest(BaseModel):
 
     status: MemoryProposalStatusV0 | None = None
     operatorAction: MemoryProposalOperatorActionV0 | None = None
+    actorId: str | None = None
+    actorLabel: str | None = None
     decisionNeededContext: str | None = None
     writeBackStatus: MemoryProposalWriteBackStatusV0 | None = None
     patchSummary: str | None = None
@@ -775,6 +779,38 @@ class MemoryProposalV0View(BaseModel):
     backupRecoveryPath: str
     writeBackStatus: MemoryProposalWriteBackStatusV0
     writeBackAllowed: Literal[False] = False
+
+
+class WorkPacketLearnDecisionRecordV0View(BaseModel):
+    decisionId: str
+    proposalId: str
+    proposalType: MemoryProposalTypeV0
+    actor: str
+    result: MemoryProposalStatusV0
+    operatorAction: MemoryProposalOperatorActionV0
+    evidenceRefs: list[str] = Field(default_factory=list)
+    recoveryPath: str
+    writeBackStatus: MemoryProposalWriteBackStatusV0
+    canonicalMutationAllowed: Literal[False] = False
+    durableWriteAllowed: Literal[False] = False
+
+
+class WorkPacketLearnOutcomeV0View(BaseModel):
+    outcomeId: str
+    status: Literal["not_applicable", "pending", "accepted", "rejected", "deferred", "blocked"]
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    learningProposalCount: int
+    documentationProposalStatus: MemoryProposalStatusV0 | Literal["not_present"] = "not_present"
+    automationAuthorityChangeStatus: Literal["not_requested", "blocked", "deauthorized", "review_gated", "accepted"] = "not_requested"
+    blockedWriteBackState: MemoryProposalWriteBackStatusV0 | Literal["not_applicable"] = "not_applicable"
+    nextSafeAction: str
+    decisionRecords: list[WorkPacketLearnDecisionRecordV0View] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    sourceRefs: list[str] = Field(default_factory=list)
+    canonicalMutationAllowed: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    durableWriteAllowed: Literal[False] = False
 
 
 class LlmWikiRebuildPreviewV0View(BaseModel):
@@ -1150,6 +1186,7 @@ class WorkPacketV0View(BaseModel):
     laneCards: list[WorkPacketLaneCardV0View] = Field(default_factory=list)
     memoryProposals: list[MemoryProposalV0View] = Field(default_factory=list)
     deliveryEvidence: WorkPacketDeliveryEvidenceV0View | None = None
+    learnOutcome: WorkPacketLearnOutcomeV0View | None = None
     alphaMemorySourceStatus: AlphaMemorySourceStatusV0View | None = None
     gateStateValidation: WorkPacketGateStateValidationV0View | None = None
     loopStopStates: list[WorkPacketLoopStopStateV0View] = Field(default_factory=list)

@@ -211,6 +211,8 @@ from supervisor.api.schemas import (
     WorkPacketDeliveryMergeGateV0View,
     WorkPacketExecutionAttemptSummaryV0View,
     WorkPacketLaneCardV0View,
+    WorkPacketLearnDecisionRecordV0View,
+    WorkPacketLearnOutcomeV0View,
     WorkPacketRouteSummaryV0View,
     WorkPacketReviewSummaryV0View,
     WorkPacketStageTransitionEventV0View,
@@ -535,9 +537,14 @@ class SupervisorService:
                 "proposalId": proposal.proposal_id,
                 "sourceRefs": proposal.source_refs_json,
                 "evidenceRefs": proposal.evidence_refs_json,
+                "actorId": payload.actorId,
+                "actorLabel": payload.actorLabel,
                 "writeBackAllowed": False,
                 "retentionClass": "metadata_only",
             },
+            actor_type="operator" if payload.actorId or payload.actorLabel else "system",
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
         )
         await session.commit()
         await session.refresh(proposal)
@@ -629,10 +636,15 @@ class SupervisorService:
                 "proposalId": proposal.proposal_id,
                 "status": proposal.status,
                 "operatorAction": proposal.operator_action,
+                "actorId": payload.actorId,
+                "actorLabel": payload.actorLabel,
                 "writeBackStatus": proposal.write_back_status,
                 "writeBackAllowed": False,
                 "retentionClass": "metadata_only",
             },
+            actor_type="operator" if payload.actorId or payload.actorLabel else "system",
+            actor_id=payload.actorId,
+            actor_label=payload.actorLabel,
         )
         await session.commit()
         await session.refresh(proposal)
@@ -21298,6 +21310,7 @@ class SupervisorService:
             laneCards=self._work_packet_lane_cards(attempts, routing_preview),
             memoryProposals=memory_proposal_views,
             deliveryEvidence=self._work_packet_delivery_evidence(item_view, evidence_refs, artifact_refs),
+            learnOutcome=self._work_packet_learn_outcome(packet_id, memory_proposal_views, workflow_events),
             alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs, memory_proposal_views),
             gateStateValidation=self._work_packet_gate_state_validation(
                 stored_stage=stage,
@@ -21404,6 +21417,127 @@ class SupervisorService:
             blockedReasons=list(dict.fromkeys(blocked_reasons)),
             recoveryPath=self._metadata_text(latest_delivery, "recoveryPath") or self._metadata_text(metadata, "cleanupRecoveryPath") or "inspect retained delivery evidence before retry, merge, or cleanup",
         )
+
+    def _work_packet_learn_outcome(
+        self,
+        packet_id: str,
+        memory_proposals: list[MemoryProposalV0View],
+        workflow_events: list[WorkflowEvent],
+    ) -> WorkPacketLearnOutcomeV0View | None:
+        if not memory_proposals:
+            return None
+
+        blocked_write_back_state = self._learn_blocked_write_back_state(memory_proposals)
+        decision_records = [
+            WorkPacketLearnDecisionRecordV0View(
+                decisionId=f"learn-decision:{packet_id}:{proposal.proposalId}",
+                proposalId=proposal.proposalId,
+                proposalType=proposal.proposalType,
+                actor=self._learn_decision_actor(proposal, workflow_events),
+                result=proposal.status,
+                operatorAction=proposal.operatorAction,
+                evidenceRefs=list(proposal.evidenceRefs),
+                recoveryPath=proposal.backupRecoveryPath,
+                writeBackStatus=proposal.writeBackStatus,
+            )
+            for proposal in memory_proposals
+        ]
+
+        return WorkPacketLearnOutcomeV0View(
+            outcomeId=f"learn-outcome:{packet_id}",
+            status=self._learn_outcome_status(memory_proposals),
+            learningProposalCount=len(memory_proposals),
+            documentationProposalStatus=self._learn_documentation_proposal_status(memory_proposals),
+            automationAuthorityChangeStatus=self._learn_automation_authority_change_status(memory_proposals),
+            blockedWriteBackState=blocked_write_back_state,
+            nextSafeAction=self._learn_next_safe_action(memory_proposals, blocked_write_back_state),
+            decisionRecords=decision_records,
+            evidenceRefs=list(dict.fromkeys(ref for proposal in memory_proposals for ref in proposal.evidenceRefs)),
+            sourceRefs=list(dict.fromkeys(ref for proposal in memory_proposals for ref in proposal.sourceRefs)),
+        )
+
+    def _learn_decision_actor(self, proposal: MemoryProposalV0View, workflow_events: list[WorkflowEvent]) -> str:
+        for event in workflow_events:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            if (
+                event.event_type in {"memory_proposal.review_updated", "memory_proposal.created"}
+                and payload.get("proposalId") == proposal.proposalId
+            ):
+                actor = event.actor_label or event.actor_id or payload.get("actorLabel") or payload.get("actorId")
+                return str(actor) if actor else "system"
+        return "system"
+
+    def _learn_outcome_status(self, memory_proposals: list[MemoryProposalV0View]) -> str:
+        proposal_statuses = {proposal.status for proposal in memory_proposals}
+        if proposal_statuses & {"blocked", "stale", "contradictory"}:
+            return "blocked"
+        if proposal_statuses & {"proposed", "pending_human_approval", "edit_needed"}:
+            return "pending"
+        if "deferred" in proposal_statuses:
+            return "deferred"
+        if "rejected" in proposal_statuses:
+            return "rejected"
+        if proposal_statuses and proposal_statuses <= {"approved"}:
+            return "accepted"
+        return "pending"
+
+    def _learn_blocked_write_back_state(self, memory_proposals: list[MemoryProposalV0View]) -> str:
+        states = [proposal.writeBackStatus for proposal in memory_proposals]
+        for state in ("blocked", "review_gated", "deferred", "not_started", "approved_for_future"):
+            if state in states:
+                return state
+        return "not_applicable"
+
+    def _learn_documentation_proposal_status(self, memory_proposals: list[MemoryProposalV0View]) -> str:
+        documentation_statuses = {
+            proposal.status
+            for proposal in memory_proposals
+            if proposal.proposalType == "user_facing_documentation"
+        }
+        if not documentation_statuses:
+            return "not_present"
+        for status in (
+            "blocked",
+            "stale",
+            "contradictory",
+            "pending_human_approval",
+            "proposed",
+            "edit_needed",
+            "deferred",
+            "rejected",
+            "approved",
+            "not_applicable",
+        ):
+            if status in documentation_statuses:
+                return status
+        return "pending_human_approval"
+
+    def _learn_automation_authority_change_status(self, memory_proposals: list[MemoryProposalV0View]) -> str:
+        authority_proposals = [
+            proposal
+            for proposal in memory_proposals
+            if proposal.proposalType in {"decision_record", "error_book_entry"}
+        ]
+        if not authority_proposals:
+            return "not_requested"
+        if any(proposal.operatorAction in {"reject", "blocked"} for proposal in authority_proposals):
+            return "deauthorized"
+        if any(proposal.status in {"blocked", "stale", "contradictory", "rejected"} for proposal in authority_proposals):
+            return "blocked"
+        if all(proposal.status == "approved" and proposal.operatorAction == "approve" for proposal in authority_proposals):
+            return "accepted"
+        return "review_gated"
+
+    def _learn_next_safe_action(self, memory_proposals: list[MemoryProposalV0View], blocked_write_back_state: str) -> str:
+        if any(proposal.status in {"blocked", "stale", "contradictory"} for proposal in memory_proposals):
+            return "Keep canonical memory unchanged and resolve blocked Learn proposal reason codes."
+        if any(proposal.proposalType == "user_facing_documentation" for proposal in memory_proposals):
+            return "Review the documentation proposal as draft-plan evidence; do not mutate canonical Obsidian memory."
+        if blocked_write_back_state in {"review_gated", "approved_for_future"}:
+            return "Keep Learn output review-gated and run the matching future write-back authority workflow before any canonical memory mutation."
+        if blocked_write_back_state == "deferred":
+            return "Leave Learn proposal deferred until the operator reopens it with fresh evidence."
+        return "Review Learn proposal evidence and preserve metadata-only recovery notes."
 
     def _work_packet_merge_gate_evidence(self, metadata: dict, latest_delivery: dict) -> WorkPacketDeliveryMergeGateV0View:
         expected_head = self._metadata_text(latest_delivery, "expectedHeadRevision")
