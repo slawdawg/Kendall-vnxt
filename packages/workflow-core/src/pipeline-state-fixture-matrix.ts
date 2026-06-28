@@ -99,6 +99,7 @@ export interface HumanGateActionValidationInputV0 {
   resultingStage?: unknown;
   resultingOwner?: unknown;
   auditEventType?: unknown;
+  reasonCodes?: unknown;
   disabledReason?: unknown;
 }
 
@@ -944,6 +945,20 @@ export function validateHumanGateActionModel(input: HumanGateActionValidationInp
   }
   if (input.status !== "available" && !isNonEmptyString(input.disabledReason)) {
     failures.push({ category: "boundary", id: "disabledReason", message: "Unavailable Human Gate actions require a disabled reason." });
+  }
+  if (!isNonEmptyStringArray(input.reasonCodes)) {
+    failures.push({ category: "boundary", id: "reasonCodes", message: "Human Gate action requires reason codes." });
+  } else {
+    const seenReasonCodes = new Set<string>();
+    for (const reasonCode of input.reasonCodes) {
+      if (!/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/.test(reasonCode)) {
+        failures.push({ category: "boundary", id: "reasonCodes.format", message: `Human Gate action reason code ${reasonCode} is not machine-readable.` });
+      }
+      if (seenReasonCodes.has(reasonCode)) {
+        failures.push({ category: "boundary", id: "reasonCodes.duplicate", message: `Human Gate action duplicates reason code ${reasonCode}.` });
+      }
+      seenReasonCodes.add(reasonCode);
+    }
   }
   if (!payload || !isNonEmptyString(payload.packetId)) {
     failures.push({ category: "boundary", id: "payload.packetId", message: "Human Gate action payload must bind to a packet id." });

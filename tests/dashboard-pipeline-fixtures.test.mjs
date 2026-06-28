@@ -809,6 +809,38 @@ test("pipeline Hermes worker fixtures render mocked containment without runtime 
     }
   }
 
+  for (const packet of pipelineCockpitPackets) {
+    for (const action of packet.humanGateActions) {
+      assert.ok(action.authorityFamily.length > 0, `${packet.packetId} ${action.type} should expose authority family`);
+      assert.ok(action.requiredEvidenceRefs.length > 0, `${packet.packetId} ${action.type} should expose required evidence refs`);
+      assert.ok(action.stopLines.length > 0, `${packet.packetId} ${action.type} should expose stop lines`);
+      assert.ok(action.rollbackPath.length > 0, `${packet.packetId} ${action.type} should expose rollback path`);
+      assert.ok(action.resultingStage.length > 0, `${packet.packetId} ${action.type} should expose resulting stage`);
+      assert.ok(action.resultingOwner.length > 0, `${packet.packetId} ${action.type} should expose resulting owner`);
+      assert.ok(action.status.length > 0, `${packet.packetId} ${action.type} should expose status`);
+      assert.ok(action.auditEventType.length > 0, `${packet.packetId} ${action.type} should expose audit event type`);
+    }
+    for (const action of packet.humanGateActions.filter((candidate) => candidate.status !== "available")) {
+      assert.ok(action.reasonCodes.length > 0, `${packet.packetId} ${action.type} should expose blocked/unavailable reason codes`);
+      assert.ok(action.disabledReason && action.disabledReason.length > 0, `${packet.packetId} ${action.type} should remain inspectable without firing`);
+    }
+  }
+
+  const humanGateActionTypes = new Set(pipelineCockpitPackets.flatMap((packet) => packet.humanGateActions.map((action) => action.type)));
+  for (const actionType of [
+    "approve_route",
+    "approve_execution",
+    "approve_delivery",
+    "approve_memory_proposal",
+    "reject_packet",
+    "edit_packet",
+    "send_back_to_shape",
+    "send_back_to_research",
+    "reroute",
+  ]) {
+    assert.ok(humanGateActionTypes.has(actionType), `pipeline fixtures should assemble ${actionType}`);
+  }
+
   for (const packet of pipelineCockpitPackets.filter((candidate) => candidate.hermesJob !== null)) {
     const refs = packet.evidenceRefs.map((ref) => ref.refId);
     assert.equal(refs.filter((ref) => ref === packet.hermesJob.evidenceRef).length, 1, `${packet.packetId} should contain Hermes evidence exactly once`);
@@ -834,6 +866,9 @@ test("pipeline Codex and Claude lane fixtures stay distinct and metadata-only", 
   assert.match(packetDetailSource, /Workers and review/);
   assert.match(packetDetailSource, /Codex:/);
   assert.match(packetDetailSource, /Claude:/);
+  assert.match(packetDetailSource, /Reason codes/);
+  assert.match(packetDetailSource, /HumanGateActionList/);
+  assert.doesNotMatch(packetDetailSource.match(/function HumanGateActionList[\s\S]*?function MemoryProposalList/)?.[0] ?? "", /<button|onClick|submitCapable/);
   assert.match(fixtureSource, /implementation_worker/);
   assert.match(fixtureSource, /independent_review/);
 
