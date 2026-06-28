@@ -2479,6 +2479,7 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
         "authority-blocked-work",
         "queue-zero-dispatch-continuity-refresh",
         "queue-zero-runway-continuity-refresh",
+        "queue-zero-runway-followup-refresh",
     }
     ready_items = [item for item in report["items"] if item["status"] == "ready"]
     for item in ready_items:
@@ -2511,11 +2512,17 @@ def test_safe_development_backlog_report_prioritizes_large_safe_slices_without_m
     assert queue_zero_item["nextLane"]["branchName"] == "codex/queue-zero-runway-continuity-refresh"
     assert "completed seed evidence" in queue_zero_item["nextAction"]
     queue_zero_successor = next(item for item in report["items"] if item["itemId"] == "queue-zero-runway-continuity-refresh")
-    assert queue_zero_successor["status"] == "ready"
-    assert queue_zero_successor["recommendedSliceSize"] == "medium_to_large"
-    assert queue_zero_successor["nextLane"]["laneSlug"] == "queue-zero-runway-continuity-refresh"
-    assert queue_zero_successor["nextLane"]["branchName"] == "codex/queue-zero-runway-continuity-refresh"
-    assert "metadata-only" in queue_zero_successor["nextAction"]
+    assert queue_zero_successor["status"] == "closed"
+    assert queue_zero_successor["recommendedSliceSize"] == "complete"
+    assert queue_zero_successor["nextLane"]["laneSlug"] == "queue-zero-runway-followup-refresh"
+    assert queue_zero_successor["nextLane"]["branchName"] == "codex/queue-zero-runway-followup-refresh"
+    assert "completed runway evidence" in queue_zero_successor["nextAction"]
+    queue_zero_followup = next(item for item in report["items"] if item["itemId"] == "queue-zero-runway-followup-refresh")
+    assert queue_zero_followup["status"] == "ready"
+    assert queue_zero_followup["recommendedSliceSize"] == "medium_to_large"
+    assert queue_zero_followup["nextLane"]["laneSlug"] == "queue-zero-runway-followup-refresh"
+    assert queue_zero_followup["nextLane"]["branchName"] == "codex/queue-zero-runway-followup-refresh"
+    assert "metadata-only" in queue_zero_followup["nextAction"]
     verification_item = next(item for item in report["items"] if item["itemId"] == "verification-surface-hardening")
     assert verification_item["status"] == "closed"
     assert verification_item["recommendedSliceSize"] == "complete"
