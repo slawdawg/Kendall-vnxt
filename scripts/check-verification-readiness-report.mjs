@@ -99,6 +99,7 @@ for (const typeName of [
   "VerificationCommandView",
   "VerificationCommandGroupView",
   "VerificationHandoffCheckpointView",
+  "VerificationSurfaceCoverageView",
   "VerificationReadinessReportView",
 ]) {
   assertCondition(contractSource.includes(typeName), `Shared contracts must include ${typeName}`, failures);
@@ -129,6 +130,7 @@ for (const serviceText of [
   "executionAuthorityApproved=False",
   "commandGroups=command_groups",
   "handoffCheckpoints=handoff_checkpoints",
+  "surfaceCoverage=surface_coverage",
   "static-drift-chain",
   "dashboard-browser-build",
   "full-local-gate",
@@ -160,6 +162,10 @@ for (const panelText of [
   "commandGroups",
   "Handoff checkpoints",
   "handoffCheckpoints",
+  "Surface coverage",
+  "surfaceCoverage",
+  "isTemplateHref",
+  "reportShortcutHref",
   "Required commands",
   "Optional commands",
   "Authority stop lines",
@@ -175,12 +181,94 @@ for (const browserText of [
   "dashboard-browser-build",
   "full-local-gate",
   "Handoff checkpoints",
+  "Surface coverage",
   "local-development-handoff",
   "dashboard-change-handoff",
   "setup-handoff",
   "authority-boundary-handoff",
 ]) {
   assertCondition(controlsSpec.includes(browserText), `Controls e2e must assert ${browserText}`, failures);
+}
+
+const verificationSurfaceMatrix = [
+  {
+    surfaceId: "dashboard-e2e-surface",
+    commandIds: ["check-e2e-report", "test-dashboard-e2e-runner"],
+    reports: ["GET /supervisor/verification-readiness-report", "GET /supervisor/dashboard-e2e-report"],
+    anchors: ["/controls#verification-readiness-report", "/controls#dashboard-e2e-report"],
+  },
+  {
+    surfaceId: "supervisor-report-catalog-surface",
+    commandIds: ["check-reports", "check-verification-readiness"],
+    reports: ["GET /supervisor/report-catalog", "GET /supervisor/verification-readiness-report"],
+    anchors: ["/controls#supervisor-report-catalog", "/controls#verification-readiness-report"],
+  },
+  {
+    surfaceId: "runtime-export-surface",
+    commandIds: ["check-runtime-export", "check-runtime-review"],
+    reports: [
+      "GET /work-items/{id}/runtime-evidence-export",
+      "GET /supervisor/runtime-evidence-review-report",
+      "GET /supervisor/verification-readiness-report",
+    ],
+    anchors: ["/work-items/{id}", "/controls#runtime-evidence-review-report", "/controls#verification-readiness-report"],
+  },
+  {
+    surfaceId: "safe-backlog-surface",
+    commandIds: ["check-safe-backlog", "check-development-runway", "check-runner-assignment-status"],
+    reports: [
+      "GET /supervisor/safe-development-backlog",
+      "GET /supervisor/development-runway-report",
+      "GET /supervisor/runner-assignment-status-report",
+    ],
+    anchors: ["/controls#safe-development-backlog", "/controls#development-runway-report", "/controls#runner-assignment-status"],
+  },
+  {
+    surfaceId: "managed-recipe-surface",
+    commandIds: ["check-managed-recipes"],
+    reports: ["GET /supervisor/managed-recipe-policy-report", "GET /supervisor/verification-readiness-report"],
+    anchors: ["/controls#managed-recipe-policy-report", "/controls#verification-readiness-report"],
+  },
+  {
+    surfaceId: "delivery-readiness-surface",
+    commandIds: ["check-delivery-readiness", "check-github-workflow-policy", "check-cleanup-automation"],
+    reports: [
+      "GET /supervisor/delivery-readiness-policy-report",
+      "GET /supervisor/github-workflow-policy-report",
+      "GET /supervisor/local-cleanup-readiness-report",
+    ],
+    anchors: [
+      "/controls#delivery-readiness-policy-report",
+      "/controls#github-workflow-policy-report",
+      "/controls#local-cleanup-readiness-report",
+    ],
+  },
+];
+
+for (const surface of verificationSurfaceMatrix) {
+  const serviceSurfaceMatch = new RegExp(
+    `VerificationSurfaceCoverageView\\([\\s\\S]*?surfaceId="${escapeRegExp(surface.surfaceId)}"[\\s\\S]*?nextAction=[\\s\\S]*?\\n\\s*\\),`,
+  ).exec(serviceSource);
+  const serviceSurfaceBlock = serviceSurfaceMatch?.[0] ?? "";
+
+  assertCondition(serviceSurfaceBlock.length > 0, `Verification readiness service must include surface ${surface.surfaceId}`, failures);
+  assertCondition(supervisorTests.includes(`"${surface.surfaceId}"`), `Supervisor tests must assert surface ${surface.surfaceId}`, failures);
+  assertCondition(controlsSpec.includes(surface.surfaceId), `Controls e2e must assert surface ${surface.surfaceId}`, failures);
+
+  for (const commandId of surface.commandIds) {
+    assertCondition(serviceSurfaceBlock.includes(`"${commandId}"`), `Surface ${surface.surfaceId} must require command ${commandId}`, failures);
+    assertCondition(supervisorTests.includes(`"${commandId}"`), `Supervisor tests must assert surface command ${commandId}`, failures);
+  }
+
+  for (const report of surface.reports) {
+    assertCondition(serviceSurfaceBlock.includes(report), `Surface ${surface.surfaceId} must reference report ${report}`, failures);
+    assertCondition(supervisorTests.includes(report), `Supervisor tests must assert surface report ${report}`, failures);
+  }
+
+  for (const anchor of surface.anchors) {
+    assertCondition(serviceSurfaceBlock.includes(anchor), `Surface ${surface.surfaceId} must reference dashboard anchor ${anchor}`, failures);
+    assertCondition(supervisorTests.includes(anchor), `Supervisor tests must assert surface dashboard anchor ${anchor}`, failures);
+  }
 }
 
 const storyPath = "docs/workflows/implementation-evidence-boundary.md";

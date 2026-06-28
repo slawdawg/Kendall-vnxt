@@ -171,6 +171,7 @@ from supervisor.api.schemas import (
     VerificationCommandGroupView,
     VerificationHandoffCheckpointView,
     VerificationReadinessReportView,
+    VerificationSurfaceCoverageView,
     RejectedRoutingLaneView,
     RunStatusView,
     WorkItemCreate,
@@ -2895,6 +2896,135 @@ class SupervisorService:
             ),
         ]
 
+        surface_coverage = [
+            VerificationSurfaceCoverageView(
+                surfaceId="dashboard-e2e-surface",
+                label="Dashboard e2e verification surface",
+                status="covered",
+                summary="Focused dashboard browser runners are represented in the verification report and remain optional evidence, not execution authority.",
+                requiredCommandIds=["check-e2e-report", "test-dashboard-e2e-runner"],
+                relatedReports=[
+                    "GET /supervisor/verification-readiness-report",
+                    "GET /supervisor/dashboard-e2e-report",
+                ],
+                dashboardAnchors=[
+                    "/controls#verification-readiness-report",
+                    "/controls#dashboard-e2e-report",
+                ],
+                stopLines=[
+                    "Dashboard browser evidence does not approve provider calls, worker launch, or credentials.",
+                    "Use focused dashboard runners only for UI changes and record unavailable browser dependencies as blockers.",
+                ],
+                nextAction="Before UI delivery, select the focused dashboard runner from the dashboard e2e report and keep the evidence local.",
+            ),
+            VerificationSurfaceCoverageView(
+                surfaceId="supervisor-report-catalog-surface",
+                label="Supervisor report catalog surface",
+                status="covered",
+                summary="Report catalog drift remains tied to verification readiness, controls-page anchors, and runtime evidence references.",
+                requiredCommandIds=["check-reports", "check-verification-readiness"],
+                relatedReports=[
+                    "GET /supervisor/report-catalog",
+                    "GET /supervisor/verification-readiness-report",
+                ],
+                dashboardAnchors=[
+                    "/controls#supervisor-report-catalog",
+                    "/controls#verification-readiness-report",
+                ],
+                stopLines=[
+                    "Report catalog evidence is read-only and must not trigger runtime execution.",
+                    "Add new report routes with matching dashboard anchors and browser assertions.",
+                ],
+                nextAction="When evidence surfaces change, update report catalog, runtime export references, dashboard links, and drift checks together.",
+            ),
+            VerificationSurfaceCoverageView(
+                surfaceId="runtime-export-surface",
+                label="Runtime evidence export surface",
+                status="covered",
+                summary="Runtime export drift coverage stays linked to work-item detail evidence and supervisor report shortcuts.",
+                requiredCommandIds=["check-runtime-export", "check-runtime-review"],
+                relatedReports=[
+                    "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/runtime-evidence-review-report",
+                    "GET /supervisor/verification-readiness-report",
+                ],
+                dashboardAnchors=[
+                    "/work-items/{id}",
+                    "/controls#runtime-evidence-review-report",
+                    "/controls#verification-readiness-report",
+                ],
+                stopLines=[
+                    "Runtime evidence exports retain metadata and links, not provider payloads, secrets, or raw completions.",
+                    "Runtime export review is evidence-only and does not approve execution.",
+                ],
+                nextAction="Run runtime export and runtime review drift checks when evidence payloads, detail panels, or report shortcuts change.",
+            ),
+            VerificationSurfaceCoverageView(
+                surfaceId="safe-backlog-surface",
+                label="Safe backlog and dispatcher surface",
+                status="covered",
+                summary="Safe backlog, development runway, and runner assignment status checks keep dispatcher continuity source-owned.",
+                requiredCommandIds=["check-safe-backlog", "check-development-runway", "check-runner-assignment-status"],
+                relatedReports=[
+                    "GET /supervisor/safe-development-backlog",
+                    "GET /supervisor/development-runway-report",
+                    "GET /supervisor/runner-assignment-status-report",
+                ],
+                dashboardAnchors=[
+                    "/controls#safe-development-backlog",
+                    "/controls#development-runway-report",
+                    "/controls#runner-assignment-status",
+                ],
+                stopLines=[
+                    "Dispatcher readiness does not approve worker launch or takeover without matching assignment evidence.",
+                    "Closed source-completion evidence must remain closed and must not be reopened as a new lane.",
+                ],
+                nextAction="Use dispatcher dry-runs and runner assignment status before claiming or taking over a lane.",
+            ),
+            VerificationSurfaceCoverageView(
+                surfaceId="managed-recipe-surface",
+                label="Managed recipe policy surface",
+                status="covered",
+                summary="Managed recipe checks remain tied to the policy report and dashboard coverage without enabling runtime recipes.",
+                requiredCommandIds=["check-managed-recipes"],
+                relatedReports=[
+                    "GET /supervisor/managed-recipe-policy-report",
+                    "GET /supervisor/verification-readiness-report",
+                ],
+                dashboardAnchors=[
+                    "/controls#managed-recipe-policy-report",
+                    "/controls#verification-readiness-report",
+                ],
+                stopLines=[
+                    "Managed recipe evidence does not grant process launch, provider access, or cleanup authority.",
+                    "Recipe browser coverage remains fixture-backed unless separately approved.",
+                ],
+                nextAction="Run managed recipe policy drift checks when recipe reports or dashboard recipe panels change.",
+            ),
+            VerificationSurfaceCoverageView(
+                surfaceId="delivery-readiness-surface",
+                label="Delivery readiness policy surface",
+                status="covered",
+                summary="Delivery readiness checks preserve exact-head, review-thread, status-check, and cleanup evidence boundaries.",
+                requiredCommandIds=["check-delivery-readiness", "check-github-workflow-policy", "check-cleanup-automation"],
+                relatedReports=[
+                    "GET /supervisor/delivery-readiness-policy-report",
+                    "GET /supervisor/github-workflow-policy-report",
+                    "GET /supervisor/local-cleanup-readiness-report",
+                ],
+                dashboardAnchors=[
+                    "/controls#delivery-readiness-policy-report",
+                    "/controls#github-workflow-policy-report",
+                    "/controls#local-cleanup-readiness-report",
+                ],
+                stopLines=[
+                    "Delivery checks do not bypass failing checks, unresolved review threads, or exact-head mismatch.",
+                    "Cleanup remains dry-run first and must prove branch/worktree/head match before deletion.",
+                ],
+                nextAction="Before merge or cleanup, prove exact-head GitHub gates and thread-aware review state, then record cleanup dry-run evidence.",
+            ),
+        ]
+
         return VerificationReadinessReportView(
             reportId="verification-readiness-report-v1",
             generatedAt=datetime.now(timezone.utc),
@@ -2906,6 +3036,7 @@ class SupervisorService:
             optionalCommands=optional_commands,
             commandGroups=command_groups,
             handoffCheckpoints=handoff_checkpoints,
+            surfaceCoverage=surface_coverage,
             stopLines=[
                 "Passing verification does not approve local provider/model calls.",
                 "Passing verification does not approve subscription-agent process launch.",
