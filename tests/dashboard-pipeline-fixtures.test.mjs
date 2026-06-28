@@ -554,6 +554,14 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(packetDetailSource, /Human Gate binding/);
   assert.match(packetDetailSource, /Workers and review/);
   assert.match(packetDetailSource, /Gate, memory, recovery/);
+  assert.match(packetDetailSource, /Delivery and cleanup evidence/);
+  assert.match(packetDetailSource, /Cleanup dry-run/);
+  assert.match(packetDetailSource, /Cleanup target/);
+  assert.match(packetDetailSource, /Delivery rails grant authority/);
+  assert.match(packetDetailSource, /Remote mutation approved/);
+  assert.match(packetDetailSource, /Merge approved/);
+  assert.match(packetDetailSource, /Cleanup approved/);
+  assert.match(packetDetailSource, /Recovery path/);
   assert.match(packetDetailSource, /Action request ledger/);
   assert.match(packetDetailSource, /Required evidence/);
   assert.match(packetDetailSource, /Stop lines/);
@@ -1036,6 +1044,63 @@ test("supervisor WorkPacket schema defaults loop stop states for real packet pay
   assert.match(supervisorSchemaSource, /workerLaunchAllowed:\s*Literal\[False\]\s*=\s*False/);
   assert.match(supervisorSchemaSource, /githubMutationAllowed:\s*Literal\[False\]\s*=\s*False/);
   assert.match(supervisorSchemaSource, /cleanupAllowed:\s*Literal\[False\]\s*=\s*False/);
+});
+
+test("pipeline delivery fixture renders metadata-only delivery and cleanup evidence", async () => {
+  const { pipelineCockpitPackets, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
+  const packetDetailSource = await readFile(packetDetailPath, "utf8");
+  const fixtureSource = await readFile(fixturesPath, "utf8");
+
+  assert.match(packetDetailSource, /DeliveryEvidenceList/);
+  assert.match(packetDetailSource, /Delivery and cleanup evidence/);
+  assert.match(fixtureSource, /deliveryEvidence/);
+  assert.match(fixtureSource, /cleanupDryRunStatus/);
+  assert.match(fixtureSource, /deliveryRailsGrantAuthority:\s*false/);
+  assert.match(fixtureSource, /remoteMutationApproved:\s*false/);
+  assert.match(fixtureSource, /mergeApproved:\s*false/);
+  assert.match(fixtureSource, /cleanupApproved:\s*false/);
+  assert.match(fixtureSource, /isPullRequestArtifactRef/);
+
+  const deliveryPacket = pipelineFixturePackets.find((packet) => packet.packetId === "fixture:deliver-evidence");
+  assert.ok(deliveryPacket, "pipeline fixtures should include a delivery evidence packet");
+  assert.equal(deliveryPacket.currentStage, "deliver");
+  assert.equal(deliveryPacket.currentOwner, "github");
+  assert.equal(deliveryPacket.deliveryEvidence?.mode, "metadata_only");
+  assert.equal(deliveryPacket.deliveryEvidence?.actionId, "cleanup");
+  assert.equal(deliveryPacket.deliveryEvidence?.ciStatus, "passed");
+  assert.equal(deliveryPacket.deliveryEvidence?.reviewState, "resolved");
+  assert.equal(deliveryPacket.deliveryEvidence?.mergeStatus, "ready");
+  assert.equal(deliveryPacket.deliveryEvidence?.cleanupDryRunStatus, "passed");
+  assert.equal(deliveryPacket.deliveryEvidence?.readyForApproval, true);
+  assert.equal(deliveryPacket.deliveryEvidence?.hasDeliveryExecutionEvidence, true);
+  assert.equal(deliveryPacket.deliveryEvidence?.deliveryRailsGrantAuthority, false);
+  assert.equal(deliveryPacket.deliveryEvidence?.rawPayloadRetained, false);
+  assert.equal(deliveryPacket.deliveryEvidence?.remoteMutationApproved, false);
+  assert.equal(deliveryPacket.deliveryEvidence?.mergeApproved, false);
+  assert.equal(deliveryPacket.deliveryEvidence?.cleanupApproved, false);
+  assert.ok(deliveryPacket.deliveryEvidence?.recoveryPath.includes("Re-run exact-head gate checks"));
+  assert.ok(deliveryPacket.deliveryEvidence?.blockedReasons.length === 0);
+  for (const refId of deliveryPacket.deliveryEvidence?.evidenceRefs ?? []) {
+    const evidenceRef = deliveryPacket.evidenceRefs.find((ref) => ref.refId === refId);
+    assert.ok(evidenceRef, `delivery evidence ref ${refId} should be materialized`);
+    assert.equal(evidenceRef.retentionClass, "metadata_only");
+    assert.equal(evidenceRef.rawPayloadRetained, false);
+  }
+  for (const refId of deliveryPacket.deliveryEvidence?.artifactRefs ?? []) {
+    assert.ok(deliveryPacket.artifactRefs.some((ref) => ref.refId === refId), `delivery artifact ref ${refId} should be materialized`);
+  }
+  for (const refId of deliveryPacket.deliveryEvidence?.retainedEvidence ?? []) {
+    assert.ok(
+      deliveryPacket.evidenceRefs.some((ref) => ref.refId === refId) || deliveryPacket.artifactRefs.some((ref) => ref.refId === refId),
+      `retained delivery ref ${refId} should be materialized`
+    );
+  }
+  const pullRequestArtifact = deliveryPacket.artifactRefs.find((ref) => ref.refId === "fixture:deliver-evidence:artifact:pull-request");
+  assert.equal(pullRequestArtifact?.artifactType, "pull_request");
+  assert.equal(pullRequestArtifact?.pathOrUrl, deliveryPacket.deliveryEvidence?.pullRequestUrl);
+
+  const cockpitDeliveryPacket = pipelineCockpitPackets.find((packet) => packet.packetId === deliveryPacket.packetId);
+  assert.equal(cockpitDeliveryPacket?.deliveryEvidence?.cleanupTarget, "managed worktree fixture:deliver-evidence");
 });
 
 test("pipeline memory proposal fixtures stay review-gated and proposal-only", async () => {

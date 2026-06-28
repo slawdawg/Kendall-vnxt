@@ -1117,6 +1117,39 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
     freshnessLabel: "fresh",
     sourceTrustState: "included",
     sourceTrustStates: ["included"],
+    deliveryEvidence: {
+      evidenceId: "fixture:deliver-evidence:delivery-cleanup-evidence",
+      mode: "metadata_only",
+      actionId: "cleanup",
+      status: "ready_for_operator_inspection",
+      targetBranch: "codex/fixture-delivery-evidence",
+      baseBranch: "dev",
+      pullRequestUrl: "https://github.com/slawdawg/Kendall_Nxt/pull/fixture-delivery-evidence",
+      expectedHeadRevision: "fixture-reviewed-head",
+      pullRequestHeadRevision: "fixture-reviewed-head",
+      ciStatus: "passed",
+      reviewState: "resolved",
+      mergeStatus: "ready",
+      mergeResult: "not_run",
+      cleanupDryRunStatus: "passed",
+      cleanupTarget: "managed worktree fixture:deliver-evidence",
+      readyForApproval: true,
+      hasDeliveryExecutionEvidence: true,
+      evidenceRefs: ["fixture:deliver-evidence:evidence:delivery-gate", "fixture:deliver-evidence:evidence:cleanup-dry-run"],
+      artifactRefs: ["fixture:deliver-evidence:artifact:pull-request", "fixture:deliver-evidence:artifact:cleanup-plan"],
+      retainedEvidence: [
+        "fixture:deliver-evidence:evidence:delivery-gate",
+        "fixture:deliver-evidence:evidence:cleanup-dry-run",
+        "fixture:deliver-evidence:evidence:retained-delivery-summary",
+      ],
+      blockedReasons: [],
+      recoveryPath: "Re-run exact-head gate checks, then repeat cleanup dry-run before any delivery mutation.",
+      deliveryRailsGrantAuthority: false,
+      rawPayloadRetained: false,
+      remoteMutationApproved: false,
+      mergeApproved: false,
+      cleanupApproved: false,
+    },
   }),
   packetFixture({
     packetId: "fixture:learn-memory",
@@ -1853,6 +1886,7 @@ function packetFixture(input: {
   claudeReviewState?: ClaudeReviewPacketV0["statusLabel"];
   governedWorkerAttempt?: GovernedWorkerAttemptFixtureOptions;
   loopStopStates?: LoopStopStateFixtureInput[];
+  deliveryEvidence?: WorkPacketV0View["deliveryEvidence"];
   }): PipelineFixturePacket {
   const fixture = requireCatalogEntry(input.fixtureId);
   const rows = requireMatrixRows(input.matrixRowIds);
@@ -2037,6 +2071,24 @@ function packetFixture(input: {
       });
     }
   }
+  if (input.deliveryEvidence) {
+    const deliveryArtifactRefs = new Set(input.deliveryEvidence.artifactRefs);
+    const deliveryEvidenceRefs = Array.from(
+      new Set([
+        ...input.deliveryEvidence.evidenceRefs,
+        ...input.deliveryEvidence.retainedEvidence.filter((refId) => !deliveryArtifactRefs.has(refId)),
+      ])
+    );
+    for (const refId of deliveryEvidenceRefs) {
+      evidenceRefs.push({
+        refId,
+        evidenceType: "gate",
+        label: `Delivery and cleanup evidence: ${input.deliveryEvidence.status}`,
+        retentionClass: "metadata_only",
+        rawPayloadRetained: false,
+      });
+    }
+  }
   const artifactRefs: WorkPacketV0View["artifactRefs"] = [
     {
       refId: `${input.packetId}:artifact:fixture`,
@@ -2054,6 +2106,15 @@ function packetFixture(input: {
             status: "available" as const,
           },
         ]
+      : []),
+    ...(input.deliveryEvidence
+      ? input.deliveryEvidence.artifactRefs.map((refId) => ({
+          refId,
+          artifactType: isPullRequestArtifactRef(refId) ? "pull_request" as const : "report" as const,
+          label: isPullRequestArtifactRef(refId) ? "Pull request delivery metadata" : "Cleanup dry-run plan metadata",
+          pathOrUrl: isPullRequestArtifactRef(refId) ? input.deliveryEvidence?.pullRequestUrl ?? null : null,
+          status: "available" as const,
+        }))
       : []),
   ];
   const humanGateActions = buildHumanGateActions(input);
@@ -2085,6 +2146,7 @@ function packetFixture(input: {
     workItem: null,
     taskPacket: null,
     routingPreview: null,
+    deliveryEvidence: input.deliveryEvidence ?? null,
     routeSummary: {
       recommendation: rows[0]?.stage ?? input.currentStage,
       confidenceScore: input.confidenceLabel === "Low confidence" ? 0.36 : 0.82,
@@ -2207,6 +2269,10 @@ function packetFixture(input: {
     riskFlags: input.riskFlags ?? riskFlagsFor(input),
     matrixRowIds: input.matrixRowIds,
   };
+}
+
+function isPullRequestArtifactRef(refId: string) {
+  return /(?:pull[-_]request|:pull_request)$/.test(refId);
 }
 
 function buildAlphaMemorySourceStatus(
