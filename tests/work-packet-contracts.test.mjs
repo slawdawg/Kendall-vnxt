@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workPacketPath = new URL("../packages/contracts/src/work-packet.ts", import.meta.url);
+const apiPath = new URL("../packages/contracts/src/api.ts", import.meta.url);
 const indexPath = new URL("../packages/contracts/src/index.ts", import.meta.url);
 
 test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", async () => {
@@ -202,6 +203,19 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   }
 
   assert.match(indexSource, /export \* from "\.\/work-packet";/);
+});
+
+test("Candidate Work contracts expose metadata-only source summaries", async () => {
+  const apiSource = await readFile(apiPath, "utf8");
+
+  assert.match(apiSource, /export interface CandidateWorkSourceSummaryView/);
+  assert.match(apiSource, /sourceSummary\?:\s*CandidateWorkSourceSummaryView \| null;/);
+  assert.match(apiSource, /summary:\s*string;/);
+  assert.match(apiSource, /sourceRef:\s*string;/);
+  assert.match(apiSource, /retentionPolicy:\s*string;/);
+  assert.match(apiSource, /boundarySummary:\s*string;/);
+  assert.match(apiSource, /evidenceRefs:\s*string\[\];/);
+  assert.doesNotMatch(apiSource, /rawContent|noteContent|sourceContent/);
 });
 
 test("Model role policy wrappers are contract-only and Ollama-first", async () => {
