@@ -234,6 +234,99 @@ def test_candidate_work_promotes_once_into_active_work_with_metadata(tmp_path, m
         assert promotion_event["payload"]["sourceArtifactType"] == "bmad_story"
 
 
+def test_candidate_work_promotion_preserves_source_refs_and_audit_evidence(tmp_path, monkeypatch) -> None:
+    with _client(tmp_path, monkeypatch, "candidate-work-source-ref-promotion.db") as client:
+        created_response = client.post(
+            "/candidate-work",
+            json={
+                "title": "Promote sourced work",
+                "requestedOutcome": "Keep source provenance attached to active work.",
+                "source": "bmad",
+                "sourceArtifactPath": "_bmad-output/implementation-artifacts/2-2-preserve-source-refs-through-candidate-promotion.md",
+                "sourceArtifactType": "bmad_story",
+                "riskLevel": "medium",
+                "priority": "high",
+                "sortOrder": 3,
+                "importMetadata": {
+                    "verificationSummary": "Candidate source refs were approved for metadata-only promotion.",
+                    "workPacketSourceRefs": [
+                        {
+                            "refId": "obsidian:00-inbox/customer-signal",
+                            "sourceType": "obsidian",
+                            "label": "Customer signal",
+                            "pathOrUrl": "00 Inbox/customer-signal.md",
+                            "freshness": "fresh",
+                            "accessState": "allowed",
+                            "canonical": True,
+                            "summaryOnly": True,
+                        },
+                        {
+                            "refId": "source:malformed",
+                            "sourceType": "private_vault",
+                            "label": "Malformed source ref",
+                            "pathOrUrl": "Private/raw-note.md",
+                            "freshness": "ancient",
+                            "accessState": "allowed",
+                            "canonical": False,
+                            "summaryOnly": False,
+                        },
+                    ],
+                    "promotionEvidenceRefs": ["candidate-import:source-ref-check"],
+                },
+            },
+        )
+        assert created_response.status_code == 200
+        candidate_id = created_response.json()["data"]["id"]
+        assert client.patch(f"/candidate-work/{candidate_id}", json={"status": "approved"}).status_code == 200
+
+        promoted_response = client.post(f"/candidate-work/{candidate_id}/promote")
+        assert promoted_response.status_code == 200
+        promoted = promoted_response.json()["data"]
+        work_item_id = promoted["workItem"]["id"]
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item_id}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        refs_by_id = {ref["refId"]: ref for ref in packet["sourceRefs"]}
+        assert refs_by_id["obsidian:00-inbox/customer-signal"] == {
+            "refId": "obsidian:00-inbox/customer-signal",
+            "sourceType": "obsidian",
+            "label": "Customer signal",
+            "pathOrUrl": "00 Inbox/customer-signal.md",
+            "freshness": "fresh",
+            "accessState": "allowed",
+            "canonical": True,
+            "summaryOnly": True,
+            "blockedReason": None,
+        }
+        blocked_ref = refs_by_id["source:malformed"]
+        assert blocked_ref["sourceType"] == "manual"
+        assert blocked_ref["freshness"] == "unknown"
+        assert blocked_ref["accessState"] == "blocked"
+        assert blocked_ref["canonical"] is False
+        assert blocked_ref["summaryOnly"] is True
+        assert blocked_ref["pathOrUrl"] is None
+        assert blocked_ref["blockedReason"] == "invalid source type; invalid freshness; unsafe non-summary source metadata"
+
+        events_response = client.get(f"/work-items/{work_item_id}/events")
+        assert events_response.status_code == 200
+        promotion_event = next(event for event in events_response.json()["data"] if event["eventType"] == "candidate_work.promoted")
+        assert promotion_event["actorType"] == "operator"
+        assert promotion_event["payload"]["actor"] == {"type": "operator", "id": None, "label": "Operator"}
+        assert promotion_event["payload"]["authority"] == {
+            "operation": "candidate_work.promotion",
+            "mode": "explicit_candidate_approval",
+        }
+        assert promotion_event["payload"]["before"] == {"candidateStatus": "approved", "promotedWorkItemId": None}
+        assert promotion_event["payload"]["after"]["candidateStatus"] == "approved"
+        assert promotion_event["payload"]["after"]["promotedWorkItemId"] == work_item_id
+        assert promotion_event["payload"]["evidenceRefs"] == ["candidate-import:source-ref-check"]
+        assert promotion_event["payload"]["workPacketSourceRefs"] == [
+            "obsidian:00-inbox/customer-signal",
+            "source:malformed",
+        ]
+
+
 def test_candidate_work_list_uses_sort_order(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "candidate-work-order.db") as client:
         for title, sort_order in (("Second", 20), ("First", 10)):

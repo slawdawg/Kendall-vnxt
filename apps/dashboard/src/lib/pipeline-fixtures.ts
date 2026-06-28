@@ -1628,7 +1628,9 @@ function packetFixture(input: {
       pathOrUrl: "_bmad-output/implementation-artifacts/1-5-define-pipeline-state-evidence-and-fixture-matrix.md",
       freshness: input.freshnessLabel === "stale" ? "stale" : "fresh",
       accessState: "allowed",
+      canonical: true,
       summaryOnly: true,
+      blockedReason: null,
     },
   ];
 
@@ -1639,7 +1641,9 @@ function packetFixture(input: {
       label: "Stale research summary",
       freshness: "stale",
       accessState: "blocked",
+      canonical: false,
       summaryOnly: true,
+      blockedReason: "stale research source must be refreshed before promotion",
     });
   }
   if (input.fixtureId === "obsidian_proposal_pending_approval" || input.fixtureId === "corrupted_incomplete_aggregate") {
@@ -1650,7 +1654,9 @@ function packetFixture(input: {
         label: "Obsidian human-owned memory",
         freshness: "fresh",
         accessState: "excluded",
+        canonical: true,
         summaryOnly: true,
+        blockedReason: "human-owned Obsidian source is excluded from automated mutation",
       },
       {
         refId: `${input.packetId}:source:llm-wiki-derived-only`,
@@ -1658,7 +1664,9 @@ function packetFixture(input: {
         label: "LLM-Wiki derived-only digest",
         freshness: "fresh",
         accessState: "blocked",
+        canonical: false,
         summaryOnly: true,
+        blockedReason: "LLM-Wiki is derived-only and cannot be treated as source of truth",
       }
     );
   }
@@ -1669,7 +1677,9 @@ function packetFixture(input: {
       label: "Approved Obsidian memory metadata",
       freshness: "fresh",
       accessState: "allowed",
+      canonical: true,
       summaryOnly: true,
+      blockedReason: null,
     });
   }
   const evidenceRefs: WorkPacketV0View["evidenceRefs"] = [
