@@ -17,7 +17,7 @@ export default async function PipelinePage() {
   return (
     <Shell compactHeader realtimeRefresh={false} wide>
       <PipelineCockpit
-        fixtureMode={pipelineFixtureMode}
+        fixtureMode={fixtureMode}
         packets={packets}
         selectedPacket={selectedPacket}
       />
