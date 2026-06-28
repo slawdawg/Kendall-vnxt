@@ -1138,7 +1138,9 @@ function claimNext(argv) {
       ...plan,
       `wrote ${applied.path}`,
       applied.message,
-      "assignment metadata only; no branch, PR, worktree, worker, or implementation mutation",
+      selected.mutation === "manifest_owner_claim"
+        ? "workspace manifest owner metadata only; no branch, PR, worktree, worker, or implementation mutation"
+        : "assignment metadata only; no branch, PR, worktree, worker, or implementation mutation",
     ]);
   }
 

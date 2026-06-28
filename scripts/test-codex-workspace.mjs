@@ -2306,6 +2306,92 @@ try {
     }
   });
 
+  test("claim-next apply claims one existing unowned safe backlog workspace", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-unowned-ready-"));
+    try {
+      const expected = {
+        slug: "bmad-1-1-validate-the-pipeline-work-packet-read-contract",
+        branch: "codex/bmad-1-1-validate-the-pipeline-work-packet-read-contract",
+      };
+      const tasksDir = join(claimStateRoot, "tasks");
+      const assignmentsDir = join(claimStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      seedUnownedSafeBacklogWorkspace(claimStateRoot, expected.slug, expected.branch);
+      const manifestPath = join(tasksDir, `${expected.slug}-workspace.json`);
+      const beforeTasks = taskSnapshot(tasksDir);
+
+      const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes(`claim candidate ${expected.slug} (claim existing unowned workspace ${expected.slug}-workspace)`), result.stdout || result.stderr);
+      assert(result.stdout.includes(`claimed existing unowned workspace ${expected.slug}-workspace for runner-a`), result.stdout || result.stderr);
+      assert(result.stdout.includes("workspace manifest owner metadata only; no branch, PR, worktree, worker, or implementation mutation"), result.stdout || result.stderr);
+      const manifest = readJson(manifestPath);
+      assert(manifest.owner === "runner-a", result.stdout || result.stderr);
+      assert(manifest.owner_acquired_at, "owner acquisition timestamp missing");
+      assert(manifest.owner_updated_at === manifest.owner_acquired_at, "owner updated timestamp should match claim timestamp");
+      assert(manifest.ownership_takeovers?.[0]?.previous_owner === "unowned", "previous owner evidence missing");
+      assert(manifest.ownership_takeovers?.[0]?.new_owner === "runner-a", "new owner evidence missing");
+      assert(manifest.ownership_takeovers?.[0]?.reason === "unowned legacy lane claimed", "claim reason evidence missing");
+      assert(manifest.events.some((event) => event.type === "ownership_claimed"), "ownership claim event missing");
+      assert(manifest.branch === expected.branch, "claim changed manifest branch");
+      assert(manifest.worktree_path === rootDir, "claim changed manifest worktree path");
+      assert(!manifest.pr_url, "claim wrote PR URL evidence");
+      assert(!manifest.pr_number, "claim wrote PR number evidence");
+      assert(manifest.runner_kind === undefined, "claim wrote runner evidence");
+      assert(!existsSync(join(assignmentsDir, `${expected.slug}.json`)), "manifest owner claim should not create assignment metadata");
+      assert(!existsSync(join(claimStateRoot, "worktrees")), "manifest owner claim should not create a worktree");
+      const afterTasksWithoutClaimedManifest = taskSnapshot(tasksDir).replace(readFileSync(manifestPath, "utf8"), "");
+      assert(beforeTasks.includes('"owner": ""'), "fixture should start unowned");
+      assert(!afterTasksWithoutClaimedManifest.includes("runner-a"), "claim mutated unrelated task manifests");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next apply revalidates an unowned workspace before manifest claim", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-unowned-race-"));
+    try {
+      const laneSlug = "bmad-1-1-validate-the-pipeline-work-packet-read-contract";
+      const branch = `codex/${laneSlug}`;
+      const tasksDir = join(claimStateRoot, "tasks");
+      const assignmentsDir = join(claimStateRoot, "assignments");
+      mkdirSync(tasksDir, { recursive: true });
+      seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      seedUnownedSafeBacklogWorkspace(claimStateRoot, laneSlug, branch);
+      const manifestPath = join(tasksDir, `${laneSlug}-workspace.json`);
+
+      const preview = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      assert(preview.stdout.includes(`claim candidate ${laneSlug} (claim existing unowned workspace ${laneSlug}-workspace)`), preview.stdout || preview.stderr);
+
+      const manifest = readJson(manifestPath);
+      manifest.owner = "runner-b";
+      manifest.owner_acquired_at = "2026-06-28T00:00:00.000Z";
+      manifest.owner_updated_at = "2026-06-28T00:00:00.000Z";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      const beforeManifest = readFileSync(manifestPath, "utf8");
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const result = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("claimed ready lane bmad-1-2-expose-read-only-supervisor-packet-projections"), result.stdout || result.stderr);
+      const afterManifest = readJson(manifestPath);
+      assert(afterManifest.owner === "runner-b", "stale unowned preview claim overwrote the fresh owner");
+      assert(readFileSync(manifestPath, "utf8") === beforeManifest, "stale unowned preview mutated the owned workspace manifest");
+      assert(!existsSync(join(assignmentsDir, `${laneSlug}.json`)), "stale unowned preview created assignment metadata for owned lane");
+      assert(
+        existsSync(join(assignmentsDir, "bmad-1-2-expose-read-only-supervisor-packet-projections.json")),
+        "apply did not claim the next safe assignment after revalidation",
+      );
+      assert(taskSnapshot(assignmentsDir) !== beforeAssignments, "apply should claim the next safe assignment instead of stale workspace");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
   test("claim-next apply refreshes the first BMAD assignment idempotently", () => {
     const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-idempotent-"));
     try {
