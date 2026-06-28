@@ -312,6 +312,24 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
                 {"artifactType": "missing_fixture"},
             ],
         )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-routing-preview",
+            event_type="routing.preview_recorded",
+            summary="Routing preview recorded.",
+            payload={"selectedLane": "utility", "reasonCodes": ["task.deterministic_check"]},
+            created_at="2026-06-27 23:59:58.000000",
+        )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-routing-outcome",
+            event_type="routing.outcome_recorded",
+            summary="Routing outcome recorded.",
+            payload={"selectedLane": "utility", "reasonCodes": ["task.deterministic_check"]},
+            created_at="2026-06-27 23:59:59.000000",
+        )
 
         before_attempts = client.get(f"/work-items/{work_item['id']}/execution-attempts").json()["data"]
         before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
@@ -355,6 +373,10 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         assert "execution_attempt.planned" in event_types
         assert "execution_attempt.failed" in event_types
         durable_event_ids = {f"event:{event['id']}" for event in before_events}
+        routing_event_ids = {
+            f"event:{event['id']}" for event in before_events if event["eventType"].startswith("routing.")
+        }
+        assert routing_event_ids
         failed_transition = next(transition for transition in transition_events if transition["eventType"] == "execution_attempt.failed")
         assert event_types.index("execution_attempt.planned") < event_types.index("execution_attempt.failed")
         assert failed_transition["sourceStage"] == "shape"
@@ -368,6 +390,8 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         assert f"attempt:{attempt['attemptId']}" in failed_transition["evidenceRefs"]
         assert failed_transition["durable"] is True
         assert all("workspaceIsolationPlan" not in transition for transition in transition_events)
+        packet_evidence_ref_ids = {ref["refId"] for ref in packet["evidenceRefs"]}
+        assert routing_event_ids <= packet_evidence_ref_ids
         assert any(ref["evidenceType"] == "attempt" for ref in packet["evidenceRefs"])
         attempt_artifacts = [ref for ref in packet["artifactRefs"] if ref["refId"].startswith(f"artifact:attempt:{attempt['attemptId']}")]
         assert attempt_artifacts
@@ -400,6 +424,76 @@ def test_work_packet_transition_events_replay_work_item_and_subscription_launch_
         _insert_workflow_event_fixture(
             db_path,
             work_item["id"],
+            event_id="event-recipe-ready",
+            event_type="recipe.ready",
+            summary="Recipe moved to ready.",
+            payload={"state": "ready", "lane": "local_patch_draft"},
+            created_at="2026-06-28 00:00:01.250000",
+        )
+        for event_id, event_type in [
+            ("event-work-item-assigned", "work_item.assigned"),
+            ("event-work-item-unassigned", "work_item.unassigned"),
+            ("event-work-item-escalated", "work_item.escalated"),
+        ]:
+            _insert_workflow_event_fixture(
+                db_path,
+                work_item["id"],
+                event_id=event_id,
+                event_type=event_type,
+                summary="Work item bookkeeping changed without a state transition.",
+                payload={"state": "ready", "lane": "utility", "assigneeLabel": "Operator"},
+                created_at="2026-06-28 00:00:01.500000",
+            )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
+            event_id="event-supervised-codex-started",
+            event_type="execution_attempt.supervised_codex_launch_started",
+            summary="Supervised Codex launch started.",
+            payload={
+                "attemptId": "attempt-supervised-codex",
+                "selectedLane": "codex_cli_worker",
+                "status": "completed",
+            },
+            created_at="2026-06-28 00:00:01.750000",
+        )
+        for event_id, event_type, summary in [
+            (
+                "event-subscription-z-started",
+                "execution_attempt.subscription_launch_fixture_started",
+                "Subscription-agent artifact-only fixture started.",
+            ),
+            (
+                "event-subscription-b-timeout-policy",
+                "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+                "Subscription-agent timeout policy recorded.",
+            ),
+            (
+                "event-subscription-c-cancellation-policy",
+                "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+                "Subscription-agent cancellation policy recorded.",
+            ),
+            (
+                "event-subscription-d-rollback-disabled",
+                "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+                "Subscription-agent rollback-disabled policy recorded.",
+            ),
+        ]:
+            _insert_workflow_event_fixture(
+                db_path,
+                work_item["id"],
+                event_id=event_id,
+                event_type=event_type,
+                summary=summary,
+                payload={
+                    "executionAttemptId": "attempt-subscription-fixture",
+                    "approvalBinding": {"lane": "subscription_agent"},
+                },
+                created_at="2026-06-28 00:00:02.000000",
+            )
+        _insert_workflow_event_fixture(
+            db_path,
+            work_item["id"],
             event_id="event-subscription-completed",
             event_type="execution_attempt.subscription_launch_fixture_completed",
             summary="Subscription-agent artifact-only fixture completed.",
@@ -421,6 +515,19 @@ def test_work_packet_transition_events_replay_work_item_and_subscription_launch_
         assert ready_transition["targetOwner"] == "operator"
         assert ready_transition["targetStatus"] == "waiting"
         assert ready_transition["evidenceRefs"] == ["event:event-work-item-ready"]
+        recipe_transition = transition_by_type["recipe.ready"]
+        assert recipe_transition["targetStage"] == "human_gate"
+        assert recipe_transition["targetOwner"] == "operator"
+        assert recipe_transition["targetStatus"] == "waiting"
+        assert recipe_transition["evidenceRefs"] == ["event:event-recipe-ready"]
+        for bookkeeping_event_type in ["work_item.assigned", "work_item.unassigned", "work_item.escalated"]:
+            assert bookkeeping_event_type not in transition_by_type
+
+        supervised_transition = transition_by_type["execution_attempt.supervised_codex_launch_started"]
+        assert supervised_transition["targetStage"] == "execute"
+        assert supervised_transition["targetOwner"] == "codex_worker"
+        assert supervised_transition["targetStatus"] == "active"
+        assert "attempt:attempt-supervised-codex" in supervised_transition["evidenceRefs"]
 
         subscription_transition = transition_by_type["execution_attempt.subscription_launch_fixture_completed"]
         assert subscription_transition["targetStage"] == "review"
@@ -428,6 +535,18 @@ def test_work_packet_transition_events_replay_work_item_and_subscription_launch_
         assert subscription_transition["targetStatus"] == "complete"
         assert "event:event-subscription-completed" in subscription_transition["evidenceRefs"]
         assert "attempt:attempt-subscription-fixture" in subscription_transition["evidenceRefs"]
+        subscription_order = [
+            transition["eventType"]
+            for transition in packet["transitionEvents"]
+            if transition["eventType"].startswith("execution_attempt.subscription_launch_fixture_")
+        ]
+        assert subscription_order == [
+            "execution_attempt.subscription_launch_fixture_started",
+            "execution_attempt.subscription_launch_fixture_timeout_policy_recorded",
+            "execution_attempt.subscription_launch_fixture_cancellation_policy_recorded",
+            "execution_attempt.subscription_launch_fixture_rollback_disabled_recorded",
+            "execution_attempt.subscription_launch_fixture_completed",
+        ]
 
         packet_evidence_ref_ids = {ref["refId"] for ref in packet["evidenceRefs"]}
         assert "event:event-work-item-ready" in packet_evidence_ref_ids

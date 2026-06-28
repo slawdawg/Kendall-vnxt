@@ -20730,13 +20730,19 @@ class SupervisorService:
             "planned": 100,
             "approved": 110,
             "starting": 120,
+            "supervised_codex_launch_started": 120,
+            "subscription_launch_fixture_started": 120,
             "running": 130,
+            "subscription_launch_fixture_timeout_policy_recorded": 131,
+            "subscription_launch_fixture_cancellation_policy_recorded": 132,
+            "subscription_launch_fixture_rollback_disabled_recorded": 133,
             "cancel_requested": 140,
             "cancelled": 150,
             "timed_out": 150,
             "failed": 150,
             "rejected": 150,
             "completed": 160,
+            "subscription_launch_fixture_completed": 160,
         }.get(event_type.removeprefix("execution_attempt."), 900)
 
     def _work_packet_transition_target_for_event(self, event_type: str, payload: dict) -> tuple[str, str, str, list[str]] | None:
@@ -20755,7 +20761,7 @@ class SupervisorService:
                 "routing.outcome_recorded",
             )
         state = payload.get("state")
-        if isinstance(state, str):
+        if isinstance(state, str) and self._work_packet_is_state_transition_event(event_type, state):
             lane = payload.get("lane")
             mapped = self._gate_state_from_workflow_state(state, lane if isinstance(lane, str) else None)
             if mapped:
@@ -20765,10 +20771,12 @@ class SupervisorService:
 
         status = event_type.removeprefix("execution_attempt.")
         if status.startswith("subscription_launch_fixture_"):
-            status = "completed" if status == "subscription_launch_fixture_completed" else "running"
+            status = "completed" if status == "subscription_launch_fixture_completed" else "starting"
         elif status == "subscription_launch_runtime_recorded":
             attempt_status = payload.get("attemptStatus")
             status = attempt_status if isinstance(attempt_status, str) and attempt_status else "completed"
+        elif status == "supervised_codex_launch_started":
+            status = "starting"
         selected_lane = payload.get("selectedLane") or payload.get("lane")
         approval_binding = payload.get("approvalBinding")
         if not selected_lane and isinstance(approval_binding, dict):
@@ -20790,6 +20798,14 @@ class SupervisorService:
         if status in {"cancel_requested", "timed_out", "failed", "rejected"}:
             return "execute", "blocked", "failed", reason_codes
         return None
+
+    def _work_packet_is_state_transition_event(self, event_type: str, state: str) -> bool:
+        if "." not in event_type:
+            return False
+        event_family, event_state = event_type.rsplit(".", 1)
+        if event_state != state:
+            return False
+        return event_family in {"work_item", "workflow", "recipe", "repo"}
 
     def _work_packet_event_attempt_id(self, payload: dict) -> str | None:
         for key in ("attemptId", "executionAttemptId"):
