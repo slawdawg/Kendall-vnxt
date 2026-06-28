@@ -79,6 +79,7 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.doesNotMatch(humanGateActionBlock, /actionType:/);
   assert.doesNotMatch(humanGateActionBlock, /availability:/);
   assert.doesNotMatch(humanGateActionBlock, /summary:/);
+  assert.match(humanGateActionBlock, /reasonCodes:\s*string\[\];/);
 
   assert.match(workPacketSource, /rawPayloadRetained:\s*false;/);
   assert.match(workPacketSource, /writeBackAllowed:\s*false;/);

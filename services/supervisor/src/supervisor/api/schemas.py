@@ -840,6 +840,34 @@ class RecoveryActionV0View(BaseModel):
     evidenceRefs: list[str] = Field(default_factory=list)
 
 
+class GateReplayRefStateV0View(BaseModel):
+    refId: str
+    refType: Literal["source", "evidence", "event"]
+    state: Literal["allowed", "blocked", "missing", "excluded", "redacted", "unsupported", "metadata_only"]
+    label: str
+    blockingReason: str | None = None
+
+
+class WorkPacketGateStateValidationV0View(BaseModel):
+    status: Literal["matched", "blocked", "preview_only"]
+    storedStage: str
+    derivedStage: str | None = None
+    storedOwner: str
+    derivedOwner: str | None = None
+    storedStatus: str
+    derivedStatus: str | None = None
+    eventCount: int
+    latestEventType: str | None = None
+    replayedEventTypes: list[str] = Field(default_factory=list)
+    mismatchReasons: list[str] = Field(default_factory=list)
+    blockedReasons: list[str] = Field(default_factory=list)
+    refStates: list[GateReplayRefStateV0View] = Field(default_factory=list)
+    readOnly: Literal[True] = True
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    workerLaunchAllowed: Literal[False] = False
+
+
 class WorkPacketRouteSummaryV0View(BaseModel):
     recommendation: str
     confidenceScore: float | None = None
@@ -960,6 +988,7 @@ class WorkPacketV0View(BaseModel):
     laneCards: list[WorkPacketLaneCardV0View] = Field(default_factory=list)
     memoryProposals: list[MemoryProposalV0View] = Field(default_factory=list)
     alphaMemorySourceStatus: AlphaMemorySourceStatusV0View | None = None
+    gateStateValidation: WorkPacketGateStateValidationV0View | None = None
     reviewSummaries: list[WorkPacketReviewSummaryV0View] = Field(default_factory=list)
     recoveryActions: list[RecoveryActionV0View] = Field(default_factory=list)
 

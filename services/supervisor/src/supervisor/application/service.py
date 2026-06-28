@@ -188,9 +188,11 @@ from supervisor.api.schemas import (
     WorkflowEventView,
     ArtifactRefV0View,
     EvidenceRefV0View,
+    GateReplayRefStateV0View,
     RecoveryActionV0View,
     AlphaMemorySourceStatusV0View,
     SourceRefV0View,
+    WorkPacketGateStateValidationV0View,
     WorkPacketExecutionAttemptSummaryV0View,
     WorkPacketLaneCardV0View,
     WorkPacketRouteSummaryV0View,
@@ -20480,6 +20482,14 @@ class SupervisorService:
             laneCards=self._work_packet_lane_cards(attempts, routing_preview),
             memoryProposals=memory_proposal_views,
             alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs, memory_proposal_views),
+            gateStateValidation=self._work_packet_gate_state_validation(
+                stored_stage=stage,
+                stored_owner=owner,
+                stored_status=status,
+                source_refs=source_refs,
+                evidence_refs=evidence_refs,
+                events=workflow_events,
+            ),
             reviewSummaries=self._work_packet_review_summaries(item_view, evidence_refs, artifact_refs),
             recoveryActions=self._work_packet_recovery_actions(status, evidence_refs),
         )
@@ -20777,6 +20787,168 @@ class SupervisorService:
             if safe_reason_codes:
                 return safe_reason_codes
         return self._execution_lane_reason_codes(lane, fallback_reason_code)
+
+    def _work_packet_gate_state_validation(
+        self,
+        *,
+        stored_stage: str,
+        stored_owner: str,
+        stored_status: str,
+        source_refs: list[SourceRefV0View],
+        evidence_refs: list[EvidenceRefV0View],
+        events: list[WorkflowEvent],
+    ) -> WorkPacketGateStateValidationV0View:
+        event_views = [self.to_event_view(event) for event in events]
+        derived_stage, derived_owner, derived_status, replayed_event_types = self._derive_gate_state_from_events(event_views)
+        ref_states = self._gate_replay_ref_states(source_refs, evidence_refs, event_views)
+        blocked_reasons = [state.blockingReason for state in ref_states if state.blockingReason]
+        mismatch_reasons: list[str] = []
+        if derived_stage and derived_stage != stored_stage:
+            mismatch_reasons.append(f"stored stage {stored_stage} does not match event replay stage {derived_stage}")
+        if derived_owner and derived_owner != stored_owner:
+            mismatch_reasons.append(f"stored owner {stored_owner} does not match event replay owner {derived_owner}")
+        if derived_status and derived_status != stored_status:
+            mismatch_reasons.append(f"stored status {stored_status} does not match event replay status {derived_status}")
+
+        status = "matched"
+        if not derived_stage:
+            status = "preview_only"
+            blocked_reasons.append("No replayable workflow event establishes gate state yet.")
+        if mismatch_reasons or blocked_reasons:
+            status = "blocked" if derived_stage else "preview_only"
+
+        return WorkPacketGateStateValidationV0View(
+            status=status,
+            storedStage=stored_stage,
+            derivedStage=derived_stage,
+            storedOwner=stored_owner,
+            derivedOwner=derived_owner,
+            storedStatus=stored_status,
+            derivedStatus=derived_status,
+            eventCount=len(event_views),
+            latestEventType=event_views[0].eventType if event_views else None,
+            replayedEventTypes=replayed_event_types,
+            mismatchReasons=mismatch_reasons,
+            blockedReasons=blocked_reasons,
+            refStates=ref_states,
+        )
+
+    def _derive_gate_state_from_events(
+        self,
+        events_desc: list[WorkflowEventView],
+    ) -> tuple[str | None, str | None, str | None, list[str]]:
+        derived: tuple[str | None, str | None, str | None] = (None, None, None)
+        replayed_event_types: list[str] = []
+        for event in reversed(events_desc):
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            event_type = event.eventType
+            if event_type not in replayed_event_types:
+                replayed_event_types.append(event_type)
+
+            state = payload.get("state")
+            if isinstance(state, str):
+                lane = payload.get("lane")
+                mapped = self._gate_state_from_workflow_state(state, lane if isinstance(lane, str) else None)
+                if mapped:
+                    derived = mapped
+
+            if event_type.startswith("execution_attempt."):
+                attempt_status = str(payload.get("status") or event_type.removeprefix("execution_attempt."))
+                lane = payload.get("selectedLane") or payload.get("lane")
+                mapped = self._gate_state_from_execution_attempt_status(attempt_status, lane if isinstance(lane, str) else None)
+                if mapped:
+                    derived = mapped
+
+        return (*derived, replayed_event_types)
+
+    def _gate_state_from_workflow_state(self, state: str, lane: str | None = None) -> tuple[str, str, str] | None:
+        state_map = {
+            "queued": ("capture", "kendall", "active"),
+            "triaged": ("classify", "kendall", "active"),
+            "ready": ("human_gate", "operator", "waiting"),
+            "implementing": ("execute", self._owner_for_lane(lane), "active"),
+            "validating": ("review", "kendall", "active"),
+            "reviewing": ("review", "kendall", "active"),
+            "awaiting_audit": ("review", "operator", "waiting"),
+            "needs_rework": ("shape", "kendall", "active"),
+            "blocked": ("human_gate", "blocked", "blocked"),
+            "done": ("deliver", "kendall", "complete"),
+        }
+        return state_map.get(state)
+
+    def _gate_state_from_execution_attempt_status(self, status: str, lane: str | None) -> tuple[str, str, str] | None:
+        if status == ExecutionAttemptStatus.PLANNED.value:
+            return "shape", "kendall", "waiting"
+        if status == ExecutionAttemptStatus.APPROVED.value:
+            return "human_gate", "operator", "waiting"
+        if status in {ExecutionAttemptStatus.STARTING.value, ExecutionAttemptStatus.RUNNING.value}:
+            return "execute", self._owner_for_lane(lane), "active"
+        if status == ExecutionAttemptStatus.COMPLETED.value:
+            return "review", "kendall", "complete"
+        if status == ExecutionAttemptStatus.CANCELLED.value:
+            return "execute", "blocked", "blocked"
+        if status in {
+            ExecutionAttemptStatus.CANCEL_REQUESTED.value,
+            ExecutionAttemptStatus.TIMED_OUT.value,
+            ExecutionAttemptStatus.FAILED.value,
+            ExecutionAttemptStatus.REJECTED.value,
+        }:
+            return "execute", "blocked", "failed"
+        return None
+
+    def _gate_replay_ref_states(
+        self,
+        source_refs: list[SourceRefV0View],
+        evidence_refs: list[EvidenceRefV0View],
+        event_views: list[WorkflowEventView],
+    ) -> list[GateReplayRefStateV0View]:
+        states: list[GateReplayRefStateV0View] = []
+        for ref in source_refs:
+            access_state = ref.accessState
+            blocking_reason = None
+            if access_state != "allowed":
+                blocking_reason = ref.blockedReason or f"Source ref {ref.refId} is {access_state}."
+            states.append(
+                GateReplayRefStateV0View(
+                    refId=ref.refId,
+                    refType="source",
+                    state=access_state,
+                    label=ref.label,
+                    blockingReason=blocking_reason,
+                )
+            )
+        for ref in evidence_refs:
+            state = "metadata_only" if ref.retentionClass == "metadata_only" else "allowed"
+            states.append(
+                GateReplayRefStateV0View(
+                    refId=ref.refId,
+                    refType="evidence",
+                    state=state,
+                    label=ref.label,
+                    blockingReason=None,
+                )
+            )
+        for event in event_views:
+            if self._payload_contains_redaction_marker(event.payload):
+                states.append(
+                    GateReplayRefStateV0View(
+                        refId=f"event:{event.id}",
+                        refType="event",
+                        state="redacted",
+                        label=event.eventType,
+                        blockingReason=f"Event {event.eventType} contains redacted payload fields and cannot fully prove gate state.",
+                    )
+                )
+        return states
+
+    def _payload_contains_redaction_marker(self, value: object) -> bool:
+        if isinstance(value, dict):
+            if value.get("redactedUnknownKeys") is True:
+                return True
+            return any(self._payload_contains_redaction_marker(child) for child in value.values())
+        if isinstance(value, list):
+            return any(self._payload_contains_redaction_marker(child) for child in value)
+        return False
 
     def _work_packet_source_refs(
         self,

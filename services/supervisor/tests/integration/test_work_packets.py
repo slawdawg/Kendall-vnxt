@@ -360,6 +360,173 @@ def test_work_packet_assembles_route_task_attempt_evidence_and_recovery_metadata
         assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == before_events
 
 
+def test_work_packet_gate_state_validation_matches_event_replay_without_mutation(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-gate-replay-match.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        from supervisor.api.main import service
+
+        service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Gate replay matched packet",
+                "requestedOutcome": "Validate stored gate state against ordered events.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "sourceArtifactPath": "docs/gate-replay.md",
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+
+        attempt_response = client.post(f"/work-items/{work_item['id']}/execution-attempts", json={})
+        assert attempt_response.status_code == 200
+        attempt = attempt_response.json()["data"]
+        approval_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "operator gate approval",
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+            },
+        )
+        assert approval_response.status_code == 200
+        before_events = client.get(f"/work-items/{work_item['id']}/events").json()["data"]
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        validation = packet["gateStateValidation"]
+
+        assert validation["status"] == "matched"
+        assert validation["storedStage"] == "human_gate"
+        assert validation["derivedStage"] == "human_gate"
+        assert validation["storedOwner"] == "operator"
+        assert validation["derivedOwner"] == "operator"
+        assert validation["storedStatus"] == "waiting"
+        assert validation["derivedStatus"] == "waiting"
+        assert validation["latestEventType"] == "execution_attempt.approved"
+        assert "execution_attempt.approved" in validation["replayedEventTypes"]
+        assert validation["mismatchReasons"] == []
+        assert validation["blockedReasons"] == []
+        assert validation["readOnly"] is True
+        assert validation["sourceMutationAllowed"] is False
+        assert validation["providerCallsAllowed"] is False
+        assert validation["workerLaunchAllowed"] is False
+        assert client.get(f"/work-items/{work_item['id']}/events").json()["data"] == before_events
+
+
+def test_work_packet_gate_state_validation_blocks_mismatch_from_event_replay(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-gate-replay-mismatch.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        from supervisor.api.main import service
+
+        service._repo_is_dirty = lambda: False  # type: ignore[method-assign]
+        work_item_response = client.post(
+            "/work-items",
+            json={
+                "title": "Gate replay mismatch packet",
+                "requestedOutcome": "Report stored gate state drift as blocked validation.",
+                "source": "pytest",
+                "riskLevel": "low",
+                "metadata": {
+                    "executionRecipeId": "dashboard-test-coverage",
+                    "sourceArtifactPath": "docs/gate-replay.md",
+                },
+            },
+        )
+        assert work_item_response.status_code == 200
+        work_item = work_item_response.json()["data"]
+        attempt_response = client.post(f"/work-items/{work_item['id']}/execution-attempts", json={})
+        attempt = attempt_response.json()["data"]
+        approval_response = client.post(
+            f"/work-items/{work_item['id']}/execution-attempts/{attempt['attemptId']}/lifecycle",
+            json={
+                "status": "approved",
+                "reason": "operator gate approval",
+                "routeDecisionId": attempt["routeDecisionId"],
+                "workerId": attempt["workerId"],
+                "lane": attempt["lane"],
+                "authorityMode": attempt["authorityMode"],
+            },
+        )
+        assert approval_response.status_code == 200
+        _update_execution_attempt_fixture(db_path, attempt["attemptId"], status="running")
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        validation = packet_response.json()["data"]["gateStateValidation"]
+
+        assert validation["status"] == "blocked"
+        assert validation["storedStage"] == "execute"
+        assert validation["derivedStage"] == "human_gate"
+        assert validation["storedStatus"] == "active"
+        assert validation["derivedStatus"] == "waiting"
+        assert any("stored stage execute" in reason for reason in validation["mismatchReasons"])
+        assert any("stored status active" in reason for reason in validation["mismatchReasons"])
+
+
+def test_work_packet_gate_state_validation_blocks_inaccessible_refs_with_explicit_states(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-gate-replay-refs.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Gate replay inaccessible refs packet")
+        _update_work_item_fixture(
+            db_path,
+            work_item["id"],
+            metadata_json={
+                "sourceArtifactPath": "docs/direct-work.md",
+                "workPacketSourceRefs": [
+                    {
+                        "refId": "fixture:source:missing",
+                        "sourceType": "github",
+                        "label": "Missing GitHub evidence",
+                        "freshness": "unknown",
+                        "accessState": "missing",
+                    },
+                    {
+                        "refId": "fixture:source:excluded",
+                        "sourceType": "llm_wiki",
+                        "label": "Excluded wiki source",
+                        "pathOrUrl": "https://example.invalid/raw-source",
+                        "freshness": "unknown",
+                        "accessState": "excluded",
+                    },
+                    {
+                        "refId": "fixture:source:unsupported",
+                        "sourceType": "private_dump",
+                        "label": "Unsupported private dump",
+                        "pathOrUrl": "file:///private/raw-source.md",
+                        "freshness": "fresh",
+                        "accessState": "allowed",
+                    },
+                ],
+            },
+        )
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        validation = packet["gateStateValidation"]
+        ref_states = {ref["refId"]: ref for ref in validation["refStates"] if ref["refType"] == "source"}
+
+        assert validation["status"] in {"blocked", "preview_only"}
+        assert ref_states["fixture:source:missing"]["state"] == "missing"
+        assert ref_states["fixture:source:excluded"]["state"] == "excluded"
+        assert ref_states["fixture:source:unsupported"]["state"] == "blocked"
+        assert ref_states["fixture:source:excluded"]["blockingReason"]
+        assert packet["sourceRefs"][1]["accessState"] == "missing"
+        assert packet["sourceRefs"][2]["accessState"] == "excluded"
+        assert packet["sourceRefs"][2]["pathOrUrl"] is None
+
+
 def test_work_packet_matches_candidate_from_work_item_metadata_without_mutation(tmp_path, monkeypatch) -> None:
     with _client(tmp_path, monkeypatch, "work-packet-metadata-link.db") as client:
         candidate = _create_candidate(client, title="Metadata linked candidate")
