@@ -1905,23 +1905,28 @@ try {
   });
 
   test("claim-next dry-run previews the next safe backlog lane without mutation", () => {
-    const tasksDir = join(stateRoot, "tasks");
-    mkdirSync(tasksDir, { recursive: true });
-    seedGeneratedSuccessorPrerequisites(stateRoot);
-    const before = taskSnapshot(tasksDir);
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-dry-run-"));
+    try {
+      const tasksDir = join(claimStateRoot, "tasks");
+      mkdirSync(tasksDir, { recursive: true });
+      seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      const before = taskSnapshot(tasksDir);
 
-    const result = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", stateRoot]);
-    const after = taskSnapshot(tasksDir);
+      const result = run(["claim-next", "--dry-run", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      const after = taskSnapshot(tasksDir);
 
-    assert(result.code === 0, result.stderr || result.stdout);
-    assert(result.stdout.includes("DRY RUN: claim-next"), result.stdout || result.stderr);
-    assert(result.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
-    assert(result.stdout.includes("claimable=34"), result.stdout || result.stderr);
-    assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- bmad-1-2-expose-read-only-supervisor-packet-projections | assignable"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
-    assert(result.stdout.includes("- authority-blocked-work | closed"), result.stdout || result.stderr);
-    assert(before === after, "claim-next --dry-run mutated workspace manifests");
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("DRY RUN: claim-next"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claim candidate bmad-1-1-validate-the-pipeline-work-packet-read-contract"), result.stdout || result.stderr);
+      assert(result.stdout.includes("claimable=34"), result.stdout || result.stderr);
+      assert(result.stdout.includes("preview only; no manifest, branch, PR, or worktree mutation"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- bmad-1-2-expose-read-only-supervisor-packet-projections | assignable"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- dispatcher-closed-source-guard-filter-empty-state-shortcut-reason-keyboard-loop-refresh | closed"), result.stdout || result.stderr);
+      assert(result.stdout.includes("- authority-blocked-work | closed"), result.stdout || result.stderr);
+      assert(before === after, "claim-next --dry-run mutated workspace manifests");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
   });
 
   test("claim-next summary-json previews a bounded queue summary without mutation", () => {
@@ -2405,6 +2410,76 @@ try {
       const assignment = readJson(join(assignmentsDir, "bmad-1-1-validate-the-pipeline-work-packet-read-contract.json"));
       assert(assignment.assignment_id === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", second.stdout || second.stderr);
       assert(!existsSync(join(claimStateRoot, "worktrees")), "claim-next idempotent apply created worktrees");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next blocks a second active lane for the same runner session without mutation", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-claim-next-current-owner-bounded-"));
+    try {
+      const assignmentsDir = join(claimStateRoot, "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      seedGeneratedSuccessorPrerequisites(claimStateRoot);
+      writeFileSync(
+        join(assignmentsDir, "manual-active-lane.json"),
+        `${JSON.stringify(
+          {
+            assignment_id: "manual-active-lane",
+            task_id: "manual-active-lane",
+            lane_slug: "manual-active-lane",
+            branch: "codex/manual-active-lane",
+            status: "claimed",
+            owner: "runner-a",
+            assigned_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            last_heartbeat_at: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+
+      const preview = run(["claim-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", claimStateRoot]);
+
+      assert(preview.code === 0, preview.stderr || preview.stdout);
+      const packet = JSON.parse(preview.stdout);
+      assert(packet.selected === null, preview.stdout || preview.stderr);
+      assert(packet.blockerStatusCounts.blocked_current_owner_active_lane === 1, preview.stdout || preview.stderr);
+      assert(packet.blockers[0].reasonCode === "current_runner_active_lane_exists", preview.stdout || preview.stderr);
+      assert(
+        packet.assignmentPreview.blockedReasons.some((reason) => reason.includes("current runner already has active lane evidence")),
+        preview.stdout || preview.stderr,
+      );
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "claim-next dry-run mutated active assignment evidence");
+
+      const apply = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(apply.code !== 0, "claim-next apply unexpectedly claimed a second active lane");
+      assert(apply.stdout.includes("BLOCKED: claim-next"), apply.stdout || apply.stderr);
+      assert(
+        apply.stdout.includes("finish or clean up the current runner lane before claiming another safe backlog lane"),
+        apply.stdout || apply.stderr,
+      );
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "failed claim-next apply mutated assignment evidence");
+
+      const dispatchPreview = run(["dispatch-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(dispatchPreview.code === 0, dispatchPreview.stderr || dispatchPreview.stdout);
+      const dispatchPacket = JSON.parse(dispatchPreview.stdout);
+      assert(dispatchPacket.dispatch.allowed === false, dispatchPreview.stdout || dispatchPreview.stderr);
+      assert(dispatchPacket.selected === null, dispatchPreview.stdout || dispatchPreview.stderr);
+      assert(dispatchPacket.candidateStateCounts.blocked_current_owner_active_lane === 1, dispatchPreview.stdout || dispatchPreview.stderr);
+      assert(
+        dispatchPacket.laneAssignmentPreview.blockedReasons.some((reason) => reason.includes("current runner already has active lane evidence")),
+        dispatchPreview.stdout || dispatchPreview.stderr,
+      );
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "dispatch-next dry-run mutated active assignment evidence");
+
+      const dispatchApply = run(["dispatch-next", "--apply", "--no-fetch", "--owner", "runner-a", "--state-root", claimStateRoot]);
+      assert(dispatchApply.code !== 0, "dispatch-next apply unexpectedly claimed a second active lane");
+      assert(dispatchApply.stderr.includes("No dispatchable safe backlog lane found."), dispatchApply.stdout || dispatchApply.stderr);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "failed dispatch-next apply mutated assignment evidence");
+      assert(!existsSync(join(claimStateRoot, "worktrees")), "failed dispatch-next apply created a worktree");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }

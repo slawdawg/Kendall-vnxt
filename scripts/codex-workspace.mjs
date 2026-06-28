@@ -592,6 +592,7 @@ function reasonCodeForClassification(classification = {}) {
   if (reason === "ready safe backlog lane has an unowned active workspace") return "ready_unowned_active_workspace";
   if (reason === "ready safe backlog lane is already claimed by current runner") return "ready_claimed_by_current_runner";
   if (reason === "ready safe backlog lane has no workspace conflict") return "ready_no_workspace_conflict";
+  if (reason.startsWith("current runner already has active lane evidence: ")) return "current_runner_active_lane_exists";
   if (reason.startsWith("Refusing to operate on protected branch: ")) return "protected_branch_blocked";
   if (reason.startsWith("branch ") || reason.startsWith("local branch ") || reason.startsWith("remote branch ")) {
     return "branch_availability_blocked";
@@ -1098,7 +1099,14 @@ function claimNext(argv) {
       staleAfterSeconds,
     }),
   );
-  const selected = selectClaimableEvaluation(evaluations);
+  const { selected, evaluations: queueEvaluations } = applyCurrentOwnerSessionBounds({
+    evaluations,
+    manifests,
+    assignments,
+    currentOwner,
+    generatedAt,
+    staleAfterSeconds,
+  });
 
   const plan = [
     `current owner ${currentOwner}`,
@@ -1114,7 +1122,7 @@ function claimNext(argv) {
     plan.push(`start command ${selected.item.startCommand}`);
   }
   if (options.dryRun) {
-    const summary = buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selected, evaluations });
+    const summary = buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selected, evaluations: queueEvaluations });
     if (options.summaryJson) {
       console.log(JSON.stringify(summary, null, 2));
       return;
@@ -1125,7 +1133,7 @@ function claimNext(argv) {
   } else {
     if (!selected) {
       printBlocked("claim-next", plan);
-      printClaimBlockers(evaluations, selected);
+      printClaimBlockers(queueEvaluations, selected);
       throw new Error("No claimable safe backlog lane found.");
     }
     const applied = applyClaimNext(selected, {
@@ -1145,7 +1153,7 @@ function claimNext(argv) {
   }
 
   console.log("Queue evidence:");
-  printClaimBlockers(evaluations, selected);
+  printClaimBlockers(queueEvaluations, selected);
 }
 
 function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selected, evaluations }) {
@@ -1199,6 +1207,82 @@ function buildAssignmentPreview({ selected, currentOwner, mode, blockedReasons =
       ? [`safe backlog item ${targetLane}`, `${mode} dry-run summary-json`]
       : [`${mode} dry-run summary-json`, ...blockedRequiredEvidence],
     mutation: "none; preview only",
+  };
+}
+
+function applyCurrentOwnerSessionBounds({ evaluations, manifests, assignments, currentOwner, generatedAt, staleAfterSeconds }) {
+  const selectedCandidate = selectClaimableEvaluation(evaluations);
+  const boundedSessionBlockers = currentOwnerActiveLaneEvidence({ manifests, assignments, currentOwner, generatedAt, staleAfterSeconds })
+    .filter((evidence) => !currentOwnerEvidenceIsClosedSource(evidence, evaluations))
+    .filter((evidence) => !selectedMatchesCurrentOwnerEvidence(selectedCandidate, evidence))
+    .map((evidence) => currentOwnerActiveLaneEvaluation(evidence));
+  return {
+    selected: boundedSessionBlockers.length > 0 ? null : selectedCandidate,
+    evaluations: [...boundedSessionBlockers, ...evaluations],
+  };
+}
+
+function currentOwnerActiveLaneEvidence({ manifests, assignments, currentOwner, generatedAt, staleAfterSeconds }) {
+  const context = { currentOwner, generatedAt, staleAfterSeconds };
+  const assignmentEvidence = assignments
+    .filter((assignment) => assignment.owner === currentOwner && assignment.status !== "closed")
+    .map((assignment) => ({
+      kind: "assignment",
+      id: assignment.assignment_id || assignment.task_id || assignment.lane_slug || "unknown-assignment",
+      sourceBacklogItemId: assignment.source_backlog_item?.item_id || assignment.lane_slug || assignment.assignment_id || null,
+      branch: assignment.branch || null,
+      classification: classifyLaneAssignment(assignment, context).status,
+    }));
+  const workspaceEvidence = manifests
+    .filter((manifest) => manifest.owner === currentOwner && manifest.status !== "closed")
+    .map((manifest) => ({
+      kind: "workspace",
+      id: manifest.task_id || "unknown-workspace",
+      sourceBacklogItemId: manifest.source_backlog_item?.item_id || manifest.task_id || null,
+      branch: manifest.branch || null,
+      classification: classifyWorkspaceAssignment(manifest, context).status,
+    }));
+  return [...assignmentEvidence, ...workspaceEvidence].filter((evidence) =>
+    ["active", "claimed", "delivery", "cleanup"].includes(evidence.classification),
+  );
+}
+
+function selectedMatchesCurrentOwnerEvidence(selected, evidence) {
+  if (!selected) {
+    return false;
+  }
+  if (evidence.kind === "assignment" && selected.targetAssignmentId && selected.targetAssignmentId === evidence.id) {
+    return true;
+  }
+  if (evidence.kind === "workspace" && selected.targetTaskId && selected.targetTaskId === evidence.id) {
+    return true;
+  }
+  return Boolean(selected.item?.branchName && evidence.branch && selected.item.branchName === evidence.branch);
+}
+
+function currentOwnerEvidenceIsClosedSource(evidence, evaluations) {
+  return evaluations.some(
+    (evaluation) =>
+      evaluation.status === "closed" &&
+      (evaluation.item?.itemId === evidence.id || evaluation.item?.itemId === evidence.sourceBacklogItemId),
+  );
+}
+
+function currentOwnerActiveLaneEvaluation(evidence) {
+  const itemId = `current-owner-active-${evidence.kind}-${evidence.id}`;
+  return {
+    item: {
+      itemId,
+      status: "blocked",
+      branchName: evidence.branch || null,
+      priority: null,
+    },
+    claimable: false,
+    action: "",
+    mutation: "",
+    status: "blocked_current_owner_active_lane",
+    reason: `current runner already has active lane evidence: ${evidence.kind} ${evidence.id}`,
+    nextAction: "finish or clean up the current runner lane before claiming another safe backlog lane",
   };
 }
 
@@ -4035,12 +4119,20 @@ function applyClaimNext(selected, context) {
 }
 
 function dispatchPlan(context) {
-  const evaluations = dispatchCandidateEvaluations(context);
+  const { evaluations, manifests, assignments } = dispatchCandidateEvaluations(context);
   const deliveryWorkspaceCount = openDeliveryWorkspaceCount(context);
-  const selected = deliveryWorkspaceCount > 0 ? null : selectClaimableEvaluation(evaluations);
-  const packet = dispatchPacket(selected, evaluations, context);
-  return {
+  const bounded = applyCurrentOwnerSessionBounds({
     evaluations,
+    manifests,
+    assignments,
+    currentOwner: context.currentOwner,
+    generatedAt: context.generatedAt,
+    staleAfterSeconds: context.staleAfterSeconds,
+  });
+  const selected = deliveryWorkspaceCount > 0 ? null : bounded.selected;
+  const packet = dispatchPacket(selected, bounded.evaluations, context);
+  return {
+    evaluations: bounded.evaluations,
     selected,
     packet,
   };
@@ -4050,17 +4142,18 @@ function dispatchCandidateEvaluations(context) {
   const manifests = readManifests(context.state).map(({ manifest }) => manifest);
   const assignments = readAssignments(context.state).map(({ assignment }) => assignment);
   const backlogItems = readSafeBacklogItems();
-  return backlogItems.map((item) =>
+  const evaluations = backlogItems.map((item) =>
     evaluateClaimCandidate(item, manifests, assignments, {
       currentOwner: context.currentOwner,
       generatedAt: context.generatedAt,
       staleAfterSeconds: context.staleAfterSeconds,
     }),
   );
+  return { evaluations, manifests, assignments };
 }
 
 function dispatchCandidateStateCounts(context) {
-  return queueCandidateStateCounts(dispatchCandidateEvaluations(context));
+  return queueCandidateStateCounts(dispatchCandidateEvaluations(context).evaluations);
 }
 
 function dispatchPacket(selected, evaluations, context) {
