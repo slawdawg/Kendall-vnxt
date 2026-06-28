@@ -181,6 +181,23 @@ cannot be completed without expanded party-mode authority.
    of a planned task id, branch, worktree, and manifest path before workspace
    creation.
 
+## Best-Judgment Decision Evidence
+
+When an autonomous lane runner makes a material best-judgment choice, record it
+as metadata-only heartbeat evidence before continuing. Use `heartbeat <query>`
+with `--decision`, `--decision-rationale`, and `--next-safe-action` so the
+assignment or workspace manifest keeps the decision, owner, phase, current
+command summary, result summary, and next bounded action without branch, PR,
+cleanup, or ownership mutation.
+
+Record this evidence when the runner continues through routine uncertainty,
+chooses a supported fallback command, escalates or skips review within the
+active allowance, enters a stop state, follows the tool-churn recovery path, or
+handles cleanup or assignment-closeout mismatch evidence. Keep the retained
+text to summaries only. Do not store raw prompts, reasoning traces, provider
+payloads, secrets, credentials, or copied source content in best-judgment
+decision evidence.
+
 ## Lane Ownership
 
 Lane runners must treat the workspace manifest as the local ownership record.

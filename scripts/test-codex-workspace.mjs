@@ -2542,6 +2542,12 @@ try {
         "pnpm run check:static",
         "--last-result",
         "running",
+        "--decision",
+        "continue with source-owned start after dispatch reported open delivery work",
+        "--decision-rationale",
+        "claim-next selected this owner-scoped lane and no second lane was claimed",
+        "--next-safe-action",
+        "record the decision and proceed with scoped implementation",
         "--stale-after-seconds",
         "60",
         "--state-root",
@@ -2570,6 +2576,29 @@ try {
       assert(assignment.heartbeat_count === 1, "heartbeat count missing");
       assert(Boolean(assignment.last_heartbeat_at), "last heartbeat timestamp missing");
       assert(assignment.events.some((event) => event.type === "heartbeat"), "heartbeat event missing");
+      assert(
+        assignment.events.some((event) => event.type === "best_judgment_decision"),
+        "best-judgment decision event missing",
+      );
+      assert(Array.isArray(assignment.best_judgment_decisions), "best-judgment decisions missing");
+      assert(assignment.best_judgment_decisions.length === 1, "best-judgment decision count missing");
+      assert(
+        assignment.best_judgment_decisions[0].decision ===
+          "continue with source-owned start after dispatch reported open delivery work",
+        "best-judgment decision summary missing",
+      );
+      assert(
+        assignment.best_judgment_decisions[0].rationale ===
+          "claim-next selected this owner-scoped lane and no second lane was claimed",
+        "best-judgment decision rationale missing",
+      );
+      assert(
+        assignment.best_judgment_decisions[0].next_safe_action ===
+          "record the decision and proceed with scoped implementation",
+        "best-judgment next safe action missing",
+      );
+      assert(assignment.best_judgment_decisions[0].owner === "runner-a", "best-judgment owner missing");
+      assert(assignment.best_judgment_decisions[0].phase === "active", "best-judgment phase missing");
 
       const second = run([
         "heartbeat",
@@ -2646,6 +2675,8 @@ try {
       assert(Boolean(packet.lastHeartbeatAt), result.stdout || result.stderr);
       assert(packet.staleAfterSeconds === 120, result.stdout || result.stderr);
       assert(packet.heartbeatCount === 1, result.stdout || result.stderr);
+      assert(packet.bestJudgmentDecisionCount === 0, result.stdout || result.stderr);
+      assert(packet.latestBestJudgmentDecision === null, result.stdout || result.stderr);
       assert(
         packet.mutation === "heartbeat metadata only; no branch, PR, cleanup, or ownership mutation",
         result.stdout || result.stderr,
@@ -2680,6 +2711,38 @@ try {
       assert(result.code !== 0, "heartbeat unexpectedly updated another owner's assignment");
       assert(result.stderr.includes("Heartbeat is owner-only"), result.stderr || result.stdout);
       assert(before === after, "failed heartbeat mutated another owner's assignment");
+    } finally {
+      rmSync(claimStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("heartbeat requires complete best-judgment decision evidence", () => {
+    const claimStateRoot = mkdtempSync(join(tmpdir(), "codex-heartbeat-decision-required-"));
+    try {
+      const expected = expectedClaimCandidate();
+      seedClaimedSafeBacklogAssignment(claimStateRoot, expected.slug, "runner-a");
+      const assignmentPath = join(claimStateRoot, "assignments", `${expected.slug}.json`);
+      const before = readFileSync(assignmentPath, "utf8");
+
+      const result = run([
+        "heartbeat",
+        expected.slug,
+        "--owner",
+        "runner-a",
+        "--phase",
+        "active",
+        "--decision",
+        "continue through routine uncertainty",
+        "--state-root",
+        claimStateRoot,
+      ]);
+      const after = readFileSync(assignmentPath, "utf8");
+
+      assert(result.code !== 0, "heartbeat accepted incomplete best-judgment decision evidence");
+      assert(result.stderr.includes("Best-judgment decision evidence requires"), result.stderr || result.stdout);
+      assert(result.stderr.includes("--decision-rationale"), result.stderr || result.stdout);
+      assert(result.stderr.includes("--next-safe-action"), result.stderr || result.stdout);
+      assert(before === after, "failed incomplete decision heartbeat mutated assignment");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }
@@ -3640,6 +3703,12 @@ try {
         "codex-cli",
         "--last-result",
         "tests passed",
+        "--decision",
+        "stop for thread-aware review before merge",
+        "--decision-rationale",
+        "low-risk delivery requires review-thread evidence at the exact head",
+        "--next-safe-action",
+        "fetch review threads and record the gate result",
         "--state-root",
         claimStateRoot,
       ]);
@@ -3657,6 +3726,20 @@ try {
       assert(Boolean(manifest.last_heartbeat_at), "workspace heartbeat timestamp missing");
       assert(manifest.owner_updated_at === manifest.last_heartbeat_at, "workspace owner timestamp not refreshed");
       assert(manifest.events.some((event) => event.type === "heartbeat"), "workspace heartbeat event missing");
+      assert(
+        manifest.events.some((event) => event.type === "best_judgment_decision"),
+        "workspace best-judgment event missing",
+      );
+      assert(Array.isArray(manifest.best_judgment_decisions), "workspace best-judgment decisions missing");
+      assert(manifest.best_judgment_decisions.length === 1, "workspace best-judgment decision count missing");
+      assert(
+        manifest.best_judgment_decisions[0].decision === "stop for thread-aware review before merge",
+        "workspace best-judgment decision missing",
+      );
+      assert(
+        manifest.best_judgment_decisions[0].next_safe_action === "fetch review threads and record the gate result",
+        "workspace best-judgment next safe action missing",
+      );
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });
     }
@@ -3697,6 +3780,12 @@ try {
         "codex-cli",
         "--last-result",
         "tests passed",
+        "--decision",
+        "continue after runbook verification passed",
+        "--decision-rationale",
+        "the touched surface is source-owned workflow evidence only",
+        "--next-safe-action",
+        "run codex workspace tests",
         "--state-root",
         claimStateRoot,
       ]);
@@ -3712,6 +3801,10 @@ try {
       assert(packet.phase === "active", result.stdout || result.stderr);
       assert(packet.lastResult === "tests passed", result.stdout || result.stderr);
       assert(packet.heartbeatCount === 1, result.stdout || result.stderr);
+      assert(packet.bestJudgmentDecisionCount === 1, result.stdout || result.stderr);
+      assert(packet.latestBestJudgmentDecision.decision === "continue after runbook verification passed", result.stdout || result.stderr);
+      assert(packet.latestBestJudgmentDecision.rationale === "the touched surface is source-owned workflow evidence only", result.stdout || result.stderr);
+      assert(packet.latestBestJudgmentDecision.nextSafeAction === "run codex workspace tests", result.stdout || result.stderr);
       assert(!existsSync(join(claimStateRoot, "assignments")), "manifest heartbeat json created assignment metadata");
     } finally {
       rmSync(claimStateRoot, { recursive: true, force: true });

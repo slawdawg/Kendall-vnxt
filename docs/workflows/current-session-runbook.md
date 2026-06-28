@@ -40,6 +40,8 @@ Prepared lane handoffs must surface a resume packet with owner, branch,
 worktree/dirty state, readiness status, next command, and takeover stop lines
 through the runner assignment status report before another runner continues or
 asks for takeover.
+Autonomous best-judgment choices must be recorded through metadata-only heartbeat decision evidence.
+Include the decision, rationale, and next safe action before the runner continues.
 
 `pnpm run check` includes `pnpm run check:docs`,
 `pnpm run check:governed-worker-execution-dry-run`,
