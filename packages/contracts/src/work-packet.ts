@@ -403,6 +403,7 @@ export interface HumanGateActionRequestV0 {
   actionId: string;
   decisionId: string;
   requestedActionType: HumanGateActionTypeV0;
+  requestDisplayLabel: string;
   requestedByLabel: string;
   requestedAt: string;
   status: HumanGateActionRequestStatusV0;

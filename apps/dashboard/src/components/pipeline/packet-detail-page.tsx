@@ -278,12 +278,14 @@ function HumanGateActionRequestList({ packet }: { packet: PipelineFixturePacket 
         {requests.map((request) => (
           <TraceBlock
             key={request.requestId}
-            title={request.requestedActionType}
+            title={request.requestDisplayLabel}
             fields={[
               ["Request id", request.requestId],
               ["Request status", request.status],
               ["Action id", request.actionId],
               ["Decision id", request.decisionId],
+              ["Requested action type", request.requestedActionType],
+              ["Request display label", request.requestDisplayLabel],
               ["Requested by", request.requestedByLabel],
               ["Requested at", request.requestedAt],
               ["Evidence refs", request.evidenceRefs.join(", ") || "none"],

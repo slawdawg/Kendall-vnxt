@@ -586,6 +586,7 @@ class HumanGateActionRequestV0View(BaseModel):
         "rerun_smaller",
         "reroute",
     ]
+    requestDisplayLabel: str
     requestedByLabel: str
     requestedAt: str
     status: Literal["recorded", "rejected", "blocked", "stale"]

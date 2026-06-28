@@ -1205,6 +1205,8 @@ test("pipeline action guards reject stale unsafe unknown and boundary cases thro
   const { packet: packetWithUnknownRequest, request: unknownRequest } = submitFixtureHumanGateActionRequest(unknownGuard.packet, `${unknownGuard.packet.packetId}:action:not_in_packet`, "Operator");
   assert.equal(unknownRequest.status, "rejected");
   assert.equal(unknownRequest.auditEventType, "human_gate.unknown_action.request_rejected");
+  assert.equal(unknownRequest.requestedActionType, "request_clarification");
+  assert.equal(unknownRequest.requestDisplayLabel, "unknown_action");
   assert.equal(unknownRequest.executionStarted, false);
   assert.equal(unknownRequest.resultingStateApplied, false);
   assert.equal(unknownRequest.retentionClass, "metadata_only");
@@ -1220,6 +1222,18 @@ test("pipeline action guards reject stale unsafe unknown and boundary cases thro
   if (densityGuard) {
     assert.match(densityGuard.guard.safeNextOption, new RegExp(escapeRegExp(densityGuard.packet.packetId)));
   }
+  const densityPacketWithRequest = pipelineDensityFixturePackets.find((packet) => packet.humanGateActionRequests.length > 0);
+  if (densityPacketWithRequest) {
+    for (const request of densityPacketWithRequest.humanGateActionRequests) {
+      assert.equal(request.packetId, densityPacketWithRequest.packetId);
+      assert.match(request.actionId, new RegExp(escapeRegExp(densityPacketWithRequest.packetId)));
+      assert.match(request.decisionId, new RegExp(escapeRegExp(densityPacketWithRequest.packetId)));
+      assert.ok(
+        request.evidenceRefs.every((ref) => ref.includes(densityPacketWithRequest.packetId)),
+        "density clone request evidence refs should be remapped to the density packet"
+      );
+    }
+  }
 
   const humanGatePacket = pipelineFixturePackets.find((packet) => packet.packetId === "fixture:human-gate-blocked");
   assert.ok(humanGatePacket, "human gate packet should exist");
@@ -1230,6 +1244,7 @@ test("pipeline action guards reject stale unsafe unknown and boundary cases thro
   assert.equal(recordedRequest.actionId, availableAction.actionId);
   assert.equal(recordedRequest.decisionId, availableAction.payload.decisionId);
   assert.equal(recordedRequest.requestedActionType, availableAction.type);
+  assert.equal(recordedRequest.requestDisplayLabel, availableAction.type);
   assert.equal(recordedRequest.executionStarted, false);
   assert.equal(recordedRequest.resultingStateApplied, false);
   assert.equal(recordedRequest.retentionClass, "metadata_only");
