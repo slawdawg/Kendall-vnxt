@@ -3389,12 +3389,6 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#local-cleanup-readiness-report",
@@ -8806,12 +8800,6 @@ class SupervisorService:
                 ],
                 relatedDocs=[
                     "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
-                    "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
                     "/controls#supervisor-report-catalog",
@@ -8833,9 +8821,11 @@ class SupervisorService:
                     "Historical assignment state still contains read-only-evidence-polish as an old active/stale lane, while source-owned backlog evidence marks the original lane complete.",
                     "This follow-up keeps read-only evidence polish dispatchable under a distinct branch and leaves closed completion evidence untouched.",
                     "The lane remains metadata-only and does not grant runtime execution, provider calls, worker launch, credential access, or source-boundary expansion.",
+                    "Runtime evidence exports now expose explicit related-report shortcut targets so operators can inspect read-only evidence without guessing anchors.",
                 ],
                 relatedReports=[
                     "GET /work-items/{id}/runtime-evidence-export",
+                    "GET /supervisor/runtime-evidence-review-report",
                     "GET /supervisor/documentation-authority-report",
                     "GET /supervisor/maintenance-readiness-report",
                     "GET /supervisor/safe-development-backlog",
@@ -8846,6 +8836,7 @@ class SupervisorService:
                     "docs/workflows/implementation-evidence-boundary.md",
                 ],
                 dashboardAnchors=[
+                    "/controls#runtime-evidence-review-report",
                     "/controls#supervisor-report-catalog",
                     "/controls#documentation-authority-report",
                     "/controls#maintenance-readiness-report",

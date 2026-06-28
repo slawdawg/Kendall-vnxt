@@ -220,9 +220,10 @@ export function RuntimeEvidenceExportPanel({ exportView }: { exportView: Runtime
               <a
                 key={report}
                 href={reportShortcutHref(report)}
-                className="block rounded-[0.5rem] border bg-[var(--panel)] p-3 font-mono text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                className="block rounded-[0.5rem] border bg-[var(--panel)] p-3 transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
               >
-                {report}
+                <span className="block break-all font-mono text-xs text-[var(--muted)]">{report}</span>
+                <span className="mt-2 block break-all font-mono text-[11px] text-[var(--accent)]">{reportShortcutHref(report)}</span>
               </a>
             ))}
           </div>
