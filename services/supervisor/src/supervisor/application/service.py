@@ -2177,6 +2177,21 @@ class SupervisorService:
                 ],
             ),
             VerificationCommandView(
+                commandId="test-manager-quality-gate",
+                label="Manager quality-gate adapter tests",
+                command="pnpm run test:manager-quality-gate",
+                status="required",
+                requiredFor=[
+                    "manager quality-gate adapter changes",
+                    "runner assignment status quality-gate changes",
+                    "workspace coordination quality-gate changes",
+                ],
+                evidence=[
+                    "Validates manager quality-gate catalog output, dry-run evidence, failure packets, timeout handling, and fail-closed local boundary behavior.",
+                    "Runs as part of the static and full local verification commands.",
+                ],
+            ),
+            VerificationCommandView(
                 commandId="test-runner-handoff-audit-json-validation",
                 label="Runner handoff audit JSON validation fixtures",
                 command="pnpm run test:runner-handoff-audit-json-validation",
@@ -2764,6 +2779,7 @@ class SupervisorService:
                     "check-maintenance-action-plan",
                     "check-development-runway",
                     "check-runner-assignment-status",
+                    "test-manager-quality-gate",
                     "test-runner-handoff-audit-json-validation",
                     "check-delivery-readiness",
                     "check-github-workflow-policy",

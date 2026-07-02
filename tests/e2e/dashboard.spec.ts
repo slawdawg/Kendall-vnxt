@@ -1511,6 +1511,7 @@ test.describe("dashboard workflow coverage", () => {
     await expect(verificationPanel.getByText("pnpm run check:maintenance-action-plan", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:development-runway", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:runner-assignment-status", { exact: true })).toBeVisible();
+    await expect(verificationPanel.getByText("pnpm run test:manager-quality-gate", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run test:runner-handoff-audit-json-validation", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:delivery-readiness", { exact: true })).toBeVisible();
     await expect(verificationPanel.getByText("pnpm run check:github-workflow-policy", { exact: true })).toBeVisible();
