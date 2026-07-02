@@ -1733,6 +1733,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
         "check-maintenance-action-plan",
         "check-development-runway",
         "check-runner-assignment-status",
+        "test-manager-quality-gate",
         "test-runner-handoff-audit-json-validation",
         "check-delivery-readiness",
         "check-github-workflow-policy",
@@ -1804,6 +1805,7 @@ def test_verification_readiness_report_surfaces_required_checks_without_mutation
     assert "test-bounded-live-memory-source" in static_group["commandIds"]
     assert "check-development-runway" in static_group["commandIds"]
     assert "check-runner-assignment-status" in static_group["commandIds"]
+    assert "test-manager-quality-gate" in static_group["commandIds"]
     assert "test-runner-handoff-audit-json-validation" in static_group["commandIds"]
     assert "check-token-economy" in static_group["commandIds"]
     assert "test-tmux-orientation-report" in static_group["commandIds"]
