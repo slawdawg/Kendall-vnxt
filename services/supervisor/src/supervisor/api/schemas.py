@@ -813,6 +813,93 @@ class WorkPacketLearnOutcomeV0View(BaseModel):
     durableWriteAllowed: Literal[False] = False
 
 
+class WorkPacketLearnFollowUpCandidateV0View(BaseModel):
+    followUpId: str
+    candidateWorkId: str
+    label: str
+    sourcePacketId: str
+    reason: str
+    status: CandidateWorkStatus | Literal["not_created"]
+    origin: Literal["failure", "approval", "rejection", "quality", "operator_feedback"]
+    reentryPath: Literal["reenter_capture", "human_gate", "learn_review", "none"]
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+class WorkPacketOperatorOwnedExitV0View(BaseModel):
+    exitId: str
+    sourcePacketId: str
+    state: Literal["operator_owned"] = "operator_owned"
+    reason: str
+    stopStateKind: Literal[
+        "limit_window",
+        "operator_approval",
+        "review_thread",
+        "failed_check",
+        "tool_churn",
+        "unsafe_cleanup",
+        "scope_boundary",
+        "owner_conflict",
+        "operator_owned_exit",
+    ]
+    reentryPath: Literal["reenter_capture"] = "reenter_capture"
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+class WorkPacketRefillSourceStateV0View(BaseModel):
+    state: Literal["healthy", "source_exhausted", "blocked", "refilling", "unknown"]
+    operationalLabel: str
+    explanation: str
+    sourceRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+
+class WorkPacketReadyToTestV0View(BaseModel):
+    readyId: str
+    userFacingSummary: str
+    testableSurface: str
+    verificationRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+    rawPayloadRetained: Literal[False] = False
+
+
+class WorkPacketLearnRefillHousekeepingV0View(BaseModel):
+    status: Literal["not_applicable", "complete", "blocked", "running", "unknown"]
+    summary: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+
+class WorkPacketLearnRefillSourceExhaustionV0View(BaseModel):
+    exhausted: bool
+    summary: str
+    sourceRefs: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    metadataOnly: Literal[True] = True
+
+
+class WorkPacketLearnRefillProjectionV0View(BaseModel):
+    projectionId: str
+    retentionClass: Literal["metadata_only"] = "metadata_only"
+    followUpCandidates: list[WorkPacketLearnFollowUpCandidateV0View] = Field(default_factory=list)
+    operatorOwnedExits: list[WorkPacketOperatorOwnedExitV0View] = Field(default_factory=list)
+    refillSourceState: WorkPacketRefillSourceStateV0View
+    housekeeping: WorkPacketLearnRefillHousekeepingV0View
+    sourceExhaustion: WorkPacketLearnRefillSourceExhaustionV0View
+    readyToTest: WorkPacketReadyToTestV0View | None = None
+    nextSafeAction: str
+    rawPayloadRetained: Literal[False] = False
+    sourceMutationAllowed: Literal[False] = False
+    providerCallsAllowed: Literal[False] = False
+    workerLaunchAllowed: Literal[False] = False
+    githubMutationAllowed: Literal[False] = False
+
+
 class LlmWikiRebuildPreviewV0View(BaseModel):
     previewId: str
     operationMode: Literal["read_only"] = "read_only"
@@ -1187,6 +1274,7 @@ class WorkPacketV0View(BaseModel):
     memoryProposals: list[MemoryProposalV0View] = Field(default_factory=list)
     deliveryEvidence: WorkPacketDeliveryEvidenceV0View | None = None
     learnOutcome: WorkPacketLearnOutcomeV0View | None = None
+    learnRefill: WorkPacketLearnRefillProjectionV0View | None = None
     alphaMemorySourceStatus: AlphaMemorySourceStatusV0View | None = None
     gateStateValidation: WorkPacketGateStateValidationV0View | None = None
     loopStopStates: list[WorkPacketLoopStopStateV0View] = Field(default_factory=list)

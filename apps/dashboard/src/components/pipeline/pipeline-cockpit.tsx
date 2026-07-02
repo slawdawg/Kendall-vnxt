@@ -366,7 +366,7 @@ export function PipelineCockpit({
                 </p>
               </div>
             </div>
-            <OperationalStrip packets={packets} usageVisibility={usageVisibility} />
+            <OperationalStrip usageVisibility={usageVisibility} />
             <MissionControlStrip attentionPacket={attentionPacket} blockedGateCount={blockedGateCount} />
             <div className="pipeline-map-layout mt-3">
               <section
@@ -449,13 +449,11 @@ function MissionControlStrip({
 }
 
 function OperationalStrip({
-  packets,
   usageVisibility,
 }: {
-  packets: PipelineFixturePacket[];
   usageVisibility: { claude: boolean; codex: boolean };
 }) {
-  const usageItems = globalUsageItems(packets).filter((item) => usageVisibility[item.providerKey]);
+  const usageItems = globalUsageItems().filter((item) => usageVisibility[item.providerKey]);
   return (
     <div aria-label="Pipeline operational strip" className="pipeline-operational-strip">
       <StatusKey />
@@ -573,7 +571,9 @@ function RouteStation({
       <span className="sr-only" id={stagePurposeId}>{stagePurpose(stage)}</span>
       <div className="mt-2 grid min-h-[6.75rem] content-start gap-1.5">
         {visiblePackets.length === 0 ? (
-          <span aria-hidden="true" className="pipeline-empty-station min-h-[2.1rem]" />
+          <span className="pipeline-empty-station flex min-h-[2.1rem] items-center rounded-[0.375rem] border border-dashed px-2 text-[0.68rem] leading-4 text-[var(--muted)]">
+            No work in this stage; refill state appears in Learn details when evidence exists.
+          </span>
         ) : (
           visiblePackets.map((packet) => (
             <PacketMiniCard
@@ -655,6 +655,7 @@ function PacketInspection({ packet }: { packet: PipelineFixturePacket }) {
           </ul>
         </section>
       ) : null}
+      {packet.learnRefill ? <LearnRefillPanel packet={packet} /> : null}
       {packet.executionAttempts.length > 0 ? (
         <section aria-label="Execution attempts" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
           <h3 className="text-sm font-semibold">Execution attempts</h3>
@@ -677,11 +678,38 @@ function PacketInspection({ packet }: { packet: PipelineFixturePacket }) {
   );
 }
 
+function LearnRefillPanel({ packet }: { packet: PipelineFixturePacket }) {
+  const projection = packet.learnRefill;
+  if (!projection) {
+    return null;
+  }
+  return (
+    <section aria-label="Learn and refill panel" className="mt-3 grid gap-2 rounded-[0.5rem] border bg-[var(--background-elevated)] p-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Learn and refill</h3>
+        <span className="rounded-full border border-[color-mix(in_srgb,var(--accent)_32%,transparent)] px-2 py-0.5 text-xs text-[var(--accent)]">
+          {projection.refillSourceState.operationalLabel}
+        </span>
+      </div>
+      <p className="text-xs leading-5 text-[var(--muted)]">{projection.refillSourceState.explanation}</p>
+      <dl className="grid gap-2 text-xs">
+        <InspectionRow label="Refill source state" value={projection.refillSourceState.state} />
+        <InspectionRow label="Housekeeping" value={`${projection.housekeeping.status}; ${projection.housekeeping.summary}`} />
+        <InspectionRow label="Source exhaustion" value={projection.sourceExhaustion.exhausted ? `Source exhausted; ${projection.sourceExhaustion.summary}` : projection.sourceExhaustion.summary} />
+        <InspectionRow label="Follow-up Candidate Work" value={projection.followUpCandidates.length > 0 ? projection.followUpCandidates.map((followUp) => `${followUp.label}: source ${followUp.sourcePacketId}; candidate ${followUp.candidateWorkId}; status ${followUp.status}; origin ${followUp.origin}; ${followUp.reason}; reentry ${followUp.reentryPath}`).join(" | ") : "none"} />
+        <InspectionRow label="Operator-owned exits" value={projection.operatorOwnedExits.length > 0 ? projection.operatorOwnedExits.map((exit) => `${exit.reason}; ${exit.reentryPath}`).join(" | ") : "none"} />
+        <InspectionRow label="Ready to test" value={projection.readyToTest ? `${projection.readyToTest.userFacingSummary}; ${projection.readyToTest.testableSurface}` : "none"} />
+        <InspectionRow label="Retention" value={`${projection.retentionClass}; metadata_only; rawPayloadRetained ${String(projection.rawPayloadRetained)}`} />
+      </dl>
+    </section>
+  );
+}
+
 function InspectionRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid gap-0.5">
       <dt className="font-mono text-[0.62rem] uppercase tracking-[0.14em] text-[var(--muted)]">{label}</dt>
-      <dd className="text-[var(--foreground)]">{value}</dd>
+      <dd className="break-words text-[var(--foreground)]">{value}</dd>
     </div>
   );
 }
@@ -772,7 +800,7 @@ function stageToneForPackets(packets: PipelineFixturePacket[]) {
   return "waiting";
 }
 
-function globalUsageItems(_packets: PipelineFixturePacket[]) {
+function globalUsageItems() {
   const disconnectedUsageDetail = "Usage source is not connected. Configure a read-only source in Settings.";
   return [
     {

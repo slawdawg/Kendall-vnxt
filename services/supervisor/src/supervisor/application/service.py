@@ -213,7 +213,14 @@ from supervisor.api.schemas import (
     WorkPacketExecutionAttemptSummaryV0View,
     WorkPacketLaneCardV0View,
     WorkPacketLearnDecisionRecordV0View,
+    WorkPacketLearnFollowUpCandidateV0View,
     WorkPacketLearnOutcomeV0View,
+    WorkPacketLearnRefillHousekeepingV0View,
+    WorkPacketLearnRefillProjectionV0View,
+    WorkPacketLearnRefillSourceExhaustionV0View,
+    WorkPacketOperatorOwnedExitV0View,
+    WorkPacketReadyToTestV0View,
+    WorkPacketRefillSourceStateV0View,
     WorkPacketRouteSummaryV0View,
     WorkPacketReviewSummaryV0View,
     WorkPacketStageTransitionEventV0View,
@@ -22092,6 +22099,15 @@ class SupervisorService:
             memoryProposals=memory_proposal_views,
             deliveryEvidence=self._work_packet_delivery_evidence(item_view, evidence_refs, artifact_refs),
             learnOutcome=self._work_packet_learn_outcome(packet_id, memory_proposal_views, workflow_events),
+            learnRefill=self._work_packet_learn_refill_projection(
+                packet_id,
+                candidate_view,
+                item_view,
+                memory_proposal_views,
+                source_refs,
+                evidence_refs,
+                workflow_events,
+            ),
             alphaMemorySourceStatus=self._work_packet_alpha_memory_source_status(packet_id, source_refs, evidence_refs, memory_proposal_views),
             gateStateValidation=self._work_packet_gate_state_validation(
                 stored_stage=stage,
@@ -22319,6 +22335,281 @@ class SupervisorService:
         if blocked_write_back_state == "deferred":
             return "Leave Learn proposal deferred until the operator reopens it with fresh evidence."
         return "Review Learn proposal evidence and preserve metadata-only recovery notes."
+
+    def _learn_refill_metadata(self, candidate: CandidateWorkView | None, item: WorkItemView | None) -> dict:
+        candidate_metadata = candidate.importMetadata if candidate and isinstance(candidate.importMetadata, dict) else {}
+        item_metadata = item.metadata if item and isinstance(item.metadata, dict) else {}
+        nested_import_metadata = item_metadata.get("importMetadata") if isinstance(item_metadata.get("importMetadata"), dict) else {}
+        metadata: dict = {}
+        for source in (candidate_metadata, nested_import_metadata, item_metadata):
+            metadata.update(source)
+        return metadata
+
+    def _learn_refill_metadata_text(self, metadata: dict, key: str) -> str | None:
+        value = metadata.get(key) if isinstance(metadata, dict) else None
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.split())
+        if not text:
+            return None
+        unsafe_markers = (
+            "rawprompt",
+            "raw prompt",
+            "rawcompletion",
+            "raw completion",
+            "reasoningtrace",
+            "reasoning trace",
+            "providerpayload",
+            "provider payload",
+            "secret",
+            "credential",
+        )
+        lowered = f"{key} {text}".lower()
+        if any(marker in lowered for marker in unsafe_markers):
+            return None
+        return text[:280]
+
+    def _work_packet_learn_refill_projection(
+        self,
+        packet_id: str,
+        candidate: CandidateWorkView | None,
+        item: WorkItemView | None,
+        memory_proposals: list[MemoryProposalV0View],
+        source_refs: list[SourceRefV0View],
+        evidence_refs: list[EvidenceRefV0View],
+        workflow_events: list[WorkflowEvent],
+    ) -> WorkPacketLearnRefillProjectionV0View | None:
+        metadata = self._learn_refill_metadata(candidate, item)
+        raw_projection = metadata.get("learnRefill") if isinstance(metadata.get("learnRefill"), dict) else {}
+        has_projection_metadata = bool(raw_projection)
+        has_learn_evidence = bool(memory_proposals)
+        has_operator_exit = self._metadata_bool(raw_projection, "operatorOwnedExit") or any(
+            event.event_type in {"work_item.operator_owned_exit", "work_item.operator_owned"}
+            for event in workflow_events
+        )
+        has_ready_to_test = isinstance(raw_projection.get("readyToTest"), dict) or self._metadata_bool(metadata, "readyToTest")
+        if not (has_projection_metadata or has_learn_evidence or has_operator_exit or has_ready_to_test):
+            return None
+
+        evidence_ids = [ref.refId for ref in evidence_refs]
+        source_ids = [ref.refId for ref in source_refs]
+        refill_state = self._learn_refill_state(raw_projection, memory_proposals, item)
+        refill_label = self._learn_refill_label(refill_state)
+        refill_explanation = self._learn_refill_metadata_text(raw_projection, "explanation") or self._learn_refill_explanation(refill_state)
+        follow_ups = self._learn_refill_follow_up_candidates(packet_id, raw_projection, memory_proposals, evidence_ids)
+        operator_exits = self._learn_refill_operator_exits(packet_id, raw_projection, workflow_events, evidence_ids, has_operator_exit)
+        ready_to_test = self._learn_refill_ready_to_test(packet_id, raw_projection, metadata, evidence_ids)
+        housekeeping = raw_projection.get("housekeeping") if isinstance(raw_projection.get("housekeeping"), dict) else {}
+        housekeeping_status = housekeeping.get("status")
+        if housekeeping_status not in {"not_applicable", "complete", "blocked", "running", "unknown"}:
+            housekeeping_status = "complete" if refill_state in {"healthy", "source_exhausted"} else "running" if refill_state == "refilling" else "blocked" if refill_state == "blocked" else "unknown"
+        source_exhausted = refill_state == "source_exhausted"
+        return WorkPacketLearnRefillProjectionV0View(
+            projectionId=f"learn-refill:{packet_id}",
+            followUpCandidates=follow_ups,
+            operatorOwnedExits=operator_exits,
+            refillSourceState=WorkPacketRefillSourceStateV0View(
+                state=refill_state,
+                operationalLabel=refill_label,
+                explanation=refill_explanation,
+                sourceRefs=source_ids,
+                evidenceRefs=evidence_ids,
+            ),
+            housekeeping=WorkPacketLearnRefillHousekeepingV0View(
+                status=housekeeping_status,
+                summary=self._learn_refill_metadata_text(housekeeping, "summary") or self._learn_refill_housekeeping_summary(housekeeping_status),
+                evidenceRefs=self._metadata_string_list(housekeeping, "evidenceRefs") or evidence_ids,
+            ),
+            sourceExhaustion=WorkPacketLearnRefillSourceExhaustionV0View(
+                exhausted=source_exhausted,
+                summary=(
+                    self._learn_refill_metadata_text(raw_projection, "sourceExhaustionSummary")
+                    or ("Approved source exhausted; queue is healthy until new approved source work appears." if source_exhausted else "Approved source still has refill or follow-up posture.")
+                ),
+                sourceRefs=source_ids,
+                evidenceRefs=evidence_ids,
+            ),
+            readyToTest=ready_to_test,
+            nextSafeAction=self._learn_refill_metadata_text(raw_projection, "nextSafeAction") or self._learn_refill_next_safe_action(refill_state, bool(follow_ups), bool(operator_exits), ready_to_test is not None),
+        )
+
+    def _learn_refill_follow_up_candidates(
+        self,
+        packet_id: str,
+        raw_projection: dict,
+        memory_proposals: list[MemoryProposalV0View],
+        evidence_ids: list[str],
+    ) -> list[WorkPacketLearnFollowUpCandidateV0View]:
+        raw_follow_ups = raw_projection.get("followUpCandidates")
+        follow_ups: list[WorkPacketLearnFollowUpCandidateV0View] = []
+        allowed_statuses = {status.value for status in CandidateWorkStatus}
+        allowed_origins = {"failure", "approval", "rejection", "quality", "operator_feedback"}
+        allowed_reentry = {"reenter_capture", "human_gate", "learn_review", "none"}
+        if isinstance(raw_follow_ups, list):
+            for index, raw_follow_up in enumerate(raw_follow_ups[:10]):
+                if not isinstance(raw_follow_up, dict):
+                    continue
+                status = raw_follow_up.get("status")
+                origin = raw_follow_up.get("origin")
+                reentry_path = raw_follow_up.get("reentryPath")
+                follow_ups.append(
+                    WorkPacketLearnFollowUpCandidateV0View(
+                        followUpId=self._learn_refill_metadata_text(raw_follow_up, "followUpId") or f"learn-follow-up:{packet_id}:{index + 1}",
+                        candidateWorkId=self._learn_refill_metadata_text(raw_follow_up, "candidateWorkId") or "not_created",
+                        label=self._learn_refill_metadata_text(raw_follow_up, "label") or "Follow-up Candidate Work",
+                        sourcePacketId=self._learn_refill_metadata_text(raw_follow_up, "sourcePacketId") or packet_id,
+                        reason=self._learn_refill_metadata_text(raw_follow_up, "reason") or "Learn recorded a metadata-only follow-up.",
+                        status=status if isinstance(status, str) and status in allowed_statuses else "not_created",
+                        origin=origin if isinstance(origin, str) and origin in allowed_origins else "operator_feedback",
+                        reentryPath=reentry_path if isinstance(reentry_path, str) and reentry_path in allowed_reentry else "learn_review",
+                        evidenceRefs=self._metadata_string_list(raw_follow_up, "evidenceRefs") or evidence_ids,
+                    )
+                )
+        if not follow_ups and memory_proposals:
+            for proposal in memory_proposals[:3]:
+                follow_ups.append(
+                    WorkPacketLearnFollowUpCandidateV0View(
+                        followUpId=f"learn-follow-up:{packet_id}:{proposal.proposalId}",
+                        candidateWorkId="not_created",
+                        label="Follow-up Candidate Work",
+                        sourcePacketId=packet_id,
+                        reason=proposal.summary,
+                        status="not_created",
+                        origin="operator_feedback",
+                        reentryPath="learn_review",
+                        evidenceRefs=list(proposal.evidenceRefs) or evidence_ids,
+                    )
+                )
+        return follow_ups
+
+    def _learn_refill_operator_exits(
+        self,
+        packet_id: str,
+        raw_projection: dict,
+        workflow_events: list[WorkflowEvent],
+        evidence_ids: list[str],
+        has_operator_exit: bool,
+    ) -> list[WorkPacketOperatorOwnedExitV0View]:
+        raw_exits = raw_projection.get("operatorOwnedExits")
+        exits: list[WorkPacketOperatorOwnedExitV0View] = []
+        allowed_stop_kinds = {
+            "limit_window",
+            "operator_approval",
+            "review_thread",
+            "failed_check",
+            "tool_churn",
+            "unsafe_cleanup",
+            "scope_boundary",
+            "owner_conflict",
+            "operator_owned_exit",
+        }
+        if isinstance(raw_exits, list):
+            for index, raw_exit in enumerate(raw_exits[:10]):
+                if not isinstance(raw_exit, dict):
+                    continue
+                stop_kind = raw_exit.get("stopStateKind")
+                exits.append(
+                    WorkPacketOperatorOwnedExitV0View(
+                        exitId=self._learn_refill_metadata_text(raw_exit, "exitId") or f"operator-owned-exit:{packet_id}:{index + 1}",
+                        sourcePacketId=self._learn_refill_metadata_text(raw_exit, "sourcePacketId") or packet_id,
+                        reason=self._learn_refill_metadata_text(raw_exit, "reason") or "Rejected to operator-owned workbench.",
+                        stopStateKind=stop_kind if isinstance(stop_kind, str) and stop_kind in allowed_stop_kinds else "operator_owned_exit",
+                        evidenceRefs=self._metadata_string_list(raw_exit, "evidenceRefs") or evidence_ids,
+                    )
+                )
+        if not exits and has_operator_exit:
+            event_ref = next((event.id for event in workflow_events if event.event_type in {"work_item.operator_owned_exit", "work_item.operator_owned"}), None)
+            exits.append(
+                WorkPacketOperatorOwnedExitV0View(
+                    exitId=f"operator-owned-exit:{packet_id}",
+                    sourcePacketId=packet_id,
+                    reason="Rejected to operator-owned workbench; reenter_capture is the safe path back.",
+                    stopStateKind="operator_owned_exit",
+                    evidenceRefs=[event_ref] if event_ref else evidence_ids,
+                )
+            )
+        return exits
+
+    def _learn_refill_ready_to_test(
+        self,
+        packet_id: str,
+        raw_projection: dict,
+        metadata: dict,
+        evidence_ids: list[str],
+    ) -> WorkPacketReadyToTestV0View | None:
+        raw_ready = raw_projection.get("readyToTest") if isinstance(raw_projection.get("readyToTest"), dict) else {}
+        if not raw_ready and not self._metadata_bool(metadata, "readyToTest"):
+            return None
+        return WorkPacketReadyToTestV0View(
+            readyId=self._learn_refill_metadata_text(raw_ready, "readyId") or f"ready-to-test:{packet_id}",
+            userFacingSummary=self._learn_refill_metadata_text(raw_ready, "userFacingSummary") or self._learn_refill_metadata_text(metadata, "readyToTestSummary") or "Completed user-facing work is ready to test.",
+            testableSurface=self._learn_refill_metadata_text(raw_ready, "testableSurface") or self._learn_refill_metadata_text(metadata, "testableSurface") or "user-facing workflow",
+            verificationRefs=self._metadata_string_list(raw_ready, "verificationRefs") or self._metadata_string_list(metadata, "verificationRefs"),
+            evidenceRefs=self._metadata_string_list(raw_ready, "evidenceRefs") or evidence_ids,
+        )
+
+    def _learn_refill_state(self, raw_projection: dict, memory_proposals: list[MemoryProposalV0View], item: WorkItemView | None) -> str:
+        state = raw_projection.get("state")
+        if state in {"healthy", "source_exhausted", "blocked", "refilling", "unknown"}:
+            return str(state)
+        if memory_proposals:
+            return "refilling"
+        if item and item.state.value == "blocked":
+            return "blocked"
+        if item and item.state.value == "done":
+            return "healthy"
+        return "unknown"
+
+    def _learn_refill_label(self, state: str) -> str:
+        return {
+            "healthy": "Healthy empty",
+            "source_exhausted": "Source exhausted",
+            "blocked": "Refill blocked",
+            "refilling": "Refill running",
+            "unknown": "Unknown refill state",
+        }[state]
+
+    def _learn_refill_explanation(self, state: str) -> str:
+        return {
+            "healthy": "The approved queue is empty because completed work has no unsafe follow-up.",
+            "source_exhausted": "Approved source work is exhausted; this is healthy unless an approved source was expected.",
+            "blocked": "Refill cannot continue until the named blocker is resolved.",
+            "refilling": "Learn is creating or reviewing follow-up Candidate Work from metadata-only evidence.",
+            "unknown": "No current refill source summary is available.",
+        }[state]
+
+    def _learn_refill_housekeeping_summary(self, status: str) -> str:
+        return {
+            "not_applicable": "No housekeeping result is attached.",
+            "complete": "Housekeeping complete.",
+            "blocked": "Housekeeping blocked.",
+            "running": "Housekeeping running.",
+            "unknown": "Housekeeping state unknown.",
+        }[status]
+
+    def _learn_refill_next_safe_action(self, state: str, has_follow_up: bool, has_operator_exit: bool, has_ready_to_test: bool) -> str:
+        if has_operator_exit:
+            return "Use reenter_capture only after the operator-owned workbench decision is explicit."
+        if has_ready_to_test:
+            return "Show ready-to-test work and continue processing other safe packets."
+        if has_follow_up:
+            return "Review follow-up Candidate Work metadata before promoting anything back into Capture."
+        if state == "source_exhausted":
+            return "Leave the queue healthy-empty until a new approved source appears."
+        if state == "blocked":
+            return "Resolve the refill blocker before creating new work."
+        if state == "refilling":
+            return "Let refill finish and keep raw source content out of the dashboard."
+        return "Inspect manager refill evidence before taking action."
+
+    def _metadata_bool(self, metadata: dict, key: str) -> bool:
+        return metadata.get(key) is True
+
+    def _metadata_string_list(self, metadata: dict, key: str) -> list[str]:
+        value = metadata.get(key)
+        if not isinstance(value, list):
+            return []
+        return [entry for entry in value if isinstance(entry, str) and entry][:20]
 
     def _work_packet_merge_gate_evidence(self, metadata: dict, latest_delivery: dict) -> WorkPacketDeliveryMergeGateV0View:
         expected_head = self._metadata_text(latest_delivery, "expectedHeadRevision")
@@ -23101,8 +23392,10 @@ class SupervisorService:
             "approvalStatus",
             "approvedBy",
             "approvedAt",
+            "readyToTestSummary",
+            "testableSurface",
         }
-        bool_fields = {"canonicalMutationAllowed", "sourceMutationAllowed"}
+        bool_fields = {"canonicalMutationAllowed", "sourceMutationAllowed", "readyToTest"}
         for field in string_fields:
             value = import_metadata.get(field)
             if isinstance(value, str) and value:
@@ -23111,6 +23404,13 @@ class SupervisorService:
             value = import_metadata.get(field)
             if isinstance(value, bool):
                 promoted[field] = value
+        for field in ("verificationRefs", "evidenceRefs"):
+            values = self._metadata_string_list(import_metadata, field)
+            if values:
+                promoted[field] = values
+        learn_refill = self._safe_learn_refill_import_metadata(import_metadata.get("learnRefill"))
+        if learn_refill:
+            promoted["learnRefill"] = learn_refill
         notes = import_metadata.get("notes")
         if isinstance(notes, list):
             safe_notes = [note for note in notes if isinstance(note, str) and note][:10]
@@ -23120,6 +23420,94 @@ class SupervisorService:
         if source_summary:
             promoted["userFacingSourceSummary"] = source_summary
         return promoted
+
+    def _safe_learn_refill_import_metadata(self, value: object) -> dict[str, object] | None:
+        if not isinstance(value, dict):
+            return None
+        safe: dict[str, object] = {}
+        state = value.get("state")
+        if state in {"healthy", "source_exhausted", "blocked", "refilling", "unknown"}:
+            safe["state"] = state
+        for field in ("explanation", "sourceExhaustionSummary", "nextSafeAction"):
+            text_value = self._learn_refill_metadata_text(value, field)
+            if text_value:
+                safe[field] = text_value
+        housekeeping = value.get("housekeeping")
+        if isinstance(housekeeping, dict):
+            safe_housekeeping: dict[str, object] = {}
+            status = housekeeping.get("status")
+            if status in {"not_applicable", "complete", "blocked", "running", "unknown"}:
+                safe_housekeeping["status"] = status
+            summary = self._learn_refill_metadata_text(housekeeping, "summary")
+            if summary:
+                safe_housekeeping["summary"] = summary
+            evidence_refs = self._metadata_string_list(housekeeping, "evidenceRefs")
+            if evidence_refs:
+                safe_housekeeping["evidenceRefs"] = evidence_refs
+            if safe_housekeeping:
+                safe["housekeeping"] = safe_housekeeping
+        ready_to_test = value.get("readyToTest")
+        if isinstance(ready_to_test, dict):
+            safe_ready: dict[str, object] = {}
+            for field in ("readyId", "userFacingSummary", "testableSurface"):
+                text_value = self._learn_refill_metadata_text(ready_to_test, field)
+                if text_value:
+                    safe_ready[field] = text_value
+            for field in ("verificationRefs", "evidenceRefs"):
+                refs = self._metadata_string_list(ready_to_test, field)
+                if refs:
+                    safe_ready[field] = refs
+            if safe_ready:
+                safe["readyToTest"] = safe_ready
+        follow_ups = value.get("followUpCandidates")
+        if isinstance(follow_ups, list):
+            safe_follow_ups: list[dict[str, object]] = []
+            for raw_follow_up in follow_ups[:10]:
+                if not isinstance(raw_follow_up, dict):
+                    continue
+                safe_follow_up: dict[str, object] = {}
+                for field in ("followUpId", "candidateWorkId", "label", "sourcePacketId", "reason"):
+                    text_value = self._learn_refill_metadata_text(raw_follow_up, field)
+                    if text_value:
+                        safe_follow_up[field] = text_value
+                status = raw_follow_up.get("status")
+                if isinstance(status, str):
+                    safe_follow_up["status"] = status
+                origin = raw_follow_up.get("origin")
+                if isinstance(origin, str):
+                    safe_follow_up["origin"] = origin
+                reentry_path = raw_follow_up.get("reentryPath")
+                if isinstance(reentry_path, str):
+                    safe_follow_up["reentryPath"] = reentry_path
+                refs = self._metadata_string_list(raw_follow_up, "evidenceRefs")
+                if refs:
+                    safe_follow_up["evidenceRefs"] = refs
+                if safe_follow_up:
+                    safe_follow_ups.append(safe_follow_up)
+            if safe_follow_ups:
+                safe["followUpCandidates"] = safe_follow_ups
+        operator_exits = value.get("operatorOwnedExits")
+        if isinstance(operator_exits, list):
+            safe_exits: list[dict[str, object]] = []
+            for raw_exit in operator_exits[:10]:
+                if not isinstance(raw_exit, dict):
+                    continue
+                safe_exit: dict[str, object] = {}
+                for field in ("exitId", "sourcePacketId", "reason"):
+                    text_value = self._learn_refill_metadata_text(raw_exit, field)
+                    if text_value:
+                        safe_exit[field] = text_value
+                stop_kind = raw_exit.get("stopStateKind")
+                if isinstance(stop_kind, str):
+                    safe_exit["stopStateKind"] = stop_kind
+                refs = self._metadata_string_list(raw_exit, "evidenceRefs")
+                if refs:
+                    safe_exit["evidenceRefs"] = refs
+                if safe_exit:
+                    safe_exits.append(safe_exit)
+            if safe_exits:
+                safe["operatorOwnedExits"] = safe_exits
+        return safe or None
 
     def _safe_user_facing_source_summary(self, value: object) -> dict[str, object] | None:
         if not isinstance(value, dict):

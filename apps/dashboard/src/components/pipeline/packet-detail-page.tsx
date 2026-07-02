@@ -78,6 +78,7 @@ export function PacketDetailPage({
           <LoopStopStateList packet={packet} />
           <DeliveryEvidenceList packet={packet} />
           <LearnOutcomeList packet={packet} />
+          <LearnRefillDetail packet={packet} />
           <HumanGateActionList packet={packet} />
           <HumanGateActionRequestList packet={packet} />
           <MemoryProposalList packet={packet} />
@@ -440,6 +441,37 @@ function LearnOutcomeList({ packet }: { packet: PipelineFixturePacket }) {
               "Decision records",
               outcome.decisionRecords.map((decision) => `${decision.actor}: ${decision.proposalId} -> ${decision.result}; ${decision.recoveryPath}`).join(" | ") || "none",
             ],
+          ]}
+        />
+      ) : null}
+    </DetailCard>
+  );
+}
+
+function LearnRefillDetail({ packet }: { packet: PipelineFixturePacket }) {
+  const projection = packet.learnRefill;
+  return (
+    <DetailCard title="Learn and refill" empty={!projection ? "No Learn/refill projection for this packet." : null}>
+      {projection ? (
+        <TraceBlock
+          title={`${projection.refillSourceState.operationalLabel}; ${projection.refillSourceState.state}`}
+          fields={[
+            ["Projection id", projection.projectionId],
+            ["Retention", projection.retentionClass],
+            ["Refill source state", projection.refillSourceState.state],
+            ["Operational label", projection.refillSourceState.operationalLabel],
+            ["Explanation", projection.refillSourceState.explanation],
+            ["Follow-up Candidate Work", projection.followUpCandidates.map((followUp) => `${followUp.label}: source ${followUp.sourcePacketId}; candidate ${followUp.candidateWorkId}; ${followUp.reason}; ${followUp.status}; ${followUp.origin}; ${followUp.reentryPath}`).join(" | ") || "none"],
+            ["Operator-owned exits", projection.operatorOwnedExits.map((exit) => `${exit.state}; ${exit.reason}; ${exit.stopStateKind}; ${exit.reentryPath}`).join(" | ") || "none"],
+            ["Housekeeping", `${projection.housekeeping.status}; ${projection.housekeeping.summary}`],
+            ["Source exhausted", projection.sourceExhaustion.exhausted ? `Source exhausted; ${projection.sourceExhaustion.summary}` : projection.sourceExhaustion.summary],
+            ["Ready to test", projection.readyToTest ? `${projection.readyToTest.userFacingSummary}; ${projection.readyToTest.testableSurface}` : "none"],
+            ["Next safe action", projection.nextSafeAction],
+            ["Raw payload retained", String(projection.rawPayloadRetained)],
+            ["Source mutation", projection.sourceMutationAllowed ? "allowed" : "blocked"],
+            ["Provider calls", projection.providerCallsAllowed ? "allowed" : "blocked"],
+            ["Worker launch", projection.workerLaunchAllowed ? "allowed" : "blocked"],
+            ["GitHub mutation", projection.githubMutationAllowed ? "allowed" : "blocked"],
           ]}
         />
       ) : null}

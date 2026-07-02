@@ -336,6 +336,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     "recoveryFixtureEvents",
     "actionGuardFixtures",
     "memoryProposals",
+    "learnRefill",
     "recoveryActions"
   ]) {
     assert.match(fixtureSource, new RegExp(packetSurface));
@@ -1282,6 +1283,113 @@ test("pipeline learn outcome fixtures close the loop without hidden writes", asy
       assert.ok(decision.recoveryPath.length > 0);
     }
   }
+});
+
+test("pipeline learn and refill visibility stays metadata-only and behind detail surfaces", async () => {
+  const { pipelineCockpitPackets, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
+  const cockpitSource = await readFile(cockpitPath, "utf8");
+  const packetDetailSource = await readFile(packetDetailPath, "utf8");
+  const fixtureSource = await readFile(fixturesPath, "utf8");
+  const supervisorSchemaSource = await readFile(supervisorSchemasPath, "utf8");
+  const allPipelineSource = `${cockpitSource}\n${packetDetailSource}\n${fixtureSource}`;
+
+  assert.match(fixtureSource, /learnRefill/);
+  assert.match(cockpitSource, /LearnRefillPanel/);
+  assert.match(cockpitSource, /Learn and refill panel/);
+  assert.match(cockpitSource, /No work in this stage/);
+  assert.match(cockpitSource, /break-words text-\[var\(--foreground\)\]/);
+  assert.match(cockpitSource, /source \$\{followUp\.sourcePacketId\}/);
+  assert.match(cockpitSource, /candidate \$\{followUp\.candidateWorkId\}/);
+  assert.match(packetDetailSource, /LearnRefillDetail/);
+  assert.match(packetDetailSource, /source \$\{followUp\.sourcePacketId\}/);
+  assert.match(packetDetailSource, /candidate \$\{followUp\.candidateWorkId\}/);
+  assert.match(supervisorSchemaSource, /class WorkPacketLearnRefillProjectionV0View\(BaseModel\):/);
+  assert.match(supervisorSchemaSource, /learnRefill:\s*WorkPacketLearnRefillProjectionV0View \| None = None/);
+
+  for (const visibleLabel of [
+    "Learn and refill",
+    "Follow-up Candidate Work",
+    "Operator-owned exits",
+    "Refill source state",
+    "Housekeeping",
+    "Source exhausted",
+    "Refill running",
+    "Refill blocked",
+    "Healthy empty",
+    "Unknown refill state",
+    "Ready to test",
+    "Rejected to operator-owned workbench",
+    "reenter_capture",
+    "metadata_only",
+  ]) {
+    assert.match(allPipelineSource, new RegExp(visibleLabel, "i"));
+  }
+
+  const packetsWithProjection = pipelineCockpitPackets.filter((packet) => packet.learnRefill);
+  assert.ok(packetsWithProjection.length >= 5, "fixtures should include routine learn/refill projection examples");
+  assert.ok(
+    packetsWithProjection.some((packet) => packet.learnRefill?.followUpCandidates.length),
+    "learn/refill projection should expose follow-up Candidate Work"
+  );
+  assert.ok(
+    packetsWithProjection.some((packet) => packet.learnRefill?.operatorOwnedExits.length),
+    "learn/refill projection should expose operator-owned exits"
+  );
+  assert.ok(
+    packetsWithProjection.some((packet) => packet.learnRefill?.readyToTest),
+    "learn/refill projection should expose ready-to-test user-facing work"
+  );
+
+  const states = new Set(packetsWithProjection.map((packet) => packet.learnRefill?.refillSourceState.state));
+  assert.deepEqual(
+    ["blocked", "healthy", "refilling", "source_exhausted", "unknown"].filter((state) => !states.has(state)),
+    [],
+    "fixtures should cover all refill source states"
+  );
+
+  for (const packet of packetsWithProjection) {
+    const projection = packet.learnRefill;
+    assert.ok(projection, `${packet.packetId} should have learn/refill projection`);
+    assert.equal(projection.retentionClass, "metadata_only");
+    assert.equal(projection.rawPayloadRetained, false);
+    assert.equal(projection.sourceMutationAllowed, false);
+    assert.equal(projection.providerCallsAllowed, false);
+    assert.equal(projection.workerLaunchAllowed, false);
+    assert.equal(projection.githubMutationAllowed, false);
+    assert.equal(projection.refillSourceState.metadataOnly, true);
+    assert.ok(projection.refillSourceState.explanation.length > 0);
+    assert.ok(projection.refillSourceState.operationalLabel.length > 0);
+    assert.ok(projection.housekeeping.summary.length > 0);
+    assert.ok(projection.nextSafeAction.length > 0);
+    for (const followUp of projection.followUpCandidates) {
+      assert.ok(followUp.sourcePacketId.length > 0);
+      assert.ok(followUp.candidateWorkId.length > 0);
+      assert.ok(followUp.reason.length > 0);
+      assert.ok(["failure", "approval", "rejection", "quality", "operator_feedback"].includes(followUp.origin));
+      assert.ok(["reenter_capture", "human_gate", "learn_review", "none"].includes(followUp.reentryPath));
+      assert.equal(followUp.metadataOnly, true);
+      assert.equal(followUp.rawPayloadRetained, false);
+      assert.ok(followUp.evidenceRefs.length > 0);
+    }
+    for (const exit of projection.operatorOwnedExits) {
+      assert.equal(exit.state, "operator_owned");
+      assert.equal(exit.reentryPath, "reenter_capture");
+      assert.equal(exit.metadataOnly, true);
+      assert.equal(exit.rawPayloadRetained, false);
+      assert.ok(exit.reason.length > 0);
+    }
+    if (projection.readyToTest) {
+      assert.equal(projection.readyToTest.metadataOnly, true);
+      assert.equal(projection.readyToTest.rawPayloadRetained, false);
+      assert.ok(projection.readyToTest.userFacingSummary.length > 0);
+      assert.ok(projection.readyToTest.testableSurface.length > 0);
+    }
+  }
+
+  const sourceExhaustedPacket = pipelineFixturePackets.find((packet) => packet.packetId === "fixture:learn-source-exhausted");
+  assert.equal(sourceExhaustedPacket?.learnRefill?.refillSourceState.state, "source_exhausted");
+  assert.match(sourceExhaustedPacket?.learnRefill?.refillSourceState.explanation ?? "", /approved source/i);
+  assert.doesNotMatch(allPipelineSource, /getRunStatus|getWorkItems|fetch\s*\(|EventSource|WebSocket|tmux|providerPayload|rawPrompt|rawCompletion|reasoningTrace|github\.rest|octokit/i);
 });
 
 test("pipeline source boundary checklist preserves Obsidian and LLM-Wiki ownership", async () => {

@@ -79,6 +79,9 @@ type LoopStopStateFixtureInput = Omit<WorkPacketV0View["loopStopStates"][number]
   evidenceRefs?: string[];
 };
 
+type LearnRefillProjection = NonNullable<WorkPacketV0View["learnRefill"]>;
+type LearnRefillState = LearnRefillProjection["refillSourceState"]["state"];
+
 export type GovernedCopiedWorktreeExecutionEvidenceV0 = {
   source_id: string;
   worker: "claude" | "hermes";
@@ -1081,6 +1084,8 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
     sourceTrustState: "included",
     sourceTrustStates: ["included"],
     claudeReviewState: "blocked",
+    learnRefillState: "blocked",
+    learnRefillOperatorOwnedExit: true,
   }),
   packetFixture({
     packetId: "fixture:promote-candidate",
@@ -1152,6 +1157,8 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
       mergeApproved: false,
       cleanupApproved: false,
     },
+    learnRefillState: "healthy",
+    learnRefillReadyToTest: true,
   }),
   packetFixture({
     packetId: "fixture:learn-memory",
@@ -1172,6 +1179,8 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
     sourceTrustState: "excluded",
     sourceTrustStates: ["excluded", "derived-only"],
     sourceTrustSummary: "Obsidian is excluded from automatic writes and LLM-Wiki remains derived-only.",
+    learnRefillState: "refilling",
+    learnRefillFollowUpOrigin: "operator_feedback",
   }),
   packetFixture({
     packetId: "fixture:documentation-proposal",
@@ -1192,6 +1201,8 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
     sourceTrustState: "excluded",
     sourceTrustStates: ["excluded", "derived-only"],
     sourceTrustSummary: "User-facing documentation remains proposal-only; Obsidian stays human-owned and LLM-Wiki remains derived-only.",
+    learnRefillState: "refilling",
+    learnRefillFollowUpOrigin: "quality",
   }),
   packetFixture({
     packetId: "fixture:llm-wiki-rebuild-preview",
@@ -1212,6 +1223,49 @@ export const pipelineFixturePackets: PipelineFixturePacket[] = [
     sourceTrustState: "included",
     sourceTrustStates: ["included"],
     sourceTrustSummary: "Approved Obsidian metadata can feed a derived LLM-Wiki preview; no durable write is authorized.",
+    learnRefillState: "refilling",
+  }),
+  packetFixture({
+    packetId: "fixture:learn-source-exhausted",
+    title: "Hold healthy empty approved source",
+    requestedOutcome: "Show that no approved refill source remains without treating the manager as broken.",
+    currentStage: "capture",
+    currentOwner: "kendall",
+    status: "waiting",
+    riskLevel: "low",
+    priority: "normal",
+    fixtureId: "happy_path_work_packet",
+    matrixRowIds: ["source.missing"],
+    fixtureKind: "synthetic",
+    summary: "Learn fixture labels approved source exhaustion as healthy empty until new approved work appears.",
+    nextAction: "Wait for approved source",
+    confidenceLabel: "Source exhausted",
+    freshnessLabel: "fresh",
+    sourceTrustState: "included",
+    sourceTrustStates: ["included"],
+    sourceTrustSummary: "Approved source exhausted; no fake work should be created to keep utilization high.",
+    learnRefillState: "source_exhausted",
+  }),
+  packetFixture({
+    packetId: "fixture:learn-refill-unknown",
+    title: "Inspect unknown refill posture",
+    requestedOutcome: "Show an unknown refill state without inventing source health.",
+    currentStage: "capture",
+    currentOwner: "kendall",
+    status: "waiting",
+    riskLevel: "medium",
+    priority: "normal",
+    fixtureId: "corrupted_incomplete_aggregate",
+    matrixRowIds: ["source.restricted_refs"],
+    fixtureKind: "synthetic",
+    summary: "Learn fixture keeps missing refill metadata visible as unknown instead of assuming failure.",
+    nextAction: "Inspect refill evidence",
+    confidenceLabel: "Unknown refill state",
+    freshnessLabel: "unknown",
+    sourceTrustState: "unavailable",
+    sourceTrustStates: ["unavailable"],
+    sourceTrustSummary: "No current refill source summary is available.",
+    learnRefillState: "unknown",
   }),
 ];
 
@@ -1909,6 +1963,10 @@ function packetFixture(input: {
   governedWorkerAttempt?: GovernedWorkerAttemptFixtureOptions;
   loopStopStates?: LoopStopStateFixtureInput[];
   deliveryEvidence?: WorkPacketV0View["deliveryEvidence"];
+  learnRefillState?: LearnRefillState;
+  learnRefillFollowUpOrigin?: NonNullable<LearnRefillProjection["followUpCandidates"][number]>["origin"];
+  learnRefillOperatorOwnedExit?: boolean;
+  learnRefillReadyToTest?: boolean;
   }): PipelineFixturePacket {
   const fixture = requireCatalogEntry(input.fixtureId);
   const rows = requireMatrixRows(input.matrixRowIds);
@@ -2162,6 +2220,7 @@ function packetFixture(input: {
         : [];
   const alphaMemorySourceStatus = buildAlphaMemorySourceStatus(input.packetId, sourceRefs, evidenceRefs, memoryProposals);
   const learnOutcome = buildLearnOutcome(input.packetId, memoryProposals);
+  const learnRefill = buildLearnRefillProjection(input, memoryProposals, sourceRefs, evidenceRefs);
 
   return {
     packetId: input.packetId,
@@ -2179,6 +2238,7 @@ function packetFixture(input: {
     routingPreview: null,
     deliveryEvidence: input.deliveryEvidence ?? null,
     learnOutcome,
+    learnRefill,
     routeSummary: {
       recommendation: rows[0]?.stage ?? input.currentStage,
       confidenceScore: input.confidenceLabel === "Low confidence" ? 0.36 : 0.82,
@@ -2301,6 +2361,165 @@ function packetFixture(input: {
     riskFlags: input.riskFlags ?? riskFlagsFor(input),
     matrixRowIds: input.matrixRowIds,
   };
+}
+
+function buildLearnRefillProjection(
+  input: {
+    packetId: string;
+    title: string;
+    summary: string;
+    learnRefillState?: LearnRefillState;
+    learnRefillFollowUpOrigin?: LearnRefillProjection["followUpCandidates"][number]["origin"];
+    learnRefillOperatorOwnedExit?: boolean;
+    learnRefillReadyToTest?: boolean;
+  },
+  memoryProposals: MemoryProposalV0[],
+  sourceRefs: SourceRefV0[],
+  evidenceRefs: WorkPacketV0View["evidenceRefs"]
+): WorkPacketV0View["learnRefill"] {
+  if (!input.learnRefillState && memoryProposals.length === 0 && !input.learnRefillReadyToTest && !input.learnRefillOperatorOwnedExit) {
+    return null;
+  }
+  const state = input.learnRefillState ?? (memoryProposals.length > 0 ? "refilling" : "unknown");
+  const evidenceIds = evidenceRefs.map((ref) => ref.refId);
+  const sourceIds = sourceRefs.map((ref) => ref.refId);
+  const followUpCandidates = memoryProposals.length > 0
+    ? memoryProposals.slice(0, 3).map((proposal, index) => ({
+        followUpId: `${input.packetId}:learn-follow-up:${String(index + 1).padStart(2, "0")}`,
+        candidateWorkId: `${input.packetId}:candidate-work:${String(index + 1).padStart(2, "0")}`,
+        label: "Follow-up Candidate Work",
+        sourcePacketId: input.packetId,
+        reason: proposal.summary,
+        status: "proposed" as const,
+        origin: input.learnRefillFollowUpOrigin ?? followUpOriginForProposal(proposal),
+        reentryPath: "learn_review" as const,
+        evidenceRefs: [...proposal.evidenceRefs],
+        metadataOnly: true as const,
+        rawPayloadRetained: false as const,
+      }))
+    : [];
+  const operatorOwnedExits = input.learnRefillOperatorOwnedExit
+    ? [
+        {
+          exitId: `${input.packetId}:operator-owned-exit`,
+          sourcePacketId: input.packetId,
+          state: "operator_owned" as const,
+          reason: "Rejected to operator-owned workbench; reenter_capture is the safe path back.",
+          stopStateKind: "operator_owned_exit" as const,
+          reentryPath: "reenter_capture" as const,
+          evidenceRefs: evidenceIds,
+          metadataOnly: true as const,
+          rawPayloadRetained: false as const,
+        },
+      ]
+    : [];
+  return {
+    projectionId: `${input.packetId}:learn-refill`,
+    retentionClass: "metadata_only",
+    followUpCandidates,
+    operatorOwnedExits,
+    refillSourceState: {
+      state,
+      operationalLabel: learnRefillOperationalLabel(state),
+      explanation: learnRefillExplanation(state),
+      sourceRefs: sourceIds,
+      evidenceRefs: evidenceIds,
+      metadataOnly: true,
+    },
+    housekeeping: {
+      status: state === "refilling" ? "running" : state === "blocked" ? "blocked" : state === "unknown" ? "unknown" : "complete",
+      summary: state === "refilling"
+        ? "Housekeeping running."
+        : state === "blocked"
+          ? "Housekeeping blocked."
+          : state === "unknown"
+            ? "Housekeeping state unknown."
+            : "Housekeeping complete.",
+      evidenceRefs: evidenceIds,
+      metadataOnly: true,
+    },
+    sourceExhaustion: {
+      exhausted: state === "source_exhausted",
+      summary: state === "source_exhausted"
+        ? "Approved source exhausted; queue is healthy until new approved source work appears."
+        : "Approved source still has refill or follow-up posture.",
+      sourceRefs: sourceIds,
+      evidenceRefs: evidenceIds,
+      metadataOnly: true,
+    },
+    readyToTest: input.learnRefillReadyToTest
+      ? {
+          readyId: `${input.packetId}:ready-to-test`,
+          userFacingSummary: "Ready to test: delivered user-facing work can be exercised from the dashboard workflow.",
+          testableSurface: input.title,
+          verificationRefs: evidenceIds,
+          evidenceRefs: evidenceIds,
+          metadataOnly: true,
+          rawPayloadRetained: false,
+        }
+      : null,
+    nextSafeAction: learnRefillNextSafeAction(state, followUpCandidates.length > 0, operatorOwnedExits.length > 0, Boolean(input.learnRefillReadyToTest)),
+    rawPayloadRetained: false,
+    sourceMutationAllowed: false,
+    providerCallsAllowed: false,
+    workerLaunchAllowed: false,
+    githubMutationAllowed: false,
+  };
+}
+
+function followUpOriginForProposal(proposal: MemoryProposalV0): LearnRefillProjection["followUpCandidates"][number]["origin"] {
+  if (proposal.status === "rejected") {
+    return "rejection";
+  }
+  if (proposal.status === "approved") {
+    return "approval";
+  }
+  if (proposal.status === "blocked" || proposal.status === "stale" || proposal.status === "contradictory") {
+    return "failure";
+  }
+  if (proposal.proposalType === "user_facing_documentation") {
+    return "quality";
+  }
+  return "operator_feedback";
+}
+
+function learnRefillOperationalLabel(state: LearnRefillState) {
+  return {
+    healthy: "Healthy empty",
+    source_exhausted: "Source exhausted",
+    blocked: "Refill blocked",
+    refilling: "Refill running",
+    unknown: "Unknown refill state",
+  }[state];
+}
+
+function learnRefillExplanation(state: LearnRefillState) {
+  return {
+    healthy: "No Learn follow-up is required and the approved queue can stay empty without creating fake work.",
+    source_exhausted: "Approved source exhausted; this is healthy unless an approved source was expected and blocked.",
+    blocked: "Refill blocked by operator-owned or rejected work that must reenter through reenter_capture.",
+    refilling: "Refill running from metadata-only Learn proposals and follow-up Candidate Work.",
+    unknown: "Unknown refill state; inspect manager evidence before assuming health or failure.",
+  }[state];
+}
+
+function learnRefillNextSafeAction(state: LearnRefillState, hasFollowUp: boolean, hasOperatorExit: boolean, hasReadyToTest: boolean) {
+  if (hasOperatorExit) {
+    return "Review operator-owned exit and use reenter_capture only after the operator decision is explicit.";
+  }
+  if (hasReadyToTest) {
+    return "Show ready-to-test work and let the manager continue other safe packets.";
+  }
+  if (hasFollowUp) {
+    return "Review follow-up Candidate Work metadata before promotion.";
+  }
+  if (state === "source_exhausted") {
+    return "Leave the queue healthy-empty until a new approved source appears.";
+  }
+  if (state === "blocked") {
+    return "Resolve the refill blocker before creating new work.";
+  }
+  return "Inspect refill evidence and keep raw payloads out of the dashboard.";
 }
 
 function buildLearnOutcome(
@@ -4133,6 +4352,43 @@ function cloneDensityPacket(packet: PipelineFixturePacket, ordinal: number): Pip
         targetVaultPath: proposal.targetVaultPath ? proposal.targetVaultPath.replace(packet.packetId.replaceAll(":", "-"), packetId.replaceAll(":", "-")) : proposal.targetVaultPath,
       };
     }),
+    learnRefill: packet.learnRefill ? {
+      ...packet.learnRefill,
+      projectionId: remapId(packet.learnRefill.projectionId),
+      followUpCandidates: packet.learnRefill.followUpCandidates.map((followUp) => ({
+        ...followUp,
+        followUpId: remapId(followUp.followUpId),
+        candidateWorkId: remapId(followUp.candidateWorkId),
+        sourcePacketId: remapId(followUp.sourcePacketId),
+        evidenceRefs: followUp.evidenceRefs.map(remapId),
+      })),
+      operatorOwnedExits: packet.learnRefill.operatorOwnedExits.map((exit) => ({
+        ...exit,
+        exitId: remapId(exit.exitId),
+        sourcePacketId: remapId(exit.sourcePacketId),
+        evidenceRefs: exit.evidenceRefs.map(remapId),
+      })),
+      refillSourceState: {
+        ...packet.learnRefill.refillSourceState,
+        sourceRefs: packet.learnRefill.refillSourceState.sourceRefs.map(remapId),
+        evidenceRefs: packet.learnRefill.refillSourceState.evidenceRefs.map(remapId),
+      },
+      housekeeping: {
+        ...packet.learnRefill.housekeeping,
+        evidenceRefs: packet.learnRefill.housekeeping.evidenceRefs.map(remapId),
+      },
+      sourceExhaustion: {
+        ...packet.learnRefill.sourceExhaustion,
+        sourceRefs: packet.learnRefill.sourceExhaustion.sourceRefs.map(remapId),
+        evidenceRefs: packet.learnRefill.sourceExhaustion.evidenceRefs.map(remapId),
+      },
+      readyToTest: packet.learnRefill.readyToTest ? {
+        ...packet.learnRefill.readyToTest,
+        readyId: remapId(packet.learnRefill.readyToTest.readyId),
+        verificationRefs: packet.learnRefill.readyToTest.verificationRefs.map(remapId),
+        evidenceRefs: packet.learnRefill.readyToTest.evidenceRefs.map(remapId),
+      } : null,
+    } : null,
     reviewSummaries: packet.reviewSummaries.map((review) => ({
       ...review,
       evidenceRefs: review.evidenceRefs.map(remapId),

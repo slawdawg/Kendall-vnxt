@@ -2014,3 +2014,71 @@ def test_work_packets_cover_blocked_and_done_delivery_aggregate_states(tmp_path,
         assert delivery_evidence["cleanupApproved"] is False
         assert f"delivery:{done_item['id']}" in delivery_evidence["evidenceRefs"]
         assert f"artifact:delivery:{done_item['id']}:pull_request" in delivery_evidence["artifactRefs"]
+
+
+
+def test_promoted_work_packets_preserve_sanitized_learn_refill_import_metadata(tmp_path, monkeypatch) -> None:
+    db_name = "work-packet-learn-refill-promotion.db"
+    db_path = _db_path(tmp_path, db_name)
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        candidate = _create_candidate(client, title="Promoted Learn refill packet")
+        _update_candidate_fixture(
+            db_path,
+            candidate["id"],
+            import_metadata_json={
+                "readyToTest": True,
+                "readyToTestSummary": "Promoted Learn/refill projection is ready to test.",
+                "testableSurface": "/pipeline selected packet",
+                "verificationRefs": ["pytest tests/integration/test_work_packets.py"],
+                "learnRefill": {
+                    "state": "source_exhausted",
+                    "explanation": "Approved source is empty after promotion.",
+                    "followUpCandidates": [
+                        {
+                            "followUpId": "learn-follow-up:promoted",
+                            "candidateWorkId": "candidate-work-promoted-follow-up",
+                            "label": "Promoted Follow-up Candidate Work",
+                            "sourcePacketId": f"candidate_work:{candidate['id']}",
+                            "reason": "rawPrompt: do not leak full prompt text",
+                            "status": "not_created",
+                            "origin": "operator_feedback",
+                            "reentryPath": "learn_review",
+                            "evidenceRefs": ["evidence:promoted-follow-up"],
+                        }
+                    ],
+                    "housekeeping": {
+                        "status": "complete",
+                        "summary": "Refill housekeeping copied safely.",
+                        "evidenceRefs": ["evidence:promoted-housekeeping"],
+                    },
+                    "sourceExhaustionSummary": "rawCompletion: do not leak completion text",
+                    "nextSafeAction": "reasoningTrace: do not leak chain of thought",
+                },
+            },
+        )
+        approved = client.patch(f"/candidate-work/{candidate['id']}", json={"status": "approved"})
+        assert approved.status_code == 200
+        promoted = client.post(f"/candidate-work/{candidate['id']}/promote")
+        assert promoted.status_code == 200
+        work_item = promoted.json()["data"]["workItem"]
+
+        packet_response = client.get(f"/work-packets/work_item:{work_item['id']}")
+        assert packet_response.status_code == 200
+        packet = packet_response.json()["data"]
+        projection = packet["learnRefill"]
+        assert projection["retentionClass"] == "metadata_only"
+        assert projection["rawPayloadRetained"] is False
+        assert projection["refillSourceState"]["state"] == "source_exhausted"
+        assert projection["refillSourceState"]["explanation"] == "Approved source is empty after promotion."
+        assert projection["followUpCandidates"][0]["sourcePacketId"] == f"candidate_work:{candidate['id']}"
+        assert projection["followUpCandidates"][0]["candidateWorkId"] == "candidate-work-promoted-follow-up"
+        assert projection["followUpCandidates"][0]["reason"] == "Learn recorded a metadata-only follow-up."
+        assert "rawPrompt" not in projection["followUpCandidates"][0]["reason"]
+        assert "rawCompletion" not in projection["sourceExhaustion"]["summary"]
+        assert "reasoningTrace" not in projection["nextSafeAction"]
+        assert projection["readyToTest"]["userFacingSummary"] == "Promoted Learn/refill projection is ready to test."
+        assert projection["readyToTest"]["testableSurface"] == "/pipeline selected packet"
+        assert projection["readyToTest"]["verificationRefs"] == ["pytest tests/integration/test_work_packets.py"]
+        assert projection["providerCallsAllowed"] is False
+        assert projection["workerLaunchAllowed"] is False
+        assert projection["githubMutationAllowed"] is False
