@@ -2603,18 +2603,35 @@ function valueOrNone(value) {
 }
 
 function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
+  const existingPacket =
+    manifest.lane_evidence_packet && typeof manifest.lane_evidence_packet === "object" ? manifest.lane_evidence_packet : {};
+  const prDeliveryEvidence = Object.hasOwn(options, "prDeliveryEvidence")
+    ? options.prDeliveryEvidence
+    : manifest.pr_delivery_evidence || existingPacket.pr_delivery || null;
+  const prGateEvidence = Object.hasOwn(options, "prGateEvidence")
+    ? options.prGateEvidence
+    : manifest.pr_gate_evidence || existingPacket.pr_gate || null;
+  const cleanupAuthorityDecision = Object.hasOwn(options, "cleanupAuthorityDecision")
+    ? options.cleanupAuthorityDecision
+    : manifest.cleanup_authority_decision || existingPacket.cleanup || null;
   return {
-    ...(manifest.lane_evidence_packet && typeof manifest.lane_evidence_packet === "object" ? manifest.lane_evidence_packet : {}),
+    ...existingPacket,
     schemaVersion: 1,
     task_id: manifest.task_id,
     branch: manifest.branch,
     worktree_path: manifest.worktree_path,
     updated_at: antiChurnRecord.updated_at || new Date().toISOString(),
     anti_churn_finalization: shapeAntiChurnEvidencePacket(antiChurnRecord, options),
-    pr_delivery: options.prDeliveryEvidence || null,
-    pr_gate: options.prGateEvidence || null,
-    cleanup: options.cleanupAuthorityDecision || manifest.cleanup_authority_decision || null,
-    authority_decisions: shapeLaneAuthorityDecisions(manifest, options),
+    pr_delivery: prDeliveryEvidence,
+    pr_gate: prGateEvidence,
+    cleanup: cleanupAuthorityDecision,
+    authority_decisions: shapeLaneAuthorityDecisions(manifest, {
+      ...options,
+      prDeliveryEvidence,
+      prGateEvidence,
+      cleanupAuthorityDecision,
+      existingAuthorityDecisions: existingPacket.authority_decisions,
+    }),
   };
 }
 
@@ -2666,7 +2683,10 @@ function normalizeAuthorityDecision(decision, overrides = {}) {
 
 function shapeLaneAuthorityDecisions(manifest, options = {}) {
   const decisions = [
+    ...copyJsonArray(options.existingAuthorityDecisions),
     ...copyJsonArray(manifest.authority_decisions),
+    manifest.pr_delivery_evidence?.authorityDecision,
+    manifest.pr_gate_evidence?.authorityDecision,
     options.prDeliveryEvidence?.authorityDecision,
     options.prGateEvidence?.authorityDecision,
     options.cleanupAuthorityDecision,
@@ -2686,6 +2706,7 @@ function shapeLaneAuthorityDecisions(manifest, options = {}) {
 function shapePrDeliveryEvidence(manifest, options = {}) {
   const prBody = typeof options.prBody === "string" ? options.prBody : "";
   const verifyCommand = Array.isArray(options.verifyCommand) ? options.verifyCommand.filter(Boolean).join(" ") : "";
+  const verificationGateSatisfied = Boolean(verifyCommand) || Boolean(options.noVerify);
   const requiredGates = [
     "clean worktree or intentionally staged changes",
     "configured verification command or explicitly recorded no-verify decision",
@@ -2737,7 +2758,9 @@ function shapePrDeliveryEvidence(manifest, options = {}) {
       decision: "recorded",
       allowed: true,
       requiredGates,
-      satisfiedGates: requiredGates,
+      satisfiedGates: requiredGates.filter(
+        (gate) => verificationGateSatisfied || gate !== "configured verification command or explicitly recorded no-verify decision",
+      ),
       stopLines,
       evidenceRefs: [
         `task:${manifest.task_id}`,
@@ -3355,24 +3378,25 @@ function cleanupMergedResources(manifest, state, options) {
     manifest.cleanup_remote_branch_sha =
       originBranchSha(manifest.branch, options.cleanupCwd) || manifest.cleanup_remote_branch_sha || null;
   }
-  manifest.cleanup_authority_decision = shapeCleanupAuthorityDecision(manifest, options.pr, {
-    deleteRemote: Boolean(options.deleteRemote),
-    decision: "applied",
-    allowed: true,
-    generatedAt: cleanupStartedAt,
-    evidenceRefs: [
-      `task:${manifest.task_id}`,
-      options.pr.number ? `pr:${options.pr.number}` : "",
-      `expected-head:${expectedHeadSha}`,
-    ],
-  });
 
   removeWorktreeIfPresent(manifest, state, options.cleanupCwd);
   deleteLocalBranchIfPresent(manifest, options.cleanupCwd, expectedHeadSha);
   if (options.deleteRemote) {
     deleteRemoteBranchIfPresent(manifest, options.cleanupCwd, expectedHeadSha);
   }
-  manifest.cleanup_completed_at = new Date().toISOString();
+  const cleanupCompletedAt = new Date().toISOString();
+  manifest.cleanup_completed_at = cleanupCompletedAt;
+  manifest.cleanup_authority_decision = shapeCleanupAuthorityDecision(manifest, options.pr, {
+    deleteRemote: Boolean(options.deleteRemote),
+    decision: "applied",
+    allowed: true,
+    generatedAt: cleanupCompletedAt,
+    evidenceRefs: [
+      `task:${manifest.task_id}`,
+      options.pr.number ? `pr:${options.pr.number}` : "",
+      `expected-head:${expectedHeadSha}`,
+    ],
+  });
 }
 
 function preflightCleanupBranchHeads(manifest, cleanupCwd, expectedHeadSha, deleteRemote) {
