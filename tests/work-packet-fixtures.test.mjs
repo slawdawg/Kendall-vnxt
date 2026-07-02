@@ -252,6 +252,35 @@ test("canonical Work Packet fixtures cover refs, memory proposals, and recovery 
   }
 });
 
+test("pipeline-control-plane lifecycle summaries reject spaced raw payload markers", async () => {
+  const { createWorkPacketCreatedEvent } = await loadCompiledPipelineControlPlane();
+  const baseInput = {
+    packetId: "packet:lifecycle-summary-guard",
+    sourceRef: {
+      refId: "source:manual",
+      sourceType: "operator_input",
+      title: "Manual source",
+      pathOrUrl: null,
+    },
+    actor: {
+      actorType: "system",
+      actorId: "test",
+      actorLabel: "Test",
+    },
+    eventId: "event:lifecycle-summary-guard",
+    occurredAt: "2026-07-02T20:00:00.000Z",
+  };
+
+  assert.equal(createWorkPacketCreatedEvent({ ...baseInput, payloadSummary: "Metadata-only lifecycle event." }).metadataOnly, true);
+  for (const payloadSummary of ["raw prompt retained", "provider payload retained", "reasoning trace retained", "raw_completion retained"]) {
+    assert.throws(
+      () => createWorkPacketCreatedEvent({ ...baseInput, eventId: "event:" + payloadSummary, payloadSummary }),
+      /raw prompt, provider, or secret payloads/,
+      payloadSummary
+    );
+  }
+});
+
 test("source reference fixtures keep excluded missing stale and blocked states visible in packet fixtures", () => {
   const packet = buildWorkPacketFixture("source visibility", {}, {
     currentStage: "capture",
@@ -502,6 +531,34 @@ function isForbiddenRawRetentionKey(key) {
   return /^(raw.*(prompt|completion|output|stdout|stderr|payload|response)|.*(secret|credential).*)$/i.test(key) ||
     /^(provider|model|worker).*(payload|response)$/i.test(key) ||
     /^(stdout|stderr)$/i.test(key);
+}
+
+async function loadCompiledPipelineControlPlane() {
+  const outDir = await mkdtemp(join(tmpdir(), "pipeline-control-plane-"));
+  await writeFile(join(outDir, "package.json"), '{"type":"module"}\n');
+  const result = spawnSync(
+    "apps/dashboard/node_modules/.bin/tsc",
+    [
+      "--target",
+      "ES2022",
+      "--module",
+      "ESNext",
+      "--moduleResolution",
+      "Bundler",
+      "--strict",
+      "--verbatimModuleSyntax",
+      "--rootDir",
+      "packages/workflow-core/src",
+      "--outDir",
+      outDir,
+      "packages/workflow-core/src/pipeline-control-plane/index.ts"
+    ],
+    { cwd: new URL("..", import.meta.url), encoding: "utf8" }
+  );
+  if (result.status !== 0) {
+    throw new Error("Unable to compile pipeline-control-plane: " + (result.stderr || result.stdout));
+  }
+  return import(pathToFileURL(join(outDir, "pipeline-control-plane/index.js")).href);
 }
 
 async function loadCompiledMapper() {

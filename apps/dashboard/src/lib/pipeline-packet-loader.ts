@@ -1,18 +1,23 @@
+import type { PipelineDashboardProjectionV0 } from "@kendall/contracts";
+
 import {
   pipelineCockpitPackets,
   pipelineFixtureMode,
   projectSupervisorWorkPacketsToCockpitPackets,
   type PipelineFixturePacket,
 } from "./pipeline-fixtures";
-import { getWorkPackets } from "./supervisor";
+import { getPipelineDashboardProjection, getWorkPackets } from "./supervisor";
 
 export type PipelineCockpitPacketLoad = {
   fixtureMode: typeof pipelineFixtureMode;
   packets: PipelineFixturePacket[];
+  projection: PipelineDashboardProjectionV0 | null;
+  projectionError: string | null;
 };
 
 export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacketLoad> {
   const fallbackPackets = pipelineCockpitPackets;
+  const projectionResult = await loadPipelineDashboardProjection();
   try {
     const supervisorPackets = projectSupervisorWorkPacketsToCockpitPackets(await getWorkPackets());
     if (supervisorPackets.length === 0) {
@@ -23,6 +28,8 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
           summary: "Supervisor returned no WorkPacketV0 rows; showing static fixture fallback without provider, worker, GitHub, or Obsidian calls.",
         },
         packets: fallbackPackets,
+        projection: projectionResult.projection,
+        projectionError: projectionResult.error,
       };
     }
     return {
@@ -32,6 +39,8 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         summary: "Read-only supervisor WorkPacketV0 projections are shown before the static fixture fallback. No provider, worker, GitHub, or Obsidian calls are made by this route.",
       },
       packets: mergePipelinePackets(supervisorPackets, fallbackPackets),
+      projection: projectionResult.projection,
+      projectionError: projectionResult.error,
     };
   } catch {
     return {
@@ -41,6 +50,8 @@ export async function loadPipelineCockpitPackets(): Promise<PipelineCockpitPacke
         summary: "Supervisor WorkPacketV0 read failed; showing static fixture fallback without provider, worker, GitHub, or Obsidian calls.",
       },
       packets: fallbackPackets,
+      projection: projectionResult.projection,
+      projectionError: projectionResult.error,
     };
   }
 }
@@ -56,4 +67,18 @@ function mergePipelinePackets(
     }
   }
   return Array.from(packetById.values());
+}
+
+async function loadPipelineDashboardProjection(): Promise<{ projection: PipelineDashboardProjectionV0 | null; error: string | null }> {
+  try {
+    return {
+      projection: await getPipelineDashboardProjection(),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      projection: null,
+      error: error instanceof Error ? error.message : "Projection fetch failed.",
+    };
+  }
 }

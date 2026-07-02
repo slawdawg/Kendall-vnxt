@@ -1,0 +1,20 @@
+type Brand<TName extends string> = string & { readonly __brand: TName };
+
+export type CandidateWorkPacketId = Brand<"CandidateWorkPacketId">;
+export type WorkItemId = Brand<"WorkItemId">;
+export type LeaseId = Brand<"LeaseId">;
+export type ExecutionAttemptId = Brand<"ExecutionAttemptId">;
+export type RefillJobId = Brand<"RefillJobId">;
+export type EvidenceRefId = Brand<"EvidenceRefId">;
+export type AuthorityDecisionId = Brand<"AuthorityDecisionId">;
+export type ImplementationRunContractId = Brand<"ImplementationRunContractId">;
+export type ManagerPreauthorizationId = Brand<"ManagerPreauthorizationId">;
+export type ManagerEventId = Brand<"ManagerEventId">;
+export type ManagerSourceRefId = Brand<"ManagerSourceRefId">;
+export type ManagerPolicyId = Brand<"ManagerPolicyId">;
+export type ManagerWorkerId = Brand<"ManagerWorkerId">;
+export type ManagerRunId = Brand<"ManagerRunId">;
+export type VerificationTargetId = Brand<"VerificationTargetId">;
+export type ManagerCorrelationId = Brand<"ManagerCorrelationId">;
+export type ManagerCausationId = Brand<"ManagerCausationId">;
+export type ManagerIdempotencyKey = Brand<"ManagerIdempotencyKey">;

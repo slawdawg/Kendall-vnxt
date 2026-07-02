@@ -195,6 +195,32 @@ def _create_work_item(client: TestClient, *, title: str = "Direct active packet"
     return response.json()["data"]
 
 
+def test_pipeline_dashboard_projection_endpoint_projects_live_work_packets(tmp_path, monkeypatch) -> None:
+    db_name = "pipeline-projection.db"
+    with _client(tmp_path, monkeypatch, db_name) as client:
+        work_item = _create_work_item(client, title="Live projection packet")
+
+        response = client.get("/pipeline-control-plane/projection")
+        assert response.status_code == 200
+        projection = response.json()["data"]
+
+        assert projection["schemaVersion"] == "pipeline-dashboard-projection/v0"
+        assert projection["sourceLabel"] == "live"
+        assert projection["freshnessState"] == "live"
+        assert projection["fixtureMode"]["enabled"] is False
+        assert projection["truthSummary"]["fixtureBacked"] is False
+        assert len(projection["stageSummaries"]) == 10
+        packet = next(packet for packet in projection["workPackets"] if packet["packetId"] == f"work_item:{work_item['id']}")
+        assert packet["title"] == "Live projection packet"
+        assert packet["truthLabel"] == "live"
+        assert packet["metadataOnly"] is True
+        assert packet["sourceRef"]["sourceType"] == "workflow"
+        assert packet["currentStage"] in {"capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"}
+        detail = next(detail for detail in projection["selectedPacketDetails"] if detail["packetId"] == packet["packetId"])
+        assert detail["metadataOnly"] is True
+        assert detail["sourceRefs"][0]["refId"] == f"work_item:{work_item['id']}"
+
+
 def test_work_packets_include_candidate_only_work_item_only_combined_and_dangling_promoted_packets(tmp_path, monkeypatch) -> None:
     db_name = "work-packets.db"
     db_path = _db_path(tmp_path, db_name)
