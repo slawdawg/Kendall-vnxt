@@ -771,7 +771,61 @@ try {
 
     const packetBlock = source.match(/function buildLaneEvidencePacket[\s\S]*?function shapePrDeliveryEvidence/);
     assert(packetBlock, "lane evidence packet source not found");
-    assert(packetBlock[0].includes("pr_gate: options.prGateEvidence || null"), "lane packet must attach PR gate evidence");
+    assert(packetBlock[0].includes("pr_gate: prGateEvidence"), "lane packet must attach PR gate evidence");
+    assert(packetBlock[0].includes("manifest.pr_gate_evidence || existingPacket.pr_gate"), "lane packet must preserve existing PR gate evidence");
+  });
+
+  test("manager gate packets record metadata-only authority decisions", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const helperBlock = source.match(/function shapeAuthorityDecisionEvidence[\s\S]*?function appendAuthorityDecision/);
+    assert(helperBlock, "authority decision helper not found");
+    for (const expected of [
+      "operation",
+      "authorityFamily",
+      "authorityProfile",
+      "decision",
+      "allowed",
+      "requiredGates",
+      "satisfiedGates",
+      "blockedReasons",
+      "stopLines",
+      "evidenceRefs",
+      "nextSafeAction",
+      "recoveryPath",
+      "metadataOnly: true",
+      "rawPayloadRetained: false",
+    ]) {
+      assert(helperBlock[0].includes(expected), `authority decision helper missing ${expected}`);
+    }
+    for (const forbidden of ["providerPayload", "rawPrompt", "rawCompletion", "reasoningTrace", "secret"]) {
+      assert(!helperBlock[0].includes(forbidden), `authority decision helper must not retain ${forbidden}`);
+    }
+
+    const lanePacketBlock = source.match(/function buildLaneEvidencePacket[\s\S]*?function shapeAuthorityDecisionEvidence/);
+    const dispatchBlock = source.match(/function dispatchPacket[\s\S]*?function buildDispatchNextSummary/);
+    const dispatchHandoffBlock = source.match(/function dispatchHandoffPacket[\s\S]*?function recordManifestDispatchHandoff/);
+    const takeoverBlock = source.match(/function takeoverPacket[\s\S]*?function buildTakeoverSummary/);
+    const deliveryBlock = source.match(/function shapePrDeliveryEvidence[\s\S]*?function shapeAntiChurnEvidencePacket/);
+    const gateBlock = source.match(/function buildPrGateEvidence[\s\S]*?function prGateHeadState/);
+    const cleanupSummaryBlock = source.match(/function cleanupMergedReadySummary[\s\S]*?function cleanupPrSummary/);
+    const cleanupApplyBlock = source.match(/function cleanupMergedResources[\s\S]*?function preflightCleanupBranchHeads/);
+    for (const [name, block, expected] of [
+      ["lane evidence packet", lanePacketBlock, "authority_decisions"],
+      ["dispatch packet", dispatchBlock, "authority_decision"],
+      ["dispatch handoff packet", dispatchHandoffBlock, "authority_decision"],
+      ["takeover packet", takeoverBlock, "authority_decision"],
+      ["PR delivery evidence", deliveryBlock, "authorityDecision"],
+      ["PR gate evidence", gateBlock, "authorityDecision"],
+      ["cleanup summary", cleanupSummaryBlock, "authorityDecision"],
+      ["cleanup apply", cleanupApplyBlock, "cleanup_authority_decision"],
+    ]) {
+      assert(block, `${name} source not found`);
+      assert(block[0].includes(expected), `${name} missing ${expected}`);
+    }
+    assert(
+      cleanupApplyBlock[0].indexOf("deleteRemoteBranchIfPresent") < cleanupApplyBlock[0].indexOf("manifest.cleanup_authority_decision = shapeCleanupAuthorityDecision"),
+      "cleanup apply authority must be recorded only after cleanup deletions finish",
+    );
   });
 
   test("anti-churn evidence packet keeps proposals local and source edits recoverable", () => {
@@ -3186,6 +3240,11 @@ try {
       assert(packet.requestingOwner === "runner-a", result.stdout || result.stderr);
       assert(packet.decision === "blocked", result.stdout || result.stderr);
       assert(packet.allowed === false, result.stdout || result.stderr);
+      assert(packet.authorityDecision?.operation === "takeover", result.stdout || result.stderr);
+      assert(packet.authorityDecision?.authorityFamily === "worker-mutation", result.stdout || result.stderr);
+      assert(packet.authorityDecision?.decision === "blocked", result.stdout || result.stderr);
+      assert(packet.authorityDecision?.metadataOnly === true, result.stdout || result.stderr);
+      assert(packet.authorityDecision?.rawPayloadRetained === false, result.stdout || result.stderr);
       assert(packet.heartbeat.isStale === true, result.stdout || result.stderr);
       assert(packet.heartbeat.staleAfterSeconds === 60, result.stdout || result.stderr);
       assert(packet.worktree.status === "not_applicable", result.stdout || result.stderr);
@@ -3291,6 +3350,11 @@ try {
       assert(Array.isArray(assignment.takeover_decisions), "takeover decision evidence missing");
       assert(assignment.takeover_decisions[0].decision === "applied", "takeover decision not marked applied");
       assert(assignment.takeover_decisions[0].previous_owner === "runner-b", "previous owner evidence missing");
+      assert(Array.isArray(assignment.authority_decisions), "generic authority decision evidence missing");
+      assert(assignment.authority_decisions[0].operation === "takeover", "takeover authority decision missing");
+      assert(assignment.authority_decisions[0].decision === "applied", "takeover authority decision not marked applied");
+      assert(assignment.takeover_decisions[0].authority_decision?.decision === "applied", "takeover decision nested authority not marked applied");
+      assert(assignment.authority_decisions[0].rawPayloadRetained === false, "takeover authority decision retained raw payload");
       assert(assignment.events.some((event) => event.type === "takeover_applied"), "takeover event missing");
       assert(!existsSync(join(takeoverStateRoot, "tasks")), "assignment takeover created workspace manifests");
     } finally {
@@ -3447,6 +3511,10 @@ try {
       assert(packet.readinessProfile === "doctor", result.stdout || result.stderr);
       assert(packet.selected?.itemId === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
       assert(packet.dispatch.allowed === true, result.stdout || result.stderr);
+      assert(packet.dispatch.authorityDecision?.operation === "dispatch-next", result.stdout || result.stderr);
+      assert(packet.dispatch.authorityDecision?.authorityFamily === "worker-mutation", result.stdout || result.stderr);
+      assert(packet.dispatch.authorityDecision?.allowed === true, result.stdout || result.stderr);
+      assert(packet.dispatch.authorityDecision?.metadataOnly === true, result.stdout || result.stderr);
       assert(packet.dispatch.selectedLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
       assert(packet.laneAssignmentPreview.proposedRunner === "runner-a", result.stdout || result.stderr);
       assert(packet.laneAssignmentPreview.targetLane === "bmad-1-1-validate-the-pipeline-work-packet-read-contract", result.stdout || result.stderr);
@@ -4556,9 +4624,22 @@ try {
         manifest.pr_delivery_evidence.stopLines.includes("no merge or cleanup from finish-pr"),
         "manifest PR delivery evidence missing finish-pr stop line",
       );
+      assert(manifest.pr_delivery_evidence.authorityDecision?.operation === "finish-pr", "PR delivery authority decision missing");
+      assert(manifest.pr_delivery_evidence.authorityDecision?.authorityFamily === "delivery", "PR delivery authority family missing");
+      assert(manifest.pr_delivery_evidence.authorityDecision?.rawPayloadRetained === false, "PR delivery authority retained raw payload");
+      assert(
+        manifest.pr_delivery_evidence.authorityDecision.satisfiedGates.includes(
+          "configured verification command or explicitly recorded no-verify decision",
+        ),
+        "explicit no-verify gate was not truthfully satisfied",
+      );
       assert(
         manifest.lane_evidence_packet?.pr_delivery?.pullRequestNumber === 456,
         "lane evidence packet missing PR delivery evidence",
+      );
+      assert(
+        manifest.lane_evidence_packet?.authority_decisions?.some((entry) => entry.operation === "finish-pr"),
+        "lane evidence packet missing finish-pr authority decision",
       );
       assert(
         manifest.events.some((event) => event.type === "commit_reconciled"),
@@ -4598,9 +4679,52 @@ try {
     }
   });
 
+  test("finish-pr without verification profile does not satisfy verification authority gate", () => {
+    const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["finish-pr", "resumed-task", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { cwd: fixture.worktree, env: fixture.env },
+      );
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "resumed-task.json"));
+      assert(
+        manifest.pr_delivery_evidence?.verificationGate?.decision === "no-verification-profile",
+        "manifest should record no verification profile",
+      );
+      assert(
+        !manifest.pr_delivery_evidence.authorityDecision.satisfiedGates.includes(
+          "configured verification command or explicitly recorded no-verify decision",
+        ),
+        "verification authority gate was falsely satisfied",
+      );
+    } finally {
+      cleanupFinishPrExistingCommitFixture(fixture);
+    }
+  });
+
   test("verify-pr-gates records clean exact-head checks and review-thread evidence", () => {
     const fixture = createFinishPrExistingCommitFixture({ existingPr: true });
     try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "resumed-task.json");
+      const seeded = readJson(manifestPath);
+      seeded.authority_decisions = [
+        {
+          operation: "seeded-raw",
+          authorityFamily: "delivery",
+          decision: "recorded",
+          allowed: true,
+          recordedAt: "2026-07-02T00:00:00.000Z",
+          rawPrompt: "must not persist",
+          providerPayload: "must not persist",
+          secret: "must not persist",
+        },
+        { operation: "", authorityFamily: "delivery", decision: "malformed", recordedAt: "2026-07-02T00:00:01.000Z" },
+      ];
+      writeFileSync(manifestPath, `${JSON.stringify(seeded, null, 2)}\n`);
+
       const result = runFixtureScript(
         fixture,
         ["verify-pr-gates", "resumed-task", "--apply", "--owner", "runner-a", "--state-root", fixture.stateRoot],
@@ -4616,10 +4740,26 @@ try {
       assert(manifest.pr_gate_evidence.checks.total === 1, "gate evidence missing check rollup");
       assert(manifest.pr_gate_evidence.checks.passed.length === 1, "gate evidence did not classify passed check");
       assert(manifest.pr_gate_evidence.reviewThreads.unresolvedNonOutdatedCount === 0, "gate evidence did not prove resolved review threads");
+      assert(manifest.pr_gate_evidence.authorityDecision?.operation === "verify-pr-gates", "PR gate authority decision missing");
+      assert(manifest.pr_gate_evidence.authorityDecision?.authorityFamily === "delivery-gate", "PR gate authority family missing");
+      assert(manifest.pr_gate_evidence.authorityDecision?.allowed === true, "PR gate authority decision not allowed");
       assert(manifest.pr_review_state_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing review-thread freshness timestamp");
       assert(manifest.pr_checks_state_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing checks freshness timestamp");
       assert(manifest.pr_exact_head_checked_at === manifest.pr_gate_evidence.checkedAt, "manifest missing exact-head freshness timestamp");
       assert(manifest.lane_evidence_packet?.pr_gate?.status === "passed", "lane packet missing PR gate evidence");
+      assert(
+        manifest.lane_evidence_packet?.authority_decisions?.some((entry) => entry.operation === "verify-pr-gates"),
+        "lane evidence packet missing verify-pr-gates authority decision",
+      );
+      const serializedLanePacket = JSON.stringify(manifest.lane_evidence_packet);
+      assert(!serializedLanePacket.includes("must not persist"), "lane evidence retained raw authority decision payload");
+      assert(!serializedLanePacket.includes("rawPrompt"), "lane evidence retained rawPrompt key");
+      assert(!serializedLanePacket.includes("providerPayload"), "lane evidence retained providerPayload key");
+      assert(!serializedLanePacket.includes("secret"), "lane evidence retained secret key");
+      assert(
+        manifest.lane_evidence_packet.authority_decisions.every((entry) => entry.operation && entry.recordedAt && entry.decision),
+        "lane evidence retained malformed authority decision",
+      );
       assert(
         manifest.events.some((event) => event.type === "pr_gate_evidence_recorded"),
         "manifest missing PR gate event",
@@ -4764,6 +4904,31 @@ try {
   test("cleanup-merged can apply from inside the target worktree and delete remote branch", () => {
     const fixture = createMergedCleanupFixture();
     try {
+      const manifestPath = join(fixture.stateRoot, "tasks", "cleanup-task.json");
+      const seeded = readJson(manifestPath);
+      seeded.pr_delivery_evidence = {
+        operation: "create-pr",
+        pullRequestNumber: 123,
+        authorityDecision: {
+          operation: "finish-pr",
+          authorityFamily: "delivery",
+          decision: "recorded",
+          allowed: true,
+          recordedAt: "2026-07-02T00:00:00.000Z",
+        },
+      };
+      seeded.pr_gate_evidence = {
+        status: "passed",
+        authorityDecision: {
+          operation: "verify-pr-gates",
+          authorityFamily: "delivery-gate",
+          decision: "passed",
+          allowed: true,
+          recordedAt: "2026-07-02T00:00:01.000Z",
+        },
+      };
+      writeFileSync(manifestPath, `${JSON.stringify(seeded, null, 2)}\n`);
+
       const result = runMergedCleanupFixtureScript(fixture, [
         "cleanup-current",
         "--apply",
@@ -4783,6 +4948,15 @@ try {
       assert(manifest.worktree_removed_at, "manifest missing worktree removal timestamp");
       assert(manifest.local_branch_deleted_at, "manifest missing local branch deletion timestamp");
       assert(manifest.remote_branch_deleted_at, "manifest missing remote branch deletion timestamp");
+      assert(manifest.cleanup_authority_decision?.operation === "cleanup-merged-delete-remote", "cleanup authority decision missing");
+      assert(manifest.cleanup_authority_decision?.authorityFamily === "cleanup", "cleanup authority family missing");
+      assert(manifest.cleanup_authority_decision?.decision === "applied", "cleanup authority decision not applied");
+      assert(
+        manifest.lane_evidence_packet?.authority_decisions?.some((entry) => entry.operation === "cleanup-merged-delete-remote"),
+        "lane evidence packet missing cleanup authority decision",
+      );
+      assert(manifest.lane_evidence_packet?.pr_delivery?.operation === "create-pr", "cleanup dropped PR delivery evidence");
+      assert(manifest.lane_evidence_packet?.pr_gate?.status === "passed", "cleanup dropped PR gate evidence");
       assert(manifest.source_assignment_closed_at, "manifest missing source assignment closure timestamp");
       const assignment = readJson(join(fixture.stateRoot, "assignments", "cleanup-assignment.json"));
       assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
@@ -4818,6 +4992,14 @@ try {
       assert(cleanup.expectedHeadSha, "summary missing expected cleanup head");
       assert(cleanup.localBranchSha, "summary missing local branch head");
       assert(cleanup.remoteBranchSha, "summary missing remote branch head");
+      assert(cleanup.authorityDecision?.operation === "cleanup-merged-delete-remote", "summary missing cleanup authority operation");
+      assert(cleanup.authorityDecision?.authorityFamily === "cleanup", "summary missing cleanup authority family");
+      assert(cleanup.authorityDecision?.decision === "ready_for_apply", "summary cleanup authority decision not ready");
+      assert(cleanup.authorityDecision?.metadataOnly === true, "summary cleanup authority decision is not metadata-only");
+      assert(
+        !cleanup.authorityDecision.satisfiedGates.includes("cleanup mutation requires --apply"),
+        "summary authority decision falsely satisfied apply gate",
+      );
       assert(cleanup.worktree.exists === true, "summary did not report existing worktree");
       assert(cleanup.worktree.dirty === false, "summary reported dirty worktree");
       assert(cleanup.plan.some((line) => line.includes(`git worktree remove ${fixture.worktree}`)), "summary missing worktree cleanup plan");
@@ -4912,6 +5094,37 @@ try {
       assert(remoteBranchExists(fixture.root, fixture.branch), "remote branch was deleted after head mismatch");
       const manifest = readJson(join(fixture.stateRoot, "tasks", "cleanup-task.json"));
       assert(manifest.status === "cleanup_partial", `manifest status is ${manifest.status}`);
+      assert(manifest.cleanup_authority_decision?.decision !== "applied", "failed cleanup must not retain applied cleanup authority");
+    } finally {
+      cleanupMergedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-merged summary-json blocks stale branch-head authority evidence", () => {
+    const fixture = createMergedCleanupFixture();
+    try {
+      runGit(fixture.worktree, ["switch", "-q", fixture.branch]);
+      commitFile(fixture.worktree, "advanced.txt", "advanced\n", "advanced branch after pr");
+      runGit(fixture.worktree, ["push", "-q", "origin", fixture.branch]);
+
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-merged", "cleanup-task", "--summary-json", "--delete-remote", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+        { env: fixture.env },
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.counts.cleanupReady === 0, `cleanupReady count is ${summary.counts.cleanupReady}`);
+      const [cleanup] = summary.results;
+      assert(cleanup.status === "skipped_head_mismatch", `status is ${cleanup.status}`);
+      assert(cleanup.authorityDecision?.decision === "blocked", "cleanup mismatch authority decision not blocked");
+      assert(cleanup.authorityDecision?.allowed === false, "cleanup mismatch authority decision allowed unexpectedly");
+      assert(
+        cleanup.authorityDecision?.blockedReasons?.some((reason) => reason.includes("does not match expected cleanup head")),
+        "cleanup mismatch authority decision missing branch-head blocker",
+      );
+      assert(branchExists(fixture.root, fixture.branch), "summary deleted local branch after head mismatch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "summary deleted remote branch after head mismatch");
     } finally {
       cleanupMergedCleanupFixture(fixture);
     }

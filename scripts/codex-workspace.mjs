@@ -1959,6 +1959,7 @@ function finishPr(argv) {
       verifyCommand,
       noVerify: Boolean(options.noVerify),
     });
+    appendAuthorityDecision(manifest, manifest.pr_delivery_evidence.authorityDecision);
     manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, antiChurn.manifestRecord, {
       worktreeStatus,
       prDeliveryEvidence: manifest.pr_delivery_evidence,
@@ -2032,6 +2033,7 @@ function verifyPrGates(argv) {
     manifest.pr_delivery_head_sha = lockedPacket.expectedHeadSha;
     manifest.pr_url = lockedPacket.pr.url || manifest.pr_url;
     manifest.pr_number = lockedPacket.pr.number || manifest.pr_number;
+    appendAuthorityDecision(manifest, lockedPacket.authorityDecision);
     manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, manifest.anti_churn_finalization || {}, {
       worktreeStatus: parseStatus(manifest.worktree_path),
       prDeliveryEvidence: manifest.pr_delivery_evidence || null,
@@ -2060,10 +2062,25 @@ function buildPrGateEvidence(manifest) {
     checks,
     reviewThreadState,
   });
+  const requiredGates = [
+    "PR open and non-draft",
+    "expected base branch",
+    "exact PR head matches local delivery head",
+    "GitHub merge state clean",
+    "all reported checks completed successfully",
+    "thread-aware review query returned no unresolved non-outdated threads",
+  ];
+  const stopLines = [
+    "metadata-only evidence; no merge",
+    "no review-thread mutation",
+    "no check bypass",
+    "no cleanup",
+  ];
+  const status = blockers.length ? "blocked" : "passed";
 
   return {
     schemaVersion: 1,
-    status: blockers.length ? "blocked" : "passed",
+    status,
     lowRiskReady: blockers.length === 0,
     checkedAt,
     authorityProfile: "standard-delivery",
@@ -2086,20 +2103,29 @@ function buildPrGateEvidence(manifest) {
     checks,
     reviewThreads: reviewThreadState,
     blockers,
-    requiredGates: [
-      "PR open and non-draft",
-      "expected base branch",
-      "exact PR head matches local delivery head",
-      "GitHub merge state clean",
-      "all reported checks completed successfully",
-      "thread-aware review query returned no unresolved non-outdated threads",
-    ],
-    stopLines: [
-      "metadata-only evidence; no merge",
-      "no review-thread mutation",
-      "no check bypass",
-      "no cleanup",
-    ],
+    requiredGates,
+    stopLines,
+    authorityDecision: shapeAuthorityDecisionEvidence({
+      operation: "verify-pr-gates",
+      authorityFamily: "delivery-gate",
+      decision: status,
+      allowed: blockers.length === 0,
+      requiredGates,
+      satisfiedGates: blockers.length === 0 ? requiredGates : [],
+      blockedReasons: blockers,
+      stopLines,
+      evidenceRefs: [
+        `task:${manifest.task_id}`,
+        pr.number ? `pr:${pr.number}` : "",
+        headState.expectedHeadSha ? `expected-head:${headState.expectedHeadSha}` : "",
+      ],
+      nextSafeAction:
+        blockers.length === 0
+          ? "Record PR gate evidence or proceed to exact-head merge only under the active delivery policy."
+          : "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates.",
+      recoveryPath: "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates before exact-head merge.",
+      generatedAt: checkedAt,
+    }),
     recoveryPath: "Fix blockers, rerun focused verification, push a new head if needed, then rerun verify-pr-gates before exact-head merge.",
     metadataOnly: true,
   };
@@ -2577,22 +2603,127 @@ function valueOrNone(value) {
 }
 
 function buildLaneEvidencePacket(manifest, antiChurnRecord = {}, options = {}) {
+  const existingPacket =
+    manifest.lane_evidence_packet && typeof manifest.lane_evidence_packet === "object" ? manifest.lane_evidence_packet : {};
+  const prDeliveryEvidence = Object.hasOwn(options, "prDeliveryEvidence")
+    ? options.prDeliveryEvidence
+    : manifest.pr_delivery_evidence || existingPacket.pr_delivery || null;
+  const prGateEvidence = Object.hasOwn(options, "prGateEvidence")
+    ? options.prGateEvidence
+    : manifest.pr_gate_evidence || existingPacket.pr_gate || null;
+  const cleanupAuthorityDecision = Object.hasOwn(options, "cleanupAuthorityDecision")
+    ? options.cleanupAuthorityDecision
+    : manifest.cleanup_authority_decision || existingPacket.cleanup || null;
   return {
-    ...(manifest.lane_evidence_packet && typeof manifest.lane_evidence_packet === "object" ? manifest.lane_evidence_packet : {}),
+    ...existingPacket,
     schemaVersion: 1,
     task_id: manifest.task_id,
     branch: manifest.branch,
     worktree_path: manifest.worktree_path,
     updated_at: antiChurnRecord.updated_at || new Date().toISOString(),
     anti_churn_finalization: shapeAntiChurnEvidencePacket(antiChurnRecord, options),
-    pr_delivery: options.prDeliveryEvidence || null,
-    pr_gate: options.prGateEvidence || null,
+    pr_delivery: prDeliveryEvidence,
+    pr_gate: prGateEvidence,
+    cleanup: cleanupAuthorityDecision,
+    authority_decisions: shapeLaneAuthorityDecisions(manifest, {
+      ...options,
+      prDeliveryEvidence,
+      prGateEvidence,
+      cleanupAuthorityDecision,
+      existingAuthorityDecisions: existingPacket.authority_decisions,
+    }),
   };
+}
+
+function shapeAuthorityDecisionEvidence(options = {}) {
+  const blockedReasons = uniqueTextValues(options.blockedReasons || options.blockers || []);
+  return {
+    schemaVersion: 1,
+    operation: valueOrNone(options.operation),
+    authorityFamily: valueOrNone(options.authorityFamily),
+    authorityProfile: valueOrNone(options.authorityProfile || "standard-delivery"),
+    decision: valueOrNone(options.decision),
+    allowed: Boolean(options.allowed),
+    requiredGates: uniqueTextValues(options.requiredGates),
+    satisfiedGates: uniqueTextValues(options.satisfiedGates),
+    blockedReasons,
+    stopLines: uniqueTextValues(options.stopLines),
+    evidenceRefs: uniqueTextValues(options.evidenceRefs),
+    nextSafeAction: options.nextSafeAction || null,
+    recoveryPath: options.recoveryPath || "Preserve metadata evidence, fix the blocked gate, and rerun the same command.",
+    recordedAt: options.recordedAt || options.generatedAt || new Date().toISOString(),
+    metadataOnly: true,
+    rawPayloadRetained: false,
+  };
+}
+
+function appendAuthorityDecision(target, decision) {
+  const clean = normalizeAuthorityDecision(decision);
+  if (!clean) {
+    return;
+  }
+  target.authority_decisions = [...copyJsonArray(target.authority_decisions).map(normalizeAuthorityDecision).filter(Boolean), clean].slice(-20);
+}
+
+function normalizeAuthorityDecision(decision, overrides = {}) {
+  if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
+    return null;
+  }
+  const normalized = shapeAuthorityDecisionEvidence({ ...decision, ...overrides });
+  if (
+    normalized.operation === "none" ||
+    normalized.authorityFamily === "none" ||
+    normalized.decision === "none" ||
+    normalized.recordedAt === "none"
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function shapeLaneAuthorityDecisions(manifest, options = {}) {
+  const decisions = [
+    ...copyJsonArray(options.existingAuthorityDecisions),
+    ...copyJsonArray(manifest.authority_decisions),
+    manifest.pr_delivery_evidence?.authorityDecision,
+    manifest.pr_gate_evidence?.authorityDecision,
+    options.prDeliveryEvidence?.authorityDecision,
+    options.prGateEvidence?.authorityDecision,
+    options.cleanupAuthorityDecision,
+    manifest.cleanup_authority_decision,
+  ].map(normalizeAuthorityDecision).filter(Boolean);
+  const seen = new Set();
+  return decisions.filter((entry) => {
+    const key = [entry.operation, entry.recordedAt, entry.decision].join("|");
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function shapePrDeliveryEvidence(manifest, options = {}) {
   const prBody = typeof options.prBody === "string" ? options.prBody : "";
   const verifyCommand = Array.isArray(options.verifyCommand) ? options.verifyCommand.filter(Boolean).join(" ") : "";
+  const verificationGateSatisfied = Boolean(verifyCommand) || Boolean(options.noVerify);
+  const requiredGates = [
+    "clean worktree or intentionally staged changes",
+    "configured verification command or explicitly recorded no-verify decision",
+    "anti-churn finalization before delivery mutation",
+    "safe branch",
+    "expected base branch",
+    "push succeeded before PR evidence is recorded",
+  ];
+  const stopLines = [
+    "no provider/model calls",
+    "no paid usage",
+    "no worker launch",
+    "no credential or sensitive-material retention",
+    "no merge or cleanup from finish-pr",
+    "no failed-check bypass",
+    "no review-thread mutation",
+  ];
   return {
     schemaVersion: 1,
     operation: options.existingPr ? "update-existing-pr-reference" : "create-pr",
@@ -2619,23 +2750,26 @@ function shapePrDeliveryEvidence(manifest, options = {}) {
           decision: options.noVerify ? "explicit-no-verify" : "no-verification-profile",
           recordedAt: new Date().toISOString(),
         },
-    requiredGates: [
-      "clean worktree or intentionally staged changes",
-      "configured verification command or explicitly recorded no-verify decision",
-      "anti-churn finalization before delivery mutation",
-      "safe branch",
-      "expected base branch",
-      "push succeeded before PR evidence is recorded",
-    ],
-    stopLines: [
-      "no provider/model calls",
-      "no paid usage",
-      "no worker launch",
-      "no credential or sensitive-material retention",
-      "no merge or cleanup from finish-pr",
-      "no failed-check bypass",
-      "no review-thread mutation",
-    ],
+    requiredGates,
+    stopLines,
+    authorityDecision: shapeAuthorityDecisionEvidence({
+      operation: "finish-pr",
+      authorityFamily: "delivery",
+      decision: "recorded",
+      allowed: true,
+      requiredGates,
+      satisfiedGates: requiredGates.filter(
+        (gate) => verificationGateSatisfied || gate !== "configured verification command or explicitly recorded no-verify decision",
+      ),
+      stopLines,
+      evidenceRefs: [
+        `task:${manifest.task_id}`,
+        `branch:${manifest.pr_delivery_branch || manifest.branch}`,
+        manifest.pr_number ? `pr:${manifest.pr_number}` : "",
+        manifest.pr_delivery_head_sha ? `head:${manifest.pr_delivery_head_sha}` : "",
+      ],
+      recoveryPath: "If push or PR creation/update fails, leave the local branch and manifest in place, preserve command output, and rerun finish-pr after fixing the gate.",
+    }),
     recoveryPath: "If push or PR creation/update fails, leave the local branch and manifest in place, preserve command output, and rerun finish-pr after fixing the gate.",
     metadataOnly: true,
   };
@@ -2760,7 +2894,7 @@ function cleanupMerged(argv, mode = {}) {
     const { manifest, path: manifestPath } = record;
     if (manifest.status === "closed") {
       if (options.summaryJson) {
-        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_closed", "workspace manifest is already closed"));
+        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_closed", "workspace manifest is already closed", { deleteRemote }));
       }
       continue;
     }
@@ -2770,7 +2904,7 @@ function cleanupMerged(argv, mode = {}) {
     const pr = prView(manifest);
     if (!pr || !pr.mergedAt) {
       if (options.summaryJson) {
-        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_unmerged_pr", "PR is not merged", { pr }));
+        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_unmerged_pr", "PR is not merged", { pr, deleteRemote }));
         continue;
       }
       console.log(`SKIP ${manifest.task_id}: PR is not merged.`);
@@ -2781,6 +2915,7 @@ function cleanupMerged(argv, mode = {}) {
         summaryResults.push(
           cleanupMergedSkipSummary(manifest, "skipped_pr_base_mismatch", `PR base is ${pr.baseRefName}, expected ${manifest.base_branch}`, {
             pr,
+            deleteRemote,
           }),
         );
         continue;
@@ -2793,10 +2928,31 @@ function cleanupMerged(argv, mode = {}) {
     const worktreeStatus = worktreeCleanupStatus(manifest, cleanupCwd);
     if (worktreeStatus.dirty) {
       if (options.summaryJson) {
-        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_dirty_worktree", "worktree is not clean", { pr, worktreeStatus }));
+        summaryResults.push(cleanupMergedSkipSummary(manifest, "skipped_dirty_worktree", "worktree is not clean", { pr, worktreeStatus, deleteRemote }));
         continue;
       }
       console.log(`SKIP ${manifest.task_id}: worktree is not clean.`);
+      continue;
+    }
+
+    let cleanupHeadBlocker = "";
+    try {
+      preflightCleanupBranchHeads(manifest, cleanupCwd, requireCleanupHeadSha(manifest, pr), deleteRemote);
+    } catch (error) {
+      cleanupHeadBlocker = error.message;
+    }
+    if (cleanupHeadBlocker && (options.summaryJson || options.dryRun || !apply)) {
+      if (options.summaryJson) {
+        summaryResults.push(
+          cleanupMergedSkipSummary(manifest, "skipped_head_mismatch", cleanupHeadBlocker, {
+            pr,
+            worktreeStatus,
+            deleteRemote,
+          }),
+        );
+        continue;
+      }
+      console.log(`SKIP ${manifest.task_id}: ${cleanupHeadBlocker}`);
       continue;
     }
 
@@ -2834,6 +2990,13 @@ function cleanupMerged(argv, mode = {}) {
           throw new Error("Worktree is not clean after acquiring cleanup lock.");
         }
         cleanupMergedResources(manifest, state, { cleanupCwd: lockedCleanupCwd, deleteRemote, pr: lockedPr });
+        appendAuthorityDecision(manifest, manifest.cleanup_authority_decision);
+        manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, manifest.anti_churn_finalization || {}, {
+          worktreeStatus: lockedWorktreeStatus.status || null,
+          prDeliveryEvidence: manifest.pr_delivery_evidence,
+          prGateEvidence: manifest.pr_gate_evidence,
+          cleanupAuthorityDecision: manifest.cleanup_authority_decision,
+        });
         manifest.status = "closed";
         manifest.pr_url = lockedPr.url || manifest.pr_url;
         manifest.pr_number = lockedPr.number || manifest.pr_number;
@@ -2897,6 +3060,17 @@ function buildCleanupMergedSummary({ state, currentOwner, mode, deleteRemote, re
 }
 
 function cleanupMergedReadySummary(manifest, pr, options) {
+  const authorityDecision = shapeCleanupAuthorityDecision(manifest, pr, {
+    deleteRemote: Boolean(options.deleteRemote),
+    decision: "ready_for_apply",
+    allowed: true,
+    generatedAt: new Date().toISOString(),
+    evidenceRefs: [
+      `task:${manifest.task_id}`,
+      pr?.number ? `pr:${pr.number}` : "",
+      expectedCleanupHeadSha(manifest, pr) ? `expected-head:${expectedCleanupHeadSha(manifest, pr)}` : "",
+    ],
+  });
   return {
     taskId: manifest.task_id,
     status: "ready",
@@ -2911,6 +3085,7 @@ function cleanupMergedReadySummary(manifest, pr, options) {
     localBranchSha: branchSha(manifest.branch, options.cleanupCwd) || null,
     remoteBranchSha: options.deleteRemote ? originBranchSha(manifest.branch, options.cleanupCwd) || null : null,
     plan: options.plan,
+    authorityDecision,
   };
 }
 
@@ -2924,7 +3099,57 @@ function cleanupMergedSkipSummary(manifest, status, reason, options = {}) {
     worktreePath: manifest.worktree_path,
     worktree: options.worktreeStatus ? cleanupWorktreeSummary(options.worktreeStatus) : null,
     pr: cleanupPrSummary(manifest, options.pr),
+    authorityDecision: shapeCleanupAuthorityDecision(manifest, options.pr, {
+      deleteRemote: Boolean(options.deleteRemote),
+      decision: "blocked",
+      allowed: false,
+      blockedReasons: [reason],
+      evidenceRefs: [`task:${manifest.task_id}`],
+    }),
   };
+}
+
+function shapeCleanupAuthorityDecision(manifest, pr, options = {}) {
+  const deleteRemote = Boolean(options.deleteRemote);
+  const requiredGates = [
+    "PR is merged",
+    "expected base branch",
+    "worktree is clean",
+    "exact PR head evidence exists",
+    "local branch head matches expected head before deletion",
+    deleteRemote ? "remote branch head matches expected head before deletion" : "",
+    "cleanup mutation requires --apply",
+  ];
+  const stopLines = [
+    "no cleanup without merged PR evidence",
+    "no branch deletion without exact-head match",
+    "no remote branch deletion unless --delete-remote is explicit",
+    "no provider/model calls",
+  ];
+  const decision = options.decision || "ready_for_apply";
+  const satisfiedGates = options.allowed
+    ? requiredGates.filter((gate) => decision === "applied" || gate !== "cleanup mutation requires --apply")
+    : [];
+  return shapeAuthorityDecisionEvidence({
+    operation: deleteRemote ? "cleanup-merged-delete-remote" : "cleanup-merged",
+    authorityFamily: "cleanup",
+    decision,
+    allowed: Boolean(options.allowed),
+    requiredGates,
+    satisfiedGates: options.satisfiedGates || satisfiedGates,
+    blockedReasons: options.blockedReasons || [],
+    stopLines,
+    evidenceRefs: options.evidenceRefs || [
+      `task:${manifest.task_id}`,
+      pr?.number ? `pr:${pr.number}` : "",
+      expectedCleanupHeadSha(manifest, pr) ? `expected-head:${expectedCleanupHeadSha(manifest, pr)}` : "",
+    ],
+    nextSafeAction: options.allowed
+      ? "Run cleanup-merged --apply only after reviewing the dry-run packet."
+      : "Resolve cleanup blockers before applying cleanup.",
+    recoveryPath: "If cleanup fails, keep cleanup_partial evidence in the manifest and rerun cleanup-merged after branch-head evidence is fixed.",
+    generatedAt: options.generatedAt,
+  });
 }
 
 function cleanupPrSummary(manifest, pr) {
@@ -3161,7 +3386,19 @@ function cleanupMergedResources(manifest, state, options) {
   if (options.deleteRemote) {
     deleteRemoteBranchIfPresent(manifest, options.cleanupCwd, expectedHeadSha);
   }
-  manifest.cleanup_completed_at = new Date().toISOString();
+  const cleanupCompletedAt = new Date().toISOString();
+  manifest.cleanup_completed_at = cleanupCompletedAt;
+  manifest.cleanup_authority_decision = shapeCleanupAuthorityDecision(manifest, options.pr, {
+    deleteRemote: Boolean(options.deleteRemote),
+    decision: "applied",
+    allowed: true,
+    generatedAt: cleanupCompletedAt,
+    evidenceRefs: [
+      `task:${manifest.task_id}`,
+      options.pr.number ? `pr:${options.pr.number}` : "",
+      `expected-head:${expectedHeadSha}`,
+    ],
+  });
 }
 
 function preflightCleanupBranchHeads(manifest, cleanupCwd, expectedHeadSha, deleteRemote) {
@@ -4973,6 +5210,17 @@ function dispatchPacket(selected, evaluations, context) {
   const nextActionGuidance = stop
     ? "clear the active emergency stop checkpoint only after operator-approved resume, then rerun dispatch-next dry-run"
     : dispatchNextActionGuidance(selected, candidateStateCounts);
+  const stopLines = stopLinesForSafeBacklogItem(selected?.item, defaultDispatchStopLines());
+  const blockedCandidates = evaluations
+    .filter((evaluation) => !evaluation.claimable)
+    .map((evaluation) => ({
+      item_id: evaluation.item.itemId,
+      status: evaluation.status,
+      reason_code: reasonCodeForClassification(evaluation),
+      reason: evaluation.reason,
+      next_action: evaluation.nextAction,
+    }));
+  const allowed = blockers.length === 0;
 
   return {
     schema_version: 1,
@@ -4986,21 +5234,47 @@ function dispatchPacket(selected, evaluations, context) {
     readiness_profile: context.readinessProfile,
     next_command: selected ? dispatchNextCommand(selected, context.readinessProfile) : null,
     handoff: selected ? "runner may resume prepared worktree; no worker or provider process launched" : null,
-    stop_lines: stopLinesForSafeBacklogItem(selected?.item, defaultDispatchStopLines()),
-    allowed: blockers.length === 0,
+    stop_lines: stopLines,
+    allowed,
     blockers,
     next_action_guidance: nextActionGuidance,
     generated_at: context.generatedAt.toISOString(),
     candidate_state_counts: candidateStateCounts,
-    blocked_candidates: evaluations
-      .filter((evaluation) => !evaluation.claimable)
-      .map((evaluation) => ({
-        item_id: evaluation.item.itemId,
-        status: evaluation.status,
-        reason_code: reasonCodeForClassification(evaluation),
-        reason: evaluation.reason,
-        next_action: evaluation.nextAction,
-      })),
+    authority_decision: shapeAuthorityDecisionEvidence({
+      operation: "dispatch-next",
+      authorityFamily: "worker-mutation",
+      decision: allowed ? "allowed_for_apply_review" : "blocked",
+      allowed,
+      requiredGates: [
+        "source-owned safe backlog item is ready",
+        "no active delivery lane blocks dispatch",
+        "no authority-blocked lane mutation",
+        "no provider/model calls",
+        "no automatic worker process launch",
+      ],
+      satisfiedGates: selected
+        ? [
+            "source-owned safe backlog item is ready",
+            "no active delivery lane blocks dispatch",
+            "no authority-blocked lane mutation",
+            "no provider/model calls",
+            "no automatic worker process launch",
+          ]
+        : [],
+      blockedReasons: dispatchNextBlockedReasons({
+        next_action_guidance: nextActionGuidance,
+        blockers,
+        blocked_candidates: blockedCandidates,
+      }),
+      stopLines,
+      evidenceRefs: selected
+        ? [`lane:${selected.item.itemId}`, `branch:${selected.item.branchName || "unknown"}`]
+        : ["dispatch:blockers"],
+      nextSafeAction: nextActionGuidance,
+      recoveryPath: "Resolve blocked candidates or review the dry-run packet before rerunning dispatch-next --apply.",
+      generatedAt: context.generatedAt.toISOString(),
+    }),
+    blocked_candidates: blockedCandidates,
   };
 }
 
@@ -5031,6 +5305,7 @@ function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, read
       nextActionGuidance: plan.packet.next_action_guidance,
       blockers: plan.packet.blockers,
       stopLines: plan.packet.stop_lines,
+      authorityDecision: plan.packet.authority_decision,
       generatedAt: plan.packet.generated_at,
     },
     counts: {
@@ -5467,6 +5742,8 @@ function summarizeCommandOutput(output) {
 }
 
 function dispatchHandoffPacket(selected, context, manifest, readiness, workspaceAction, candidateStateCounts = {}) {
+  const generatedAt = new Date().toISOString();
+  const stopLines = stopLinesForSafeBacklogItem(selected.item, defaultDispatchStopLines());
   return {
     schema_version: 1,
     lane: selected.item.itemId,
@@ -5478,9 +5755,46 @@ function dispatchHandoffPacket(selected, context, manifest, readiness, workspace
     readiness,
     next_command: `cd ${manifest.worktree_path}`,
     handoff: "resume this prepared worktree; no worker or provider process launched",
-    stop_lines: stopLinesForSafeBacklogItem(selected.item, defaultDispatchStopLines()),
+    stop_lines: stopLines,
     candidate_state_counts: candidateStateCounts,
-    generated_at: new Date().toISOString(),
+    authority_decision: shapeAuthorityDecisionEvidence({
+      operation: "dispatch-next-apply",
+      authorityFamily: "worker-mutation",
+      decision: readiness.status === "failed" ? "readiness_failed" : "handoff_recorded",
+      allowed: readiness.status !== "failed",
+      requiredGates: [
+        "dry-run dispatch selected a safe lane",
+        "claim or workspace preparation completed",
+        "readiness completed or was explicitly skipped",
+        "no provider/model calls",
+        "no automatic worker process launch",
+      ],
+      satisfiedGates:
+        readiness.status === "failed"
+          ? ["dry-run dispatch selected a safe lane", "claim or workspace preparation completed"]
+          : [
+              "dry-run dispatch selected a safe lane",
+              "claim or workspace preparation completed",
+              "readiness completed or was explicitly skipped",
+              "no provider/model calls",
+              "no automatic worker process launch",
+            ],
+      blockedReasons: readiness.status === "failed" ? [readiness.summary || "readiness failed"] : [],
+      stopLines,
+      evidenceRefs: [
+        `lane:${selected.item.itemId}`,
+        `task:${manifest.task_id}`,
+        `branch:${manifest.branch}`,
+        `readiness:${readiness.status}`,
+      ],
+      nextSafeAction:
+        readiness.status === "failed"
+          ? "Fix readiness failure before handing the lane to a worker."
+          : "Resume the prepared worktree; no worker was launched by dispatch-next.",
+      recoveryPath: "Re-run dispatch-next dry-run before another apply if readiness or ownership evidence changes.",
+      generatedAt,
+    }),
+    generated_at: generatedAt,
   };
 }
 
@@ -5496,6 +5810,7 @@ function recordManifestDispatchHandoff(manifest, packet, context) {
   manifest.last_result = packet.readiness.summary;
   writeClaimHeartbeatEvidence(manifest, context.options, now);
   manifest.dispatch_handoffs = [...(Array.isArray(manifest.dispatch_handoffs) ? manifest.dispatch_handoffs : []), packet];
+  appendAuthorityDecision(manifest, packet.authority_decision);
   appendTaskEvent(manifest, "heartbeat", `owner ${context.currentOwner} phase ${manifest.phase}`);
   appendTaskEvent(manifest, "dispatch_handoff", `${packet.lane} ${packet.workspace_action} readiness ${packet.readiness.status}`);
 }
@@ -5518,6 +5833,7 @@ function recordAssignmentDispatchHandoff(assignment, packet, manifest, context) 
     ...(Array.isArray(assignment.dispatch_handoffs) ? assignment.dispatch_handoffs : []),
     packet,
   ];
+  appendAuthorityDecision(assignment, packet.authority_decision);
   assignment.events = [
     ...(Array.isArray(assignment.events) ? assignment.events : []),
     taskEvent("heartbeat", `owner ${context.currentOwner} phase ${assignment.phase}`),
@@ -5923,6 +6239,7 @@ function takeoverPacket(target, context) {
     worktree,
     dirty,
   });
+  const allowed = blockers.length === 0;
 
   return {
     schema_version: 1,
@@ -5937,9 +6254,48 @@ function takeoverPacket(target, context) {
     pr_evidence: pr,
     dirty_state_evidence: dirty,
     approval_evidence: context.approval || null,
-    decision: blockers.length === 0 ? "approved_for_apply" : "blocked",
-    allowed: blockers.length === 0,
+    decision: allowed ? "approved_for_apply" : "blocked",
+    allowed,
     blockers,
+    authority_decision: shapeAuthorityDecisionEvidence({
+      operation: "takeover",
+      authorityFamily: "worker-mutation",
+      decision: allowed ? "approved_for_apply" : "blocked",
+      allowed,
+      requiredGates: [
+        "target has a previous owner",
+        "owner heartbeat is stale",
+        "worktree exists when required",
+        "worktree is clean",
+        "takeover reason is present",
+        "explicit operator approval evidence is present for apply",
+      ],
+      satisfiedGates: allowed
+        ? [
+            "target has a previous owner",
+            "owner heartbeat is stale",
+            "worktree exists when required",
+            "worktree is clean",
+            "takeover reason is present",
+            "explicit operator approval evidence is present for apply",
+          ]
+        : [],
+      blockedReasons: blockers,
+      stopLines: [
+        "no automatic takeover without stale-owner evidence",
+        "no takeover apply without explicit operator approval evidence",
+        "no dirty worktree mutation",
+        "no provider/model calls",
+      ],
+      evidenceRefs: [
+        `${target.kind}:${target.kind === "assignment" ? record.assignment_id : record.task_id}`,
+        branch.branch ? `branch:${branch.branch}` : "",
+        stale.timestamp ? `heartbeat:${stale.source}` : "",
+      ],
+      nextSafeAction: allowed ? "Apply takeover under lock if --apply was requested." : "Fix blockers or ask the operator for explicit approval before takeover apply.",
+      recoveryPath: "Leave the previous owner intact until takeover gates pass; rerun takeover dry-run after evidence changes.",
+      generatedAt: context.generatedAt.toISOString(),
+    }),
     generated_at: context.generatedAt.toISOString(),
   };
 }
@@ -5983,6 +6339,7 @@ function buildTakeoverSummary(packet) {
     approval: {
       present: Boolean(packet.approval_evidence),
     },
+    authorityDecision: packet.authority_decision,
     blockers: packet.blockers,
     mutation: "none; dry-run summary only",
   };
@@ -6182,7 +6539,14 @@ function applyAssignmentTakeover(assignment, packet) {
   if (!Array.isArray(assignment.takeover_decisions)) {
     assignment.takeover_decisions = [];
   }
-  assignment.takeover_decisions.push({ ...packet, decision: "applied", applied_at: now });
+  const appliedAuthorityDecision = normalizeAuthorityDecision(packet.authority_decision, {
+    decision: "applied",
+    allowed: true,
+    recordedAt: now,
+    nextSafeAction: "Continue with the newly owned lane under normal gates.",
+  });
+  assignment.takeover_decisions.push({ ...packet, decision: "applied", applied_at: now, authority_decision: appliedAuthorityDecision });
+  appendAuthorityDecision(assignment, appliedAuthorityDecision);
   assignment.events = [
     ...(Array.isArray(assignment.events) ? assignment.events : []),
     taskEvent("takeover_applied", `owner ${packet.previous_owner} -> ${packet.requesting_owner}: ${packet.reason}`),
@@ -6199,7 +6563,14 @@ function applyManifestTakeover(manifest, packet) {
   if (!Array.isArray(manifest.takeover_decisions)) {
     manifest.takeover_decisions = [];
   }
-  manifest.takeover_decisions.push({ ...packet, decision: "applied", applied_at: now });
+  const appliedAuthorityDecision = normalizeAuthorityDecision(packet.authority_decision, {
+    decision: "applied",
+    allowed: true,
+    recordedAt: now,
+    nextSafeAction: "Continue with the newly owned lane under normal gates.",
+  });
+  manifest.takeover_decisions.push({ ...packet, decision: "applied", applied_at: now, authority_decision: appliedAuthorityDecision });
+  appendAuthorityDecision(manifest, appliedAuthorityDecision);
   if (!Array.isArray(manifest.ownership_takeovers)) {
     manifest.ownership_takeovers = [];
   }
