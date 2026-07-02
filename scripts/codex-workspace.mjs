@@ -6,6 +6,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -61,6 +62,9 @@ try {
     case "dispatch-next":
       dispatchNext(commandArgs);
       break;
+    case "emergency-stop":
+      emergencyStop(commandArgs);
+      break;
     case "resume":
       resumeWorkspace(commandArgs);
       break;
@@ -112,6 +116,7 @@ Commands:
   close-assignments         Close assignment records whose workspaces are already closed.
   takeover <query>          Build or apply explicit stale-owner takeover evidence.
   dispatch-next             Claim or resume one safe lane and record handoff evidence.
+  emergency-stop            Preview, apply, or clear a metadata-only emergency stop checkpoint.
   resume <query>            Print the matching task worktree and branch.
   finish-pr [query]         Commit, push, and create/view a PR for a task.
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
@@ -195,6 +200,15 @@ dispatch-next options:
   --worktree <path>         Override worktree path when creating a workspace.
   --no-fetch                Do not fetch origin before creating a workspace.
   --stale-after-seconds <n> Override stale owner threshold. Defaults to 86400.
+
+emergency-stop options:
+  --dry-run                 Preview checkpoint without mutation.
+  --apply                   Write or clear the metadata-only emergency stop checkpoint.
+  --summary-json            With --dry-run, print a compact JSON checkpoint summary.
+  --mode <pause|drain|kill> Stop posture to record. Defaults to pause.
+  --reason <text>           Required. Explains the stop or clear in at least 10 non-whitespace characters.
+  --approval <text>         Required for --mode kill --apply and --clear --apply; records operator approval evidence.
+  --clear                   Clear an active checkpoint after operator-approved resume.
 
 resume options:
   --json                    Print the matched workspace resume packet as JSON.
@@ -1142,6 +1156,12 @@ function claimNext(argv) {
     plan.push("preview only; no manifest, branch, PR, or worktree mutation");
     printPlan("claim-next", plan);
   } else {
+    const stop = activeEmergencyStop(state);
+    if (stop) {
+      plan.push(`emergency stop ${stop.checkpoint_id || "unknown"} (${stop.mode || "unknown"}) is active`);
+      printBlocked("claim-next", plan);
+      throw new Error(emergencyStopBlocker(stop, "claim-next"));
+    }
     if (!selected) {
       printBlocked("claim-next", plan);
       printClaimBlockers(queueEvaluations, selected);
@@ -1171,16 +1191,21 @@ function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selecte
   const blockers = evaluations.filter((evaluation) => claimEvaluationIsBlocker(evaluation));
   const excluded = evaluations.filter((evaluation) => claimEvaluationIsExcluded(evaluation));
   const sourceDrift = excluded.filter((evaluation) => claimEvaluationIsSourceDrift(evaluation));
+  const stop = activeEmergencyStop(state);
+  const blockedReasons = [
+    ...claimNextBlockedReasons({ selected, blockers, sourceDrift }),
+    ...(stop ? [emergencyStopBlocker(stop, "claim-next")] : []),
+  ];
   return {
     currentOwner,
     stateRoot: state.root,
     staleAfterSeconds,
-    selected: selected ? summarizeClaimEvaluation(selected) : null,
+    selected: selected && !stop ? summarizeClaimEvaluation(selected) : null,
     assignmentPreview: buildAssignmentPreview({
-      selected,
+      selected: stop ? null : selected,
       currentOwner,
       mode: "claim-next",
-      blockedReasons: claimNextBlockedReasons({ selected, blockers, sourceDrift }),
+      blockedReasons,
       blockedRequiredEvidence: claimNextBlockedRequiredEvidence(),
     }),
     nextActionSummary: buildClaimNextActionSummary({ selected, blockers, excluded, sourceDrift, evaluations }),
@@ -1206,6 +1231,7 @@ function buildClaimNextSummary({ state, currentOwner, staleAfterSeconds, selecte
 
 function buildAssignmentPreview({ selected, currentOwner, mode, blockedReasons = [], blockedRequiredEvidence = [] }) {
   const targetLane = selected?.item?.itemId || null;
+  const hasBlockers = blockedReasons.length > 0;
   return {
     proposedRunner: currentOwner,
     targetLane,
@@ -1213,8 +1239,8 @@ function buildAssignmentPreview({ selected, currentOwner, mode, blockedReasons =
     rationale: selected
       ? selected.reason
       : blockedReasons[0] || "no safe independent lane is available to claim",
-    blockedReasons: selected ? [] : blockedReasons,
-    requiredEvidence: selected
+    blockedReasons,
+    requiredEvidence: selected && !hasBlockers
       ? [`safe backlog item ${targetLane}`, `${mode} dry-run summary-json`]
       : [`${mode} dry-run summary-json`, ...blockedRequiredEvidence],
     mutation: "none; preview only",
@@ -1683,6 +1709,48 @@ function dispatchNext(argv) {
   if (applied.manifestPath) {
     console.log(`Workspace: ${applied.manifestPath}`);
   }
+}
+
+function emergencyStop(argv) {
+  const { options } = parseOptions(argv);
+  if (options.apply && options.dryRun) {
+    throw new Error("emergency-stop accepts either --dry-run or --apply, not both.");
+  }
+  if (!options.apply && !options.dryRun) {
+    throw new Error("emergency-stop requires either --dry-run or --apply.");
+  }
+  if (options.summaryJson && !options.dryRun) {
+    throw new Error("emergency-stop --summary-json is only supported with --dry-run.");
+  }
+  if (!validEmergencyStopReason(options.reason)) {
+    throw new Error("--reason must explain the emergency stop or clear in at least 10 non-whitespace characters.");
+  }
+
+  const state = workspaceState(options);
+  const currentOwner = currentLaneOwner(options);
+  const generatedAt = new Date();
+  const existing = readEmergencyStopCheckpoint(state);
+  const packet = options.clear
+    ? buildEmergencyStopClearPacket({ state, currentOwner, generatedAt, options, existing })
+    : buildEmergencyStopApplyPacket({ state, currentOwner, generatedAt, options, existing });
+
+  if (options.dryRun) {
+    if (options.summaryJson) {
+      console.log(JSON.stringify(summarizeEmergencyStopPacket(packet, { dryRun: true }), null, 2));
+      return;
+    }
+    printEmergencyStopPacket("DRY RUN", packet);
+    return;
+  }
+
+  if (!packet.allowed) {
+    printEmergencyStopPacket("BLOCKED", packet);
+    throw new Error(`Emergency stop ${packet.action} blocked.`);
+  }
+
+  const applied = applyEmergencyStopCheckpoint(state, packet);
+  printEmergencyStopPacket("APPLY", applied.packet);
+  console.log(`Wrote: ${applied.path}`);
 }
 
 function resumeWorkspace(argv) {
@@ -4747,15 +4815,315 @@ function assignmentBranchStatesByBranch(assignments) {
 }
 
 function applyClaimNext(selected, context) {
-  if (selected.mutation === "manifest_owner_claim") {
-    return applyManifestOwnerClaim(selected, context);
+  const applyMutation = () => {
+    assertNoActiveEmergencyStop(context.state, "claim-next");
+    if (selected.mutation === "manifest_owner_claim") {
+      return applyManifestOwnerClaim(selected, context);
+    }
+
+    if (selected.mutation === "assignment_write" || selected.mutation === "assignment_refresh") {
+      return applyAssignmentClaim(selected, context);
+    }
+
+    throw new Error(`Unsupported claim mutation: ${selected.mutation || "unknown"}`);
+  };
+  return context.emergencyStopLockHeld === true ? applyMutation() : withEmergencyStopLock(context.state, applyMutation);
+}
+
+function emergencyStopCheckpointPath(state) {
+  return join(state.root, "emergency-stop.json");
+}
+
+function emergencyStopLockPath(state) {
+  return join(state.root, "emergency-stop.lock");
+}
+
+function readEmergencyStopCheckpoint(state) {
+  const path = emergencyStopCheckpointPath(state);
+  if (!existsSync(path)) {
+    return null;
+  }
+  let packet;
+  try {
+    packet = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new Error(`Emergency stop checkpoint is invalid JSON: ${path}: ${error.message}`);
+  }
+  if (!isEmergencyStopCheckpoint(packet)) {
+    throw new Error(`Emergency stop checkpoint is invalid: ${path}`);
+  }
+  return packet;
+}
+
+function isEmergencyStopCheckpoint(packet) {
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) return false;
+  if (packet.schema_version !== 1) return false;
+  if (!["apply", "clear"].includes(packet.action)) return false;
+  if (!["active", "cleared"].includes(packet.status)) return false;
+  if (typeof packet.checkpoint_id !== "string" || packet.checkpoint_id.trim().length === 0) return false;
+  if (packet.status === "active" && !["pause", "drain", "kill"].includes(packet.mode)) return false;
+  if (typeof packet.owner !== "string" || packet.owner.trim().length === 0) return false;
+  if (typeof packet.state_root !== "string" || packet.state_root.trim().length === 0) return false;
+  if (!packet.controls || typeof packet.controls !== "object" || Array.isArray(packet.controls)) return false;
+  if (!Array.isArray(packet.stop_lines)) return false;
+  return true;
+}
+
+function activeEmergencyStop(state) {
+  const packet = readEmergencyStopCheckpoint(state);
+  return packet?.status === "active" ? packet : null;
+}
+
+function assertNoActiveEmergencyStop(state, commandName) {
+  const packet = activeEmergencyStop(state);
+  if (packet) {
+    throw new Error(emergencyStopBlocker(packet, commandName));
+  }
+}
+
+function emergencyStopBlocker(packet, commandName = "workspace mutation") {
+  const checkpointId = packet?.checkpoint_id || "unknown";
+  const mode = packet?.mode || "unknown";
+  return `${commandName} blocked by active emergency stop ${checkpointId} (${mode}); clear the checkpoint before new claim, dispatch, provider, worker, branch, PR, or cleanup mutation.`;
+}
+
+function buildEmergencyStopApplyPacket({ state, currentOwner, generatedAt, options, existing }) {
+  const mode = normalizeEmergencyStopMode(options.mode || "pause");
+  const reason = String(options.reason || "").trim();
+  const blockers = [];
+  if (mode === "kill" && options.apply && !validEmergencyStopReason(options.approval)) {
+    blockers.push("--approval must record operator approval for --mode kill --apply");
   }
 
-  if (selected.mutation === "assignment_write" || selected.mutation === "assignment_refresh") {
-    return applyAssignmentClaim(selected, context);
+  const checkpointId = `emergency-stop-${generatedAt.toISOString().replace(/[-:.]/g, "").replace("T", "-").replace("Z", "z")}`;
+  return {
+    schema_version: 1,
+    action: "apply",
+    status: "active",
+    checkpoint_id: checkpointId,
+    owner: currentOwner,
+    mode,
+    reason,
+    approval: mode === "kill" ? String(options.approval || "").trim() : null,
+    acknowledged_at: generatedAt.toISOString(),
+    state_root: state.root,
+    previous_checkpoint: existing ? summarizeEmergencyStop(existing) : null,
+    controls: emergencyStopControls(mode),
+    resume_checkpoint: emergencyStopResumeCheckpoint(),
+    stop_lines: emergencyStopStopLines(mode),
+    mutation: "metadata checkpoint only; no worker, provider, branch, PR, cleanup, external, or process mutation",
+    allowed: blockers.length === 0,
+    blockers,
+  };
+}
+
+function buildEmergencyStopClearPacket({ state, currentOwner, generatedAt, options, existing }) {
+  const blockers = [];
+  if (existing?.status !== "active") {
+    blockers.push("no active emergency stop checkpoint to clear");
+  }
+  if (options.apply && !validEmergencyStopReason(options.approval)) {
+    blockers.push("--approval must record operator approval for --clear --apply");
+  }
+  return {
+    schema_version: 1,
+    action: "clear",
+    status: "cleared",
+    checkpoint_id: existing?.checkpoint_id || `emergency-stop-clear-${generatedAt.toISOString().replace(/[-:.]/g, "").replace("T", "-").replace("Z", "z")}`,
+    owner: currentOwner,
+    mode: existing?.mode || null,
+    reason: String(options.reason || "").trim(),
+    approval: String(options.approval || "").trim(),
+    cleared_at: generatedAt.toISOString(),
+    state_root: state.root,
+    previous_checkpoint: existing ? summarizeEmergencyStop(existing) : null,
+    controls: {
+      new_claim_allowed: true,
+      new_dispatch_allowed: true,
+      provider_or_external_mutation_allowed: false,
+      worker_process_mutation_allowed: false,
+      branch_pr_cleanup_mutation_allowed: false,
+    },
+    resume_checkpoint: {
+      next_safe_action: "rerun claim-next or dispatch-next dry-run before applying new work",
+      required_evidence: [
+        "operator-approved resume or clear reason",
+        "fresh dry-run packet after clear",
+        "normal lane authority gates still apply",
+      ],
+    },
+    stop_lines: emergencyStopClearStopLines(),
+    mutation: "metadata checkpoint clear only; no worker, provider, branch, PR, cleanup, external, or process mutation",
+    allowed: blockers.length === 0,
+    blockers,
+  };
+}
+
+function applyEmergencyStopCheckpoint(state, packet) {
+  return withEmergencyStopLock(state, () => {
+    const fresh = readEmergencyStopCheckpoint(state);
+    const previousCheckpointId = packet.previous_checkpoint?.checkpointId || null;
+    if (packet.action === "clear" && (fresh?.status !== "active" || fresh?.checkpoint_id !== previousCheckpointId)) {
+      throw new Error("Emergency stop clear target changed; rerun emergency-stop --dry-run.");
+    }
+    if (packet.action === "apply" && fresh?.status === "active" && fresh.checkpoint_id !== previousCheckpointId) {
+      throw new Error("Emergency stop checkpoint changed; rerun emergency-stop --dry-run.");
+    }
+    const path = emergencyStopCheckpointPath(state);
+    const written = { ...packet, written_at: new Date().toISOString() };
+    writeJsonAtomic(path, written);
+    return { path, packet: written };
+  });
+}
+
+function withEmergencyStopLock(state, fn) {
+  mkdirSync(state.root, { recursive: true });
+  const lockPath = emergencyStopLockPath(state);
+  clearStaleEmergencyStopLock(lockPath);
+  let fd;
+  try {
+    fd = openSync(lockPath, "wx");
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw error;
+    }
+    throw new Error(`Emergency stop checkpoint is locked by another session: ${lockPath}`);
   }
 
-  throw new Error(`Unsupported claim mutation: ${selected.mutation || "unknown"}`);
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    rmSync(lockPath, { force: true });
+  }
+}
+
+function clearStaleEmergencyStopLock(lockPath) {
+  if (!existsSync(lockPath)) return;
+  const staleAfterMs = 5 * 60 * 1000;
+  const stats = statSync(lockPath);
+  if (Date.now() - stats.mtimeMs > staleAfterMs) {
+    rmSync(lockPath, { force: true });
+  }
+}
+
+function writeJsonAtomic(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`);
+  renameSync(tempPath, path);
+}
+
+function normalizeEmergencyStopMode(value) {
+  const mode = String(value || "pause").trim();
+  if (!["pause", "drain", "kill"].includes(mode)) {
+    throw new Error("--mode must be one of: pause, drain, kill.");
+  }
+  return mode;
+}
+
+function validEmergencyStopReason(value) {
+  return String(value || "").replace(/\s+/g, "").length >= 10;
+}
+
+function emergencyStopControls(mode) {
+  return {
+    new_claim_allowed: false,
+    new_dispatch_allowed: false,
+    provider_or_external_mutation_allowed: false,
+    worker_process_mutation_allowed: false,
+    branch_pr_cleanup_mutation_allowed: false,
+    requested_worker_posture: mode,
+    worker_process_action: "none; process pause, drain, or kill must be performed by a separately approved operator action",
+  };
+}
+
+function emergencyStopResumeCheckpoint() {
+  return {
+    clear_command:
+      "node ./scripts/codex-workspace.mjs emergency-stop --clear --apply --reason '<operator-approved resume reason>' --approval '<operator approval evidence>'",
+    next_safe_action: "clear only after operator-approved resume, then rerun claim-next or dispatch-next dry-run",
+    required_evidence: [
+      "active emergency stop checkpoint id",
+      "operator-approved resume or clear reason",
+      "fresh dry-run packet after clear",
+      "normal lane authority gates still apply",
+    ],
+  };
+}
+
+function emergencyStopStopLines(mode) {
+  const lines = [
+    "no new claim-next --apply while checkpoint is active",
+    "no new dispatch-next --apply while checkpoint is active",
+    "no provider/model calls or paid usage while checkpoint is active",
+    "no branch, PR, merge, cleanup, or delivery mutation while checkpoint is active",
+    "no worker/process mutation from this command",
+  ];
+  if (mode === "kill") {
+    lines.push("kill mode records intent only; process termination requires separate explicit operator action");
+  }
+  return lines;
+}
+
+function emergencyStopClearStopLines() {
+  return [
+    "clear only resumes eligibility for normal dry-run and authority gates",
+    "no provider/model calls, worker/process mutation, branch, PR, merge, cleanup, or delivery mutation from clear",
+  ];
+}
+
+function summarizeEmergencyStop(packet) {
+  if (!packet) {
+    return null;
+  }
+  return {
+    checkpointId: packet.checkpoint_id || null,
+    status: packet.status || null,
+    mode: packet.mode || null,
+    owner: packet.owner || null,
+    acknowledgedAt: packet.acknowledged_at || null,
+    clearedAt: packet.cleared_at || null,
+  };
+}
+
+function summarizeEmergencyStopPacket(packet, { dryRun = false } = {}) {
+  return {
+    action: packet.action,
+    status: packet.status,
+    checkpointId: packet.checkpoint_id,
+    owner: packet.owner,
+    mode: packet.mode,
+    stateRoot: packet.state_root,
+    allowed: packet.allowed,
+    blockers: packet.blockers,
+    controls: packet.controls,
+    resumeCheckpoint: packet.resume_checkpoint,
+    stopLines: packet.stop_lines,
+    previousCheckpoint: packet.previous_checkpoint,
+    mutation: dryRun ? "none; dry-run summary only" : packet.mutation,
+  };
+}
+
+function printEmergencyStopPacket(label, packet) {
+  console.log(`${label}: emergency-stop`);
+  console.log(`- action ${packet.action}`);
+  console.log(`- checkpoint ${packet.checkpoint_id}`);
+  console.log(`- status ${packet.status}`);
+  console.log(`- mode ${packet.mode || "none"}`);
+  console.log(`- owner ${packet.owner}`);
+  console.log(`- allowed ${packet.allowed !== false}`);
+  console.log(`- mutation ${packet.mutation}`);
+  for (const line of packet.stop_lines || []) {
+    console.log(`- stop line ${line}`);
+  }
+  if (packet.blockers?.length) {
+    for (const blocker of packet.blockers) {
+      console.log(`- blocker ${blocker}`);
+    }
+  } else {
+    console.log("- blockers none");
+  }
 }
 
 function dispatchPlan(context) {
@@ -4798,15 +5166,24 @@ function dispatchCandidateStateCounts(context) {
 
 function dispatchPacket(selected, evaluations, context) {
   const blockers = [];
+  const stop = activeEmergencyStop(context.state);
   if (!selected) {
     blockers.push("no dispatchable safe backlog lane found");
+  }
+  if (stop) {
+    blockers.push(emergencyStopBlocker(stop, "dispatch-next"));
   }
   const candidateStateCounts = queueCandidateStateCounts(evaluations);
   const deliveryWorkspaceCount = openDeliveryWorkspaceCount(context);
   if (deliveryWorkspaceCount > 0) {
     candidateStateCounts.delivery = Math.max(candidateStateCounts.delivery || 0, deliveryWorkspaceCount);
   }
-  const nextActionGuidance = dispatchNextActionGuidance(selected, candidateStateCounts);
+  if (stop) {
+    candidateStateCounts.emergency_stop = 1;
+  }
+  const nextActionGuidance = stop
+    ? "clear the active emergency stop checkpoint only after operator-approved resume, then rerun dispatch-next dry-run"
+    : dispatchNextActionGuidance(selected, candidateStateCounts);
   const stopLines = stopLinesForSafeBacklogItem(selected?.item, defaultDispatchStopLines());
   const blockedCandidates = evaluations
     .filter((evaluation) => !evaluation.claimable)
@@ -4919,10 +5296,10 @@ function buildDispatchNextSummary({ state, currentOwner, staleAfterSeconds, read
 }
 
 function dispatchNextBlockedReasons(packet) {
-  if (packet.selected_lane) {
+  const blockers = Array.isArray(packet.blockers) ? packet.blockers : [];
+  if (packet.selected_lane && blockers.length === 0) {
     return [];
   }
-  const blockers = Array.isArray(packet.blockers) ? packet.blockers : [];
   const blockedCandidates = Array.isArray(packet.blocked_candidates) ? packet.blocked_candidates : [];
   const reasons = [
     packet.next_action_guidance,
@@ -5028,68 +5405,72 @@ function formatQueueCandidateStateCounts(counts = {}) {
 }
 
 function applyDispatchNext(plan, context) {
-  if (!plan.selected) {
-    throw new Error("No dispatchable safe backlog lane found.");
-  }
-  preflightDispatchWorkspaceBase(plan.selected, context);
+  return withEmergencyStopLock(context.state, () => {
+    assertNoActiveEmergencyStop(context.state, "dispatch-next");
+    if (!plan.selected) {
+      throw new Error("No dispatchable safe backlog lane found.");
+    }
+    preflightDispatchWorkspaceBase(plan.selected, context);
 
-  const claim = applyClaimNext(plan.selected, {
-    state: context.state,
-    options: context.options,
-    currentOwner: context.currentOwner,
-    staleAfterSeconds: context.staleAfterSeconds,
-  });
-
-  if (plan.selected.mutation === "manifest_owner_claim") {
-    return applyManifestDispatch(plan.selected, claim.path, context, {
-      assignmentPath: null,
-      workspaceAction: "claim_existing_workspace",
+    const claim = applyClaimNext(plan.selected, {
+      state: context.state,
+      options: context.options,
+      currentOwner: context.currentOwner,
+      staleAfterSeconds: context.staleAfterSeconds,
+      emergencyStopLockHeld: true,
     });
-  }
 
-  const assignmentPathForClaim = claim.path;
-  const assignment = readAssignment(assignmentPathForClaim);
-  validateAssignment(assignment, assignmentPathForClaim);
-  const existingManifest = dispatchManifestForAssignment(context.state, assignment);
-  const manifestResult = existingManifest
-    ? { path: existingManifest.path, manifest: existingManifest.manifest, workspaceAction: "resume_existing_workspace" }
-    : createDispatchWorkspace(plan.selected.item, assignment, context);
+    if (plan.selected.mutation === "manifest_owner_claim") {
+      return applyManifestDispatch(plan.selected, claim.path, context, {
+        assignmentPath: null,
+        workspaceAction: "claim_existing_workspace",
+      });
+    }
 
-  const readiness = runDispatchReadiness(manifestResult.manifest.worktree_path, context);
-  const candidateStateCounts = dispatchCandidateStateCounts(context);
-  const packet = dispatchHandoffPacket(
-    plan.selected,
-    context,
-    manifestResult.manifest,
-    readiness,
-    manifestResult.workspaceAction,
-    candidateStateCounts,
-  );
+    const assignmentPathForClaim = claim.path;
+    const assignment = readAssignment(assignmentPathForClaim);
+    validateAssignment(assignment, assignmentPathForClaim);
+    const existingManifest = dispatchManifestForAssignment(context.state, assignment);
+    const manifestResult = existingManifest
+      ? { path: existingManifest.path, manifest: existingManifest.manifest, workspaceAction: "resume_existing_workspace" }
+      : createDispatchWorkspace(plan.selected.item, assignment, context);
 
-  withManifestLock(context.state, manifestResult.manifest.task_id, () => {
-    const manifest = readManifest(manifestResult.path);
-    validateManifest(manifest, manifestResult.path);
-    recordManifestDispatchHandoff(manifest, packet, context);
-    writeManifest(manifestResult.path, manifest);
+    const readiness = runDispatchReadiness(manifestResult.manifest.worktree_path, context);
+    const candidateStateCounts = dispatchCandidateStateCounts(context);
+    const packet = dispatchHandoffPacket(
+      plan.selected,
+      context,
+      manifestResult.manifest,
+      readiness,
+      manifestResult.workspaceAction,
+      candidateStateCounts,
+    );
+
+    withManifestLock(context.state, manifestResult.manifest.task_id, () => {
+      const manifest = readManifest(manifestResult.path);
+      validateManifest(manifest, manifestResult.path);
+      recordManifestDispatchHandoff(manifest, packet, context);
+      writeManifest(manifestResult.path, manifest);
+    });
+
+    withAssignmentLock(context.state, assignment.assignment_id, () => {
+      const freshAssignment = readAssignment(assignmentPathForClaim);
+      validateAssignment(freshAssignment, assignmentPathForClaim);
+      recordAssignmentDispatchHandoff(freshAssignment, packet, manifestResult.manifest, context);
+      writeAssignment(assignmentPathForClaim, freshAssignment);
+    });
+
+    if (readiness.status === "failed") {
+      throw new Error(`Dispatch readiness failed for ${manifestResult.manifest.task_id}.`);
+    }
+
+    return {
+      path: manifestResult.path,
+      assignmentPath: assignmentPathForClaim,
+      manifestPath: manifestResult.path,
+      packet,
+    };
   });
-
-  withAssignmentLock(context.state, assignment.assignment_id, () => {
-    const freshAssignment = readAssignment(assignmentPathForClaim);
-    validateAssignment(freshAssignment, assignmentPathForClaim);
-    recordAssignmentDispatchHandoff(freshAssignment, packet, manifestResult.manifest, context);
-    writeAssignment(assignmentPathForClaim, freshAssignment);
-  });
-
-  if (readiness.status === "failed") {
-    throw new Error(`Dispatch readiness failed for ${manifestResult.manifest.task_id}.`);
-  }
-
-  return {
-    path: manifestResult.path,
-    assignmentPath: assignmentPathForClaim,
-    manifestPath: manifestResult.path,
-    packet,
-  };
 }
 
 function applyManifestDispatch(selected, manifestPath, context, { assignmentPath, workspaceAction }) {
