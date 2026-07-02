@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -433,6 +433,7 @@ try {
     assert(result.stdout.includes("heartbeat <query>"), result.stdout || result.stderr);
     assert(result.stdout.includes("takeover <query>"), result.stdout || result.stderr);
     assert(result.stdout.includes("dispatch-next"), result.stdout || result.stderr);
+    assert(result.stdout.includes("emergency-stop"), result.stdout || result.stderr);
     assert(result.stdout.includes("--base <ref>"), result.stdout || result.stderr);
     assert(result.stdout.includes("Defaults to dev"), result.stdout || result.stderr);
     assert(result.stdout.includes("Defaults to origin/main"), result.stdout || result.stderr);
@@ -2349,6 +2350,280 @@ try {
       assert(beforeAssignments === taskSnapshot(assignmentsDir), "owned delivery dry-run mutated assignments");
     } finally {
       rmSync(queueStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("emergency-stop summary-json previews a metadata-only checkpoint without mutation", () => {
+    const stopStateRoot = mkdtempSync(join(tmpdir(), "codex-emergency-stop-preview-"));
+    try {
+      const result = run([
+        "emergency-stop",
+        "--dry-run",
+        "--summary-json",
+        "--mode",
+        "pause",
+        "--reason",
+        "operator requested emergency pause",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+
+      assert(result.code === 0, result.stderr || result.stdout);
+      const packet = JSON.parse(result.stdout);
+      assert(packet.action === "apply", result.stdout || result.stderr);
+      assert(packet.status === "active", result.stdout || result.stderr);
+      assert(packet.mode === "pause", result.stdout || result.stderr);
+      assert(packet.controls.new_claim_allowed === false, result.stdout || result.stderr);
+      assert(packet.controls.new_dispatch_allowed === false, result.stdout || result.stderr);
+      assert(packet.controls.worker_process_mutation_allowed === false, result.stdout || result.stderr);
+      assert(packet.mutation === "none; dry-run summary only", result.stdout || result.stderr);
+      assert(!existsSync(join(stopStateRoot, "emergency-stop.json")), "emergency-stop dry-run wrote checkpoint");
+    } finally {
+      rmSync(stopStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("emergency-stop apply blocks claim and dispatch until cleared", () => {
+    const stopStateRoot = mkdtempSync(join(tmpdir(), "codex-emergency-stop-apply-"));
+    try {
+      seedGeneratedSuccessorPrerequisites(stopStateRoot);
+      const assignmentsDir = join(stopStateRoot, "assignments");
+      const tasksDir = join(stopStateRoot, "tasks");
+      const stopPath = join(stopStateRoot, "emergency-stop.json");
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const beforeTasks = taskSnapshot(tasksDir);
+
+      const apply = run([
+        "emergency-stop",
+        "--apply",
+        "--mode",
+        "drain",
+        "--reason",
+        "operator requested emergency drain",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+
+      assert(apply.code === 0, apply.stderr || apply.stdout);
+      assert(apply.stdout.includes("APPLY: emergency-stop"), apply.stdout || apply.stderr);
+      const checkpoint = readJson(stopPath);
+      assert(checkpoint.status === "active", apply.stdout || apply.stderr);
+      assert(checkpoint.mode === "drain", apply.stdout || apply.stderr);
+      assert(checkpoint.controls.new_claim_allowed === false, apply.stdout || apply.stderr);
+      assert(checkpoint.controls.new_dispatch_allowed === false, apply.stdout || apply.stderr);
+      assert(checkpoint.controls.worker_process_action.includes("separately approved"), apply.stdout || apply.stderr);
+
+      const claim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", stopStateRoot]);
+      assert(claim.code !== 0, "claim-next apply passed during active emergency stop");
+      assert(claim.stdout.includes("BLOCKED: claim-next"), claim.stdout || claim.stderr);
+      assert(claim.stderr.includes("blocked by active emergency stop"), claim.stderr || claim.stdout);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "blocked claim-next mutated assignments");
+      assert(taskSnapshot(tasksDir) === beforeTasks, "blocked claim-next mutated manifests");
+
+      const dispatchSummary = run([
+        "dispatch-next",
+        "--dry-run",
+        "--summary-json",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+      assert(dispatchSummary.code === 0, dispatchSummary.stderr || dispatchSummary.stdout);
+      const packet = JSON.parse(dispatchSummary.stdout);
+      assert(packet.dispatch.allowed === false, dispatchSummary.stdout || dispatchSummary.stderr);
+      assert(packet.dispatch.blockers.some((blocker) => blocker.includes("active emergency stop")), dispatchSummary.stdout || dispatchSummary.stderr);
+      assert(packet.laneAssignmentPreview.blockedReasons.some((reason) => reason.includes("active emergency stop")), dispatchSummary.stdout || dispatchSummary.stderr);
+      assert(packet.candidateStateCounts.emergency_stop === 1, dispatchSummary.stdout || dispatchSummary.stderr);
+
+      const dispatchApply = run([
+        "dispatch-next",
+        "--apply",
+        "--no-fetch",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+      assert(dispatchApply.code !== 0, "dispatch-next apply passed during active emergency stop");
+      assert(dispatchApply.stdout.includes("BLOCKED: dispatch-next"), dispatchApply.stdout || dispatchApply.stderr);
+      assert(!existsSync(join(stopStateRoot, "worktrees")), "blocked dispatch-next created a worktree");
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "blocked dispatch-next mutated assignments");
+      assert(taskSnapshot(tasksDir) === beforeTasks, "blocked dispatch-next mutated manifests");
+
+      const blockedClear = run([
+        "emergency-stop",
+        "--clear",
+        "--apply",
+        "--reason",
+        "operator approved resume after emergency",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+      assert(blockedClear.code !== 0, "emergency-stop clear applied without approval evidence");
+      assert(blockedClear.stdout.includes("BLOCKED: emergency-stop"), blockedClear.stdout || blockedClear.stderr);
+      assert(readJson(stopPath).status === "active", blockedClear.stdout || blockedClear.stderr);
+
+      const clear = run([
+        "emergency-stop",
+        "--clear",
+        "--apply",
+        "--reason",
+        "operator approved resume after emergency",
+        "--approval",
+        "operator approved clearing emergency stop",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+      assert(clear.code === 0, clear.stderr || clear.stdout);
+      const cleared = readJson(stopPath);
+      assert(cleared.status === "cleared", clear.stdout || clear.stderr);
+      assert(cleared.previous_checkpoint.checkpointId === checkpoint.checkpoint_id, clear.stdout || clear.stderr);
+
+      const resumedClaim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", stopStateRoot]);
+      assert(resumedClaim.code === 0, resumedClaim.stderr || resumedClaim.stdout);
+      assert(resumedClaim.stdout.includes("claimed ready lane"), resumedClaim.stdout || resumedClaim.stderr);
+    } finally {
+      rmSync(stopStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("emergency-stop kill mode requires approval and remains process-mutation free", () => {
+    const stopStateRoot = mkdtempSync(join(tmpdir(), "codex-emergency-stop-kill-"));
+    try {
+      const blocked = run([
+        "emergency-stop",
+        "--apply",
+        "--mode",
+        "kill",
+        "--reason",
+        "operator requested emergency kill posture",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+      assert(blocked.code !== 0, "kill-mode emergency stop applied without approval");
+      assert(blocked.stdout.includes("BLOCKED: emergency-stop"), blocked.stdout || blocked.stderr);
+      assert(!existsSync(join(stopStateRoot, "emergency-stop.json")), "blocked kill-mode wrote checkpoint");
+
+      const applied = run([
+        "emergency-stop",
+        "--apply",
+        "--mode",
+        "kill",
+        "--reason",
+        "operator requested emergency kill posture",
+        "--approval",
+        "operator approved recording kill posture only",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+      assert(applied.code === 0, applied.stderr || applied.stdout);
+      const packet = readJson(join(stopStateRoot, "emergency-stop.json"));
+      assert(packet.status === "active", applied.stdout || applied.stderr);
+      assert(packet.mode === "kill", applied.stdout || applied.stderr);
+      assert(packet.controls.worker_process_mutation_allowed === false, applied.stdout || applied.stderr);
+      assert(packet.controls.worker_process_action.includes("none;"), applied.stdout || applied.stderr);
+      assert(packet.stop_lines.some((line) => line.includes("records intent only")), applied.stdout || applied.stderr);
+    } finally {
+      rmSync(stopStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("emergency-stop malformed checkpoint fails claim and dispatch closed", () => {
+    const stopStateRoot = mkdtempSync(join(tmpdir(), "codex-emergency-stop-malformed-"));
+    try {
+      seedGeneratedSuccessorPrerequisites(stopStateRoot);
+      writeFileSync(join(stopStateRoot, "emergency-stop.json"), `${JSON.stringify({ status: "active" })}\n`);
+
+      const claim = run(["claim-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", stopStateRoot]);
+      assert(claim.code !== 0, "claim-next dry-run ignored malformed emergency stop checkpoint");
+      assert(claim.stderr.includes("Emergency stop checkpoint is invalid"), claim.stderr || claim.stdout);
+
+      const dispatch = run(["dispatch-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", stopStateRoot]);
+      assert(dispatch.code !== 0, "dispatch-next dry-run ignored malformed emergency stop checkpoint");
+      assert(dispatch.stderr.includes("Emergency stop checkpoint is invalid"), dispatch.stderr || dispatch.stdout);
+    } finally {
+      rmSync(stopStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("claim-next summary-json surfaces active emergency stop before apply", () => {
+    const stopStateRoot = mkdtempSync(join(tmpdir(), "codex-emergency-stop-claim-summary-"));
+    try {
+      seedGeneratedSuccessorPrerequisites(stopStateRoot);
+      const stop = run([
+        "emergency-stop",
+        "--apply",
+        "--mode",
+        "pause",
+        "--reason",
+        "operator requested emergency pause",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+      assert(stop.code === 0, stop.stderr || stop.stdout);
+
+      const claim = run(["claim-next", "--dry-run", "--summary-json", "--owner", "runner-a", "--state-root", stopStateRoot]);
+      assert(claim.code === 0, claim.stderr || claim.stdout);
+      const packet = JSON.parse(claim.stdout);
+      assert(packet.selected === null, claim.stdout || claim.stderr);
+      assert(packet.assignmentPreview.blockedReasons.some((reason) => reason.includes("active emergency stop")), claim.stdout || claim.stderr);
+      assert(packet.assignmentPreview.targetLane === null, claim.stdout || claim.stderr);
+    } finally {
+      rmSync(stopStateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("emergency-stop shared lock blocks claim mutation and recovers stale lock", () => {
+    const stopStateRoot = mkdtempSync(join(tmpdir(), "codex-emergency-stop-lock-"));
+    try {
+      seedGeneratedSuccessorPrerequisites(stopStateRoot);
+      const assignmentsDir = join(stopStateRoot, "assignments");
+      const tasksDir = join(stopStateRoot, "tasks");
+      const lockPath = join(stopStateRoot, "emergency-stop.lock");
+      const beforeAssignments = taskSnapshot(assignmentsDir);
+      const beforeTasks = taskSnapshot(tasksDir);
+      writeFileSync(lockPath, "active writer\n");
+
+      const lockedClaim = run(["claim-next", "--apply", "--owner", "runner-a", "--state-root", stopStateRoot]);
+      assert(lockedClaim.code !== 0, "claim-next apply ignored active emergency-stop lock");
+      assert(lockedClaim.stderr.includes("Emergency stop checkpoint is locked"), lockedClaim.stderr || lockedClaim.stdout);
+      assert(taskSnapshot(assignmentsDir) === beforeAssignments, "locked claim-next mutated assignments");
+      assert(taskSnapshot(tasksDir) === beforeTasks, "locked claim-next mutated manifests");
+
+      const oldDate = new Date(Date.now() - 10 * 60 * 1000);
+      utimesSync(lockPath, oldDate, oldDate);
+      const recoveredStop = run([
+        "emergency-stop",
+        "--apply",
+        "--mode",
+        "pause",
+        "--reason",
+        "operator requested emergency pause",
+        "--owner",
+        "runner-a",
+        "--state-root",
+        stopStateRoot,
+      ]);
+      assert(recoveredStop.code === 0, recoveredStop.stderr || recoveredStop.stdout);
+      assert(readJson(join(stopStateRoot, "emergency-stop.json")).status === "active", recoveredStop.stdout || recoveredStop.stderr);
+      assert(!existsSync(lockPath), "stale emergency-stop lock remained after successful apply");
+    } finally {
+      rmSync(stopStateRoot, { recursive: true, force: true });
     }
   });
 
