@@ -434,8 +434,10 @@ try {
     assert(result.stdout.includes("takeover <query>"), result.stdout || result.stderr);
     assert(result.stdout.includes("dispatch-next"), result.stdout || result.stderr);
     assert(result.stdout.includes("emergency-stop"), result.stdout || result.stderr);
+    assert(result.stdout.includes("cleanup-integrated [query]"), result.stdout || result.stderr);
     assert(result.stdout.includes("--base <ref>"), result.stdout || result.stderr);
     assert(result.stdout.includes("Defaults to dev"), result.stdout || result.stderr);
+    assert(result.stdout.includes("Defaults to origin/dev"), result.stdout || result.stderr);
     assert(result.stdout.includes("Defaults to origin/main"), result.stdout || result.stderr);
   });
 
@@ -5130,6 +5132,113 @@ try {
     }
   });
 
+  test("cleanup-integrated source keeps no-PR cleanup stricter than branch cleanup", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const match = source.match(/function cleanupIntegrated[\s\S]*?function cleanupRepositoryRoot/);
+    assert(match, "cleanupIntegrated source not found");
+    assert(match[0].includes("merge-base"), "cleanup-integrated must require ancestry against the base ref");
+    assert(match[0].includes("worktreeCleanupStatus"), "cleanup-integrated must inspect worktree cleanliness");
+    assert(match[0].includes("manifest.pr_url || manifest.pr_number"), "cleanup-integrated must reject PR-backed workspaces");
+    assert(match[0].includes("deleteLocalBranchIfPresent"), "cleanup-integrated must use exact-head local branch deletion");
+    assert(!match[0].includes("deleteRemoteBranchIfPresent"), "cleanup-integrated must not delete remote branches");
+  });
+
+  test("cleanup-integrated summary-json reports clean integrated no-PR workspaces without mutation", () => {
+    const fixture = createIntegratedCleanupFixture();
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-integrated", "integrated-task", "--summary-json", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      const summary = JSON.parse(result.stdout);
+      assert(summary.mode === "cleanup-integrated", `mode is ${summary.mode}`);
+      assert(summary.baseRef === "origin/main", `baseRef is ${summary.baseRef}`);
+      assert(summary.counts.total === 1, `total is ${summary.counts.total}`);
+      assert(summary.counts.cleanupReady === 1, `cleanupReady is ${summary.counts.cleanupReady}`);
+      assert(summary.remoteBranchPolicy.includes("not deleted"), result.stdout || result.stderr);
+      const [cleanup] = summary.results;
+      assert(cleanup.status === "ready", `status is ${cleanup.status}`);
+      assert(cleanup.reason.includes("clean no-PR workspace"), cleanup.reason);
+      assert(cleanup.expectedHeadSha, "summary missing expected head");
+      assert(cleanup.remoteBranchSha, "summary should report remote tracking branch");
+      assert(cleanup.plan === undefined, "cleanup-integrated summary should not include oversized plan payloads");
+
+      assert(existsSync(fixture.worktree), "summary unexpectedly removed target worktree");
+      assert(branchExists(fixture.root, fixture.branch), "summary unexpectedly deleted local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "summary unexpectedly deleted remote branch");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "integrated-task.json"));
+      assert(manifest.status === "active", `manifest status is ${manifest.status}`);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated applies only clean no-PR branches already integrated into base", () => {
+    const fixture = createIntegratedCleanupFixture();
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-integrated", "integrated-task", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("Closed integrated-task"), result.stdout || result.stderr);
+      assert(!existsSync(fixture.worktree), "cleanup-integrated did not remove target worktree");
+      assert(!branchExists(fixture.root, fixture.branch), "cleanup-integrated did not delete local branch");
+      assert(remoteBranchExists(fixture.root, fixture.branch), "cleanup-integrated deleted the remote branch");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "integrated-task.json"));
+      assert(manifest.status === "closed", `manifest status is ${manifest.status}`);
+      assert(manifest.cleanup_base_ref === "origin/main", `cleanup_base_ref is ${manifest.cleanup_base_ref}`);
+      assert(manifest.cleanup_remote_branch_policy === "not-deleted-no-pr-integrated-cleanup", "manifest missing remote branch policy");
+      assert(manifest.worktree_removed_at, "manifest missing worktree removal timestamp");
+      assert(manifest.local_branch_deleted_at, "manifest missing local branch deletion timestamp");
+      assert(manifest.cleanup_completed_at, "manifest missing cleanup completion timestamp");
+      assert(manifest.source_assignment_closed_at, "manifest missing source assignment closure timestamp");
+      const assignment = readJson(join(fixture.stateRoot, "assignments", "integrated-assignment.json"));
+      assert(assignment.status === "closed", `assignment status is ${assignment.status}`);
+      assert(assignment.last_result === "closed after integrated cleanup of integrated-task", `assignment last_result is ${assignment.last_result}`);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated refuses dirty no-PR worktrees", () => {
+    const fixture = createIntegratedCleanupFixture();
+    try {
+      writeFileSync(join(fixture.worktree, "dirty.txt"), "dirty\n");
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-integrated", "integrated-task", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("SKIP integrated-task: worktree is not clean"), result.stdout || result.stderr);
+      assert(existsSync(fixture.worktree), "dirty worktree was removed");
+      assert(branchExists(fixture.root, fixture.branch), "dirty worktree branch was deleted");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "integrated-task.json"));
+      assert(manifest.status === "active", `manifest status is ${manifest.status}`);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
+  test("cleanup-integrated refuses branches not integrated into base", () => {
+    const fixture = createIntegratedCleanupFixture({ diverged: true });
+    try {
+      const result = runFixtureScript(
+        fixture,
+        ["cleanup-integrated", "integrated-task", "--apply", "--base", "origin/main", "--owner", "runner-a", "--state-root", fixture.stateRoot],
+      );
+      assert(result.code === 0, result.stderr || result.stdout);
+      assert(result.stdout.includes("branch is not an ancestor of origin/main"), result.stdout || result.stderr);
+      assert(existsSync(fixture.worktree), "non-integrated worktree was removed");
+      assert(branchExists(fixture.root, fixture.branch), "non-integrated branch was deleted");
+      const manifest = readJson(join(fixture.stateRoot, "tasks", "integrated-task.json"));
+      assert(manifest.status === "active", `manifest status is ${manifest.status}`);
+    } finally {
+      cleanupIntegratedCleanupFixture(fixture);
+    }
+  });
+
   test("cleanup-orphans lists orphan directories without deleting by default", () => {
     const orphanPath = join(stateRoot, "worktrees", "orphan-story");
     mkdirSync(join(orphanPath, "services", "supervisor", ".pytest_cache"), { recursive: true });
@@ -5508,6 +5617,102 @@ function cleanupMergedCleanupFixture(fixture) {
   rmSync(fixture.remoteRoot, { recursive: true, force: true });
   rmSync(fixture.root, { recursive: true, force: true });
 }
+
+function createIntegratedCleanupFixture(options = {}) {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-integrated-cleanup-"));
+  const remoteRoot = `${fixtureRoot}-remote.git`;
+  const stateRootFixture = join(fixtureRoot, "state");
+  const branch = "codex/integrated-cleanup";
+  const worktree = join(stateRootFixture, "worktrees", "integrated-task");
+
+  copyWorkspaceScriptFixture(fixtureRoot);
+  runGit(fixtureRoot, ["init", "-q"]);
+  runGit(fixtureRoot, ["config", "user.email", "codex-workspace-test@example.com"]);
+  runGit(fixtureRoot, ["config", "user.name", "Codex Workspace Test"]);
+  commitFile(fixtureRoot, "base.txt", "base\n", "base");
+  runGit(fixtureRoot, ["branch", "-M", "main"]);
+  mkdirSync(remoteRoot, { recursive: true });
+  runGit(remoteRoot, ["init", "--bare", "-q"]);
+  runGit(fixtureRoot, ["remote", "add", "origin", remoteRoot]);
+  runGit(fixtureRoot, ["push", "-q", "-u", "origin", "main"]);
+  runGit(fixtureRoot, ["branch", branch, "main"]);
+  if (options.diverged) {
+    runGit(fixtureRoot, ["switch", "-q", branch]);
+    commitFile(fixtureRoot, "diverged.txt", "not integrated\n", "diverged work");
+    runGit(fixtureRoot, ["switch", "-q", "main"]);
+  }
+  runGit(fixtureRoot, ["push", "-q", "-u", "origin", branch]);
+  mkdirSync(join(stateRootFixture, "worktrees"), { recursive: true });
+  runGit(fixtureRoot, ["worktree", "add", "-q", worktree, branch]);
+
+  mkdirSync(join(stateRootFixture, "tasks"), { recursive: true });
+  writeFileSync(
+    join(stateRootFixture, "tasks", "integrated-task.json"),
+    `${JSON.stringify({
+      schema_version: 1,
+      task_id: "integrated-task",
+      title: "Integrated task",
+      description: "integrated task",
+      repo_name: "fixture",
+      repo_root: worktree,
+      state_root: stateRootFixture,
+      base_branch: "main",
+      base_ref: "origin/main",
+      branch,
+      worktree_path: worktree,
+      status: "active",
+      mode: "pr",
+      source_assignment_id: "integrated-assignment",
+      owner: "runner-a",
+      events: [],
+    }, null, 2)}\n`,
+  );
+  mkdirSync(join(stateRootFixture, "assignments"), { recursive: true });
+  writeFileSync(
+    join(stateRootFixture, "assignments", "integrated-assignment.json"),
+    `${JSON.stringify({
+      schema_version: 1,
+      assignment_id: "integrated-assignment",
+      task_id: "integrated-task",
+      lane_slug: "integrated-task",
+      branch,
+      worktree_path: worktree,
+      status: "claimed",
+      owner: "runner-a",
+      phase: "handoff",
+      runner_kind: "codex-cli",
+      events: [],
+      source_backlog_item: {
+        item_id: "integrated-task",
+        branch_name: branch,
+      },
+    }, null, 2)}\n`,
+  );
+
+  return {
+    root: fixtureRoot,
+    remoteRoot,
+    stateRoot: stateRootFixture,
+    branch,
+    worktree,
+    script: join(fixtureRoot, "scripts", "codex-workspace.mjs"),
+  };
+}
+
+function cleanupIntegratedCleanupFixture(fixture) {
+  if (!fixture) {
+    return;
+  }
+  spawnSync("git", ["worktree", "remove", "--force", fixture.worktree], {
+    cwd: fixture.root,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  rmSync(fixture.worktree, { recursive: true, force: true });
+  rmSync(fixture.remoteRoot, { recursive: true, force: true });
+  rmSync(fixture.root, { recursive: true, force: true });
+}
+
 
 function createWorkspaceDefaultBaseFixture(options = {}) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "codex-default-base-"));
