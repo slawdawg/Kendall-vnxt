@@ -410,9 +410,7 @@ textarea::placeholder {
   border: 1px solid color-mix(in srgb, var(--info) 18%, var(--line));
   border-radius: 999px;
   display: inline-flex;
-  flex-wrap: wrap;
   gap: 0.35rem;
-  min-width: 0;
   min-height: 1.65rem;
   padding: 0.18rem 0.6rem;
 }
@@ -433,8 +431,6 @@ textarea::placeholder {
   color: var(--foreground);
   font-size: 0.75rem;
   font-weight: 600;
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .pipeline-operational-strip .pipeline-status-key {
@@ -483,6 +479,14 @@ textarea::placeholder {
   font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 0.6rem;
   text-transform: uppercase;
+}
+
+.pipeline-usage-meter-value {
+  color: var(--foreground);
+  flex: 0 0 auto;
+  font-family: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
 }
 
 .pipeline-usage-meter-track {
@@ -611,8 +615,7 @@ textarea::placeholder {
   z-index: 0;
 }
 
-.pipeline-route-connector-line,
-.pipeline-route-connector-pulse {
+.pipeline-route-connector-line {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -622,13 +625,6 @@ textarea::placeholder {
 .pipeline-route-connector-line {
   stroke: color-mix(in srgb, var(--accent) 42%, transparent);
   stroke-dasharray: 0.42rem 0.38rem;
-}
-
-.pipeline-route-connector-pulse {
-  animation: pipeline-route-flow 9s linear infinite;
-  stroke: color-mix(in srgb, var(--accent-2) 92%, transparent);
-  stroke-dasharray: 0.35rem 4rem;
-  stroke-width: 3.5;
 }
 
 .pipeline-route-row {
@@ -658,6 +654,13 @@ textarea::placeholder {
 
 .pipeline-route-station::after {
   content: none;
+}
+
+.pipeline-route-anchor {
+  height: 2rem;
+  inset: 0.55rem 0.55rem auto 0.55rem;
+  pointer-events: none;
+  position: absolute;
 }
 
 .pipeline-stage-station {
@@ -700,13 +703,11 @@ textarea::placeholder {
 }
 
 .pipeline-stage-label {
-  flex: 1 1 auto;
-  line-height: 1.05;
-  min-width: 0;
-  overflow-wrap: anywhere;
+  flex: 0 0 auto;
+  min-width: max-content;
   overflow: visible;
   text-overflow: clip;
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .pipeline-stage-info-icon {
@@ -775,22 +776,6 @@ textarea::placeholder {
   visibility: visible;
 }
 
-.pipeline-route-station-active .pipeline-stage-station {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
-}
-
-.pipeline-route-station-approval .pipeline-stage-station {
-  border-color: color-mix(in srgb, var(--review) 58%, var(--line));
-}
-
-.pipeline-route-station-blocked .pipeline-stage-station {
-  border-color: color-mix(in srgb, var(--warn) 52%, var(--line));
-}
-
-.pipeline-route-station-complete .pipeline-stage-station {
-  border-color: color-mix(in srgb, var(--success) 38%, var(--line));
-}
-
 .pipeline-stage-station:hover,
 .pipeline-stage-station:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
@@ -824,7 +809,7 @@ textarea::placeholder {
   cursor: pointer;
   display: grid;
   gap: 0.32rem;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   min-height: 1.85rem;
   padding: 0.28rem 0.45rem;
   text-align: left;
@@ -847,15 +832,52 @@ textarea::placeholder {
   width: 0.45rem;
 }
 
+.pipeline-mini-packet-body {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
 .pipeline-mini-packet-label {
   display: block;
   font-size: 0.68rem;
+  line-height: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-mini-packet-meta {
+  color: var(--muted);
+  display: block;
+  font-size: 0.58rem;
   line-height: 1.15;
   min-width: 0;
-  overflow: visible;
-  overflow-wrap: anywhere;
-  text-overflow: clip;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-mini-packet-proof {
+  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.58rem;
+  line-height: 1;
+  padding: 0.16rem 0.28rem;
+  white-space: nowrap;
+}
+
+.pipeline-mini-packet-ready {
+  border: 1px solid color-mix(in srgb, var(--success) 55%, transparent);
+  border-radius: 999px;
+  color: var(--success);
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.16rem 0.28rem;
+  white-space: nowrap;
 }
 
 .pipeline-mini-packet-active .pipeline-mini-packet-dot {
@@ -1085,15 +1107,6 @@ textarea::placeholder {
   }
 }
 
-@keyframes pipeline-route-flow {
-  0% {
-    stroke-dashoffset: 0;
-  }
-  100% {
-    stroke-dashoffset: -4.35rem;
-  }
-}
-
 @keyframes pipeline-map-signal-sweep {
   0% {
     background-position:
@@ -1161,7 +1174,6 @@ textarea::placeholder {
 
   .pipeline-nohype-shell::before,
   .pipeline-route-map::before,
-  .pipeline-route-connector-pulse,
   .kendall-graph-background__links path,
   .kendall-graph-background__map,
   .kendall-graph-background__nodes circle,
@@ -1176,6 +1188,9 @@ textarea::placeholder {
   .pipeline-neon-card,
   .pipeline-stage-station,
   .pipeline-mini-packet,
+  .manager-execution-lane,
+  .manager-lane-row,
+  .manager-lane-block,
   .pipeline-stage-packet-row,
   .kendall-info-tip-bubble,
   .pipeline-usage-warning-bubble,
@@ -1188,6 +1203,10 @@ textarea::placeholder {
   .pipeline-neon-card:focus-within,
   .pipeline-mini-packet:hover,
   .pipeline-mini-packet:focus-visible,
+  .manager-lane-row:hover,
+  .manager-lane-row:focus-within,
+  .manager-lane-block:hover,
+  .manager-lane-block:focus-within,
   .pipeline-stage-packet-row:hover,
   .pipeline-stage-packet-row:focus-visible {
     transform: none;
@@ -1276,5 +1295,16 @@ textarea::placeholder {
   .pipeline-mini-packet-alert {
     height: 0.85rem;
     width: 0.85rem;
+  }
+
+  .manager-execution-lane {
+    overflow-wrap: anywhere;
+  }
+
+  .manager-lane-layout,
+  .manager-lane-row,
+  .manager-lane-block {
+    max-width: 100%;
+    min-width: 0;
   }
 }

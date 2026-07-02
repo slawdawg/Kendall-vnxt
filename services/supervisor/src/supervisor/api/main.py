@@ -142,6 +142,12 @@ async def list_work_packets(session: AsyncSession = Depends(get_session)):
     return ApiEnvelope(data=packets)
 
 
+@app.get("/pipeline-control-plane/projection", response_model=ApiEnvelope)
+async def get_pipeline_dashboard_projection(session: AsyncSession = Depends(get_session)):
+    projection = await service.get_pipeline_dashboard_projection(session)
+    return ApiEnvelope(data=projection)
+
+
 @app.get("/work-packets/{packet_id}", response_model=ApiEnvelope)
 async def get_work_packet(packet_id: str, session: AsyncSession = Depends(get_session)):
     packet = await service.get_work_packet(session, packet_id)

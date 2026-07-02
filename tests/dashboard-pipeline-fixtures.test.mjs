@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { mkdir, readdir, readFile, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import vm from "node:vm";
 
 const packageJsonPath = new URL("../package.json", import.meta.url);
 const nextConfigPath = new URL("../apps/dashboard/next.config.ts", import.meta.url);
 const routePath = new URL("../apps/dashboard/src/app/pipeline/page.tsx", import.meta.url);
 const packetDetailRoutePath = new URL("../apps/dashboard/src/app/pipeline/packets/[packetId]/page.tsx", import.meta.url);
-const pipelinePacketLoaderPath = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
 const settingsRoutePath = new URL("../apps/dashboard/src/app/settings/page.tsx", import.meta.url);
 const settingsUsageVisibilityPath = new URL("../apps/dashboard/src/components/settings/usage-visibility-settings.tsx", import.meta.url);
 const layoutPath = new URL("../apps/dashboard/src/app/layout.tsx", import.meta.url);
@@ -18,34 +19,307 @@ const pipelineComponentsPath = new URL("../apps/dashboard/src/components/pipelin
 const cockpitPath = new URL("pipeline-cockpit.tsx", pipelineComponentsPath);
 const packetDetailPath = new URL("packet-detail-page.tsx", pipelineComponentsPath);
 const fixturesPath = new URL("../apps/dashboard/src/lib/pipeline-fixtures.ts", import.meta.url);
+const supervisorLibPath = new URL("../apps/dashboard/src/lib/supervisor.ts", import.meta.url);
+const pipelineContractPath = new URL("../packages/contracts/src/pipeline-control-plane/index.ts", import.meta.url);
+const projectionTruthPath = new URL("../apps/dashboard/src/lib/pipeline/projection-truth.ts", import.meta.url);
+const activeBoardViewModelPath = new URL("../apps/dashboard/src/lib/pipeline/active-board-view-model.ts", import.meta.url);
 const pipelineEvidenceSourcePath = new URL("../apps/dashboard/src/lib/pipeline-evidence-source.ts", import.meta.url);
-const supervisorSchemasPath = new URL("../services/supervisor/src/supervisor/api/schemas.py", import.meta.url);
+const pipelinePacketLoaderPath = new URL("../apps/dashboard/src/lib/pipeline-packet-loader.ts", import.meta.url);
+const managerExecutionLaneSummaryPath = new URL("../apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts", import.meta.url);
+const realWorkPacketProofPath = new URL("../tests/fixtures/pipeline/pipeline-real-workpacket-proof-2026-07-02.json", import.meta.url);
 const globalsPath = new URL("../apps/dashboard/src/app/globals.css", import.meta.url);
 const shellPath = new URL("../apps/dashboard/src/components/shell.tsx", import.meta.url);
 const graphBackgroundPath = new URL("../apps/dashboard/src/components/dashboard-graph-background.tsx", import.meta.url);
 const realtimeRefreshPath = new URL("../apps/dashboard/src/components/realtime-refresh.tsx", import.meta.url);
 const navPath = new URL("../apps/dashboard/src/components/operational-nav.tsx", import.meta.url);
 const setupE2ePath = new URL("../scripts/setup-e2e.mjs", import.meta.url);
-const boundaryCheckPath = new URL("../scripts/check-dashboard-pipeline-import-boundary.mjs", import.meta.url);
+const dashboardRequire = createRequire(new URL("../apps/dashboard/package.json", import.meta.url));
+
+function loadManagerExecutionLaneSummaryModule(source) {
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "manager-execution-lane-summary.ts" });
+  return context.module.exports;
+}
+
+function loadProjectionTruthModule(source) {
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "projection-truth.ts" });
+  return context.module.exports;
+}
+
+function loadActiveBoardViewModelModule(source) {
+  const ts = dashboardRequire("typescript");
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "active-board-view-model.ts" });
+  return context.module.exports;
+}
+
+function loadPipelineCockpitModule(source, projectionTruthModule, activeBoardViewModelModule) {
+  const ts = dashboardRequire("typescript");
+  const react = dashboardRequire("react");
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      esModuleInterop: true,
+      jsx: ts.JsxEmit.ReactJSX,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context = {
+    exports: {},
+    module: { exports: {} },
+    require: (specifier) => {
+      if (specifier === "react") {
+        return react;
+      }
+      if (specifier === "react/jsx-runtime") {
+        return dashboardRequire("react/jsx-runtime");
+      }
+      if (specifier === "next/link") {
+        const Link = ({ children, href, ...props }) => react.createElement("a", { ...props, href }, children);
+        return { __esModule: true, default: Link };
+      }
+      if (specifier === "../../lib/pipeline/projection-truth") {
+        return projectionTruthModule;
+      }
+      if (specifier === "../../lib/pipeline/active-board-view-model") {
+        return activeBoardViewModelModule;
+      }
+      if (specifier === "../../lib/supervisor") {
+        return {
+          getPipelineDashboardProjection: async () => {
+            throw new Error("server-render test does not refresh projection");
+          },
+        };
+      }
+      throw new Error(`Unexpected PipelineCockpit test import: ${specifier}`);
+    },
+  };
+  context.exports = context.module.exports;
+  vm.runInNewContext(output, context, { filename: "pipeline-cockpit.tsx" });
+  return context.module.exports;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sourceBetween(source, startMarker, endMarker) {
+  assert.equal(
+    [...source.matchAll(new RegExp(escapeRegExp(startMarker), "g"))].length,
+    1,
+    `expected exactly one source marker ${startMarker}`
+  );
+  assert.equal(
+    [...source.matchAll(new RegExp(escapeRegExp(endMarker), "g"))].length,
+    1,
+    `expected exactly one source marker ${endMarker}`
+  );
+  const start = source.indexOf(startMarker);
+  assert.notEqual(start, -1, `missing source marker ${startMarker}`);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(end, -1, `missing source marker ${endMarker}`);
+  return source.slice(start, end);
+}
+
+function projectionFixture(overrides = {}) {
+  const now = "2026-07-02T16:00:00.000Z";
+  const baseWorkPacket = {
+    packetId: "packet-story-3-1-live-control",
+    title: "Story 3.1 live control packet",
+    currentStage: "execute",
+    status: "active",
+    sourceRef: {
+      refId: "story:3-1",
+      sourceType: "bmad_story",
+      pathOrUrl: "_bmad-output/implementation-artifacts/3-1-fixture-as-live-regression-tests.md",
+      title: "Story 3.1",
+    },
+    blocker: null,
+    nextAction: "Run fixture-as-live regression checks.",
+    evidenceRefs: ["story:3-1"],
+    truthLabel: "live",
+    updatedAt: now,
+    metadataOnly: true,
+  };
+  const base = {
+    schemaVersion: "pipeline-dashboard-projection/v0",
+    projectionId: "projection-story-3-1",
+    generatedAt: now,
+    sourceLabel: "live",
+    freshnessState: "live",
+    sourceUpdatedAt: now,
+    staleAfterSeconds: 15,
+    backendReachability: {
+      state: "reachable",
+      checkedAt: now,
+      reason: null,
+      summary: "Backend projection reachable.",
+    },
+    fixtureMode: {
+      enabled: false,
+      reason: null,
+      allowedForEnvironment: false,
+      visibleLabelRequired: true,
+      canSatisfyLiveProof: false,
+    },
+    truthSummary: {
+      label: "live",
+      emptyReason: null,
+      backendEmpty: false,
+      backendUnavailable: false,
+      fixtureBacked: false,
+      stale: false,
+      summary: "Live backend projection.",
+    },
+    stageSummaries: [],
+    workPackets: [baseWorkPacket],
+    selectedPacketDetails: [],
+    managerSummary: {
+      stateSource: "supervisor_projection",
+      freshnessState: "live",
+      activeLeaseCount: 0,
+      activeWorkerCount: 0,
+      warmWorkerCount: 0,
+      blockedQueueCount: 0,
+      dispatchableQueueCount: 1,
+      closedQueueCount: 0,
+      sourceExhausted: false,
+      inactivityReason: null,
+      summary: "Manager metadata only.",
+      metadataOnly: true,
+    },
+    queueSummary: {
+      dispatchableCount: 1,
+      blockedCount: 0,
+      closedCount: 0,
+      emptyReason: null,
+      sourceExhausted: false,
+      summary: "Queue metadata only.",
+    },
+    evidenceRefs: ["story:3-1"],
+  };
+  return {
+    ...base,
+    ...overrides,
+    backendReachability: { ...base.backendReachability, ...(overrides.backendReachability ?? {}) },
+    fixtureMode: { ...base.fixtureMode, ...(overrides.fixtureMode ?? {}) },
+    truthSummary: { ...base.truthSummary, ...(overrides.truthSummary ?? {}) },
+    managerSummary: { ...base.managerSummary, ...(overrides.managerSummary ?? {}) },
+    queueSummary: { ...base.queueSummary, ...(overrides.queueSummary ?? {}) },
+    workPackets: overrides.workPackets ?? base.workPackets,
+  };
+}
+
+async function collectRelativeImportGraph(entryUrl, options = {}) {
+  const visited = new Map();
+  const queue = [fileURLToPath(entryUrl)];
+  const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+  const terminalPaths = new Set((options.terminalUrls ?? []).map((url) => fileURLToPath(url)));
+
+  while (queue.length > 0) {
+    const currentPath = queue.shift();
+    if (visited.has(currentPath)) {
+      continue;
+    }
+    let source;
+    try {
+      source = await readFile(currentPath, "utf8");
+    } catch {
+      continue;
+    }
+    visited.set(currentPath, source);
+    if (terminalPaths.has(currentPath)) {
+      continue;
+    }
+    for (const specifier of extractImportSpecifiers(source)) {
+      if (!specifier.startsWith(".")) {
+        continue;
+      }
+      const resolved = await resolveDashboardImport(currentPath, specifier);
+      if (resolved && resolved.startsWith(repoRoot)) {
+        queue.push(resolved);
+      }
+    }
+  }
+
+  return {
+    files: [...visited.keys()].map((path) => relative(repoRoot, path).replaceAll("\\", "/")),
+    sources: [...visited.values()].join("\n")
+  };
+}
+
+function extractImportSpecifiers(source) {
+  return [
+    ...source.matchAll(/(?:import|export)\s+(?:type\s+)?(?:[^"'()]*?\s+from\s+)?["']([^"']+)["']/g),
+    ...source.matchAll(/import\s*\(\s*["']([^"']+)["']\s*\)/g)
+  ].map((match) => match[1]);
+}
+
+async function resolveDashboardImport(fromPath, specifier) {
+  const base = resolve(dirname(fromPath), specifier);
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.js`,
+    `${base}.jsx`,
+    join(base, "index.ts"),
+    join(base, "index.tsx")
+  ];
+  for (const candidate of candidates) {
+    try {
+      await readFile(candidate, "utf8");
+      return candidate;
+    } catch {
+      // Try the next supported extension.
+    }
+  }
+  return null;
+}
 
 test("dashboard pipeline fixture test is wired into package checks", async () => {
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   const nextConfigSource = await readFile(nextConfigPath, "utf8");
   const globalsSource = await readFile(globalsPath, "utf8");
   const setupE2eSource = await readFile(setupE2ePath, "utf8");
-  const boundaryCheckSource = await readFile(boundaryCheckPath, "utf8");
 
   assert.equal(packageJson.scripts["test:dashboard-pipeline-fixtures"], "node --test tests/dashboard-pipeline-fixtures.test.mjs");
-  assert.equal(packageJson.scripts["check:dashboard-pipeline-boundary"], "node ./scripts/check-dashboard-pipeline-import-boundary.mjs");
-  assert.match(boundaryCheckSource, /resolveLocalImport/);
-  assert.match(boundaryCheckSource, /isInsideDashboardSrc/);
-  assert.match(boundaryCheckSource, /isPipelineBoundaryPath/);
-  assert.ok(boundaryCheckSource.includes("\\brequire\\s*\\("));
-  assert.ok(boundaryCheckSource.includes("export(?:\\s+type)?"));
-  assert.ok(boundaryCheckSource.includes("specifier.startsWith(\"@/\")"));
-  assert.ok(boundaryCheckSource.includes("\\bnew\\s+Worker\\s*\\("));
-  assert.ok(boundaryCheckSource.indexOf("replace(/\"(?:\\\\.|[^\"\\\\])*\"/g") < boundaryCheckSource.indexOf("replace(/\\/\\/.*$/gm"));
-  assert.match(boundaryCheckSource, /extractTemplateExpressions/);
   assert.equal(packageJson.scripts["test:e2e:dashboard"], "playwright test");
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline-targets"], /opens fixture-backed pipeline cockpit without live execution framing/);
@@ -54,26 +328,381 @@ test("dashboard pipeline fixture test is wired into package checks", async () =>
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:ipad"], /--project ipad-pro-gen-2-safari-ios-26/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:iphone"], /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=true/);
   assert.match(packageJson.scripts["test:e2e:dashboard:pipeline:iphone"], /--project iphone-15-pro-max-safari-ios-27/);
+  assert.match(packageJson.scripts["check:dashboard"], /pnpm run test:dashboard-pipeline-fixtures/);
+  assert.match(packageJson.scripts["check:dashboard"], /pnpm run build:dashboard/);
+  assert.doesNotMatch(packageJson.scripts["check:dashboard"], /test:supervisor/);
   assert.match(setupE2eSource, /\["install", "chromium", "webkit"\]/);
   assert.match(packageJson.scripts["check:static"], /pnpm run test:dashboard-pipeline-fixtures/);
-  assert.match(packageJson.scripts["check:static"], /pnpm run check:dashboard-pipeline-boundary/);
   assert.match(packageJson.scripts.check, /pnpm run test:dashboard-pipeline-fixtures/);
-  assert.match(packageJson.scripts.check, /pnpm run check:dashboard-pipeline-boundary/);
   assert.match(nextConfigSource, /devIndicators:\s*false/);
   assert.doesNotMatch(globalsSource, /nextjs-portal[\s\S]*display: none !important/);
   assert.match(nextConfigSource + (await readFile(new URL("../playwright.config.ts", import.meta.url), "utf8")), /PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS/);
 });
 
+test("real WorkPacket projection proof artifact is metadata-only and non-fixture", async () => {
+  const proofSource = await readFile(realWorkPacketProofPath, "utf8");
+  const proof = JSON.parse(proofSource);
+
+  assert.equal(proof.schemaVersion, "pipeline-real-workpacket-proof/v0");
+  assert.equal(proof.story, "2.4-real-workpacket-backend-proof-path");
+  assert.equal(proof.backendEndpoint, "/pipeline-control-plane/projection");
+  assert.equal(proof.packetId, "packet-story-2-4-real-proof");
+  assert.equal(proof.projectionSourceLabel, "live");
+  assert.equal(proof.projectionFreshnessState, "live");
+  assert.equal(proof.fixtureMode.enabled, false);
+  assert.equal(proof.fixtureMode.canSatisfyLiveProof, false);
+  assert.equal(proof.truthSummary.fixtureBacked, false);
+  assert.equal(proof.truthSummary.backendUnavailable, false);
+  assert.equal(proof.truthSummary.stale, false);
+  assert.deepEqual(proof.evidenceRefs, ["proof:pipeline-real-workpacket", "story:2-4"]);
+  assert.equal(proof.selectedPacketDetailsSource, "PipelineDashboardProjectionV0.selectedPacketDetails");
+  assert.equal(proof.retention.metadataOnly, true);
+  assert.equal(proof.retention.rawProviderPayloadsRetained, false);
+  assert.equal(proof.retention.rawPromptsRetained, false);
+  assert.equal(proof.retention.rawCompletionsRetained, false);
+  assert.equal(proof.retention.terminalScrollbackRetained, false);
+  assert.equal(proof.liveProofCannotUseFixtures, true);
+  assert.ok(proof.verificationCommands.includes("uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -k pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_states"));
+  assert.ok(proof.verificationCommands.includes("node --test tests/dashboard-pipeline-fixtures.test.mjs"));
+  assert.ok(proof.verificationCommands.some((command) => command.includes("playwright test tests/e2e/dashboard.spec.ts") && command.includes("opens real backend WorkPacket projection detail after dashboard refresh")));
+  assert.ok(proof.verificationResults.every((result) => result.status === "passed"));
+  assert.ok(proof.verificationResults.some((result) => result.command === "pnpm run build:dashboard" && result.sandbox === "outside-sandbox"));
+  assert.ok(proof.verificationResults.some((result) => result.command.includes("playwright test tests/e2e/dashboard.spec.ts") && result.browser === "windows-11-chromium"));
+  assert.doesNotMatch(proofSource, /"(rawPrompt|rawCompletion|reasoningTrace|providerPayload|rawProviderPayload|sourceContent)"\s*:/i);
+  assert.doesNotMatch(proofSource, /sk-[A-Za-z0-9]|bearer\s+[A-Za-z0-9]|authorization:\s*[^",}\]]|password\s*[:=]|secret\s*[:=]/i);
+});
+
+test("fixture-as-live regressions are blocked by explicit projection truth predicates", async () => {
+  const cockpitSource = await readFile(cockpitPath, "utf8");
+  const supervisorLibSource = await readFile(supervisorLibPath, "utf8");
+  const contractSource = await readFile(pipelineContractPath, "utf8");
+  const projectionTruthSource = await readFile(projectionTruthPath, "utf8");
+  const activeBoardViewModelSource = await readFile(activeBoardViewModelPath, "utf8");
+  const activeBoardViewModelModule = loadActiveBoardViewModelModule(activeBoardViewModelSource);
+  const {
+    projectionDisplayLabels,
+    projectionHasRenderableBackendPackets,
+    projectionLiveProofLabel,
+    projectionLiveProofState,
+  } = loadProjectionTruthModule(projectionTruthSource);
+  const { PipelineCockpit } = loadPipelineCockpitModule(cockpitSource, {
+    projectionDisplayLabels,
+    projectionHasRenderableBackendPackets,
+    projectionLiveProofLabel,
+    projectionLiveProofState,
+  }, activeBoardViewModelModule);
+  const react = dashboardRequire("react");
+  const reactDomServer = dashboardRequire("react-dom/server");
+
+  const packetProjectionMapper = sourceBetween(
+    cockpitSource,
+    "function projectionToCockpitPackets",
+    "function projectionSourceForPackets"
+  );
+  const liveProofHelper = sourceBetween(
+    projectionTruthSource,
+    "export function projectionLiveProofState",
+    "export function projectionDisplayLabels"
+  );
+  const displayLabelsHelper = sourceBetween(
+    projectionTruthSource,
+    "export function projectionDisplayLabels",
+    "export function projectionIsLiveForProof"
+  );
+
+  assert.match(packetProjectionMapper, /if \(!projection\)[\s\S]*return fallbackPackets;/);
+  assert.match(packetProjectionMapper, /projectionHasRenderableBackendPackets\(projection\)/);
+  assert.match(packetProjectionMapper, /refreshUnavailable \? "unavailable" : proofSource/);
+  assert.match(packetProjectionMapper, /refreshUnavailable \? "unavailable" : proofFreshness/);
+  assert.match(packetProjectionMapper, /packetIsLive = projectionIsLive && packet\.truthLabel === "live"/);
+  assert.match(packetProjectionMapper, /packetIsLive[\s\S]*\? "live backend proof"[\s\S]*not live proof: packet/);
+  assert.match(packetProjectionMapper, /fixtureLabel:[\s\S]*backend projection: packet truth live[\s\S]*dashboard proof/);
+  assert.match(packetProjectionMapper, /confidenceScore: packetIsLive \? 0\.86 : 0\.42/);
+
+  for (const requiredLiveBlocker of [
+    /sourceLabel !== "live"/,
+    /freshnessState !== "live"/,
+    /projection\.truthSummary\.label !== "live"/,
+    /projection\.truthSummary\.backendEmpty === true/,
+    /projection\.truthSummary\.fixtureBacked === false/,
+    /projection\.truthSummary\.stale === false/,
+    /projection\.truthSummary\.backendUnavailable === false/,
+    /projection\.backendReachability\.state !== "reachable"/,
+    /projection\.fixtureMode\.enabled === false/,
+    /projection\.fixtureMode\.canSatisfyLiveProof === false/,
+  ]) {
+    assert.match(liveProofHelper, requiredLiveBlocker);
+  }
+
+  for (const requiredDowngrade of [
+    /failureReasons\.includes\("fixture_backed_truth"\)/,
+    /failureReasons\.includes\("backend_unavailable_truth"\)/,
+    /failureReasons\.includes\("stale_truth"\)/,
+    /case "fixture_backed_truth":/,
+    /case "fixture_mode_enabled":/,
+    /case "fixture_mode_contract_allows_live_proof":/,
+    /return \{ sourceLabel: "fixture", freshnessState: "unknown" \};/,
+    /case "stale_truth":[\s\S]*return \{ sourceLabel: "stale", freshnessState: "stale" \};/,
+    /case "backend_unavailable_truth":[\s\S]*return \{ sourceLabel: "unavailable", freshnessState: "unavailable" \};/,
+  ]) {
+    assert.match(displayLabelsHelper, requiredDowngrade);
+  }
+
+  assert.match(supervisorLibSource, /fixtureMode\.visibleLabelRequired === true/);
+  assert.match(supervisorLibSource, /fixtureMode\.canSatisfyLiveProof === false/);
+  assert.match(supervisorLibSource, /typeof truthSummary\.fixtureBacked === "boolean"/);
+  assert.match(supervisorLibSource, /typeof truthSummary\.stale === "boolean"/);
+  assert.match(supervisorLibSource, /typeof truthSummary\.backendUnavailable === "boolean"/);
+  assert.match(contractSource, /visibleLabelRequired:\s*true;/);
+  assert.match(contractSource, /canSatisfyLiveProof:\s*false;/);
+  assert.match(cockpitSource, /projectionHasRenderableBackendPackets/);
+  assert.match(cockpitSource, /projectionLiveProofState/);
+  assert.match(cockpitSource, /projectionDisplayLabels/);
+  assert.match(cockpitSource, /projectionLiveProofLabel/);
+  assert.doesNotMatch(cockpitSource, /ProjectionTruthChip label="Fixture mode"/);
+  assert.match(cockpitSource, /Open Diagnostics only when you need debug details/);
+  assert.doesNotMatch(cockpitSource, /Diagnostics contain proof, fixture, catalog, and manager internals when needed/);
+  assert.match(cockpitSource, /non-live fixture/);
+  assert.match(cockpitSource, /Fixture\/non-live packet; cannot satisfy live proof/);
+
+  const liveProjection = projectionFixture();
+  const liveProof = projectionLiveProofState(liveProjection, "live", "live");
+  assert.equal(projectionHasRenderableBackendPackets(liveProjection), true);
+  assert.equal(liveProof.canSatisfyLiveProof, true);
+  assert.equal(liveProof.failureReasons.length, 0);
+  assert.equal(projectionLiveProofLabel(liveProof), "live backend proof");
+  const liveDisplayLabels = projectionDisplayLabels(liveProjection, "live", "live", false, liveProof);
+  assert.equal(liveDisplayLabels.sourceLabel, "live");
+  assert.equal(liveDisplayLabels.freshnessState, "live");
+
+  const emptyProjection = projectionFixture({
+    generatedAt: "2099-01-01T00:00:00.000Z",
+    sourceUpdatedAt: "2099-01-01T00:00:00.000Z",
+    staleAfterSeconds: 60,
+    workPackets: [],
+    truthSummary: {
+      backendEmpty: true,
+      emptyReason: "healthy_empty",
+      summary: "Live backend projection has no WorkPackets.",
+    },
+    queueSummary: {
+      dispatchableCount: 0,
+      emptyReason: "healthy_empty",
+      summary: "No ready work.",
+    },
+  });
+  assert.equal(projectionHasRenderableBackendPackets(emptyProjection), false);
+  const emptyProof = projectionLiveProofState(emptyProjection, "live", "live");
+  assert.equal(emptyProof.canSatisfyLiveProof, false);
+  assert.equal(emptyProof.primaryReason, "backend_empty_truth");
+  assert.equal(projectionLiveProofLabel(emptyProof), "not live proof: backend empty");
+  const emptyProjectionHtml = reactDomServer.renderToStaticMarkup(react.createElement(PipelineCockpit, {
+    fixtureMode: {
+      label: "fixture fallback",
+      summary: "fixture fallback available for tests",
+      matrixRows: 0,
+      fixtureCatalogEntries: 1,
+    },
+    packets: [{ packetId: "fallback-fixture", title: "Fallback Fixture Should Not Render" }],
+    projection: emptyProjection,
+    projectionError: null,
+    selectedPacket: null,
+  }));
+  assert.doesNotMatch(emptyProjectionHtml, /not live proof: backend empty/);
+  assert.doesNotMatch(emptyProjectionHtml, /live backend proof/);
+  assert.match(emptyProjectionHtml, /Open Diagnostics only when you need debug details/);
+  assert.doesNotMatch(emptyProjectionHtml, /Fallback Fixture Should Not Render/);
+
+  const negativeCases = [
+    {
+      caseId: "backend-unavailable",
+      projection: projectionFixture({
+        sourceLabel: "unavailable",
+        freshnessState: "unavailable",
+        backendReachability: { state: "unavailable", reason: "backend_unavailable" },
+        truthSummary: {
+          label: "unavailable",
+          backendUnavailable: true,
+          emptyReason: "backend_unavailable",
+          summary: "Backend unavailable.",
+        },
+      }),
+      sourceLabel: "unavailable",
+      freshnessState: "unavailable",
+      expectedPrimaryReason: "source_not_live",
+      expectedDisplayLabels: { sourceLabel: "unavailable", freshnessState: "unavailable" },
+    },
+    {
+      caseId: "stale-projection",
+      projection: projectionFixture({
+        sourceLabel: "stale",
+        freshnessState: "stale",
+        truthSummary: {
+          label: "stale",
+          stale: true,
+          emptyReason: "projection_stale",
+          summary: "Projection stale.",
+        },
+      }),
+      sourceLabel: "stale",
+      freshnessState: "stale",
+      expectedPrimaryReason: "source_not_live",
+      expectedDisplayLabels: { sourceLabel: "stale", freshnessState: "stale" },
+    },
+    {
+      caseId: "fixture-backed-truth",
+      projection: projectionFixture({
+        truthSummary: {
+          fixtureBacked: true,
+          summary: "Fixture-backed projection.",
+        },
+      }),
+      sourceLabel: "live",
+      freshnessState: "live",
+      expectedPrimaryReason: "fixture_backed_truth",
+      expectedDisplayLabels: { sourceLabel: "fixture", freshnessState: "unknown" },
+    },
+    {
+      caseId: "backend-reachability-unavailable-with-live-truth",
+      projection: projectionFixture({
+        backendReachability: { state: "unavailable", reason: "backend_unavailable" },
+      }),
+      sourceLabel: "live",
+      freshnessState: "live",
+      expectedPrimaryReason: "backend_unavailable_truth",
+      expectedDisplayLabels: { sourceLabel: "unavailable", freshnessState: "unavailable" },
+    },
+    {
+      caseId: "fixture-mode-enabled",
+      projection: projectionFixture({
+        fixtureMode: {
+          enabled: true,
+          reason: "development fixture mode",
+          allowedForEnvironment: true,
+        },
+      }),
+      sourceLabel: "live",
+      freshnessState: "live",
+      expectedPrimaryReason: "fixture_mode_enabled",
+      expectedDisplayLabels: { sourceLabel: "fixture", freshnessState: "unknown" },
+    },
+    {
+      caseId: "fixture-contract-invalid",
+      projection: projectionFixture({
+        fixtureMode: {
+          canSatisfyLiveProof: true,
+        },
+      }),
+      sourceLabel: "live",
+      freshnessState: "live",
+      expectedPrimaryReason: "fixture_mode_contract_allows_live_proof",
+      expectedDisplayLabels: { sourceLabel: "fixture", freshnessState: "unknown" },
+    },
+    {
+      caseId: "activity-theater-does-not-upgrade-fixture",
+      projection: projectionFixture({
+        truthSummary: {
+          fixtureBacked: true,
+          summary: "Fixture-backed projection with activity theater.",
+        },
+        managerSummary: {
+          activeLeaseCount: 99,
+          activeWorkerCount: 99,
+          warmWorkerCount: 99,
+          dispatchableQueueCount: 99,
+        },
+        queueSummary: {
+          dispatchableCount: 99,
+          blockedCount: 0,
+          closedCount: 0,
+        },
+      }),
+      sourceLabel: "live",
+      freshnessState: "live",
+      expectedPrimaryReason: "fixture_backed_truth",
+      expectedDisplayLabels: { sourceLabel: "fixture", freshnessState: "unknown" },
+    },
+    {
+      caseId: "mixed-fixture-backed-stale-still-displays-fixture",
+      projection: projectionFixture({
+        freshnessState: "stale",
+        truthSummary: {
+          fixtureBacked: true,
+          stale: true,
+          summary: "Fixture-backed stale projection.",
+        },
+      }),
+      sourceLabel: "live",
+      freshnessState: "stale",
+      expectedPrimaryReason: "freshness_not_live",
+      expectedDisplayLabels: { sourceLabel: "fixture", freshnessState: "unknown" },
+    },
+    {
+      caseId: "mixed-fixture-mode-unavailable-still-displays-fixture",
+      projection: projectionFixture({
+        sourceLabel: "unavailable",
+        freshnessState: "unavailable",
+        backendReachability: { state: "unavailable", reason: "backend_unavailable" },
+        fixtureMode: {
+          enabled: true,
+          reason: "development fixture fallback",
+          allowedForEnvironment: true,
+        },
+        truthSummary: {
+          label: "unavailable",
+          backendUnavailable: true,
+          emptyReason: "backend_unavailable",
+          summary: "Unavailable projection with fixture fallback enabled.",
+        },
+      }),
+      sourceLabel: "unavailable",
+      freshnessState: "unavailable",
+      expectedPrimaryReason: "source_not_live",
+      expectedDisplayLabels: { sourceLabel: "fixture", freshnessState: "unknown" },
+    },
+  ];
+
+  for (const { caseId, expectedDisplayLabels, expectedPrimaryReason, freshnessState, projection, sourceLabel } of negativeCases) {
+    const state = projectionLiveProofState(projection, sourceLabel, freshnessState);
+    assert.equal(state.canSatisfyLiveProof, false, `${caseId} cannot satisfy live proof`);
+    assert.equal(state.primaryReason, expectedPrimaryReason, `${caseId} primary reason`);
+    assert.notEqual(projectionLiveProofLabel(state), "live backend proof", `${caseId} proof label`);
+    const displayLabels = projectionDisplayLabels(projection, sourceLabel, freshnessState, false, state);
+    assert.equal(displayLabels.sourceLabel, expectedDisplayLabels.sourceLabel, `${caseId} source display label`);
+    assert.equal(displayLabels.freshnessState, expectedDisplayLabels.freshnessState, `${caseId} freshness display label`);
+  }
+
+  assert.doesNotMatch(
+    liveProofHelper,
+    /worker|lease|activeLeaseCount|activeWorkerCount|warmWorkerCount|token|usage|tmux|terminal|route-line|pipeline-route|packetCount|workPackets\.length|packets\.length|fixtureCatalogEntries|matrixRows/i,
+    "live proof must depend on projection source/freshness/truth, not activity theater"
+  );
+  assert.doesNotMatch(
+    packetProjectionMapper,
+    /activeLeaseCount|activeWorkerCount|warmWorkerCount|token|usage|tmux|terminal|route-line|pipeline-route|fixtureCatalogEntries|matrixRows/i,
+    "packet projection mapping must not use activity-theater signals to upgrade proof"
+  );
+  assert.doesNotMatch(
+    displayLabelsHelper,
+    /worker|lease|activeLeaseCount|activeWorkerCount|warmWorkerCount|token|usage|tmux|terminal|route-line|pipeline-route|packetCount|workPackets\.length|packets\.length|fixtureCatalogEntries|matrixRows/i,
+    "display truth labels must not be upgraded by worker, token, route-line, terminal, packet-count, or fixture-catalog signals"
+  );
+});
+
 test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fallback", async () => {
   const routeSource = await readFile(routePath, "utf8");
   const packetDetailRouteSource = await readFile(packetDetailRoutePath, "utf8");
-  const pipelinePacketLoaderSource = await readFile(pipelinePacketLoaderPath, "utf8");
   const settingsRouteSource = await readFile(settingsRoutePath, "utf8");
   const settingsUsageVisibilitySource = await readFile(settingsUsageVisibilityPath, "utf8");
   const layoutSource = await readFile(layoutPath, "utf8");
   const packetDetailSource = await readFile(packetDetailPath, "utf8");
   const cockpitSource = await readFile(cockpitPath, "utf8");
   const fixtureSource = await readFile(fixturesPath, "utf8");
+  const supervisorLibSource = await readFile(supervisorLibPath, "utf8");
+  const contractSource = await readFile(pipelineContractPath, "utf8");
+  const projectionTruthSource = await readFile(projectionTruthPath, "utf8");
+  const activeBoardViewModelSource = await readFile(activeBoardViewModelPath, "utf8");
+  const managerExecutionLaneSummarySource = await readFile(managerExecutionLaneSummaryPath, "utf8");
   const globalsSource = await readFile(globalsPath, "utf8");
   const shellSource = await readFile(shellPath, "utf8");
   const graphBackgroundSource = await readFile(graphBackgroundPath, "utf8");
@@ -83,7 +712,17 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   const pipelineComponentSource = (
     await Promise.all(componentFiles.map((file) => readFile(new URL(file, pipelineComponentsPath), "utf8")))
   ).join("\n");
-  const allPipelineSource = `${routeSource}\n${packetDetailRouteSource}\n${pipelinePacketLoaderSource}\n${fixtureSource}\n${pipelineComponentSource}`;
+  const allPipelineSource = `${routeSource}\n${packetDetailRouteSource}\n${fixtureSource}\n${managerExecutionLaneSummarySource}\n${pipelineComponentSource}`;
+  const projectionImplementationSource = `${cockpitSource}\n${projectionTruthSource}`;
+  const defaultDashboardSurfaceSource = [
+    extractFunctionSource(cockpitSource, "ProjectionTruthSummary"),
+    extractFunctionSource(cockpitSource, "MissionControlStrip"),
+    extractFunctionSource(cockpitSource, "OperationalStrip"),
+    extractFunctionSource(cockpitSource, "RouteStation"),
+    extractFunctionSource(cockpitSource, "PacketMiniCard"),
+  ].join("\n");
+  const pipelinePacketLoaderSource = await readFile(pipelinePacketLoaderPath, "utf8");
+  const pipelineImportGraph = await collectRelativeImportGraph(routePath, { terminalUrls: [shellPath, supervisorLibPath] });
 
   assert.match(routeSource, /<Shell\b/);
   assert.match(routeSource, /<Shell\b[^>]*realtimeRefresh=\{false\}[^>]*wide/);
@@ -106,21 +745,276 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(layoutSource, /data-scroll-behavior="smooth"/);
   assert.match(routeSource, /PipelineCockpit/);
   assert.match(routeSource, /loadPipelineCockpitPackets/);
-  assert.match(routeSource, /fixtureMode=\{fixtureMode\}/);
-  assert.match(pipelinePacketLoaderSource, /getWorkPackets/);
-  assert.match(pipelinePacketLoaderSource, /projectSupervisorWorkPacketsToCockpitPackets/);
-  assert.match(pipelinePacketLoaderSource, /pipelineCockpitPackets/);
-  assert.doesNotMatch(pipelinePacketLoaderSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence|pipeline-evidence-source/);
-  assert.match(pipelinePacketLoaderSource, /catch/);
-  assert.match(pipelinePacketLoaderSource, /Supervisor packets/);
-  assert.match(pipelinePacketLoaderSource, /Supervisor unavailable/);
-  assert.doesNotMatch(routeSource, /getRunStatus|getWorkItems|fetch\s*\(/);
+  assert.match(routeSource, /projection=\{projection\}/);
+  assert.match(routeSource, /projectionError=\{projectionError\}/);
+  assert.match(routeSource, /selectedManagerExecutionLaneSummary/);
+  assert.match(routeSource, /managerExecutionLane=\{selectedManagerExecutionLaneSummary\}/);
+  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/app/pipeline/page.tsx"));
+  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/components/shell.tsx"));
+  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/components/pipeline/pipeline-cockpit.tsx"));
+  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/lib/supervisor.ts"));
+  assert.ok(pipelineImportGraph.files.includes("apps/dashboard/src/lib/pipeline/manager-execution-lane-summary.ts"));
+  assert.equal(
+    pipelineImportGraph.files.filter((path) => /(^|\/)(scripts|services\/supervisor|packages\/workflow-core\/src\/manager-control-plane|scripts\/lib\/manager-control-plane)(\/|$)/.test(path)).length,
+    0,
+    "/pipeline import graph should not reach manager runtime, dispatcher, scripts, or supervisor source"
+  );
+  assert.doesNotMatch(
+    pipelineImportGraph.sources,
+    /from\s+["'](?:node:child_process|child_process|openai|@anthropic|undici|axios)["']|import\s*\(\s*["'](?:openai|@anthropic|undici|axios)["']|tmux\s+send|tmux\s+capture|gh\s+pr|gh\s+api|EventSource|WebSocket|XMLHttpRequest|sendBeacon/i,
+    "/pipeline import graph should only use the supervisor projection read path and avoid runtime transports"
+  );
+  assert.doesNotMatch(routeSource, /getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
+  assert.match(cockpitSource, /ProjectionTruthSummary/);
+  for (const bannedDefaultSurfacePattern of [
+    /route id/i,
+    /attempt id/i,
+    /raw evidence ref/i,
+    /metadataOnly/,
+    /projection detail from backend/i,
+    /Manager Execution Lane/,
+    /full five-whys/i,
+    /sourceRefs/,
+    /evidenceRefs/,
+  ]) {
+    assert.doesNotMatch(defaultDashboardSurfaceSource, bannedDefaultSurfacePattern);
+  }
+  assert.match(defaultDashboardSurfaceSource, /Ready to test packet/);
+  assert.match(defaultDashboardSurfaceSource, /pipeline-mini-packet-ready/);
+  assert.match(defaultDashboardSurfaceSource, /Stale history/);
+  assert.match(defaultDashboardSurfaceSource, /Diagnostics/);
+  assert.match(cockpitSource, /buildPipelineActiveBoardViewModel/);
+  assert.match(cockpitSource, /activeBoardViewModel\.activeBoard\.stageLanes/);
+  assert.match(cockpitSource, /activeBoardCard/);
+  assert.match(cockpitSource, /!currentProjection\?\.workPackets\.some/);
+  assert.match(cockpitSource, /!currentProjection\?\.selectedPacketDetails\.some/);
+  assert.match(pipelinePacketLoaderSource, /getPipelineDashboardProjection/);
+  assert.match(pipelinePacketLoaderSource, /projectionError: projectionResult\.error/);
+  assert.doesNotMatch(cockpitSource, /getPipelineDashboardProjection|window\.setInterval\(refreshProjection, 15_000\)|setCurrentProjection\(nextProjection\)/);
+  assert.match(cockpitSource, /projectionToCockpitPackets/);
+  assert.match(cockpitSource, /projectionToCockpitPackets\(currentProjection, packets, currentProjectionError, activeBoardViewModel\)/);
+  assert.match(activeBoardViewModelSource, /derivePacketPlacement/);
+  assert.match(activeBoardViewModelSource, /derivePacketActionability/);
+  assert.match(cockpitSource, /refreshUnavailable = Boolean\(projectionError\)/);
+  assert.match(cockpitSource, /refreshUnavailable \? "unavailable" : proofSource/);
+  assert.match(cockpitSource, /refreshUnavailable \? "unavailable" : proofFreshness/);
+  assert.match(cockpitSource, /projectionIsLive = projectionLiveProof\.canSatisfyLiveProof/);
+  assert.match(cockpitSource, /effectiveLabels = projectionDisplayLabels\(projection, proofSource, proofFreshness, refreshUnavailable, projectionLiveProof\)/);
+  assert.match(cockpitSource, /stageSummaryByStage/);
+  assert.match(cockpitSource, /buildStageSummaryByStage/);
+  assert.match(cockpitSource, /buildStageSummaryByStage\(currentProjection, currentProjectionError\)/);
+  assert.match(cockpitSource, /stageSummary=\{stageSummaryByStage\.get\(stage\)/);
+  assert.match(cockpitSource, /projectionAvailable=\{Boolean\(currentProjection\)\}/);
+  assert.doesNotMatch(cockpitSource, /stageProjectionCount/);
+  assert.match(cockpitSource, /stageRenderedCount = sortedPackets\.length/);
+  assert.match(cockpitSource, /stageKnownTotalCount = stageRenderedCount/);
+  assert.match(cockpitSource, /unknown packets/);
+  assert.match(cockpitSource, /searchActive/);
+  assert.match(cockpitSource, /No matching packets in this stage/);
+  assert.match(cockpitSource, /Packet details unavailable in projection/);
+  assert.match(cockpitSource, /Stage health/);
+  assert.match(cockpitSource, /stageHealthStateLabel/);
+  assert.match(cockpitSource, /normalizeStageEmptyReason/);
+  assert.match(cockpitSource, /healthy empty/);
+  assert.match(cockpitSource, /source exhausted/);
+  assert.match(cockpitSource, /blocked/);
+  assert.match(cockpitSource, /refilling/);
+  assert.match(cockpitSource, /unknown/);
+  assert.match(cockpitSource, /backend unavailable/);
+  assert.match(cockpitSource, /projection stale/);
+  assert.match(cockpitSource, /fixture fallback/);
+  assert.match(cockpitSource, /Stage source/);
+  assert.match(cockpitSource, /Stage freshness/);
+  assert.match(cockpitSource, /Stage count/);
+  assert.match(cockpitSource, /stageButtonRefs\.current\.get\(stage\)\?\.focus\(\)/);
+  assert.match(cockpitSource, /stageAnchorRefs\.current\.get\(stage\)/);
+  assert.match(cockpitSource, /stageAnchorRefs\.current\.forEach\(\(node\) => observer\.observe\(node\)\)/);
+  assert.match(cockpitSource, /stageStationRefs\.current\.forEach\(\(node\) => observer\.observe\(node\)\)/);
+  assert.match(cockpitSource, /className="pipeline-route-anchor"/);
+  assert.doesNotMatch(cockpitSource, /\[updateConnectorPaths, visiblePackets\.length\]/);
+  assert.match(cockpitSource, /fixtureKind: "future-real-source"/);
+  assert.match(cockpitSource, /fixtureLabel:\s+packetIsLive\s+\?\s+"backend projection: packet truth live"/);
+  assert.match(cockpitSource, /: `backend projection: packet truth \$\{packet\.truthLabel\}; dashboard proof \$\{packetProofLabel\}`/);
+  assert.match(cockpitSource, /managerExecutionLane\?\.operatorAttentionRequired \? <ManagerAttentionSummary lane=\{managerExecutionLane\} \/> : null/);
+  assert.match(cockpitSource, /managerExecutionLane \? \([\s\S]*<ManagerExecutionLane lane=\{managerExecutionLane\} \/>/);
+  assert.match(cockpitSource, /aria-label="Projection truth summary"/);
+  assert.match(cockpitSource, /ProjectionTruthChip label="Projection"/);
+  assert.match(cockpitSource, /Backend/);
+  assert.doesNotMatch(cockpitSource, /ProjectionTruthChip label="Fixture mode"/);
+  assert.match(cockpitSource, /refresh unavailable; last-known/);
+  assert.match(cockpitSource, /last-known backend projection/);
+  assert.match(cockpitSource, /Backend projection refresh unavailable/);
+  assert.match(cockpitSource, /fixture fallback only and does not prove live backend work/);
+  assert.match(cockpitSource, /isProjectionTooOld/);
+  assert.doesNotMatch(cockpitSource, /projectionRefreshAttemptAt|projectionRequestSequenceRef|requestSequence !== projectionRequestSequenceRef\.current/);
+  assert.match(pipelinePacketLoaderSource, /loadPipelineDashboardProjection/);
+  assert.match(pipelinePacketLoaderSource, /error: error instanceof Error \? error\.message : "Projection fetch failed\."/);
+  assert.match(cockpitSource, /projectionSourceForPackets/);
+  assert.match(cockpitSource, /projectionFreshnessForPackets/);
+  assert.match(cockpitSource, /projectionLiveProofState/);
+  assert.match(cockpitSource, /projectionDisplayLabels/);
+  assert.match(projectionTruthSource, /projectionIsLiveForProof/);
+  assert.doesNotMatch(cockpitSource, /ProjectionTruthChip label="Live proof"/);
+  assert.match(projectionImplementationSource, /live backend proof/);
+  assert.match(projectionTruthSource, /not live proof: no projection/);
+  assert.match(projectionTruthSource, /not live proof: source not live/);
+  assert.match(projectionTruthSource, /not live proof: freshness not live/);
+  assert.match(projectionTruthSource, /not live proof: truth label not live/);
+  assert.match(projectionTruthSource, /not live proof: backend empty/);
+  assert.match(projectionTruthSource, /not live proof: fixture backed/);
+  assert.match(projectionTruthSource, /not live proof: stale/);
+  assert.match(projectionTruthSource, /not live proof: backend unavailable/);
+  assert.match(projectionTruthSource, /not live proof: fixture mode enabled/);
+  assert.match(projectionTruthSource, /not live proof: fixture contract invalid/);
+  assert.doesNotMatch(cockpitSource, /packetCountLabel = projectionError \|\| !projectionIsLive/);
+  assert.match(cockpitSource, /packetIsLive = projectionIsLive && packet\.truthLabel === "live"/);
+  assert.match(cockpitSource, /packetProofLabel = packetIsLive/);
+  assert.match(cockpitSource, /confidenceScore: packetIsLive \? 0\.86 : 0\.42/);
+  assert.match(cockpitSource, /confidenceLabel: packetIsLive \? "backend projection" : `\$\{packetSourceLabel\} \$\{packetFreshness\} projection; \$\{packetProofLabel\}`/);
+  assert.match(cockpitSource, /fixtureLabel:\s+packetIsLive\s+\?\s+"backend projection: packet truth live"/);
+  assert.match(cockpitSource, /: `backend projection: packet truth \$\{packet\.truthLabel\}; dashboard proof \$\{packetProofLabel\}`/);
+  assert.match(projectionTruthSource, /projection\.truthSummary\.fixtureBacked === false/);
+  assert.match(projectionTruthSource, /projection\.truthSummary\.backendEmpty === true/);
+  assert.match(projectionTruthSource, /projection\.truthSummary\.stale === false/);
+  assert.match(projectionTruthSource, /projection\.truthSummary\.backendUnavailable === false/);
+  assert.match(projectionTruthSource, /projection\.backendReachability\.state !== "reachable"/);
+  assert.match(projectionTruthSource, /projection\.fixtureMode\.enabled === false/);
+  assert.match(projectionTruthSource, /projection\.fixtureMode\.canSatisfyLiveProof === false/);
+  assert.match(cockpitSource, /sourceTrustStates: \[sourceTrustState\]/);
+  assert.match(cockpitSource, /projectionSourceFreshness\(sourceLabel, freshnessState\)/);
+  assert.match(cockpitSource, /sourceLabel === "live" && freshnessState === "live"/);
+  assert.match(cockpitSource, /arrivalLabel\(packet\)/);
+  assert.match(cockpitSource, /From backend projection metadata/);
+  assert.match(cockpitSource, /packet\.fixtureId\.startsWith\("projection:"\)/);
+  assert.match(cockpitSource, /selectedProjectionDetail/);
+  assert.match(cockpitSource, /currentProjection\?\.selectedPacketDetails\.find/);
+  assert.match(cockpitSource, /projectionDetailSourceRefs/);
+  assert.match(cockpitSource, /projectionDetailEvidenceRefs/);
+  assert.doesNotMatch(cockpitSource, /detail && detail\.sourceRefs\.length > 0/);
+  assert.doesNotMatch(cockpitSource, /owner\/session unavailable/);
+  assert.doesNotMatch(cockpitSource, /quality state unknown/);
+  assert.doesNotMatch(cockpitSource, /authority needs unknown/);
+  assert.match(cockpitSource, /ready to test/);
+  assert.match(cockpitSource, /testability unknown/);
+  assert.match(cockpitSource, /Selected packet is no longer present in the latest projection/);
+  assert.match(cockpitSource, /ProjectionDetailUnavailableInspection/);
+  assert.match(cockpitSource, /Selected detail unavailable in latest projection/);
+  assert.match(cockpitSource, /selectedMapPacket\?\.fixtureId\.startsWith\("projection:"\) && !selectedProjectionDetail/);
+  assert.match(cockpitSource, /projectionDetailStageLabel\(projectionDetail, packet\)/);
+  assert.match(cockpitSource, /projectionDetailTruthLabel\(projectionDetail, packet, projectionRefreshLabel\)/);
+  assert.match(cockpitSource, /truth \$\{detail\.truthLabel\}; source \$\{freshnessLabel\}/);
+  assert.match(cockpitSource, /projection detail from backend selectedPacketDetails/);
+  assert.match(cockpitSource, /Close Packet Detail/);
+  assert.match(cockpitSource, /focusPanelReturnTarget\(selectedPacketReturnFocusRef\.current\)/);
+  assert.match(cockpitSource, /registerPacketButton/);
+  assert.match(cockpitSource, /selectedDetailOnlyPacket/);
+  assert.match(cockpitSource, /projectionWorkPacketToDetailOnlyCockpitPacket/);
+  assert.match(cockpitSource, /Stale History \{activeBoardViewModel\?\.staleHistory\.count \?\? 0\}/);
+  assert.match(cockpitSource, /staleHistoryOpen && activeBoardViewModel \? \(/);
+  assert.match(cockpitSource, /function StaleHistoryPanel/);
+  assert.match(cockpitSource, /Historical packets are inspection context only/);
+  assert.match(cockpitSource, /Last known state/);
+  assert.match(cockpitSource, /Stale reason/);
+  assert.match(cockpitSource, /Inspect action/);
+  assert.match(cockpitSource, /Inspect stale packet/);
+  assert.match(cockpitSource, /Diagnostics Panel/);
+  assert.match(cockpitSource, /diagnosticsOpen \? \(/);
+  assert.match(cockpitSource, /useState\(false\)/);
+  assert.match(cockpitSource, /Debug metadata and projection proof/);
+  assert.match(cockpitSource, /Diagnostics are opt-in/);
+  assert.match(cockpitSource, /metadata-only retention/);
+  assert.match(cockpitSource, /Projection evidence refs/);
+  assert.match(cockpitSource, /live proof \$\{projectionLiveProofLabel\(diagnosticsLiveProof\)\}/);
+  assert.match(cockpitSource, /DiagnosticCopyButton/);
+  assert.match(cockpitSource, /Manager internals/);
+  assert.match(cockpitSource, /data-pipeline-panel="packet-detail"/);
+  assert.match(cockpitSource, /data-pipeline-panel="stale-history"/);
+  assert.match(cockpitSource, /data-pipeline-panel="diagnostics"/);
+  assert.doesNotMatch(cockpitSource, /full backend packet pages are handled by the next real-detail story/);
+  assert.doesNotMatch(cockpitSource, /fallbackPackets\.length === 0/);
+  assert.match(cockpitSource, /staleAfterSeconds\) \|\| projection\.staleAfterSeconds <= 0/);
+  assert.doesNotMatch(cockpitSource, /active leases \$\{formatNullableCount\(projection\.managerSummary\.activeLeaseCount\)\}/);
+  assert.doesNotMatch(cockpitSource, /ManagerProjectionSummary/);
+  assert.doesNotMatch(cockpitSource, /aria-label="Manager projection summary"/);
+  assert.doesNotMatch(cockpitSource, /Manager source/);
+  assert.doesNotMatch(cockpitSource, /Manager freshness/);
+  const liveProofHelperMatch = projectionTruthSource.match(/export function projectionLiveProofState[\s\S]*?export function projectionIsLiveForProof/);
+  assert.ok(liveProofHelperMatch, "live-proof guardrail helper should exist");
+  const liveProofHelperSource = liveProofHelperMatch[0];
+  for (const requiredPredicate of [
+    /sourceLabel !== "live"/,
+    /freshnessState !== "live"/,
+    /projection\.truthSummary\.label !== "live"/,
+    /projection\.truthSummary\.backendEmpty === true/,
+    /projection\.truthSummary\.fixtureBacked === false/,
+    /projection\.truthSummary\.stale === false/,
+    /projection\.truthSummary\.backendUnavailable === false/,
+    /projection\.backendReachability\.state !== "reachable"/,
+    /projection\.fixtureMode\.enabled === false/,
+    /projection\.fixtureMode\.canSatisfyLiveProof === false/,
+  ]) {
+    assert.match(liveProofHelperSource, requiredPredicate);
+  }
+  assert.doesNotMatch(
+    liveProofHelperSource,
+    /worker|token|tmux|terminal|route-line|pipeline-route|packetCount|packets\.length|fixtureCatalogEntries|matrixRows/i,
+    "live proof must not depend on worker count, token usage, terminal state, route styling, packet count, or fixture catalog size"
+  );
+  assert.doesNotMatch(cockpitSource, /Active leases/);
+  assert.doesNotMatch(cockpitSource, /Active workers/);
+  assert.doesNotMatch(cockpitSource, /Warm workers/);
+  assert.doesNotMatch(cockpitSource, /Dispatchable queue/);
+  assert.doesNotMatch(cockpitSource, /Blocked queue/);
+  assert.doesNotMatch(cockpitSource, /Closed queue/);
+  assert.doesNotMatch(cockpitSource, /Source exhausted/);
+  assert.doesNotMatch(cockpitSource, /Primary inactivity reason/);
+  assert.doesNotMatch(cockpitSource, /Primary reason: \{primaryReason\}/);
+  assert.doesNotMatch(cockpitSource, /Manager inactivity reason: \$\{managerInactivityLabel\(manager\?\.inactivityReason \?\? null\)\}/);
+  assert.doesNotMatch(cockpitSource, /Backend reason: \$\{managerInactivityLabel\(projection\?\.backendReachability\.reason \?\? null\)\}/);
+  assert.doesNotMatch(cockpitSource, /managerPrimaryInactivityReason/);
+  assert.doesNotMatch(cockpitSource, /managerInactivityLabel/);
+  assert.match(cockpitSource, /isProjectionTooOld\(projection\)/);
+  assert.doesNotMatch(cockpitSource, /No ready work/);
+  assert.match(cockpitSource, /approval required/);
+  assert.match(cockpitSource, /usage limited/);
+  assert.match(cockpitSource, /resource limited/);
+  assert.match(cockpitSource, /backend unavailable/);
+  assert.match(cockpitSource, /projection stale/);
+  assert.match(cockpitSource, /cleanup gated/);
+  assert.match(cockpitSource, /failure budget hit/);
+  assert.match(cockpitSource, /failure budget hit/);
+  assert.match(cockpitSource, /Wait for failure budget recovery/);
+  assert.match(supervisorLibSource, /"failure_budget_hit"/);
+  assert.match(contractSource, /"failure_budget_hit"/);
+  assert.doesNotMatch(cockpitSource, /Degraded or unknown/);
+  assert.doesNotMatch(cockpitSource, /Manager summary is metadata-only and cannot authorize mutation/);
+  assert.doesNotMatch(cockpitSource, /key=\{`\$\{index\}:\$\{detail\}`\}/);
+  assert.match(cockpitSource, /aria-hidden="true" className="pipeline-empty-station/);
+  assert.doesNotMatch(cockpitSource, /formatNullableCount\(manager\.activeLeaseCount\)/);
+  assert.doesNotMatch(cockpitSource, /formatNullableCount\(manager\.activeWorkerCount\)/);
+  assert.doesNotMatch(cockpitSource, /formatNullableCount\(manager\.warmWorkerCount\)/);
+  assert.doesNotMatch(cockpitSource, /formatNullableCount\(queue\.dispatchableCount\)/);
+  assert.doesNotMatch(cockpitSource, /formatNullableCount\(queue\.blockedCount\)/);
+  assert.doesNotMatch(cockpitSource, /formatNullableCount\(queue\.closedCount\)/);
+  assert.doesNotMatch(cockpitSource, /tmux\s+capture|tmux\s+send|child_process|provider payload|raw worker transcript|raw prompt|sk-/i);
   assert.match(packetDetailRouteSource, /PacketDetailPage/);
   assert.match(packetDetailRouteSource, /<Shell\b[^>]*compactHeader[^>]*realtimeRefresh=\{false\}[^>]*wide/);
   assert.match(packetDetailRouteSource, /realtimeRefresh=\{false\}/);
   assert.match(packetDetailRouteSource, /generateStaticParams/);
-  assert.match(packetDetailRouteSource, /loadPipelineCockpitPackets/);
-  assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|fetch\s*\(/);
+  assert.doesNotMatch(packetDetailRouteSource + packetDetailSource, /lib\/supervisor|getRunStatus|getWorkItems|getWorkPackets|fetch\s*\(/);
+  assert.match(supervisorLibSource, /Malformed response for \$\{path\}/);
+  assert.match(supervisorLibSource, /Invalid projection payload/);
+  assert.match(supervisorLibSource, /isPipelineDashboardProjection/);
+  assert.match(supervisorLibSource, /projection\.workPackets\.every\(isProjectionWorkPacket\)/);
+  assert.match(supervisorLibSource, /isProjectionStage\(packet\.currentStage\)/);
+  assert.match(supervisorLibSource, /Array\.isArray\(packet\.evidenceRefs\)/);
+  assert.match(supervisorLibSource, /packet\.metadataOnly === true/);
+  assert.match(supervisorLibSource, /isFixtureMode\(projection\.fixtureMode\)/);
+  assert.match(supervisorLibSource, /isTruthSummary\(projection\.truthSummary\)/);
+  assert.match(supervisorLibSource, /isManagerSummary\(projection\.managerSummary\)/);
+  assert.match(supervisorLibSource, /isQueueSummary\(projection\.queueSummary\)/);
+  assert.match(supervisorLibSource, /fixtureMode\.visibleLabelRequired === true/);
+  assert.match(supervisorLibSource, /managerSummary\.metadataOnly === true/);
 
   for (const regionName of [
     "Refined pipeline cockpit frame",
@@ -133,6 +1027,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     "Pipeline status key",
     "Pipeline capacity strip",
     "Pipeline route map",
+    "Manager Execution Lane",
+    "Manager run summary strip",
     "Packet inspection panel",
     "Packet plain-language summary",
     "Packet detail",
@@ -142,9 +1038,367 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   ]) {
     assert.match(cockpitSource + packetDetailSource, new RegExp(`aria-label=["']${regionName}["']`));
   }
+  assert.match(cockpitSource, /function ManagerExecutionLane/);
+  for (const managerLabel of [
+    "Queue and lease table",
+    "Refill and bootstrap",
+    "Worker pool",
+    "Resource and usage",
+    "Authority and stop-line drawer",
+    "Evidence and Checkpoint Drawer",
+    "Allowed unattended operations",
+    "Preauthorization required",
+    "Blocked operations",
+    "Forbidden operations",
+    "Delivery controls unavailable",
+    "Missing contract: delivery_phase",
+    "PR creation",
+    "PR update",
+    "PR merge",
+    "Cleanup",
+    "Operator feedback routing",
+    "Feedback routes",
+    "Affected delivery gates",
+    "continue_unrelated_safe_lanes",
+    "metadata_only_feedback_record",
+    "Manager live status",
+    "Cleanup and takeover gates",
+    "Not dispatchable safe work",
+    "Gate reason",
+    "Why it matters",
+    "Next safe action",
+    "Worker launch is not implied",
+    "Cleanup gated, not source exhausted",
+    "Takeover gated, not implementation work",
+    "Manager compact status blocks",
+    "Liveness",
+    "Blockers",
+    "Checkpoint status",
+    "State chip raw state",
+    "role=\"table\"",
+    "role=\"row\"",
+    "role=\"cell\"",
+    "role=\"status\"",
+    "role=\"meter\"",
+    "aria-valuenow",
+    "pipeline-usage-meter-value",
+    "manager-execution-lane",
+    "manager-lane-row",
+    "manager-lane-block"
+  ]) {
+    assert.match(allPipelineSource, new RegExp(managerLabel));
+  }
+  assert.match(cockpitSource, /rawPayloadRetained/);
+  assert.doesNotMatch(cockpitSource, /<section\s+aria-label="Manager Execution Lane"[\s\S]{0,240}aria-live=/);
+  assert.match(cockpitSource, /aria-label="Manager live status"/);
+  assert.match(cockpitSource, /role=\{lane\.operatorAttentionRequired \? "alert" : "status"\}/);
+  assert.match(cockpitSource, /function UsageMeterRow/);
+  assert.match(cockpitSource, /const percent = clampPercent\(meter\.percent\)/);
+  assert.match(cockpitSource, /aria-label=\{`\$\{item\.provider\} \$\{meter\.label\} usage \$\{percent\}%`\}/);
+  assert.match(cockpitSource, /aria-label=\{`\$\{title\} row \$\{row\.label\}: \$\{row\.id\}; backend state \$\{row\.rawState\}; next \$\{row\.nextAction\}`\}/);
+  assert.match(cockpitSource, /details\.contains\(target\)/);
+  assert.match(cockpitSource, /aria-live="polite"/);
+  assert.match(cockpitSource, /Delivery, cleanup, retry, worker launch, tmux, provider, GitHub, and supervisor actions stay unavailable/);
+  assert.match(cockpitSource, /function ManagerCleanupTakeoverGates/);
+  assert.match(cockpitSource, /cleanupTakeoverGateRows\(lane\)/);
+  assert.match(cockpitSource, /cleanup_stewardship/);
+  assert.match(cockpitSource, /stale owner/);
+  assert.match(cockpitSource, /dirty workspace/);
+  assert.match(cockpitSource, /cleanup partial/);
+  assert.match(cockpitSource, /cleanup ready/);
+  assert.match(cockpitSource, /blocked cleanup target/);
+  assert.match(cockpitSource, /not counted as dispatchable safe work/);
+  assert.match(cockpitSource, /gateDispatchableCountLabel/);
+  assert.match(cockpitSource, /safeWorkAvailableCount/);
+  assert.match(cockpitSource, /kind: "cleanup"/);
+  assert.match(cockpitSource, /kind: "takeover"/);
+  assert.match(cockpitSource, /row\.kind === "takeover" \? "Takeover gated, not implementation work" : "Cleanup gated, not source exhausted"/);
+  assert.doesNotMatch(cockpitSource, /row\.label\.includes\("Takeover"\)/);
+  assert.match(cockpitSource, /const hasCleanupGate = \/cleanup/);
+  assert.doesNotMatch(cockpitSource, /if \(cleanupOperation \|\|/);
+  const cleanupGateHelperMatch = cockpitSource.match(/function cleanupTakeoverGateRows[\s\S]*?function cleanupGateLabel/);
+  assert.ok(cleanupGateHelperMatch, "cleanup/takeover gate helper should exist");
+  assert.doesNotMatch(cleanupGateHelperMatch[0], /setSelectedItem|onClick=\{|fetch\s*\(|navigator\.clipboard|tmux|child_process|rm\s+-|git\s+worktree\s+remove/i);
+  assert.match(globalsSource, /\.pipeline-usage-meter-value/);
+  assert.match(globalsSource, /prefers-reduced-motion: reduce[\s\S]*\.manager-execution-lane/);
+  assert.match(globalsSource, /prefers-reduced-motion: reduce[\s\S]*\.manager-lane-row:hover/);
+  assert.match(globalsSource, /max-width: 720px[\s\S]*\.manager-execution-lane[\s\S]*overflow-wrap: anywhere/);
+  assert.match(managerExecutionLaneSummarySource, /projectManagerExecutionLaneSummary/);
+  assert.match(managerExecutionLaneSummarySource, /ManagerExecutionLaneSummary/);
+  assert.match(managerExecutionLaneSummarySource, /run-manager-empty/);
+  assert.match(managerExecutionLaneSummarySource, /run-manager-refilling/);
+  assert.match(managerExecutionLaneSummarySource, /run-manager-only/);
+  assert.match(managerExecutionLaneSummarySource, /run-manager-blocked/);
+  assert.match(managerExecutionLaneSummarySource, /run-manager-delivery-unavailable/);
+  assert.match(managerExecutionLaneSummarySource, /run-manager-source-exhausted/);
+  assert.match(managerExecutionLaneSummarySource, /run-manager-resource-critical/);
+  assert.match(managerExecutionLaneSummarySource, /run-manager-recovery/);
+  assert.match(managerExecutionLaneSummarySource, /source_exhausted/);
+  assert.match(managerExecutionLaneSummarySource, /split_brain_recovery/);
+  assert.match(managerExecutionLaneSummarySource, /resource_critical/);
+  assert.match(managerExecutionLaneSummarySource, /delivery_unavailable/);
+  assert.match(managerExecutionLaneSummarySource, /fixtureBacked: summary\.stateSource === "fixture"/);
+  assert.doesNotMatch(managerExecutionLaneSummarySource, /fixtureBacked:[^\n]*proofMode/);
+  assert.match(managerExecutionLaneSummarySource, /singleActiveLeaseEvidenceRefs/);
+  assert.match(managerExecutionLaneSummarySource, /link\.leaseId && !link\.workItemId/);
+  assert.match(managerExecutionLaneSummarySource, /active_mixed/);
+  assert.match(managerExecutionLaneSummarySource, /currentLimitations/);
+  assert.match(cockpitSource, /handleManagerKeyDown/);
+  assert.match(cockpitSource, /navigator\.clipboard/);
+  assert.match(cockpitSource, /Copy evidence ref/);
+  assert.match(cockpitSource, /Copy verification id/);
+  assert.match(cockpitSource, /<dl role="cell"><ManagerDefinition label="Item"/);
+  assert.match(cockpitSource, /Authority chip/);
+  assert.match(cockpitSource, /authorityOperations/);
+  assert.match(cockpitSource, /deliveryControlRows/);
+  assert.match(cockpitSource, /key=\{link\.key\}/);
+  assert.match(managerExecutionLaneSummarySource, /PipelineManagerAuthorityOperationRow/);
+  assert.match(managerExecutionLaneSummarySource, /PipelineManagerFeedbackRouteRow/);
+  assert.match(managerExecutionLaneSummarySource, /buildAuthorityOperationRows/);
+  assert.match(managerExecutionLaneSummarySource, /buildFeedbackRouteRows/);
+  assert.match(managerExecutionLaneSummarySource, /workspace_files/);
+  assert.match(managerExecutionLaneSummarySource, /runtime_state/);
+  assert.match(managerExecutionLaneSummarySource, /live_worker_execution/);
+  assert.match(managerExecutionLaneSummarySource, /delivery_stewardship/);
+  assert.match(managerExecutionLaneSummarySource, /cleanup_stewardship/);
+  assert.match(managerExecutionLaneSummarySource, /git_mutation/);
+  assert.match(managerExecutionLaneSummarySource, /provider_access/);
+  assert.match(managerExecutionLaneSummarySource, /supervisor_runtime/);
+  assert.doesNotMatch(managerExecutionLaneSummarySource + cockpitSource, /scripts\/lib|child_process|tmux send|fetch\s*\(|EventSource|WebSocket|XMLHttpRequest|sendBeacon|api\.openai|api\.anthropic|provider payload|raw worker transcript|raw prompt|sk-/i);
+  const managerSummaryModule = loadManagerExecutionLaneSummaryModule(managerExecutionLaneSummarySource);
+  const requiredAuthorityClasses = new Set(["allowed_unattended", "requires_preauthorization", "block_and_record", "forbidden"]);
+  const projectedAuthorityClasses = new Set();
+  for (const fixture of managerSummaryModule.managerExecutionLaneSummaryFixtures) {
+    const projected = managerSummaryModule.projectManagerExecutionLaneSummary(fixture);
+    assert.equal(typeof projected.runId, "string");
+    assert.ok(projected.statusText.length > 0, projected.runId);
+    assert.ok(projected.nextAction.length > 0, projected.runId);
+    assert.ok(projected.refillPanel.reason.length > 0, projected.runId);
+    assert.ok(projected.workerPanel.reason.length > 0, projected.runId);
+    assert.ok(projected.resourceUsagePanel.reason.length > 0, projected.runId);
+    assert.ok(projected.displayStates.length > 0, projected.runId);
+    assert.equal(projected.fixtureBacked, fixture.stateSource === "fixture", projected.runId);
+    assert.ok(projected.authorityOperations.length >= 8, `${projected.runId} should expose operation-level authority rows`);
+    assert.ok(projected.authorityOperations.every((operation) => operation.operation.length > 0), projected.runId);
+    assert.ok(projected.authorityOperations.every((operation) => operation.authorityClass.length > 0), projected.runId);
+    assert.ok(projected.authorityOperations.every((operation) => operation.reason.length > 0), projected.runId);
+    assert.ok(projected.authorityOperations.every((operation) => operation.rollbackOrRecoveryNote.length > 0), projected.runId);
+    assert.ok(projected.authorityOperations.some((operation) => operation.missingContract === "delivery_phase"), `${projected.runId} should name missing delivery_phase`);
+    assert.ok(Array.isArray(projected.feedbackRouteRows), `${projected.runId} should expose feedback route rows`);
+    assert.equal(projected.feedbackRetention, "metadata_only", `${projected.runId} should preserve metadata-only feedback retention`);
+    assert.equal(projected.feedbackRawPayloadRetained, false, `${projected.runId} should not retain raw feedback payloads`);
+    assert.ok(projected.deliveryControlRows.length >= 4, `${projected.runId} should expose read-only delivery controls`);
+    assert.ok(projected.deliveryControlRows.every((control) => control.available === false || projected.authorityStage === "delivery"), projected.runId);
+    assert.ok(projected.deliveryControlRows.some((control) => control.label === "PR creation" && control.missingContract === "delivery_phase"), projected.runId);
+    projectedAuthorityClasses.add(projected.authorityClass);
+    if (projected.queueRows.length === 0 && projected.leaseRows.length === 0) {
+      assert.match(projected.phase, /no_safe_work|closed|manager_only|blocked|refilling/, projected.runId);
+    }
+  }
+  for (const authorityClass of requiredAuthorityClasses) {
+    assert.ok(projectedAuthorityClasses.has(authorityClass), `manager fixtures should cover ${authorityClass}`);
+  }
+  const baseManagerFixture = managerSummaryModule.managerExecutionLaneSummaryFixtures[0];
+  const baseProjected = managerSummaryModule.projectManagerExecutionLaneSummary(baseManagerFixture);
+  assert.ok(baseProjected.displayStates.includes("delivery_unavailable"), "allowed pipeline_adapter summaries should still show delivery unavailable");
+  assert.equal(
+    baseProjected.authorityOperations.find((operation) => operation.key === "runtime-state")?.authorityClass,
+    "requires_preauthorization",
+    "runtime state mutation should not be allowed from pipeline_adapter authority"
+  );
+  assert.equal(
+    baseProjected.authorityOperations.find((operation) => operation.key === "git-mutation")?.missingContract,
+    "delivery_phase",
+    "Git mutation should expose the delivery_phase stop line"
+  );
+
+  const deliveryAuthorizedProjection = managerSummaryModule.projectManagerExecutionLaneSummary({
+    ...baseManagerFixture,
+    runId: "run-manager-delivery-authorized",
+    authorityStage: "delivery",
+    authorityClass: "allowed_unattended",
+    rawStateLabels: ["delivery:authorized", "fixture-backed"]
+  });
+  assert.equal(deliveryAuthorizedProjection.displayStates.includes("delivery_unavailable"), false);
+  assert.equal(deliveryAuthorizedProjection.deliveryControlRows.every((control) => control.available === true), true);
+  assert.equal(deliveryAuthorizedProjection.deliveryControlRows.every((control) => control.missingContract === null), true);
+
+  const liveWorkerProjection = managerSummaryModule.projectManagerExecutionLaneSummary({
+    ...baseManagerFixture,
+    runId: "run-manager-live-worker-authorized",
+    authorityStage: "live_worker",
+    authorityClass: "allowed_unattended",
+    rawStateLabels: ["live_worker:authorized", "fixture-backed"]
+  });
+  assert.equal(liveWorkerProjection.authorityOperations.find((operation) => operation.key === "live-workers")?.authorityClass, "allowed_unattended");
+  assert.equal(liveWorkerProjection.authorityOperations.find((operation) => operation.key === "tmux-session-control")?.authorityClass, "allowed_unattended");
+
+  const blockedProjection = managerSummaryModule.projectManagerExecutionLaneSummary(
+    managerSummaryModule.managerExecutionLaneSummaryFixtures.find((fixture) => fixture.runId === "run-manager-block-and-record")
+  );
+  assert.match(
+    blockedProjection.authorityOperations.find((operation) => operation.key === "cleanup")?.reason ?? "",
+    /cleanup target is outside scoped manager-owned state/,
+    "operation rows should preserve raw backend authority reason"
+  );
+
+  const unsafePayloadProjection = managerSummaryModule.projectManagerExecutionLaneSummary({
+    ...baseManagerFixture,
+    runId: "run-manager-unsafe-payload",
+    evidenceLinks: baseManagerFixture.evidenceLinks.map((link) => ({ ...link, rawPayloadRetained: true }))
+  });
+  assert.equal(
+    unsafePayloadProjection.evidenceLinks.every((link) => link.rawPayloadRetained === false),
+    true,
+    "dashboard projection must not render raw payload retention as true"
+  );
+
+  const blockingFeedbackProjection = managerSummaryModule.projectManagerExecutionLaneSummary(
+    managerSummaryModule.managerExecutionLaneSummaryFixtures.find((fixture) => fixture.runId === "run-manager-feedback-blocking")
+  );
+  assert.ok(blockingFeedbackProjection.displayStates.includes("feedback_blocking"), "blocking feedback should be visible as a display state");
+  assert.equal(blockingFeedbackProjection.feedbackRouteRows[0]?.classification, "blocking");
+  assert.equal(blockingFeedbackProjection.feedbackRouteRows[0]?.affectedDeliveryGate?.mergePolicy, "prevent_affected_pr_merge");
+  assert.equal(blockingFeedbackProjection.feedbackRouteRows[0]?.unrelatedLanePolicy, "continue_unrelated_safe_lanes");
+  assert.match(blockingFeedbackProjection.feedbackRouteRows[0]?.authorityImpact ?? "", /delivery/i);
+  assert.equal(blockingFeedbackProjection.feedbackRouteRows[0]?.rawPayloadRetained, false);
+
+  const correctionFeedbackProjection = managerSummaryModule.projectManagerExecutionLaneSummary(
+    managerSummaryModule.managerExecutionLaneSummaryFixtures.find((fixture) => fixture.runId === "run-manager-feedback-correction")
+  );
+  assert.equal(correctionFeedbackProjection.feedbackRouteRows[0]?.route, "route_to_active_worker");
+  assert.equal(correctionFeedbackProjection.feedbackRouteRows[0]?.targetWorkerId, "codex-3");
+
+  const queuedCorrectionProjection = managerSummaryModule.projectManagerExecutionLaneSummary({
+    ...baseManagerFixture,
+    runId: "run-manager-feedback-queued-correction",
+    feedbackRoutes: [
+      {
+        feedbackId: "feedback-correction-lane",
+        classification: "correction",
+        summary: "correction feedback without active worker",
+        targetSurface: "/pipeline",
+        affectedLane: "lane-pipeline",
+        sourceRefs: ["checkpoint:daily-use"],
+        route: "create_correction_lane",
+        targetWorkerId: null,
+        affectedDeliveryGate: {
+          action: "hold_affected_delivery_until_correction_resolved",
+          affectedLane: "lane-pipeline",
+          scope: "targeted_lane",
+          mergePolicy: "hold_until_correction_resolved",
+          downstreamPolicy: "continue_unrelated_safe_lanes",
+          recoveryPath: "route correction feedback before affected delivery is marked merge-ready"
+        },
+        authorityImpact: "affected delivery is held until correction feedback is routed",
+        dependencyImpact: "route correction while unrelated safe lanes continue",
+        nextAction: "Create or queue a correction lane while unrelated lanes continue.",
+        recordPolicy: "metadata_only_feedback_record",
+        unrelatedLanePolicy: "continue_unrelated_safe_lanes",
+        retention: "metadata_only",
+        rawPayloadRetained: false
+      }
+    ]
+  });
+  assert.equal(queuedCorrectionProjection.feedbackRouteRows[0]?.route, "create_correction_lane");
+  assert.equal(queuedCorrectionProjection.feedbackRouteRows[0]?.targetWorkerId, null);
+  assert.equal(queuedCorrectionProjection.feedbackRouteRows[0]?.affectedDeliveryGate?.mergePolicy, "hold_until_correction_resolved");
+
+  const polishFeedbackProjection = managerSummaryModule.projectManagerExecutionLaneSummary(
+    managerSummaryModule.managerExecutionLaneSummaryFixtures.find((fixture) => fixture.runId === "run-manager-feedback-polish")
+  );
+  assert.equal(polishFeedbackProjection.feedbackRouteRows[0]?.classification, "polish");
+  assert.equal(polishFeedbackProjection.feedbackRouteRows[0]?.route, "batch_polish_feedback");
+  assert.equal(polishFeedbackProjection.feedbackRouteRows[0]?.retention, "metadata_only");
+  assert.equal(polishFeedbackProjection.feedbackRouteRows[0]?.rawPayloadRetained, false);
+
+  const futureFeedbackProjection = managerSummaryModule.projectManagerExecutionLaneSummary(
+    managerSummaryModule.managerExecutionLaneSummaryFixtures.find((fixture) => fixture.runId === "run-manager-feedback-future")
+  );
+  assert.equal(futureFeedbackProjection.feedbackRouteRows[0]?.classification, "future_work");
+  assert.equal(futureFeedbackProjection.feedbackRouteRows[0]?.route, "record_future_work");
+
+  const malformedFeedbackProjection = managerSummaryModule.projectManagerExecutionLaneSummary({
+    ...baseManagerFixture,
+    runId: "run-manager-feedback-malformed",
+    feedbackRecordPolicy: "raw_feedback_record",
+    feedbackUnrelatedLanePolicy: "stop_unrelated_lanes",
+    feedbackRetention: "raw_payload",
+    feedbackRawPayloadRetained: true,
+    feedbackRoutes: [
+      {
+        feedbackId: "feedback-unknown-route",
+        classification: "urgent_blocker",
+        summary: "unknown feedback classification",
+        targetSurface: "/pipeline",
+        affectedLane: "lane-pipeline",
+        sourceRefs: ["checkpoint:daily-use"],
+        route: "allow_delivery",
+        targetWorkerId: null,
+        affectedDeliveryGate: {
+          action: "allow_affected_delivery",
+          affectedLane: "lane-pipeline",
+          scope: "global_release",
+          mergePolicy: "allow_merge",
+          downstreamPolicy: "continue_downstream_lanes",
+          recoveryPath: "none"
+        },
+        authorityImpact: "safe",
+        dependencyImpact: "none",
+        nextAction: "merge",
+        recordPolicy: "raw_feedback_record",
+        unrelatedLanePolicy: "stop_unrelated_lanes",
+        retention: "raw_payload",
+        rawPayloadRetained: true
+      }
+    ]
+  });
+  assert.ok(malformedFeedbackProjection.displayStates.includes("feedback_malformed"));
+  assert.ok(malformedFeedbackProjection.displayStates.includes("feedback_blocking"));
+  assert.equal(malformedFeedbackProjection.feedbackRouteRows[0]?.classification, "malformed_feedback");
+  assert.equal(malformedFeedbackProjection.feedbackRouteRows[0]?.route, "hold_for_feedback_contract_review");
+  assert.equal(malformedFeedbackProjection.feedbackRouteRows[0]?.affectedDeliveryGate?.mergePolicy, "prevent_affected_pr_merge");
+  assert.equal(malformedFeedbackProjection.feedbackRouteRows[0]?.affectedDeliveryGate?.downstreamPolicy, "pause_downstream_lanes");
+  assert.match(malformedFeedbackProjection.feedbackRouteRows[0]?.authorityImpact ?? "", /malformed/i);
+  assert.equal(malformedFeedbackProjection.feedbackRouteRows[0]?.retention, "metadata_only");
+  assert.equal(malformedFeedbackProjection.feedbackRouteRows[0]?.rawPayloadRetained, false);
+
+  const routeUnsafeFeedbackProjection = managerSummaryModule.projectManagerExecutionLaneSummary({
+    ...baseManagerFixture,
+    runId: "run-manager-feedback-route-unsafe-retention",
+    feedbackRoutes: [
+      {
+        feedbackId: "feedback-unsafe-route",
+        classification: "polish",
+        summary: "route-level unsafe retention should fail closed",
+        targetSurface: "/pipeline",
+        affectedLane: "lane-pipeline",
+        sourceRefs: ["checkpoint:daily-use"],
+        route: "batch_polish_feedback",
+        targetWorkerId: null,
+        affectedDeliveryGate: null,
+        authorityImpact: "polish only",
+        dependencyImpact: "unrelated lanes stop until raw payload is inspected",
+        nextAction: "inspect raw provider payload",
+        recordPolicy: "metadata_only_feedback_record",
+        unrelatedLanePolicy: "continue_unrelated_safe_lanes",
+        retention: "raw_payload",
+        rawPayloadRetained: true,
+      },
+    ],
+  });
+  assert.ok(routeUnsafeFeedbackProjection.displayStates.includes("feedback_malformed"));
+  assert.equal(routeUnsafeFeedbackProjection.feedbackRouteRows[0]?.classification, "malformed_feedback");
+  assert.equal(routeUnsafeFeedbackProjection.feedbackRouteRows[0]?.route, "hold_for_feedback_contract_review");
+  assert.equal(routeUnsafeFeedbackProjection.feedbackRouteRows[0]?.retention, "metadata_only");
+  assert.equal(routeUnsafeFeedbackProjection.feedbackRouteRows[0]?.rawPayloadRetained, false);
+
+  assert.doesNotMatch(supervisorLibSource, /workPackets.length !== selectedPacketDetails.length/);
+  assert.match(supervisorLibSource, /detailIds\.has\(detail\.packetId\)/);
   assert.doesNotMatch(cockpitSource, /Pipeline workflow strip|Pipeline mobile workflow strip|Idea captured|Review ready|Promote candidate/);
   assert.match(cockpitSource, /InfoTooltip/);
-  assert.match(cockpitSource, /Each stage shows packets currently sitting there/);
+  assert.doesNotMatch(cockpitSource, /Each stage shows packets currently sitting there/);
+  assert.doesNotMatch(cockpitSource, /See what is being worked on and where each packet sits in the process/);
   assert.match(cockpitSource, /stagePurpose/);
   assert.match(cockpitSource, /New ideas and requests land here before Kendall decides what they are/);
   assert.match(cockpitSource, /currentItem\?\.type === "packet" && currentItem\.id === packetId/);
@@ -164,7 +1418,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     "Pipeline operational strip",
     "Mission control focus strip",
     "Most urgent",
-    "Route map",
+    "Active board",
     "Pipeline status key",
     "Needs approval",
     "Blocked",
@@ -300,7 +1554,6 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     ".pipeline-usage-meter",
     ".pipeline-usage-meter-fill",
     ".pipeline-status-key",
-    "@keyframes pipeline-route-flow",
     "prefers-reduced-motion: reduce",
   ]) {
     assert.match(globalsSource, new RegExp(cssContract.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -331,12 +1584,10 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
     "artifactRefs",
     "laneCards",
     "humanGateActions",
-    "humanGateActionRequests",
     "humanGateFixtureEvents",
     "recoveryFixtureEvents",
     "actionGuardFixtures",
     "memoryProposals",
-    "learnRefill",
     "recoveryActions"
   ]) {
     assert.match(fixtureSource, new RegExp(packetSurface));
@@ -458,7 +1709,8 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /sortPacketsForMap/);
   assert.match(cockpitSource, /selectedPacketInStage/);
   assert.match(cockpitSource, /expanded \? sortedPackets : sortedPackets\.slice\(0, visibleLimit\)/);
-  assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
+  assert.match(cockpitSource, /packet\.activeBoardCard\?\.attention/);
+  assert.match(cockpitSource, /stageKnownTotalCount = stageRenderedCount/);
   assert.match(cockpitSource, /return packet\.nextAction/);
   assert.match(cockpitSource, /plainStageLabel/);
   assert.match(cockpitSource, /onSelectStage/);
@@ -485,12 +1737,15 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(globalsSource, /\.pipeline-nohype-shell[\s\S]*overflow: visible/);
   assert.match(cockpitSource, /pipeline-route-connectors/);
   assert.match(cockpitSource, /pipeline-route-connector-line/);
-  assert.match(cockpitSource, /pipeline-route-connector-pulse/);
+  assert.doesNotMatch(cockpitSource, /pipeline-route-connector-pulse/);
+  assert.doesNotMatch(cockpitSource, /stageSummary[\s\S]{0,240}pipeline-route-connector|sourceLabel[\s\S]{0,240}pipeline-route-connector|freshnessState[\s\S]{0,240}pipeline-route-connector/);
+  assert.match(globalsSource, /\.pipeline-route-anchor[\s\S]*position: absolute/);
   assert.match(cockpitSource, /Math\.abs\(currentRect\.top - nextRect\.top\) < 24/);
   assert.doesNotMatch(cockpitSource, /Math\.abs\(start\.y - end\.y\) < 24/);
   assert.match(cockpitSource, /currentRect\.height \* 0\.76/);
   assert.match(cockpitSource, /nextRect\.height \* 0\.24/);
-  assert.match(globalsSource, /@keyframes pipeline-route-flow[\s\S]*stroke-dashoffset/);
+  assert.doesNotMatch(globalsSource, /@keyframes pipeline-route-flow[\s\S]*stroke-dashoffset/);
+  assert.match(globalsSource, /\.pipeline-route-connector-line[\s\S]*stroke-dasharray/);
   assert.match(globalsSource, /\.pipeline-route-row[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(min\(12\.5rem, 100%\), 1fr\)\)/);
   assert.match(globalsSource, /max-width: 720px[\s\S]*\.pipeline-route-row[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(min\(12\.5rem, 100%\), 1fr\)\)/);
   assert.doesNotMatch(cockpitSource, /min-h-\[34rem\]/);
@@ -513,7 +1768,56 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(globalsSource, /\.pipeline-stage-label/);
   assert.match(cockpitSource, /Pipeline operational strip/);
   assert.match(cockpitSource, /Mission control focus strip/);
-  assert.match(cockpitSource, /stageToneForPackets/);
+  assert.doesNotMatch(cockpitSource, /stageToneForPackets/);
+  assert.doesNotMatch(cockpitSource, /pipeline-route-station-\$\{stageTone\}/);
+  assert.doesNotMatch(globalsSource, /\.pipeline-route-connector-pulse|pipeline-route-flow|\.pipeline-route-station-active|\.pipeline-route-station-approval|\.pipeline-route-station-blocked|\.pipeline-route-station-complete/);
+  assert.match(cockpitSource, /pipeline-mini-packet-proof/);
+  assert.match(cockpitSource, /pipeline-mini-packet-body/);
+  assert.match(cockpitSource, /pipeline-mini-packet-meta/);
+  assert.match(globalsSource, /\.pipeline-mini-packet-body/);
+  assert.match(globalsSource, /\.pipeline-mini-packet-meta/);
+  for (const packetCardHelper of [
+    "packetCardStatusLabel",
+    "packetCardStageLabel",
+    "packetCardTruthLabel",
+    "packetCardEvidenceLabel",
+    "packetCardNextLabel",
+    "packetCardTestabilityLabel",
+  ]) {
+    assert.match(cockpitSource, new RegExp(packetCardHelper));
+  }
+  assert.match(cockpitSource, /status \$\{packet\.status\}/);
+  assert.match(cockpitSource, /stage \$\{plainStageLabel\(packet\.currentStage\)\}/);
+  assert.match(cockpitSource, /truth \$\{truth\}; source \$\{packet\.freshnessLabel\}/);
+  assert.match(cockpitSource, /function packetCardEvidenceLabel/);
+  assert.doesNotMatch(cockpitSource, /packetCardEvidenceLabel\(packet\)/);
+  assert.match(cockpitSource, /next action not named/);
+  assert.match(cockpitSource, /blocker not named/);
+  assert.match(cockpitSource, /testability unknown/);
+  assert.doesNotMatch(cockpitSource, /testability ready/);
+  assert.match(cockpitSource, /packet\.activeBoardCard\?\.title\.trim\(\) \|\| packet\.title\.trim\(\) \|\| "untitled packet"/);
+  assert.match(cockpitSource, /packet\.activeBoardCard\?\.statusLabel/);
+  assert.match(cockpitSource, /packet\.activeBoardCard\?\.nextActionLabel/);
+  assert.match(cockpitSource, /aria-label="Ready to test packet"/);
+  assert.match(cockpitSource, /pipeline-mini-packet-ready/);
+  assert.doesNotMatch(cockpitSource, /packetCardNextLabel\(packet\)}; \{packetCardTestabilityLabel\(packet\)/);
+  assert.match(cockpitSource, /Testing and risk/);
+  assert.match(cockpitSource, /packetTestTargetLabel/);
+  assert.match(cockpitSource, /packetChecksRunLabel/);
+  assert.match(cockpitSource, /packetResidualRiskLabel/);
+  assert.match(activeBoardViewModelSource, /emergency_stop/);
+  assert.match(activeBoardViewModelSource, /kill state/);
+  assert.match(cockpitSource, /backend projection: packet truth live/);
+  assert.match(cockpitSource, /backend projection: packet truth \$\{packet\.truthLabel\}; dashboard proof \$\{packetProofLabel\}/);
+  assert.match(cockpitSource, /const nextAction = packet\.nextAction\.trim\(\) \|\| "next action not named"/);
+  assert.doesNotMatch(cockpitSource, /Inspect backend projection packet/);
+  assert.doesNotMatch(cockpitSource, /miniCardReasonLabel/);
+  assert.match(globalsSource, /\.pipeline-mini-packet-proof/);
+  assert.match(cockpitSource, /non-live fixture/);
+  assert.match(cockpitSource, /Fixture\/non-live packet; cannot satisfy live proof/);
+  assert.match(packetDetailSource, /Fixture\/non-live packet; cannot satisfy live proof/);
+  assert.match(packetDetailSource, /non-live fixture/);
+  assert.match(cockpitSource, /sourceLabel === "fixture" \|\| freshnessState === "fixture" \|\| reason === "fixture_fallback"/);
   assert.match(cockpitSource, /stageCode/);
   assert.match(cockpitSource, /globalUsageItems/);
   assert.match(cockpitSource, /providerKey:\s*"codex"/);
@@ -526,7 +1830,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /overflowSummary/);
   assert.doesNotMatch(cockpitSource, /More packets inside|No packets here/);
   assert.doesNotMatch(cockpitSource, /Pipeline inspection panel|Stage inspection panel|Stage plain-language facts|Choose a packet or stage|No packet is selected by default/);
-  assert.doesNotMatch(cockpitSource, /From idea to shipped|dev branch|no live calls|Active packets|Blocked gates|Provider approval|Global recovery/);
+  assert.doesNotMatch(cockpitSource, /From idea to shipped|dev branch|no live calls|Blocked gates|Provider approval|Global recovery/);
   assert.doesNotMatch(cockpitSource, /Mission route map|map view|manual/);
   assert.match(pipelineComponentSource, /Refined pipeline cockpit frame/);
   assert.match(pipelineComponentSource, /Cockpit first-frame hierarchy/);
@@ -537,52 +1841,33 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.doesNotMatch(cockpitSource, /pipeline-board-flow/);
   assert.match(cockpitSource, /shadow-\[0_0_1rem_color-mix\(in_srgb,var\(--info\)_10%,transparent\)\]/);
   assert.match(cockpitSource, /pipeline-mini-packet-label/);
-  assert.match(globalsSource, /\.pipeline-mini-packet-label[\s\S]*white-space: normal/);
-  assert.match(globalsSource, /\.pipeline-mini-packet-label[\s\S]*overflow-wrap: anywhere/);
-  assert.match(globalsSource, /\.pipeline-stage-label[\s\S]*white-space: normal/);
-  assert.match(globalsSource, /\.pipeline-mission-value[\s\S]*overflow-wrap: anywhere/);
+  assert.match(globalsSource, /\.pipeline-mini-packet-label[\s\S]*white-space: nowrap/);
   assert.doesNotMatch(cockpitSource, /import\s+\{\s*pipelineStages\s+\}\s+from\s+"..\/..\/lib\/pipeline-fixtures"/);
   assert.match(packetDetailSource, /Packet 5 Whys/);
   assert.match(packetDetailSource, /Evidence and artifacts/);
-  assert.match(packetDetailSource, /Evidence trace/);
-  assert.match(packetDetailSource, /Artifact trace/);
-  assert.match(packetDetailSource, /Retention class/);
-  assert.match(packetDetailSource, /Raw payload retained/);
-  assert.match(packetDetailSource, /Artifact type/);
-  assert.match(packetDetailSource, /Path or URL/);
-  assert.match(packetDetailSource, /Action guard previews/);
-  assert.match(packetDetailSource, /Recovery preview event/);
-  assert.match(packetDetailSource, /Human Gate binding/);
   assert.match(packetDetailSource, /Workers and review/);
   assert.match(packetDetailSource, /Gate, memory, recovery/);
   assert.match(packetDetailSource, /Delivery and cleanup evidence/);
-  assert.match(packetDetailSource, /Cleanup dry-run/);
-  assert.match(packetDetailSource, /Cleanup target/);
-  assert.match(packetDetailSource, /Delivery rails grant authority/);
-  assert.match(packetDetailSource, /Remote mutation approved/);
-  assert.match(packetDetailSource, /Merge approved/);
-  assert.match(packetDetailSource, /Cleanup approved/);
-  assert.match(packetDetailSource, /Recovery path/);
+  assert.match(packetDetailSource, /Learn panel: Memory proposals/);
   assert.match(packetDetailSource, /Action request ledger/);
-  assert.match(packetDetailSource, /Required evidence/);
-  assert.match(packetDetailSource, /Stop lines/);
-  assert.match(packetDetailSource, /Rollback/);
-  assert.match(packetDetailSource, /Audit/);
-  assert.match(packetDetailSource, /Proposal type/);
-  assert.match(packetDetailSource, /Sensitivity/);
-  assert.match(packetDetailSource, /Contradiction/);
-  assert.match(packetDetailSource, /Write-back allowed/);
-  assert.match(packetDetailSource, /Write-back status/);
-  assert.match(packetDetailSource, /Action guard previews/);
-  assert.match(packetDetailSource, /Expected binding/);
-  assert.match(packetDetailSource, /Actual binding/);
-  assert.match(packetDetailSource, /Primary risk/);
-  assert.match(packetDetailSource, /Stop line/);
-  assert.match(packetDetailSource, /Safe next option/);
-  assert.match(packetDetailSource, /Recovery preview event/);
-  assert.match(packetDetailSource, /Request status/);
-  assert.match(packetDetailSource, /Execution started/);
-  assert.match(packetDetailSource, /Resulting state applied/);
+  assert.match(packetDetailSource, /Learn outcome/);
+  assert.match(packetDetailSource, /Learn refill/);
+  assert.match(packetDetailSource, /required evidence:/);
+  assert.match(packetDetailSource, /stop lines:/);
+  assert.match(packetDetailSource, /rollback:/);
+  assert.match(packetDetailSource, /audit:/);
+  assert.match(packetDetailSource, /proposal type:/);
+  assert.match(packetDetailSource, /sensitivity:/);
+  assert.match(packetDetailSource, /contradiction:/);
+  assert.match(packetDetailSource, /write-back allowed:/);
+  assert.match(packetDetailSource, /write-back status:/);
+  assert.match(packetDetailSource, /guard classification:/);
+  assert.match(packetDetailSource, /expected binding:/);
+  assert.match(packetDetailSource, /actual binding:/);
+  assert.match(packetDetailSource, /primary risk:/);
+  assert.match(packetDetailSource, /stop line:/);
+  assert.match(packetDetailSource, /safe next option:/);
+  assert.match(packetDetailSource, /fixture event:/);
   assert.match(packetDetailSource, /Packet source boundaries/);
   assert.doesNotMatch(cockpitSource, /FixtureScenarioSelector|GoldenPathLifecycle|ActivePacketDrawer|RecoveryDrawerPanel|ActionGuardPanel|EvidenceDetailList|evaluateFixtureActionDecision/);
   assert.match(fixtureSource, /routeFork/);
@@ -594,15 +1879,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(cockpitSource, /findTopAttentionPacket/);
   assert.match(cockpitSource, /packet\.status === "blocked" \|\| packet\.status === "failed" \|\| packet\.currentStage === "human_gate"/);
   assert.match(fixtureSource, /Density \$\{ordinal\}:/);
-  assert.doesNotMatch(routeSource + packetDetailRouteSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence|pipeline-evidence-source/);
-  assert.doesNotMatch(pipelinePacketLoaderSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence|pipeline-evidence-source/);
-  assert.match(pipelinePacketLoaderSource, /pipelineCockpitPackets/);
-  assert.match(pipelinePacketLoaderSource, /mergePipelinePackets/);
-  assert.match(fixtureSource, /projectSupervisorWorkPacketsToCockpitPackets/);
-  assert.match(fixtureSource, /safeProjectSupervisorWorkPacketToCockpitPacket/);
-  assert.match(fixtureSource, /supervisorReasonCodes/);
-  assert.match(fixtureSource, /fixtureKind:\s*"future-real-source"/);
-  assert.match(fixtureSource, /Supervisor Work Packet projection rendered/);
+  assert.match(routeSource, /loadPipelineCockpitPackets/);
   const fixturePacketCount = (fixtureSource.match(/packetFixture\(\{/g) ?? []).length;
   const densityCloneCountMatch = fixtureSource.match(/Array\.from\(\{ length: (\d+) \}/);
   assert.ok(densityCloneCountMatch, "density fixture clone count should be explicit");
@@ -676,7 +1953,7 @@ test("/pipeline route uses supervisor WorkPacketV0 projections with fixture fall
   assert.match(fixtureSource, /PIPELINE_STATE_EVIDENCE_MATRIX_V0|PIPELINE_STATE_FIXTURE_CATALOG_V0/);
   assert.doesNotMatch(fixtureSource, /rawPrompt|rawCompletion|reasoningTrace|providerPayload|secretValue|credentialValue|credentialPayload|writeBackAllowed:\s*true/);
   assert.doesNotMatch(allPipelineSource, /rawPrompt|rawCompletion|reasoningTrace|providerPayload|secretValue|credentialValue|credentialPayload|memoryDump|fullRawHistory/);
-  assert.doesNotMatch(allPipelineSource, /getRunStatus|getWorkItems|fetch\s*\(|EventSource|WebSocket|XMLHttpRequest|sendBeacon/);
+  assert.doesNotMatch(allPipelineSource, /getRunStatus|getWorkItems|getWorkPackets|EventSource|WebSocket|XMLHttpRequest|sendBeacon/);
   assert.doesNotMatch(routeSource + "\n" + pipelineComponentSource, /11434\/v1\/chat\/completions|OllamaProviderAdapter|ollama_provider_adapter|model\s*discovery|endpoint\s*discovery/i);
   assert.doesNotMatch(
     allPipelineSource,
@@ -825,38 +2102,6 @@ test("pipeline Hermes worker fixtures render mocked containment without runtime 
     }
   }
 
-  for (const packet of pipelineCockpitPackets) {
-    for (const action of packet.humanGateActions) {
-      assert.ok(action.authorityFamily.length > 0, `${packet.packetId} ${action.type} should expose authority family`);
-      assert.ok(action.requiredEvidenceRefs.length > 0, `${packet.packetId} ${action.type} should expose required evidence refs`);
-      assert.ok(action.stopLines.length > 0, `${packet.packetId} ${action.type} should expose stop lines`);
-      assert.ok(action.rollbackPath.length > 0, `${packet.packetId} ${action.type} should expose rollback path`);
-      assert.ok(action.resultingStage.length > 0, `${packet.packetId} ${action.type} should expose resulting stage`);
-      assert.ok(action.resultingOwner.length > 0, `${packet.packetId} ${action.type} should expose resulting owner`);
-      assert.ok(action.status.length > 0, `${packet.packetId} ${action.type} should expose status`);
-      assert.ok(action.auditEventType.length > 0, `${packet.packetId} ${action.type} should expose audit event type`);
-    }
-    for (const action of packet.humanGateActions.filter((candidate) => candidate.status !== "available")) {
-      assert.ok(action.reasonCodes.length > 0, `${packet.packetId} ${action.type} should expose blocked/unavailable reason codes`);
-      assert.ok(action.disabledReason && action.disabledReason.length > 0, `${packet.packetId} ${action.type} should remain inspectable without firing`);
-    }
-  }
-
-  const humanGateActionTypes = new Set(pipelineCockpitPackets.flatMap((packet) => packet.humanGateActions.map((action) => action.type)));
-  for (const actionType of [
-    "approve_route",
-    "approve_execution",
-    "approve_delivery",
-    "approve_memory_proposal",
-    "reject_packet",
-    "edit_packet",
-    "send_back_to_shape",
-    "send_back_to_research",
-    "reroute",
-  ]) {
-    assert.ok(humanGateActionTypes.has(actionType), `pipeline fixtures should assemble ${actionType}`);
-  }
-
   for (const packet of pipelineCockpitPackets.filter((candidate) => candidate.hermesJob !== null)) {
     const refs = packet.evidenceRefs.map((ref) => ref.refId);
     assert.equal(refs.filter((ref) => ref === packet.hermesJob.evidenceRef).length, 1, `${packet.packetId} should contain Hermes evidence exactly once`);
@@ -882,9 +2127,6 @@ test("pipeline Codex and Claude lane fixtures stay distinct and metadata-only", 
   assert.match(packetDetailSource, /Workers and review/);
   assert.match(packetDetailSource, /Codex:/);
   assert.match(packetDetailSource, /Claude:/);
-  assert.match(packetDetailSource, /Reason codes/);
-  assert.match(packetDetailSource, /HumanGateActionList/);
-  assert.doesNotMatch(packetDetailSource.match(/function HumanGateActionList[\s\S]*?function MemoryProposalList/)?.[0] ?? "", /<button|onClick|submitCapable/);
   assert.match(fixtureSource, /implementation_worker/);
   assert.match(fixtureSource, /independent_review/);
 
@@ -987,123 +2229,6 @@ test("pipeline Codex and Claude lane fixtures stay distinct and metadata-only", 
   }
 });
 
-test("pipeline loop stop state fixtures surface metadata-only stop evidence", async () => {
-  const { pipelineCockpitPackets, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
-  const cockpitSource = await readFile(cockpitPath, "utf8");
-  const packetDetailSource = await readFile(packetDetailPath, "utf8");
-  const fixtureSource = await readFile(fixturesPath, "utf8");
-
-  assert.match(fixtureSource, /loopStopStates/);
-  assert.match(cockpitSource, /Loop stop states/);
-  assert.match(packetDetailSource, /LoopStopStateList/);
-  assert.match(packetDetailSource, /Next safe action/);
-  assert.match(packetDetailSource, /Provider calls/);
-  assert.match(packetDetailSource, /Worker launch/);
-  assert.match(packetDetailSource, /metadataOnly/);
-  assert.match(packetDetailSource, /githubMutationAllowed/);
-  assert.match(packetDetailSource, /cleanupAllowed/);
-
-  const stopPacket = pipelineFixturePackets.find((packet) => packet.packetId === "fixture:loop-stop-limit-window");
-  assert.ok(stopPacket, "pipeline fixtures should include a loop stop-state packet");
-  assert.equal(stopPacket.status, "blocked");
-  assert.equal(stopPacket.currentOwner, "codex_worker");
-  assert.equal(stopPacket.codexWorker?.readiness, "blocked");
-  assert.ok(stopPacket.artifactRefs.some((ref) => ref.refId === "fixture:loop-stop-limit-window:artifact:progress" && ref.artifactType === "progress"));
-  assert.ok(stopPacket.loopStopStates.length > 0, "loop stop packet should expose stop states");
-
-  const [stopState] = stopPacket.loopStopStates;
-  assert.equal(stopState.kind, "limit_window");
-  assert.equal(stopState.severity, "blocking");
-  assert.equal(stopState.metadataOnly, true);
-  assert.equal(stopState.sourceMutationAllowed, false);
-  assert.equal(stopState.providerCallsAllowed, false);
-  assert.equal(stopState.workerLaunchAllowed, false);
-  assert.equal(stopState.githubMutationAllowed, false);
-  assert.equal(stopState.cleanupAllowed, false);
-  assert.match(stopState.stopLine, /Pause in place/);
-  assert.match(stopState.nextSafeAction, /MANAGER_STATUS phase=blocked/);
-  assert.ok(stopState.evidenceRefs.length > 0);
-  assert.ok(stopState.evidenceRefs.every((refId) => refId.includes(":loop-stop:")), "loop stop state should use dedicated stop evidence refs");
-  for (const refId of stopState.evidenceRefs) {
-    const evidenceRef = stopPacket.evidenceRefs.find((ref) => ref.refId === refId);
-    assert.ok(evidenceRef, `loop stop state evidence ref ${refId} should be materialized`);
-    assert.equal(evidenceRef.retentionClass, "metadata_only");
-    assert.equal(evidenceRef.rawPayloadRetained, false);
-  }
-
-  const cockpitStopPacket = pipelineCockpitPackets.find((packet) => packet.packetId === stopPacket.packetId);
-  assert.equal(cockpitStopPacket?.loopStopStates[0]?.kind, "limit_window");
-});
-
-test("supervisor WorkPacket schema defaults loop stop states for real packet payloads", async () => {
-  const supervisorSchemaSource = await readFile(supervisorSchemasPath, "utf8");
-
-  assert.match(supervisorSchemaSource, /class WorkPacketLoopStopStateV0View\(BaseModel\):/);
-  assert.match(supervisorSchemaSource, /loopStopStates:\s*list\[WorkPacketLoopStopStateV0View\]\s*=\s*Field\(default_factory=list\)/);
-  assert.match(supervisorSchemaSource, /metadataOnly:\s*Literal\[True\]\s*=\s*True/);
-  assert.match(supervisorSchemaSource, /providerCallsAllowed:\s*Literal\[False\]\s*=\s*False/);
-  assert.match(supervisorSchemaSource, /workerLaunchAllowed:\s*Literal\[False\]\s*=\s*False/);
-  assert.match(supervisorSchemaSource, /githubMutationAllowed:\s*Literal\[False\]\s*=\s*False/);
-  assert.match(supervisorSchemaSource, /cleanupAllowed:\s*Literal\[False\]\s*=\s*False/);
-});
-
-test("pipeline delivery fixture renders metadata-only delivery and cleanup evidence", async () => {
-  const { pipelineCockpitPackets, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
-  const packetDetailSource = await readFile(packetDetailPath, "utf8");
-  const fixtureSource = await readFile(fixturesPath, "utf8");
-
-  assert.match(packetDetailSource, /DeliveryEvidenceList/);
-  assert.match(packetDetailSource, /Delivery and cleanup evidence/);
-  assert.match(fixtureSource, /deliveryEvidence/);
-  assert.match(fixtureSource, /cleanupDryRunStatus/);
-  assert.match(fixtureSource, /deliveryRailsGrantAuthority:\s*false/);
-  assert.match(fixtureSource, /remoteMutationApproved:\s*false/);
-  assert.match(fixtureSource, /mergeApproved:\s*false/);
-  assert.match(fixtureSource, /cleanupApproved:\s*false/);
-  assert.match(fixtureSource, /isPullRequestArtifactRef/);
-
-  const deliveryPacket = pipelineFixturePackets.find((packet) => packet.packetId === "fixture:deliver-evidence");
-  assert.ok(deliveryPacket, "pipeline fixtures should include a delivery evidence packet");
-  assert.equal(deliveryPacket.currentStage, "deliver");
-  assert.equal(deliveryPacket.currentOwner, "github");
-  assert.equal(deliveryPacket.deliveryEvidence?.mode, "metadata_only");
-  assert.equal(deliveryPacket.deliveryEvidence?.actionId, "cleanup");
-  assert.equal(deliveryPacket.deliveryEvidence?.ciStatus, "passed");
-  assert.equal(deliveryPacket.deliveryEvidence?.reviewState, "resolved");
-  assert.equal(deliveryPacket.deliveryEvidence?.mergeStatus, "ready");
-  assert.equal(deliveryPacket.deliveryEvidence?.cleanupDryRunStatus, "passed");
-  assert.equal(deliveryPacket.deliveryEvidence?.readyForApproval, true);
-  assert.equal(deliveryPacket.deliveryEvidence?.hasDeliveryExecutionEvidence, true);
-  assert.equal(deliveryPacket.deliveryEvidence?.deliveryRailsGrantAuthority, false);
-  assert.equal(deliveryPacket.deliveryEvidence?.rawPayloadRetained, false);
-  assert.equal(deliveryPacket.deliveryEvidence?.remoteMutationApproved, false);
-  assert.equal(deliveryPacket.deliveryEvidence?.mergeApproved, false);
-  assert.equal(deliveryPacket.deliveryEvidence?.cleanupApproved, false);
-  assert.ok(deliveryPacket.deliveryEvidence?.recoveryPath.includes("Re-run exact-head gate checks"));
-  assert.ok(deliveryPacket.deliveryEvidence?.blockedReasons.length === 0);
-  for (const refId of deliveryPacket.deliveryEvidence?.evidenceRefs ?? []) {
-    const evidenceRef = deliveryPacket.evidenceRefs.find((ref) => ref.refId === refId);
-    assert.ok(evidenceRef, `delivery evidence ref ${refId} should be materialized`);
-    assert.equal(evidenceRef.retentionClass, "metadata_only");
-    assert.equal(evidenceRef.rawPayloadRetained, false);
-  }
-  for (const refId of deliveryPacket.deliveryEvidence?.artifactRefs ?? []) {
-    assert.ok(deliveryPacket.artifactRefs.some((ref) => ref.refId === refId), `delivery artifact ref ${refId} should be materialized`);
-  }
-  for (const refId of deliveryPacket.deliveryEvidence?.retainedEvidence ?? []) {
-    assert.ok(
-      deliveryPacket.evidenceRefs.some((ref) => ref.refId === refId) || deliveryPacket.artifactRefs.some((ref) => ref.refId === refId),
-      `retained delivery ref ${refId} should be materialized`
-    );
-  }
-  const pullRequestArtifact = deliveryPacket.artifactRefs.find((ref) => ref.refId === "fixture:deliver-evidence:artifact:pull-request");
-  assert.equal(pullRequestArtifact?.artifactType, "pull_request");
-  assert.equal(pullRequestArtifact?.pathOrUrl, deliveryPacket.deliveryEvidence?.pullRequestUrl);
-
-  const cockpitDeliveryPacket = pipelineCockpitPackets.find((packet) => packet.packetId === deliveryPacket.packetId);
-  assert.equal(cockpitDeliveryPacket?.deliveryEvidence?.cleanupTarget, "managed worktree fixture:deliver-evidence");
-});
-
 test("pipeline memory proposal fixtures stay review-gated and proposal-only", async () => {
   const { pipelineCockpitPackets, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
   const pipelineComponentSource = await readPipelineComponentSource();
@@ -1113,22 +2238,8 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
   const allPipelineSource = `${routeSource}\n${fixtureSource}\n${pipelineComponentSource}\n${packetDetailSource}`;
 
   assert.match(packetDetailSource, /Memory proposals/);
-  assert.match(packetDetailSource, /MemoryProposalList/);
-  assert.match(packetDetailSource, /packet\.memoryProposals\.map\(\(proposal\)/);
-  for (const detailLabel of [
-    "Learn panel",
-    "Reviewable memory proposals",
-    "Proposal state",
-    "Source refs",
-    "Evidence refs",
-    "Decision context",
-    "Available review actions",
-    "Reject available",
-    "Canonical Obsidian write-back",
-    "writeBackAllowed=false",
-  ]) {
-    assert.match(packetDetailSource, new RegExp(detailLabel, "i"));
-  }
+  assert.match(packetDetailSource, /packet\.memoryProposals\.map\(formatMemoryProposal\)/);
+  assert.match(packetDetailSource, /function formatMemoryProposal/);
 
   for (const visibleLabel of [
     "Packet id",
@@ -1148,10 +2259,6 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
   assert.ok(
     memoryPackets.some((packet) => packet.fixtureId === "obsidian_proposal_pending_approval"),
     "memory proposals should reuse obsidian_proposal_pending_approval"
-  );
-  assert.ok(
-    memoryPackets.some((packet) => packet.fixtureId === "documentation_proposal_pending_approval"),
-    "documentation proposals should route through review-gated memory proposal packet evidence"
   );
 
   const allProposals = memoryPackets.flatMap((packet) => packet.memoryProposals.map((proposal) => ({ packet, proposal })));
@@ -1176,13 +2283,6 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
     if (packet.fixtureId === "obsidian_proposal_pending_approval") {
       assert.ok(proposal.sourceRefs.some((ref) => ref.includes("obsidian-human-owned")), `${packet.packetId} proposal should cite the Obsidian human-owned boundary`);
       assert.ok(proposal.sourceRefs.some((ref) => ref.includes("llm-wiki-derived-only")), `${packet.packetId} proposal should cite the LLM-Wiki derived-only boundary`);
-    }
-    if (packet.fixtureId === "documentation_proposal_pending_approval") {
-      assert.equal(proposal.proposalType, "user_facing_documentation", `${packet.packetId} proposal should be typed as user-facing documentation`);
-      assert.ok(proposal.sourceRefs.some((ref) => ref.includes("obsidian-human-owned")), `${packet.packetId} documentation proposal should cite the Obsidian human-owned boundary`);
-      assert.ok(proposal.sourceRefs.some((ref) => ref.includes("llm-wiki-derived-only")), `${packet.packetId} documentation proposal should cite the LLM-Wiki derived-only boundary`);
-      assert.match(proposal.targetVaultFolder, /^01 Dashboard Queue\/Documentation Drafts$/, `${packet.packetId} documentation proposal should target the draft-plan queue`);
-      assert.match(proposal.patchSummary ?? "", /Draft-plan evidence only/i, `${packet.packetId} documentation proposal should stay proposal-only`);
     }
     assert.ok(proposal.suggestedContentSummary.length > 0, `${packet.packetId} proposal should summarize suggested content`);
     assert.ok(proposal.backupRecoveryPath.length > 0, `${packet.packetId} proposal should describe backup/recovery`);
@@ -1213,20 +2313,12 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
       const preview = packet.alphaMemorySourceStatus?.llmWikiReadiness?.rebuildPreview;
       assert.ok(preview, `${packet.packetId} ready fixture should expose a rebuild preview`);
       assert.equal(preview.durableWriteAllowed, false);
-      assert.equal(preview.derivedTargetFolder, "01 Dashboard Queue/LLM Wiki Derived");
-      assert.equal(preview.freshness, "fresh");
-      assert.ok(preview.rebuildBasis.includes("approved-memory-proposals"));
-      assert.ok(preview.rebuildBasis.includes("source-evidence-crosswalk"));
       assert.ok(preview.inputRefs.some((ref) => ref.includes("obsidian-approved")), `${packet.packetId} preview should include approved Obsidian input ref`);
       const plan = packet.alphaMemorySourceStatus?.llmWikiReadiness?.rebuildDryRunPlan;
       assert.ok(plan, `${packet.packetId} ready fixture should expose a rebuild dry-run plan`);
       assert.equal(plan.operationMode, "dry_run");
       assert.equal(plan.writePerformed, false);
       assert.equal(plan.backupCreated, false);
-      assert.equal(plan.derivedTargetFolder, "01 Dashboard Queue/LLM Wiki Derived");
-      assert.equal(plan.freshness, "fresh");
-      assert.deepEqual(plan.rebuildBasis, preview.rebuildBasis);
-      assert.notEqual(plan.rebuildBasis, preview.rebuildBasis);
       assert.ok(plan.plannedDerivedSections.includes("approved-memory-proposals"));
       assert.match(plan.disposableTargetNamespace, /^derived:\/\/llm-wiki\/dry-run\//);
       assert.ok(plan.stopLines.some((stopLine) => stopLine.includes("do not write LLM-Wiki index")));
@@ -1247,149 +2339,6 @@ test("pipeline memory proposal fixtures stay review-gated and proposal-only", as
     allPipelineSource,
     /writeObsidian|mutateObsidian|updateCanonicalMemory|canonicalMemoryUpdate|obsidianWriteBack|vaultWrite|from\s+["']node:fs["']|from\s+["']fs["']|writeFile\s*\(|appendFile\s*\(|rename\s*\(|unlink\s*\(/i
   );
-});
-
-test("pipeline learn outcome fixtures close the loop without hidden writes", async () => {
-  const { pipelineCockpitPackets } = await loadCompiledDashboardFixtures();
-  const packetDetailSource = await readFile(packetDetailPath, "utf8");
-  const fixtureSource = await readFile(fixturesPath, "utf8");
-
-  assert.match(packetDetailSource, /Learn outcome/);
-  assert.match(packetDetailSource, /LearnOutcomeList/);
-  assert.match(packetDetailSource, /Documentation proposal/);
-  assert.match(packetDetailSource, /Automation authority/);
-  assert.match(packetDetailSource, /Next safe action/);
-  assert.match(packetDetailSource, /Decision records/);
-  assert.match(fixtureSource, /learnOutcome/);
-  assert.match(fixtureSource, /automationAuthorityChangeStatus/);
-
-  const learnPackets = pipelineCockpitPackets.filter((packet) => packet.currentStage === "learn" || packet.memoryProposals.length > 0);
-  assert.ok(learnPackets.length > 0, "fixtures should include learn-stage packets");
-  for (const packet of learnPackets) {
-    assert.ok(packet.learnOutcome, `${packet.packetId} should expose a learn outcome`);
-    assert.equal(packet.learnOutcome.retentionClass, "metadata_only");
-    assert.equal(packet.learnOutcome.canonicalMutationAllowed, false);
-    assert.equal(packet.learnOutcome.sourceMutationAllowed, false);
-    assert.equal(packet.learnOutcome.providerCallsAllowed, false);
-    assert.equal(packet.learnOutcome.durableWriteAllowed, false);
-    assert.equal(packet.learnOutcome.learningProposalCount, packet.memoryProposals.length);
-    assert.ok(packet.learnOutcome.nextSafeAction.length > 0);
-    for (const decision of packet.learnOutcome.decisionRecords) {
-      assert.equal(decision.canonicalMutationAllowed, false);
-      assert.equal(decision.durableWriteAllowed, false);
-      assert.ok(decision.actor.length > 0);
-      assert.notEqual(decision.actor, "system");
-      assert.ok(decision.evidenceRefs.length > 0);
-      assert.ok(decision.recoveryPath.length > 0);
-    }
-  }
-});
-
-test("pipeline learn and refill visibility stays metadata-only and behind detail surfaces", async () => {
-  const { pipelineCockpitPackets, pipelineFixturePackets } = await loadCompiledDashboardFixtures();
-  const cockpitSource = await readFile(cockpitPath, "utf8");
-  const packetDetailSource = await readFile(packetDetailPath, "utf8");
-  const fixtureSource = await readFile(fixturesPath, "utf8");
-  const supervisorSchemaSource = await readFile(supervisorSchemasPath, "utf8");
-  const allPipelineSource = `${cockpitSource}\n${packetDetailSource}\n${fixtureSource}`;
-
-  assert.match(fixtureSource, /learnRefill/);
-  assert.match(cockpitSource, /LearnRefillPanel/);
-  assert.match(cockpitSource, /Learn and refill panel/);
-  assert.match(cockpitSource, /No work in this stage/);
-  assert.match(cockpitSource, /break-words text-\[var\(--foreground\)\]/);
-  assert.match(cockpitSource, /source \$\{followUp\.sourcePacketId\}/);
-  assert.match(cockpitSource, /candidate \$\{followUp\.candidateWorkId\}/);
-  assert.match(packetDetailSource, /LearnRefillDetail/);
-  assert.match(packetDetailSource, /source \$\{followUp\.sourcePacketId\}/);
-  assert.match(packetDetailSource, /candidate \$\{followUp\.candidateWorkId\}/);
-  assert.match(supervisorSchemaSource, /class WorkPacketLearnRefillProjectionV0View\(BaseModel\):/);
-  assert.match(supervisorSchemaSource, /learnRefill:\s*WorkPacketLearnRefillProjectionV0View \| None = None/);
-
-  for (const visibleLabel of [
-    "Learn and refill",
-    "Follow-up Candidate Work",
-    "Operator-owned exits",
-    "Refill source state",
-    "Housekeeping",
-    "Source exhausted",
-    "Refill running",
-    "Refill blocked",
-    "Healthy empty",
-    "Unknown refill state",
-    "Ready to test",
-    "Rejected to operator-owned workbench",
-    "reenter_capture",
-    "metadata_only",
-  ]) {
-    assert.match(allPipelineSource, new RegExp(visibleLabel, "i"));
-  }
-
-  const packetsWithProjection = pipelineCockpitPackets.filter((packet) => packet.learnRefill);
-  assert.ok(packetsWithProjection.length >= 5, "fixtures should include routine learn/refill projection examples");
-  assert.ok(
-    packetsWithProjection.some((packet) => packet.learnRefill?.followUpCandidates.length),
-    "learn/refill projection should expose follow-up Candidate Work"
-  );
-  assert.ok(
-    packetsWithProjection.some((packet) => packet.learnRefill?.operatorOwnedExits.length),
-    "learn/refill projection should expose operator-owned exits"
-  );
-  assert.ok(
-    packetsWithProjection.some((packet) => packet.learnRefill?.readyToTest),
-    "learn/refill projection should expose ready-to-test user-facing work"
-  );
-
-  const states = new Set(packetsWithProjection.map((packet) => packet.learnRefill?.refillSourceState.state));
-  assert.deepEqual(
-    ["blocked", "healthy", "refilling", "source_exhausted", "unknown"].filter((state) => !states.has(state)),
-    [],
-    "fixtures should cover all refill source states"
-  );
-
-  for (const packet of packetsWithProjection) {
-    const projection = packet.learnRefill;
-    assert.ok(projection, `${packet.packetId} should have learn/refill projection`);
-    assert.equal(projection.retentionClass, "metadata_only");
-    assert.equal(projection.rawPayloadRetained, false);
-    assert.equal(projection.sourceMutationAllowed, false);
-    assert.equal(projection.providerCallsAllowed, false);
-    assert.equal(projection.workerLaunchAllowed, false);
-    assert.equal(projection.githubMutationAllowed, false);
-    assert.equal(projection.refillSourceState.metadataOnly, true);
-    assert.ok(projection.refillSourceState.explanation.length > 0);
-    assert.ok(projection.refillSourceState.operationalLabel.length > 0);
-    assert.ok(projection.housekeeping.summary.length > 0);
-    assert.ok(projection.nextSafeAction.length > 0);
-    for (const followUp of projection.followUpCandidates) {
-      assert.ok(followUp.sourcePacketId.length > 0);
-      assert.ok(followUp.candidateWorkId.length > 0);
-      assert.ok(followUp.reason.length > 0);
-      assert.ok(["failure", "approval", "rejection", "quality", "operator_feedback"].includes(followUp.origin));
-      assert.ok(["reenter_capture", "human_gate", "learn_review", "none"].includes(followUp.reentryPath));
-      assert.equal(followUp.metadataOnly, true);
-      assert.equal(followUp.rawPayloadRetained, false);
-      assert.ok(followUp.evidenceRefs.length > 0);
-    }
-    for (const exit of projection.operatorOwnedExits) {
-      assert.equal(exit.state, "operator_owned");
-      assert.equal(exit.reentryPath, "reenter_capture");
-      assert.equal(exit.metadataOnly, true);
-      assert.equal(exit.rawPayloadRetained, false);
-      assert.ok(exit.reason.length > 0);
-    }
-    if (projection.readyToTest) {
-      assert.equal(projection.readyToTest.metadataOnly, true);
-      assert.equal(projection.readyToTest.rawPayloadRetained, false);
-      assert.ok(projection.readyToTest.userFacingSummary.length > 0);
-      assert.ok(projection.readyToTest.testableSurface.length > 0);
-    }
-  }
-
-  const sourceExhaustedPacket = pipelineFixturePackets.find((packet) => packet.packetId === "fixture:learn-source-exhausted");
-  assert.equal(sourceExhaustedPacket?.learnRefill?.refillSourceState.state, "source_exhausted");
-  assert.match(sourceExhaustedPacket?.learnRefill?.refillSourceState.explanation ?? "", /approved source/i);
-  assert.doesNotMatch(allPipelineSource, /getRunStatus|getWorkItems|fetch\s*\(|EventSource|WebSocket|tmux|providerPayload|rawPrompt|rawCompletion|reasoningTrace|github\.rest|octokit/i);
 });
 
 test("pipeline source boundary checklist preserves Obsidian and LLM-Wiki ownership", async () => {
@@ -1468,7 +2417,6 @@ test("pipeline source boundary checklist preserves Obsidian and LLM-Wiki ownersh
 test("pipeline action guards reject stale unsafe unknown and boundary cases through fixture decision helper", async () => {
   const {
     evaluateFixtureActionDecision,
-    submitFixtureHumanGateActionRequest,
     pipelineDensityFixturePackets,
     pipelineFixturePackets,
   } = await loadCompiledDashboardFixtures();
@@ -1505,19 +2453,6 @@ test("pipeline action guards reject stale unsafe unknown and boundary cases thro
   assert.equal(unknownDecision.submitCapable, false);
   assert.equal(unknownDecision.guard?.classification, "unknown_action");
   assert.equal(unknownDecision.primaryRisk, "false_authority");
-  const { packet: packetWithUnknownRequest, request: unknownRequest } = submitFixtureHumanGateActionRequest(unknownGuard.packet, `${unknownGuard.packet.packetId}:action:not_in_packet`, "Operator");
-  assert.equal(unknownRequest.status, "rejected");
-  assert.equal(unknownRequest.auditEventType, "human_gate.unknown_action.request_rejected");
-  assert.equal(unknownRequest.requestedActionType, "request_clarification");
-  assert.equal(unknownRequest.requestDisplayLabel, "unknown_action");
-  assert.equal(unknownRequest.executionStarted, false);
-  assert.equal(unknownRequest.resultingStateApplied, false);
-  assert.equal(unknownRequest.retentionClass, "metadata_only");
-  assert.equal(unknownRequest.rawPayloadRetained, false);
-  assert.ok(
-    packetWithUnknownRequest.humanGateActionRequests.some((request) => request.requestId === unknownRequest.requestId),
-    "rejected unknown action request should be durable packet metadata"
-  );
 
   const densityGuard = pipelineDensityFixturePackets
     .flatMap((packet) => packet.actionGuardFixtures.map((guard) => ({ packet, guard })))
@@ -1525,44 +2460,6 @@ test("pipeline action guards reject stale unsafe unknown and boundary cases thro
   if (densityGuard) {
     assert.match(densityGuard.guard.safeNextOption, new RegExp(escapeRegExp(densityGuard.packet.packetId)));
   }
-  const densityPacketWithRequest = pipelineDensityFixturePackets.find((packet) => packet.humanGateActionRequests.length > 0);
-  if (densityPacketWithRequest) {
-    for (const request of densityPacketWithRequest.humanGateActionRequests) {
-      assert.equal(request.packetId, densityPacketWithRequest.packetId);
-      assert.match(request.actionId, new RegExp(escapeRegExp(densityPacketWithRequest.packetId)));
-      assert.match(request.decisionId, new RegExp(escapeRegExp(densityPacketWithRequest.packetId)));
-      assert.ok(
-        request.evidenceRefs.every((ref) => ref.includes(densityPacketWithRequest.packetId)),
-        "density clone request evidence refs should be remapped to the density packet"
-      );
-    }
-  }
-
-  const humanGatePacket = pipelineFixturePackets.find((packet) => packet.packetId === "fixture:human-gate-blocked");
-  assert.ok(humanGatePacket, "human gate packet should exist");
-  const availableAction = humanGatePacket.humanGateActions.find((action) => action.status === "available");
-  assert.ok(availableAction, "human gate packet should expose an available action");
-  const { packet: packetWithRecordedRequest, request: recordedRequest } = submitFixtureHumanGateActionRequest(humanGatePacket, availableAction.actionId, "Operator");
-  assert.equal(recordedRequest.status, "recorded");
-  assert.equal(recordedRequest.actionId, availableAction.actionId);
-  assert.equal(recordedRequest.decisionId, availableAction.payload.decisionId);
-  assert.equal(recordedRequest.requestedActionType, availableAction.type);
-  assert.equal(recordedRequest.requestDisplayLabel, availableAction.type);
-  assert.equal(recordedRequest.executionStarted, false);
-  assert.equal(recordedRequest.resultingStateApplied, false);
-  assert.equal(recordedRequest.retentionClass, "metadata_only");
-  assert.equal(recordedRequest.rawPayloadRetained, false);
-  assert.ok(recordedRequest.stopLines.some((line) => /Do not launch|No command|Do not call/i.test(line)));
-  assert.ok(
-    packetWithRecordedRequest.humanGateActionRequests.some((request) => request.requestId === recordedRequest.requestId),
-    "submitted action request should be durable packet metadata"
-  );
-  const { packet: packetWithSecondRecordedRequest, request: secondRecordedRequest } = submitFixtureHumanGateActionRequest(packetWithRecordedRequest, availableAction.actionId, "Second operator");
-  assert.notEqual(secondRecordedRequest.requestId, recordedRequest.requestId);
-  assert.ok(
-    packetWithSecondRecordedRequest.humanGateActionRequests.some((request) => request.requestId === secondRecordedRequest.requestId),
-    "repeated action requests should append without request id collisions"
-  );
 });
 
 test("governed copied-worktree evidence projects into pipeline packets without live dashboard authority", async () => {
@@ -1875,6 +2772,8 @@ test("governed copied-worktree evidence projects into pipeline packets without l
 });
 
 test("pipeline evidence source loads persisted worker snapshots without live calls", async () => {
+  const pipelineEvidenceSource = await readFile(pipelineEvidenceSourcePath, "utf8");
+  assert.match(pipelineEvidenceSource, /pipelinePacketsWithPersistedGovernedWorkerEvidence/);
   const {
     loadPersistedGovernedWorkerEvidencePackets,
     pipelinePacketsWithPersistedGovernedWorkerEvidence,
@@ -2128,8 +3027,37 @@ async function readPipelineComponentSource() {
   ).join("\n");
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function extractFunctionSource(source, functionName) {
+  const start = source.indexOf(`function ${functionName}`);
+  assert.notEqual(start, -1, `${functionName} source should exist`);
+  let openBrace = -1;
+  for (let index = start; index < source.length; index += 1) {
+    if (source[index] !== "{") {
+      continue;
+    }
+    let previousIndex = index - 1;
+    while (previousIndex >= start && /\s/.test(source[previousIndex])) {
+      previousIndex -= 1;
+    }
+    if (source[previousIndex] === ")") {
+      openBrace = index;
+      break;
+    }
+  }
+  assert.notEqual(openBrace, -1, `${functionName} should have a function body`);
+  let depth = 0;
+  for (let index = openBrace; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, index + 1);
+      }
+    }
+  }
+  assert.fail(`${functionName} function body should close`);
 }
 
 function assertRequiredBlockedOps(boundaries, requiredByBoundaryId) {

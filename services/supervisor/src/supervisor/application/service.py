@@ -1333,6 +1333,180 @@ class SupervisorService:
 
         return packet_views
 
+    async def get_pipeline_dashboard_projection(self, session: AsyncSession) -> dict:
+        packets = await self.list_work_packets(session)
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        projected_packets = [self._pipeline_dashboard_work_packet(packet, generated_at) for packet in packets]
+        selected_packet_details = [self._pipeline_dashboard_selected_packet_detail(packet, generated_at) for packet in packets]
+        stage_counts = {stage: 0 for stage in self._pipeline_dashboard_stages()}
+        for packet in projected_packets:
+            stage_counts[packet["currentStage"]] += 1
+        dispatchable_count = sum(1 for packet in projected_packets if packet["status"] in {"active", "waiting"})
+        blocked_count = sum(1 for packet in projected_packets if packet["status"] in {"blocked", "failed"})
+        closed_count = sum(1 for packet in projected_packets if packet["status"] in {"complete", "deferred"})
+        empty_reason = "healthy_empty" if not projected_packets else None
+        evidence_refs = sorted({ref for packet in projected_packets for ref in packet["evidenceRefs"]})
+        return {
+            "schemaVersion": "pipeline-dashboard-projection/v0",
+            "projectionId": f"pipeline-dashboard-projection:{uuid.uuid4()}",
+            "generatedAt": generated_at,
+            "sourceUpdatedAt": generated_at,
+            "sourceLabel": "live",
+            "freshnessState": "live",
+            "staleAfterSeconds": 60,
+            "backendReachability": {
+                "state": "reachable",
+                "checkedAt": generated_at,
+                "reason": None,
+                "summary": "Supervisor projection endpoint reachable.",
+            },
+            "fixtureMode": {
+                "enabled": False,
+                "reason": None,
+                "allowedForEnvironment": False,
+                "visibleLabelRequired": True,
+                "canSatisfyLiveProof": False,
+            },
+            "truthSummary": {
+                "label": "live",
+                "emptyReason": empty_reason,
+                "backendEmpty": not projected_packets,
+                "backendUnavailable": False,
+                "fixtureBacked": False,
+                "stale": False,
+                "summary": "Live supervisor WorkPacket projection." if projected_packets else "Live supervisor projection has no WorkPackets.",
+            },
+            "stageSummaries": [
+                {
+                    "stage": stage,
+                    "label": self._pipeline_dashboard_stage_labels()[stage],
+                    "packetCount": stage_counts[stage],
+                    "sourceLabel": "live",
+                    "freshnessState": "live",
+                    "emptyReason": empty_reason if stage_counts[stage] == 0 else None,
+                }
+                for stage in self._pipeline_dashboard_stages()
+            ],
+            "workPackets": projected_packets,
+            "selectedPacketDetails": selected_packet_details,
+            "managerSummary": {
+                "stateSource": "supervisor_projection",
+                "freshnessState": "live",
+                "activeLeaseCount": None,
+                "activeWorkerCount": None,
+                "warmWorkerCount": None,
+                "blockedQueueCount": blocked_count,
+                "dispatchableQueueCount": dispatchable_count,
+                "closedQueueCount": closed_count,
+                "sourceExhausted": False,
+                "inactivityReason": empty_reason,
+                "summary": "Supervisor projected queue state from live WorkPackets.",
+                "metadataOnly": True,
+            },
+            "queueSummary": {
+                "dispatchableCount": dispatchable_count,
+                "blockedCount": blocked_count,
+                "closedCount": closed_count,
+                "emptyReason": empty_reason,
+                "sourceExhausted": False,
+                "summary": "Live WorkPacket queue projection." if projected_packets else "Live queue is empty.",
+            },
+            "evidenceRefs": evidence_refs,
+        }
+
+    def _pipeline_dashboard_work_packet(self, packet: WorkPacketV0View, generated_at: str) -> dict:
+        source_refs = [self._pipeline_dashboard_source_ref(ref) for ref in packet.sourceRefs]
+        evidence_refs = [ref.refId for ref in packet.evidenceRefs]
+        return {
+            "packetId": packet.packetId,
+            "title": packet.title,
+            "currentStage": self._pipeline_dashboard_stage(packet.currentStage),
+            "status": packet.status,
+            "truthLabel": "live",
+            "sourceRef": source_refs[0] if source_refs else None,
+            "blocker": self._pipeline_dashboard_blocker(packet),
+            "nextAction": self._pipeline_dashboard_next_action(packet),
+            "evidenceRefs": evidence_refs,
+            "updatedAt": generated_at,
+            "metadataOnly": True,
+        }
+
+    def _pipeline_dashboard_selected_packet_detail(self, packet: WorkPacketV0View, generated_at: str) -> dict:
+        source_refs = [self._pipeline_dashboard_source_ref(ref) for ref in packet.sourceRefs]
+        return {
+            "packetId": packet.packetId,
+            "sourceRefs": source_refs,
+            "evidenceRefs": [ref.refId for ref in packet.evidenceRefs],
+            "currentStage": self._pipeline_dashboard_stage(packet.currentStage),
+            "status": packet.status,
+            "truthLabel": "live",
+            "blocker": self._pipeline_dashboard_blocker(packet),
+            "nextAction": self._pipeline_dashboard_next_action(packet),
+            "metadataOnly": True,
+        }
+
+    def _pipeline_dashboard_source_ref(self, ref: SourceRefV0View) -> dict:
+        source_type = {
+            "candidate_work": "operator_input",
+            "work_item": "workflow",
+            "bmad_artifact": "bmad_story",
+            "obsidian": "operator_input",
+            "llm_wiki": "repo_doc",
+            "github": "workflow",
+            "research": "repo_doc",
+            "manual": "operator_input",
+        }.get(ref.sourceType, "workflow")
+        return {
+            "refId": ref.refId,
+            "sourceType": source_type,
+            "pathOrUrl": ref.pathOrUrl,
+            "title": ref.label,
+        }
+
+    def _pipeline_dashboard_stage(self, stage: str) -> str:
+        return "needs_approval" if stage == "human_gate" else stage
+
+    def _pipeline_dashboard_stages(self) -> list[str]:
+        return ["capture", "classify", "route", "shape", "needs_approval", "execute", "review", "promote", "deliver", "learn"]
+
+    def _pipeline_dashboard_stage_labels(self) -> dict[str, str]:
+        return {
+            "capture": "Capture",
+            "classify": "Classify",
+            "route": "Route",
+            "shape": "Shape",
+            "needs_approval": "Needs Approval",
+            "execute": "Execute",
+            "review": "Review",
+            "promote": "Promote",
+            "deliver": "Deliver",
+            "learn": "Learn",
+        }
+
+    def _pipeline_dashboard_blocker(self, packet: WorkPacketV0View) -> str | None:
+        if packet.status not in {"blocked", "failed"}:
+            return None
+        if packet.loopStopStates:
+            return packet.loopStopStates[0].summary
+        if packet.gateStateValidation and packet.gateStateValidation.blockers:
+            return packet.gateStateValidation.blockers[0]
+        if packet.recoveryActions:
+            return packet.recoveryActions[0].label
+        return "WorkPacket is blocked or failed."
+
+    def _pipeline_dashboard_next_action(self, packet: WorkPacketV0View) -> str | None:
+        if packet.humanGateActionRequests:
+            return packet.humanGateActionRequests[0].summary
+        if packet.recoveryActions:
+            return packet.recoveryActions[0].consequence
+        if packet.status == "waiting" and packet.currentStage == "human_gate":
+            return "Review the approval gate."
+        if packet.status in {"active", "waiting"}:
+            return "Continue the current pipeline stage."
+        if packet.status == "complete":
+            return "Review completion evidence and next stage."
+        return None
+
     async def get_work_packet(self, session: AsyncSession, packet_id: str) -> WorkPacketV0View | None:
         if packet_id.startswith("work_item:"):
             work_item_id = packet_id.removeprefix("work_item:")

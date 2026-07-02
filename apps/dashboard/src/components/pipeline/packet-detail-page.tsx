@@ -11,6 +11,9 @@ export function PacketDetailPage({
   snapshot: PipelineGoldenPathSnapshot | null;
   sourceBoundaries: SourceBoundaryDeclarationV0[];
 }) {
+  const fixtureWarning = packet.fixtureId.startsWith("projection:")
+    ? null
+    : "Fixture/non-live packet; cannot satisfy live proof.";
   return (
     <main className="grid max-w-full min-w-0 gap-4" aria-label="Packet detail">
       <section className="pipeline-nohype-shell rounded-[0.5rem] border p-4">
@@ -21,9 +24,17 @@ export function PacketDetailPage({
           <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">{packet.currentStage}</span>
           <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">{packet.currentOwner}</span>
           <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">{packet.fixtureLabel}</span>
+          {fixtureWarning ? (
+            <span className="rounded-full bg-[var(--surface-strong)] px-2 py-1 text-xs text-[var(--muted)]">non-live fixture</span>
+          ) : null}
         </div>
         <h1 className="mt-3 break-words text-2xl font-semibold">Packet detail: {packet.title}</h1>
         <p className="mt-2 max-w-4xl text-sm leading-6 text-[var(--muted)]">{snapshot?.whatPacketIs ?? packet.summary}</p>
+        {fixtureWarning ? (
+          <p className="mt-2 max-w-4xl rounded-[0.375rem] border border-[var(--line)] px-3 py-2 text-sm leading-6 text-[var(--muted)]">
+            {fixtureWarning}
+          </p>
+        ) : null}
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <SummaryTile label="Stage" value={packet.currentStage} />
           <SummaryTile label="Owner" value={packet.currentOwner} />
@@ -56,8 +67,8 @@ export function PacketDetailPage({
 
         <DetailSection title="Evidence and artifacts">
           <RefList title="Sources" values={packet.sourceRefs.map((ref) => `${ref.label}; ${ref.sourceType}; ${ref.freshness}; ${ref.accessState}`)} />
-          <EvidenceTrace packet={packet} />
-          <ArtifactTrace packet={packet} />
+          <RefList title="Evidence" values={packet.evidenceRefs.map((ref) => `${ref.label}; ${ref.evidenceType}; retained ${String(ref.rawPayloadRetained)}`)} />
+          <RefList title="Artifacts" values={packet.artifactRefs.map((ref) => `${ref.label}; ${ref.artifactType}; ${ref.status}`)} />
         </DetailSection>
 
         <DetailSection title="Workers and review">
@@ -75,16 +86,68 @@ export function PacketDetailPage({
         </DetailSection>
 
         <DetailSection title="Gate, memory, recovery">
-          <LoopStopStateList packet={packet} />
-          <DeliveryEvidenceList packet={packet} />
-          <LearnOutcomeList packet={packet} />
-          <LearnRefillDetail packet={packet} />
-          <HumanGateActionList packet={packet} />
-          <HumanGateActionRequestList packet={packet} />
-          <MemoryProposalList packet={packet} />
-          <RecoveryActionList packet={packet} />
+          <RefList
+            title="Human Gate actions"
+            values={packet.humanGateActions.map((action) =>
+              [
+                `${action.label}: ${action.status}; ${action.disabledReason ?? action.resultingStage}`,
+                `required evidence: ${action.requiredEvidenceRefs.join(", ") || "none"}`,
+                `stop lines: ${action.stopLines.join(" | ") || "none"}`,
+                `rollback: ${action.rollbackPath}`,
+                `audit: ${action.auditEventType}`,
+              ].join("; ")
+            )}
+          />
+          <RefList title="Memory proposals" values={packet.memoryProposals.map(formatMemoryProposal)} empty="No memory proposal for this packet." />
+          <RefList title="Recovery actions" values={packet.recoveryActions.map((action) => formatRecoveryAction(packet, action.actionId))} empty="No recovery action for this packet." />
         </DetailSection>
       </section>
+
+      {packet.humanGateActionRequests.length > 0 ? (
+        <section aria-label="Action request ledger" className="rounded-[0.5rem] border bg-[var(--panel)] p-4">
+          <h2 className="text-lg font-semibold">Action request ledger</h2>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {packet.humanGateActionRequests.map((request) => (
+              <article className="rounded-[0.5rem] border bg-[var(--surface)] p-3" key={request.requestId}>
+                <h3 className="break-words text-sm font-semibold">{request.requestDisplayLabel}</h3>
+                <FieldList fields={actionRequestFields(request)} />
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {packet.deliveryEvidence ? (
+        <DetailSection title="Delivery and cleanup evidence">
+          <article className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
+            <h3 className="break-words text-sm font-semibold">{packet.deliveryEvidence.evidenceId}</h3>
+            <FieldList fields={deliveryEvidenceFields(packet.deliveryEvidence)} />
+          </article>
+        </DetailSection>
+      ) : null}
+
+      {packet.memoryProposals.length > 0 || packet.learnOutcome || packet.learnRefill ? (
+        <DetailSection title="Learn panel: Memory proposals">
+          {packet.memoryProposals.map((proposal) => (
+            <article className="rounded-[0.5rem] border bg-[var(--surface)] p-3" key={proposal.proposalId}>
+              <h3 className="break-words text-sm font-semibold">{proposal.label}</h3>
+              <FieldList fields={memoryProposalFields(proposal)} />
+            </article>
+          ))}
+          {packet.learnOutcome ? (
+            <article className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
+              <h3 className="break-words text-sm font-semibold">Learn outcome</h3>
+              <FieldList fields={learnOutcomeFields(packet.learnOutcome)} />
+            </article>
+          ) : null}
+          {packet.learnRefill ? (
+            <article className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
+              <h3 className="break-words text-sm font-semibold">Learn refill</h3>
+              <FieldList fields={learnRefillFields(packet.learnRefill)} />
+            </article>
+          ) : null}
+        </DetailSection>
+      ) : null}
 
       <section aria-label="Packet source boundaries" className="rounded-[0.5rem] border bg-[var(--panel)] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -201,375 +264,144 @@ function RefList({ empty = "None.", title, values }: { empty?: string; title: st
   );
 }
 
-function EvidenceTrace({ packet }: { packet: PipelineFixturePacket }) {
-  return (
-    <DetailCard title="Evidence trace" empty={packet.evidenceRefs.length === 0 ? "No evidence refs for this packet." : null}>
-      {packet.evidenceRefs.map((ref) => (
-        <TraceBlock
-          key={ref.refId}
-          title={ref.label}
-          fields={[
-            ["Evidence type", ref.evidenceType],
-            ["Ref id", ref.refId],
-            ["Retention class", ref.retentionClass],
-            ["Raw payload retained", String(ref.rawPayloadRetained)],
-            ["Artifact path", ref.artifactPath ?? "none"],
-          ]}
-        />
-      ))}
-    </DetailCard>
-  );
+function actionRequestFields(request: PipelineFixturePacket["humanGateActionRequests"][number]): Array<[string, string]> {
+  return [
+    ["Request status", request.status],
+    ["Requested action", request.requestedActionType],
+    ["Decision", request.decisionId],
+    ["Requested by", request.requestedByLabel],
+    ["Requested at", request.requestedAt],
+    ["Execution started", String(request.executionStarted)],
+    ["Resulting state applied", String(request.resultingStateApplied)],
+    ["Required evidence", request.evidenceRefs.join(", ") || "none"],
+    ["Stop lines", request.stopLines.join(" | ") || "none"],
+    ["Rollback", request.rollbackPath],
+    ["Audit", request.auditEventType],
+    ["Rejection reason", request.rejectionReason ?? "none"],
+  ];
 }
 
-function ArtifactTrace({ packet }: { packet: PipelineFixturePacket }) {
-  return (
-    <DetailCard title="Artifact trace" empty={packet.artifactRefs.length === 0 ? "No artifacts for this packet." : null}>
-      {packet.artifactRefs.map((ref) => (
-        <TraceBlock
-          key={ref.refId}
-          title={ref.label}
-          fields={[
-            ["Artifact type", ref.artifactType],
-            ["Ref id", ref.refId],
-            ["Status", ref.status],
-            ["Path or URL", ref.pathOrUrl ?? "none"],
-          ]}
-        />
-      ))}
-    </DetailCard>
-  );
+function deliveryEvidenceFields(delivery: NonNullable<PipelineFixturePacket["deliveryEvidence"]>): Array<[string, string]> {
+  return [
+    ["Mode", delivery.mode],
+    ["Status", delivery.status],
+    ["Action", delivery.actionId ?? "none"],
+    ["Target branch", delivery.targetBranch ?? "none"],
+    ["Base branch", delivery.baseBranch ?? "none"],
+    ["Pull request", delivery.pullRequestUrl ?? "none"],
+    ["Expected head", delivery.expectedHeadRevision ?? "none"],
+    ["Pull request head", delivery.pullRequestHeadRevision ?? "none"],
+    ["CI", delivery.ciStatus ?? "none"],
+    ["Review", delivery.reviewState ?? "none"],
+    ["Merge", delivery.mergeStatus ?? "none"],
+    ["Merge result", delivery.mergeResult ?? "none"],
+    ["Cleanup dry-run", delivery.cleanupDryRunStatus ?? "none"],
+    ["Cleanup target", delivery.cleanupTarget ?? "none"],
+    ["Ready for approval", String(delivery.readyForApproval)],
+    ["Delivery execution evidence", String(delivery.hasDeliveryExecutionEvidence)],
+    ["Evidence refs", delivery.evidenceRefs.join(", ") || "none"],
+    ["Artifact refs", delivery.artifactRefs.join(", ") || "none"],
+    ["Retained evidence", delivery.retainedEvidence.join(", ") || "none"],
+    ["Blocked reasons", delivery.blockedReasons.join(", ") || "none"],
+    ["Recovery path", delivery.recoveryPath],
+    ["Delivery rails grant authority", String(delivery.deliveryRailsGrantAuthority)],
+    ["Remote mutation approved", String(delivery.remoteMutationApproved)],
+    ["Merge approved", String(delivery.mergeApproved)],
+    ["Cleanup approved", String(delivery.cleanupApproved)],
+    ["Raw payload retained", String(delivery.rawPayloadRetained)],
+  ];
 }
 
-function HumanGateActionList({ packet }: { packet: PipelineFixturePacket }) {
-  return (
-    <DetailCard title="Human Gate actions" empty={packet.humanGateActions.length === 0 ? "No Human Gate action for this packet." : null}>
-      {packet.humanGateActions.map((action) => {
-        const event = packet.humanGateFixtureEvents.find((candidate) => candidate.actionId === action.actionId);
-        const guards = packet.actionGuardFixtures.filter(
-          (candidate) => candidate.actionSurface === "human_gate" && (candidate.actionId === action.actionId || candidate.expectedActionId === action.actionId || candidate.actualActionId === action.actionId)
-        );
-        return (
-          <TraceBlock
-            key={action.actionId}
-            title={action.label}
-            fields={[
-              ["Typed action", action.type],
-              ["Status", action.status],
-              ["Family", action.family],
-              ["Decision id", action.payload.decisionId],
-              ["Required evidence", action.requiredEvidenceRefs.join(", ") || "none"],
-              ["Disabled reason", action.disabledReason ?? "none"],
-              ["Resulting state", `${action.resultingStage} / ${action.resultingOwner}`],
-              ["Rollback", action.rollbackPath],
-              ["Audit", action.auditEventType],
-              ["Reason codes", formatReasonCodes(action.reasonCodes)],
-              ["Action guard previews", guards.length > 0 ? guards.map(formatActionGuardSummary).join(" | ") : "none"],
-              ["Preview event", event ? `${event.eventId}; ${event.summary}` : "none"],
-              ["Stop lines", action.stopLines.join(" | ") || "none"],
-            ]}
-          />
-        );
-      })}
-    </DetailCard>
-  );
+function memoryProposalFields(proposal: PipelineFixturePacket["memoryProposals"][number]): Array<[string, string]> {
+  return [
+    ["Proposal surface", proposal.targetVaultPath ?? proposal.targetVaultFolder],
+    ["Reviewable memory proposals", proposal.status === "pending_human_approval" ? "yes" : proposal.status],
+    ["Proposal state", proposal.status],
+    ["Proposal type", proposal.proposalType],
+    ["Suggested content", proposal.suggestedContentSummary],
+    ["Source refs", proposal.sourceRefs.join(", ")],
+    ["Evidence refs", proposal.evidenceRefs.join(", ")],
+    ["Decision context", proposal.decisionNeededContext ?? "no extra decision context"],
+    ["Sensitivity", proposal.sensitivity],
+    ["Contradiction", proposal.contradictionStatus],
+    ["Confidence", proposal.confidence],
+    ["Write-back allowed", String(proposal.writeBackAllowed)],
+    ["Write-back status", proposal.writeBackStatus],
+    ["Canonical Obsidian write-back", "blocked; writeBackAllowed=" + String(proposal.writeBackAllowed)],
+    ["Operator action", proposal.operatorAction],
+    ["Available review actions", "defer, reject, request edit"],
+    ["Reject available", proposal.operatorAction === "approve" || proposal.status === "pending_human_approval" ? "true" : "false"],
+    ["Backup / recovery", proposal.backupRecoveryPath],
+  ];
 }
 
-function LoopStopStateList({ packet }: { packet: PipelineFixturePacket }) {
-  return (
-    <DetailCard title="Loop stop states" empty={packet.loopStopStates.length === 0 ? "No autonomous loop stop state for this packet." : null}>
-      {packet.loopStopStates.map((stopState) => (
-        <TraceBlock
-          key={stopState.stopStateId}
-          title={stopState.label}
-          fields={[
-            ["Kind", stopState.kind],
-            ["Phase", stopState.phase],
-            ["Severity", stopState.severity],
-            ["Summary", stopState.summary],
-            ["Stop line", stopState.stopLine],
-            ["Next safe action", stopState.nextSafeAction],
-            ["Evidence refs", stopState.evidenceRefs.join(", ")],
-            ["Metadata", stopState.metadataOnly ? "metadata_only" : "raw_payload_risk"],
-            ["Source mutation", stopState.sourceMutationAllowed ? "allowed" : "blocked"],
-            ["Provider calls", stopState.providerCallsAllowed ? "allowed" : "blocked"],
-            ["Worker launch", stopState.workerLaunchAllowed ? "allowed" : "blocked"],
-            ["GitHub mutation", stopState.githubMutationAllowed ? "allowed" : "blocked"],
-            ["Cleanup", stopState.cleanupAllowed ? "allowed" : "blocked"],
-          ]}
-        />
-      ))}
-    </DetailCard>
-  );
+function learnOutcomeFields(outcome: NonNullable<PipelineFixturePacket["learnOutcome"]>): Array<[string, string]> {
+  return [
+    ["Outcome", outcome.outcomeId],
+    ["Status", outcome.status],
+    ["Retention", outcome.retentionClass],
+    ["Proposal count", String(outcome.learningProposalCount)],
+    ["Documentation proposal", outcome.documentationProposalStatus],
+    ["Automation authority", outcome.automationAuthorityChangeStatus],
+    ["Blocked write-back", outcome.blockedWriteBackState],
+    ["Next safe action", outcome.nextSafeAction],
+    ["Decision records", outcome.decisionRecords.map((record) => record.decisionId).join(", ") || "none"],
+    ["Evidence refs", outcome.evidenceRefs.join(", ") || "none"],
+    ["Source refs", outcome.sourceRefs.join(", ") || "none"],
+    ["Canonical mutation allowed", String(outcome.canonicalMutationAllowed)],
+    ["Durable write allowed", String(outcome.durableWriteAllowed)],
+  ];
 }
 
-function DeliveryEvidenceList({ packet }: { packet: PipelineFixturePacket }) {
-  const evidence = packet.deliveryEvidence;
-  return (
-    <DetailCard title="Delivery and cleanup evidence" empty={evidence ? null : "No delivery or cleanup evidence for this packet."}>
-      {evidence ? (
-        <TraceBlock
-          title={evidence.evidenceId}
-          fields={[
-            ["Mode", evidence.mode],
-            ["Action", evidence.actionId ?? "none"],
-            ["Status", evidence.status],
-            ["Target branch", evidence.targetBranch ?? "none"],
-            ["Base branch", evidence.baseBranch ?? "none"],
-            ["Pull request", evidence.pullRequestUrl ?? "none"],
-            ["Expected head", evidence.expectedHeadRevision ?? "none"],
-            ["PR head", evidence.pullRequestHeadRevision ?? "none"],
-            ["CI status", evidence.ciStatus ?? "none"],
-            ["Review state", evidence.reviewState ?? "none"],
-            ["Merge status", evidence.mergeStatus ?? "none"],
-            ["Merge result", evidence.mergeResult ?? "none"],
-            ["Cleanup dry-run", evidence.cleanupDryRunStatus ?? "none"],
-            ["Cleanup target", evidence.cleanupTarget ?? "none"],
-            ["Ready for approval", String(evidence.readyForApproval)],
-            ["Delivery execution evidence", String(evidence.hasDeliveryExecutionEvidence)],
-            ["Evidence refs", formatRefList(evidence.evidenceRefs)],
-            ["Artifact refs", formatRefList(evidence.artifactRefs)],
-            ["Retained evidence", formatRefList(evidence.retainedEvidence)],
-            ["Blocked reasons", formatRefList(evidence.blockedReasons)],
-            ["Recovery path", evidence.recoveryPath],
-            ["Delivery rails grant authority", String(evidence.deliveryRailsGrantAuthority)],
-            ["Raw payload retained", String(evidence.rawPayloadRetained)],
-            ["Remote mutation approved", String(evidence.remoteMutationApproved)],
-            ["Merge approved", String(evidence.mergeApproved)],
-            ["Cleanup approved", String(evidence.cleanupApproved)],
-          ]}
-        />
-      ) : null}
-    </DetailCard>
-  );
+function learnRefillFields(refill: NonNullable<PipelineFixturePacket["learnRefill"]>): Array<[string, string]> {
+  return [
+    ["Projection", refill.projectionId],
+    ["Refill state", refill.refillSourceState.state],
+    ["Operational label", refill.refillSourceState.operationalLabel],
+    ["Housekeeping", refill.housekeeping.status + "; " + refill.housekeeping.summary],
+    ["Source exhaustion", String(refill.sourceExhaustion.exhausted) + "; " + refill.sourceExhaustion.summary],
+    ["Follow-up candidates", refill.followUpCandidates.map((candidate) => candidate.label).join(", ") || "none"],
+    ["Operator-owned exits", refill.operatorOwnedExits.map((exit) => exit.reason).join(", ") || "none"],
+    ["Ready to test", refill.readyToTest?.userFacingSummary ?? "none"],
+    ["Next safe action", refill.nextSafeAction],
+    ["Raw payload retained", String(refill.rawPayloadRetained)],
+    ["Source mutation allowed", String(refill.sourceMutationAllowed)],
+  ];
 }
 
-function HumanGateActionRequestList({ packet }: { packet: PipelineFixturePacket }) {
-  const requests = packet.humanGateActionRequests ?? [];
-  return (
-    <section aria-label="Action request ledger">
-      <DetailCard title="Action request ledger" empty={requests.length === 0 ? "No Human Gate action request for this packet." : null}>
-        {requests.map((request) => (
-          <TraceBlock
-            key={request.requestId}
-            title={request.requestDisplayLabel}
-            fields={[
-              ["Request id", request.requestId],
-              ["Request status", request.status],
-              ["Action id", request.actionId],
-              ["Decision id", request.decisionId],
-              ["Requested action type", request.requestedActionType],
-              ["Request display label", request.requestDisplayLabel],
-              ["Requested by", request.requestedByLabel],
-              ["Requested at", request.requestedAt],
-              ["Evidence refs", request.evidenceRefs.join(", ") || "none"],
-              ["Retention class", request.retentionClass],
-              ["Raw payload retained", String(request.rawPayloadRetained)],
-              ["Execution started", String(request.executionStarted)],
-              ["Resulting state applied", String(request.resultingStateApplied)],
-              ["Audit", request.auditEventType],
-              ["Rejection reason", request.rejectionReason ?? "none"],
-              ["Rollback", request.rollbackPath],
-              ["Stop lines", request.stopLines.join(" | ") || "none"],
-            ]}
-          />
-        ))}
-      </DetailCard>
-    </section>
-  );
+function formatMemoryProposal(proposal: PipelineFixturePacket["memoryProposals"][number]) {
+  return [
+    `${proposal.label}: ${proposal.status}; ${proposal.targetVaultPath ?? proposal.targetVaultFolder}`,
+    `proposal type: ${proposal.proposalType}`,
+    `sensitivity: ${proposal.sensitivity}`,
+    `contradiction: ${proposal.contradictionStatus}`,
+    `write-back allowed: ${String(proposal.writeBackAllowed)}`,
+    `write-back status: ${proposal.writeBackStatus}`,
+    `operator action: ${proposal.operatorAction}`,
+    `backup: ${proposal.backupRecoveryPath}`,
+  ].join("; ");
 }
 
-function MemoryProposalList({ packet }: { packet: PipelineFixturePacket }) {
-  return (
-    <DetailCard title="Learn panel: Memory proposals" empty={packet.memoryProposals.length === 0 ? "No memory proposal for this packet." : null}>
-      {packet.memoryProposals.map((proposal) => (
-        <TraceBlock
-          key={proposal.proposalId}
-          title={proposal.label}
-          fields={[
-            ["Proposal surface", "Reviewable memory proposals"],
-            ["Proposal state", proposal.status],
-            ["Packet id", proposal.packetId],
-            ["Proposal id", proposal.proposalId],
-            ["Proposal type", proposal.proposalType],
-            ["Status", proposal.status],
-            ["Target", proposal.targetVaultPath ?? proposal.targetVaultFolder ?? "none"],
-            ["Target folder", proposal.targetVaultFolder ?? "none"],
-            ["Sensitivity", proposal.sensitivity],
-            ["Freshness", proposal.freshness],
-            ["Contradiction", proposal.contradictionStatus],
-            ["Confidence", proposal.confidence],
-            ["Source refs", proposal.sourceRefs.join(", ")],
-            ["Evidence refs", proposal.evidenceRefs.join(", ")],
-            ["Suggested content", proposal.suggestedContentSummary],
-            ["Patch summary", proposal.patchSummary ?? "summary only"],
-            ["Decision context", proposal.decisionNeededContext ?? "no extra decision context"],
-            ["Write-back allowed", String(proposal.writeBackAllowed)],
-            ["Write-back status", proposal.writeBackStatus],
-            ["Canonical Obsidian write-back", memoryProposalCanonicalGateState(proposal)],
-            ["Operator action", proposal.operatorAction],
-            ["Available review actions", memoryProposalReviewActions(proposal)],
-            ["Reject available", memoryProposalRejectAvailable(proposal) ? "yes; review action only" : "no"],
-            ["Backup / recovery", proposal.backupRecoveryPath],
-          ]}
-        />
-      ))}
-    </DetailCard>
-  );
-}
-
-function LearnOutcomeList({ packet }: { packet: PipelineFixturePacket }) {
-  const outcome = packet.learnOutcome;
-  return (
-    <DetailCard title="Learn outcome" empty={!outcome ? "No Learn outcome has been recorded for this packet." : null}>
-      {outcome ? (
-        <TraceBlock
-          title={`${outcome.status}; ${outcome.learningProposalCount} learning proposals`}
-          fields={[
-            ["Outcome id", outcome.outcomeId],
-            ["Retention", outcome.retentionClass],
-            ["Documentation proposal", outcome.documentationProposalStatus],
-            ["Automation authority", outcome.automationAuthorityChangeStatus],
-            ["Blocked write-back state", outcome.blockedWriteBackState],
-            ["Next safe action", outcome.nextSafeAction],
-            ["Source refs", outcome.sourceRefs.join(", ") || "none"],
-            ["Evidence refs", outcome.evidenceRefs.join(", ") || "none"],
-            ["Canonical mutation", outcome.canonicalMutationAllowed ? "allowed" : "blocked"],
-            ["Source mutation", outcome.sourceMutationAllowed ? "allowed" : "blocked"],
-            ["Provider calls", outcome.providerCallsAllowed ? "allowed" : "blocked"],
-            ["Durable writes", outcome.durableWriteAllowed ? "allowed" : "blocked"],
-            [
-              "Decision records",
-              outcome.decisionRecords.map((decision) => `${decision.actor}: ${decision.proposalId} -> ${decision.result}; ${decision.recoveryPath}`).join(" | ") || "none",
-            ],
-          ]}
-        />
-      ) : null}
-    </DetailCard>
-  );
-}
-
-function LearnRefillDetail({ packet }: { packet: PipelineFixturePacket }) {
-  const projection = packet.learnRefill;
-  return (
-    <DetailCard title="Learn and refill" empty={!projection ? "No Learn/refill projection for this packet." : null}>
-      {projection ? (
-        <TraceBlock
-          title={`${projection.refillSourceState.operationalLabel}; ${projection.refillSourceState.state}`}
-          fields={[
-            ["Projection id", projection.projectionId],
-            ["Retention", projection.retentionClass],
-            ["Refill source state", projection.refillSourceState.state],
-            ["Operational label", projection.refillSourceState.operationalLabel],
-            ["Explanation", projection.refillSourceState.explanation],
-            ["Follow-up Candidate Work", projection.followUpCandidates.map((followUp) => `${followUp.label}: source ${followUp.sourcePacketId}; candidate ${followUp.candidateWorkId}; ${followUp.reason}; ${followUp.status}; ${followUp.origin}; ${followUp.reentryPath}`).join(" | ") || "none"],
-            ["Operator-owned exits", projection.operatorOwnedExits.map((exit) => `${exit.state}; ${exit.reason}; ${exit.stopStateKind}; ${exit.reentryPath}`).join(" | ") || "none"],
-            ["Housekeeping", `${projection.housekeeping.status}; ${projection.housekeeping.summary}`],
-            ["Source exhausted", projection.sourceExhaustion.exhausted ? `Source exhausted; ${projection.sourceExhaustion.summary}` : projection.sourceExhaustion.summary],
-            ["Ready to test", projection.readyToTest ? `${projection.readyToTest.userFacingSummary}; ${projection.readyToTest.testableSurface}` : "none"],
-            ["Next safe action", projection.nextSafeAction],
-            ["Raw payload retained", String(projection.rawPayloadRetained)],
-            ["Source mutation", projection.sourceMutationAllowed ? "allowed" : "blocked"],
-            ["Provider calls", projection.providerCallsAllowed ? "allowed" : "blocked"],
-            ["Worker launch", projection.workerLaunchAllowed ? "allowed" : "blocked"],
-            ["GitHub mutation", projection.githubMutationAllowed ? "allowed" : "blocked"],
-          ]}
-        />
-      ) : null}
-    </DetailCard>
-  );
-}
-
-function memoryProposalReviewActions(proposal: PipelineFixturePacket["memoryProposals"][number]) {
-  const actions = ["defer"];
-  if (memoryProposalRejectAvailable(proposal)) {
-    actions.push("reject");
+function formatRecoveryAction(packet: PipelineFixturePacket, actionId: string) {
+  const action = packet.recoveryActions.find((candidate) => candidate.actionId === actionId);
+  if (!action) {
+    return `Unknown recovery action: ${actionId}`;
   }
-  if (!["blocked", "stale", "contradictory", "rejected"].includes(proposal.status) && proposal.freshness === "fresh" && proposal.contradictionStatus === "none") {
-    actions.push("approve future draft");
-  }
-  if (proposal.status !== "rejected") {
-    actions.push("request edit");
-  }
-  return actions.join(", ");
-}
-
-function memoryProposalRejectAvailable(proposal: PipelineFixturePacket["memoryProposals"][number]) {
-  return proposal.status !== "rejected";
-}
-
-function memoryProposalCanonicalGateState(proposal: PipelineFixturePacket["memoryProposals"][number]) {
-  return proposal.writeBackAllowed === false
-    ? "blocked; writeBackAllowed=false"
-    : "blocked; invalid proposal writeBackAllowed state requires separate gated review";
-}
-
-function RecoveryActionList({ packet }: { packet: PipelineFixturePacket }) {
-  return (
-    <DetailCard title="Recovery actions" empty={packet.recoveryActions.length === 0 ? "No recovery action for this packet." : null}>
-      {packet.recoveryActions.map((action) => {
-        const guard = packet.actionGuardFixtures.find(
-          (candidate) => candidate.actionSurface === "recovery" && (candidate.actionId === action.actionId || candidate.expectedActionId === action.actionId || candidate.actualActionId === action.actionId)
-        );
-        const event = packet.recoveryFixtureEvents.find((candidate) => candidate.actionId === action.actionId);
-        return (
-          <TraceBlock
-            key={action.actionId}
-            title={action.label}
-            fields={[
-              ["Action type", action.actionType],
-              ["Availability", action.availability],
-              ["Consequence", action.consequence],
-              ["Resulting state", `${action.resultingStage} / ${action.resultingOwner}`],
-              ["Evidence refs", action.evidenceRefs.join(", ") || "none"],
-              ["Action guard preview", guard ? `${guard.classification}; ${guard.primaryRisk}; ${guard.safeNextOption}` : "none"],
-              ["Expected binding", guard ? `${guard.expectedPacketId} / ${guard.expectedActionId} / ${guard.expectedState}` : "none"],
-              ["Actual binding", guard ? `${guard.actualPacketId} / ${guard.actualActionId} / ${guard.actualState}` : "none"],
-              ["Primary risk", guard?.primaryRisk ?? "none"],
-              ["Stop line", guard?.stopLine ?? "none"],
-              ["Safe next option", guard?.safeNextOption ?? "none"],
-              ["Recovery preview event", event ? `${event.eventId}; ${event.summary}` : "none"],
-              ["Human Gate binding", event?.humanGateActionId ?? "none"],
-            ]}
-          />
-        );
-      })}
-    </DetailCard>
+  const guard = packet.actionGuardFixtures.find(
+    (candidate) => candidate.actionSurface === "recovery" && (candidate.actionId === action.actionId || candidate.expectedActionId === action.actionId || candidate.actualActionId === action.actionId)
   );
-}
-
-function formatActionGuardSummary(guard: PipelineFixturePacket["actionGuardFixtures"][number]) {
-  return `${guard.classification}; ${guard.primaryRisk}; ${guard.safeNextOption}`;
-}
-
-function formatRefList(values?: readonly string[] | null) {
-  return values?.join(", ") || "none";
-}
-
-function formatReasonCodes(reasonCodes: unknown) {
-  return Array.isArray(reasonCodes) && reasonCodes.every((code) => typeof code === "string") && reasonCodes.length > 0 ? reasonCodes.join(", ") : "none";
-}
-
-function DetailCard({ children, empty, title }: { children: ReactNode; empty: string | null; title: string }) {
-  return (
-    <div className="rounded-[0.5rem] border bg-[var(--surface)] p-3">
-      <h3 className="text-sm font-semibold">{title}</h3>
-      {empty ? <p className="mt-2 text-xs text-[var(--muted)]">{empty}</p> : <div className="mt-2 grid gap-2">{children}</div>}
-    </div>
-  );
-}
-
-function TraceBlock({ fields, title }: { fields: Array<[string, string]>; title: string }) {
-  return (
-    <article className="rounded-[0.375rem] bg-[var(--background-elevated)] px-2 py-2">
-      <h4 className="break-words text-xs font-semibold">{title}</h4>
-      <dl className="mt-2 grid gap-1 text-xs leading-5 text-[var(--muted)]">
-        {fields.map(([label, value]) => (
-          <div className="grid gap-1 md:grid-cols-[9rem_minmax(0,1fr)]" key={label}>
-            <dt>{label}</dt>
-            <dd className="break-words text-[var(--foreground)]">{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </article>
-  );
+  const event = packet.recoveryFixtureEvents.find((candidate) => candidate.actionId === action.actionId);
+  return [
+    `${action.label}: ${action.availability}; ${action.resultingStage}`,
+    `action type: ${action.actionType}`,
+    `consequence: ${action.consequence}`,
+    `evidence refs: ${action.evidenceRefs.join(", ") || "none"}`,
+    `guard classification: ${guard?.classification ?? "none"}`,
+    `expected binding: ${guard ? `${guard.expectedPacketId} / ${guard.expectedActionId} / ${guard.expectedState}` : "none"}`,
+    `actual binding: ${guard ? `${guard.actualPacketId} / ${guard.actualActionId} / ${guard.actualState}` : "none"}`,
+    `primary risk: ${guard?.primaryRisk ?? "none"}`,
+    `stop line: ${guard?.stopLine ?? "none"}`,
+    `safe next option: ${guard?.safeNextOption ?? "none"}`,
+    `fixture event: ${event?.eventId ?? "none"}`,
+  ].join("; ");
 }

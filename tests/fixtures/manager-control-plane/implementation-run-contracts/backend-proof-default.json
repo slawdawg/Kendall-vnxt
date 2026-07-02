@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "manager-control-plane.backend-proof-default-evidence/v0",
+  "runId": "run-1",
+  "verificationCommand": "node --test tests/manager-control-plane.run-contract.test.mjs",
+  "contractBuilder": "buildDefaultBackendProofRunContract",
+  "evidenceClass": "metadata_only",
+  "rawPayloadRetained": false,
+  "sourceMutationAllowed": false,
+  "providerCallsAllowed": false,
+  "workerLaunchAllowed": false,
+  "githubMutationAllowed": false,
+  "cleanupAllowed": false,
+  "retainedEvidence": [
+    "default backend-proof contract validates",
+    "report-only steering does not allow new dispatch",
+    "workspace runtime state path is bound to the current run id"
+  ]
+}

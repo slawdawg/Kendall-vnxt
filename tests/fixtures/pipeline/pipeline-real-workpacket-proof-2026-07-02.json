@@ -1,0 +1,159 @@
+{
+  "schemaVersion": "pipeline-real-workpacket-proof/v0",
+  "story": "2.4-real-workpacket-backend-proof-path",
+  "verifiedAt": "2026-07-02T19:27:00Z",
+  "verifiedAtMeaning": "Historical exact-live browser proof timestamp from Story 2.4.",
+  "closeoutStory": "3.3-dogfood-evidence-and-slice-handoff",
+  "closeoutVerification": {
+    "recordedAt": "2026-07-02T18:20:00Z",
+    "timestampPolicy": "Story 3.3 retains command/result summaries and does not claim a single authoritative runtime instant.",
+    "provenance": "Story 3.3 appended closeout verification without replacing the historical exact-live browser proof."
+  },
+  "backendEndpoint": "/pipeline-control-plane/projection",
+  "authoritativeCreateEndpoint": "/pipeline-control-plane/work-packets",
+  "packetId": "packet-story-2-4-real-proof",
+  "packetTitle": "Projection packet",
+  "dashboardState": {
+    "route": "/pipeline",
+    "renderedSurface": "PipelineCockpit",
+    "selectedPacketId": "packet-story-2-4-real-proof",
+    "selectedPacketDetailSource": "PipelineDashboardProjectionV0.selectedPacketDetails",
+    "displayedTruthLabel": "live",
+    "displayedFreshnessState": "live",
+    "fixtureFallbackDisplayedAsLive": false,
+    "browserProofStatus": "historical-passed"
+  },
+  "artifactPaths": [
+    "_bmad-output/implementation-artifacts/pipeline-real-workpacket-proof-2026-07-02.json",
+    "_bmad-output/implementation-artifacts/pipeline-live-projection-slice-handoff-2026-07-02.md",
+    "_bmad-output/implementation-artifacts/2-4-real-workpacket-backend-proof-path.md",
+    "_bmad-output/implementation-artifacts/3-3-dogfood-evidence-and-slice-handoff.md",
+    "tests/dashboard-pipeline-fixtures.test.mjs",
+    "tests/e2e/dashboard.spec.ts",
+    "services/supervisor/tests/integration/test_work_packets.py",
+    "tests/pipeline-control-plane-lifecycle.test.mjs"
+  ],
+  "projectionIdPattern": "pipeline-projection:<utc-iso-timestamp>",
+  "projectionSourceLabel": "live",
+  "projectionFreshnessState": "live",
+  "fixtureMode": {
+    "enabled": false,
+    "canSatisfyLiveProof": false
+  },
+  "truthSummary": {
+    "fixtureBacked": false,
+    "backendUnavailable": false,
+    "stale": false
+  },
+  "selectedPacketDetailsSource": "PipelineDashboardProjectionV0.selectedPacketDetails",
+  "evidenceRefs": [
+    "proof:pipeline-real-workpacket",
+    "story:2-4"
+  ],
+  "verificationCommands": [
+    "uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -k pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_states",
+    "node --test tests/dashboard-pipeline-fixtures.test.mjs",
+    "node --test tests/pipeline-control-plane-lifecycle.test.mjs",
+    "node --test tests/work-packet-contracts.test.mjs",
+    "env NEXT_PUBLIC_SUPERVISOR_URL=http://127.0.0.1:8112 SUPERVISOR_INTERNAL_URL=http://127.0.0.1:8112 pnpm run build:dashboard",
+    "env PLAYWRIGHT_DISABLE_WEBSERVER=true PLAYWRIGHT_DASHBOARD_URL=http://127.0.0.1:3102 PLAYWRIGHT_SUPERVISOR_URL=http://127.0.0.1:8112 PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=false pnpm exec playwright test tests/e2e/dashboard.spec.ts --project windows-11-chromium --grep \"opens real backend WorkPacket projection detail after dashboard refresh\"",
+    "pnpm run build:dashboard",
+    "uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -k pipeline_dashboard_projection",
+    "node --test tests/dashboard-pipeline-fixtures.test.mjs",
+    "node --test tests/pipeline-control-plane-lifecycle.test.mjs",
+    "pnpm run build:dashboard"
+  ],
+  "verificationResults": [
+    {
+      "command": "uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -k pipeline_dashboard_projection_returns_truthful_empty_and_live_packet_states",
+      "status": "passed",
+      "sandbox": "outside-sandbox"
+    },
+    {
+      "command": "node --test tests/dashboard-pipeline-fixtures.test.mjs",
+      "status": "passed",
+      "sandbox": "workspace"
+    },
+    {
+      "command": "node --test tests/pipeline-control-plane-lifecycle.test.mjs",
+      "status": "passed",
+      "sandbox": "workspace"
+    },
+    {
+      "command": "node --test tests/work-packet-contracts.test.mjs",
+      "status": "passed",
+      "sandbox": "workspace"
+    },
+    {
+      "command": "env NEXT_PUBLIC_SUPERVISOR_URL=http://127.0.0.1:8112 SUPERVISOR_INTERNAL_URL=http://127.0.0.1:8112 pnpm run build:dashboard",
+      "status": "passed",
+      "sandbox": "outside-sandbox",
+      "purpose": "temporary production build with public supervisor URL baked in for exact-live browser proof"
+    },
+    {
+      "command": "env PLAYWRIGHT_DISABLE_WEBSERVER=true PLAYWRIGHT_DASHBOARD_URL=http://127.0.0.1:3102 PLAYWRIGHT_SUPERVISOR_URL=http://127.0.0.1:8112 PLAYWRIGHT_ENABLE_WEBKIT_PROJECTS=false pnpm exec playwright test tests/e2e/dashboard.spec.ts --project windows-11-chromium --grep \"opens real backend WorkPacket projection detail after dashboard refresh\"",
+      "status": "passed",
+      "sandbox": "outside-sandbox",
+      "browser": "windows-11-chromium",
+      "temporaryServices": {
+        "dashboardUrl": "http://127.0.0.1:3102",
+        "supervisorUrl": "http://127.0.0.1:8112"
+      }
+    },
+    {
+      "command": "pnpm run build:dashboard",
+      "status": "passed",
+      "sandbox": "outside-sandbox",
+      "purpose": "normal dashboard rebuild after temporary E2E build"
+    },
+    {
+      "command": "uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -k pipeline_dashboard_projection",
+      "status": "passed",
+      "sandbox": "outside-sandbox",
+      "purpose": "Story 3.3 closeout supervisor projection proof; 2 selected passed, 17 deselected, 1 aiosqlite warning"
+    },
+    {
+      "command": "node --test tests/dashboard-pipeline-fixtures.test.mjs",
+      "status": "passed",
+      "sandbox": "workspace",
+      "purpose": "Story 3.3 closeout fixture/live-proof guardrail"
+    },
+    {
+      "command": "node --test tests/pipeline-control-plane-lifecycle.test.mjs",
+      "status": "passed",
+      "sandbox": "workspace",
+      "purpose": "Story 3.3 closeout projection contract validation"
+    },
+    {
+      "command": "pnpm run build:dashboard",
+      "status": "passed",
+      "sandbox": "outside-sandbox",
+      "purpose": "Story 3.3 closeout dashboard production build after Story 3.2 validator changes"
+    }
+  ],
+  "sandboxBoundaryEvidence": [
+    {
+      "command": "uv run --directory services/supervisor pytest tests/integration/test_work_packets.py -k pipeline_dashboard_projection",
+      "boundary": "uv-cache-outside-workspace",
+      "reason": "uv needs $HOME/.cache/uv, which is outside sandbox writable roots; prior same-command sandbox runs in this lane failed with read-only cache errors.",
+      "rerunPolicy": "rerun exact read-only command outside sandbox"
+    },
+    {
+      "command": "pnpm run build:dashboard",
+      "boundary": "turbopack-process-port",
+      "reason": "Next/Turbopack needs worker process and internal port access blocked inside sandbox; prior same-command sandbox runs in this lane failed with Operation not permitted.",
+      "rerunPolicy": "rerun exact read-only build outside sandbox"
+    }
+  ],
+  "retention": {
+    "metadataOnly": true,
+    "rawProviderPayloadsRetained": false,
+    "rawPromptsRetained": false,
+    "rawCompletionsRetained": false,
+    "reasoningTracesRetained": false,
+    "secretsRetained": false,
+    "terminalScrollbackRetained": false,
+    "unnecessarySourceCopiesRetained": false
+  },
+  "liveProofCannotUseFixtures": true
+}
