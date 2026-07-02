@@ -5,7 +5,7 @@ import type {
   TaskPacketV0View,
   WorkItemView
 } from "./api";
-import type { CandidateWorkPriority, RiskLevel } from "./workflow";
+import type { CandidateWorkPriority, CandidateWorkStatus, RiskLevel } from "./workflow";
 
 export type PipelineStage =
   | "capture"
@@ -706,6 +706,79 @@ export interface WorkPacketLearnOutcomeV0 {
   durableWriteAllowed: false;
 }
 
+export interface WorkPacketLearnFollowUpCandidateV0 {
+  followUpId: string;
+  candidateWorkId: string;
+  label: string;
+  sourcePacketId: string;
+  reason: string;
+  status: CandidateWorkStatus | "not_created";
+  origin: "failure" | "approval" | "rejection" | "quality" | "operator_feedback";
+  reentryPath: "reenter_capture" | "human_gate" | "learn_review" | "none";
+  evidenceRefs: WorkPacketRefIdV0[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface WorkPacketOperatorOwnedExitV0 {
+  exitId: string;
+  sourcePacketId: string;
+  state: "operator_owned";
+  reason: string;
+  stopStateKind: WorkPacketLoopStopStateKindV0 | "operator_owned_exit";
+  reentryPath: "reenter_capture";
+  evidenceRefs: WorkPacketRefIdV0[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface WorkPacketRefillSourceStateV0 {
+  state: "healthy" | "source_exhausted" | "blocked" | "refilling" | "unknown";
+  operationalLabel: string;
+  explanation: string;
+  sourceRefs: WorkPacketRefIdV0[];
+  evidenceRefs: WorkPacketRefIdV0[];
+  metadataOnly: true;
+}
+
+export interface WorkPacketReadyToTestV0 {
+  readyId: string;
+  userFacingSummary: string;
+  testableSurface: string;
+  verificationRefs: WorkPacketRefIdV0[];
+  evidenceRefs: WorkPacketRefIdV0[];
+  metadataOnly: true;
+  rawPayloadRetained: false;
+}
+
+export interface WorkPacketLearnRefillProjectionV0 {
+  projectionId: string;
+  retentionClass: "metadata_only";
+  followUpCandidates: WorkPacketLearnFollowUpCandidateV0[];
+  operatorOwnedExits: WorkPacketOperatorOwnedExitV0[];
+  refillSourceState: WorkPacketRefillSourceStateV0;
+  housekeeping: {
+    status: "not_applicable" | "complete" | "blocked" | "running" | "unknown";
+    summary: string;
+    evidenceRefs: WorkPacketRefIdV0[];
+    metadataOnly: true;
+  };
+  sourceExhaustion: {
+    exhausted: boolean;
+    summary: string;
+    sourceRefs: WorkPacketRefIdV0[];
+    evidenceRefs: WorkPacketRefIdV0[];
+    metadataOnly: true;
+  };
+  readyToTest: WorkPacketReadyToTestV0 | null;
+  nextSafeAction: string;
+  rawPayloadRetained: false;
+  sourceMutationAllowed: false;
+  providerCallsAllowed: false;
+  workerLaunchAllowed: false;
+  githubMutationAllowed: false;
+}
+
 export interface WorkPacketDeliveryGateCriterionV0 {
   criterionId: string;
   label: string;
@@ -871,6 +944,7 @@ export interface WorkPacketV0View {
   memoryProposals: MemoryProposalV0[];
   deliveryEvidence?: WorkPacketDeliveryEvidenceV0 | null;
   learnOutcome?: WorkPacketLearnOutcomeV0 | null;
+  learnRefill?: WorkPacketLearnRefillProjectionV0 | null;
   alphaMemorySourceStatus?: AlphaMemorySourceStatusV0 | null;
   gateStateValidation?: WorkPacketGateStateValidationV0 | null;
   loopStopStates: WorkPacketLoopStopStateV0[];

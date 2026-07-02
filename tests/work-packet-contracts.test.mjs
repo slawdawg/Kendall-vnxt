@@ -32,6 +32,11 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
     "WorkPacketCleanupDryRunGateV0",
     "WorkPacketLearnOutcomeV0",
     "WorkPacketLearnDecisionRecordV0",
+    "WorkPacketLearnRefillProjectionV0",
+    "WorkPacketLearnFollowUpCandidateV0",
+    "WorkPacketOperatorOwnedExitV0",
+    "WorkPacketRefillSourceStateV0",
+    "WorkPacketReadyToTestV0",
     "WorkPacketLaneCardV0",
     "MODEL_ROLES_V0",
     "MODEL_ROLE_POLICIES_V0",
@@ -139,6 +144,20 @@ test("WorkPacketV0 contracts are exported and preserve metadata-only evidence", 
   assert.match(workPacketSource, /executionAttempts:\s*WorkPacketExecutionAttemptSummaryV0\[\];/);
   assert.match(workPacketSource, /deliveryEvidence\?:\s*WorkPacketDeliveryEvidenceV0 \| null;/);
   assert.match(workPacketSource, /learnOutcome\?:\s*WorkPacketLearnOutcomeV0 \| null;/);
+  assert.match(workPacketSource, /learnRefill\?:\s*WorkPacketLearnRefillProjectionV0 \| null;/);
+  assert.match(workPacketSource, /followUpCandidates:\s*WorkPacketLearnFollowUpCandidateV0\[\];/);
+  assert.match(workPacketSource, /operatorOwnedExits:\s*WorkPacketOperatorOwnedExitV0\[\];/);
+  assert.match(workPacketSource, /refillSourceState:\s*WorkPacketRefillSourceStateV0;/);
+  assert.match(workPacketSource, /readyToTest:\s*WorkPacketReadyToTestV0 \| null;/);
+  assert.match(workPacketSource, /state:\s*"healthy" \| "source_exhausted" \| "blocked" \| "refilling" \| "unknown";/);
+  assert.match(workPacketSource, /origin:\s*"failure" \| "approval" \| "rejection" \| "quality" \| "operator_feedback";/);
+  assert.match(workPacketSource, /reentryPath:\s*"reenter_capture" \| "human_gate" \| "learn_review" \| "none";/);
+  assert.match(workPacketSource, /metadataOnly:\s*true;/);
+  assert.match(workPacketSource, /rawPayloadRetained:\s*false;/);
+  assert.match(workPacketSource, /sourceMutationAllowed:\s*false;/);
+  assert.match(workPacketSource, /providerCallsAllowed:\s*false;/);
+  assert.match(workPacketSource, /workerLaunchAllowed:\s*false;/);
+  assert.match(workPacketSource, /githubMutationAllowed:\s*false;/);
   assert.match(workPacketSource, /learningProposalCount:\s*number;/);
   assert.match(workPacketSource, /documentationProposalStatus:\s*MemoryProposalStatusV0 \| "not_present";/);
   assert.match(workPacketSource, /automationAuthorityChangeStatus:\s*"not_requested" \| "blocked" \| "deauthorized" \| "review_gated" \| "accepted";/);
