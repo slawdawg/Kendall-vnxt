@@ -2993,6 +2993,8 @@ function cleanupMerged(argv, mode = {}) {
         appendAuthorityDecision(manifest, manifest.cleanup_authority_decision);
         manifest.lane_evidence_packet = buildLaneEvidencePacket(manifest, manifest.anti_churn_finalization || {}, {
           worktreeStatus: lockedWorktreeStatus.status || null,
+          prDeliveryEvidence: manifest.pr_delivery_evidence,
+          prGateEvidence: manifest.pr_gate_evidence,
           cleanupAuthorityDecision: manifest.cleanup_authority_decision,
         });
         manifest.status = "closed";
