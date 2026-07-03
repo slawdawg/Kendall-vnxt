@@ -22,6 +22,7 @@ import { resolveWorkspaceCommand } from "./lib/workspace-command-resolution.mjs"
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultBaseBranch = "dev";
 const cleanupBranchesDefaultBaseRef = "origin/main";
+const cleanupIntegratedDefaultBaseRef = "origin/dev";
 const rebuildIndexBaseBranch = "main";
 const protectedBranches = new Set(branchFoundationProtectedBranches);
 const args = process.argv.slice(2);
@@ -80,6 +81,9 @@ try {
     case "cleanup-current":
       cleanupCurrent(commandArgs);
       break;
+    case "cleanup-integrated":
+      cleanupIntegrated(commandArgs);
+      break;
     case "cleanup-orphans":
       cleanupOrphans(commandArgs);
       break;
@@ -122,6 +126,7 @@ Commands:
   verify-pr-gates [query]   Record exact-head checks and review-thread PR gate evidence.
   cleanup-merged [query]    Remove clean worktrees whose PRs are merged.
   cleanup-current           Remove the current clean worktree after its PR is merged.
+  cleanup-integrated [query] Remove clean no-PR worktrees already integrated into a base ref.
   cleanup-orphans [query]   Remove orphan directories no longer registered as Git worktrees.
   cleanup-branches [query]  Remove safe local codex/* branches already present in the base ref by ancestry or patch-id.
   repair-manifests          Preview or apply conservative repairs for closed legacy manifests.
@@ -233,6 +238,11 @@ cleanup-merged options:
 cleanup-current options:
   --apply                   Apply cleanup. Without this, cleanup is dry-run.
   --delete-remote           Delete remote branch after merged cleanup.
+  --summary-json            Without --apply, print a compact JSON cleanup summary.
+
+cleanup-integrated options:
+  --apply                   Apply cleanup. Without this, cleanup is dry-run.
+  --base <ref>              Ref to compare against. Defaults to origin/dev.
   --summary-json            Without --apply, print a compact JSON cleanup summary.
 
 cleanup-branches options:
@@ -3173,7 +3183,7 @@ function cleanupWorktreeSummary(worktreeStatus) {
   };
 }
 
-function closeAssignmentForCleanedManifest(state, manifest) {
+function closeAssignmentForCleanedManifest(state, manifest, options = {}) {
   const assignmentId = String(manifest.source_assignment_id || "").trim();
   if (!assignmentId) {
     return null;
@@ -3204,10 +3214,10 @@ function closeAssignmentForCleanedManifest(state, manifest) {
     assignment.updated_at = closedAt;
     assignment.closed_at = closedAt;
     assignment.current_command = null;
-    assignment.last_result = `closed after cleanup of ${manifest.task_id}`;
+    assignment.last_result = options.lastResult || `closed after cleanup of ${manifest.task_id}`;
     assignment.events = [
       ...(Array.isArray(assignment.events) ? assignment.events : []),
-      taskEvent("closed", `cleaned merged workspace ${manifest.task_id}`),
+      taskEvent("closed", options.eventMessage || `cleaned merged workspace ${manifest.task_id}`),
     ];
     writeAssignment(path, assignment);
     return { closed: true, assignmentId, closedAt };
@@ -3321,6 +3331,221 @@ function applyAssignmentCloseout(state, assignmentId, currentOwner) {
 function cleanupCurrent(argv) {
   cleanupMerged(argv, { currentOnly: true });
 }
+
+function cleanupIntegrated(argv) {
+  const { positional, options } = parseOptions(argv);
+  if (options.summaryJson && options.apply) {
+    throw new Error("cleanup-integrated --summary-json is only supported without --apply.");
+  }
+
+  const state = workspaceState(options);
+  const query = positional.join(" ").trim();
+  const apply = Boolean(options.apply);
+  const baseRef = String(options.base || cleanupIntegratedDefaultBaseRef);
+  if (!refExists(baseRef)) {
+    throw new Error(`Base ref not found locally: ${baseRef}`);
+  }
+
+  const records = query ? [findManifest(state, query)] : readManifests(state);
+  const currentOwner = currentLaneOwner(options);
+  const results = records.map((record) => cleanupIntegratedPlan(record, state, { baseRef, currentOwner, options }));
+
+  if (options.summaryJson) {
+    console.log(JSON.stringify(buildCleanupIntegratedSummary({ state, currentOwner, baseRef, query, results }), null, 2));
+    return;
+  }
+
+  const ready = results.filter((result) => result.status === "ready");
+  const skipped = results.filter((result) => result.status !== "ready");
+  for (const skip of skipped) {
+    console.log(`SKIP ${skip.taskId}: ${skip.reason}`);
+  }
+
+  if (ready.length === 0) {
+    console.log(query ? `No integrated workspace cleanup matched: ${query}` : "No integrated workspace cleanup found.");
+    return;
+  }
+
+  const plan = ready.flatMap((result) => cleanupIntegratedPlanLines(result));
+  if (options.dryRun || !apply) {
+    printPlan("cleanup-integrated", plan);
+    if (!apply) {
+      console.log("Add --apply to remove the clean integrated worktree(s), delete local branch(es), and close manifest(s).");
+    }
+    return;
+  }
+
+  for (const result of ready) {
+    applyCleanupIntegrated(state, result, options);
+    console.log(`Closed ${result.taskId}`);
+  }
+}
+
+function cleanupIntegratedPlan(record, state, context) {
+  const { manifest } = record;
+  const base = {
+    taskId: manifest.task_id,
+    status: "skipped",
+    reason: "",
+    branch: manifest.branch,
+    owner: manifest.owner || null,
+    worktreePath: manifest.worktree_path,
+    baseRef: context.baseRef,
+    baseSha: branchSha(context.baseRef) || null,
+    expectedHeadSha: null,
+    localBranchSha: null,
+    remoteBranchSha: null,
+    cleanupCwd: null,
+    worktree: null,
+    manifestPath: record.path,
+  };
+
+  if (manifest.status === "closed") {
+    return { ...base, reason: "workspace manifest is already closed" };
+  }
+  if (manifest.pr_url || manifest.pr_number || ["pr_open", "merged", "cleanup_partial"].includes(String(manifest.status || ""))) {
+    return { ...base, reason: "workspace has PR/merged cleanup evidence; use cleanup-merged" };
+  }
+  const ownerWarning = laneOwnerWarning(manifest, context.options);
+  if (ownerWarning && !context.options.takeOwnership) {
+    return {
+      ...base,
+      reason: `workspace is owned by ${manifest.owner}; pass --take-ownership with --takeover-reason after confirming it is idle`,
+    };
+  }
+  if (ownerWarning && context.options.takeOwnership && !validTakeoverReason(context.options.takeoverReason)) {
+    return { ...base, reason: "--takeover-reason must explain the takeover in at least 10 non-whitespace characters" };
+  }
+
+  assertSafeBranch(manifest.branch);
+  const cleanupCwd = cleanupRepositoryRoot(manifest.worktree_path);
+  const worktreeStatus = worktreeCleanupStatus(manifest, cleanupCwd);
+  if (!worktreeStatus.exists && !worktreeStatus.listed) {
+    return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), reason: "worktree is already absent; inspect manifest before no-PR cleanup" };
+  }
+  if (worktreeStatus.dirty) {
+    return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), reason: "worktree is not clean" };
+  }
+
+  const localBranchSha = branchSha(manifest.branch, cleanupCwd);
+  if (!localBranchSha) {
+    return { ...base, cleanupCwd, worktree: cleanupWorktreeSummary(worktreeStatus), reason: "local branch is absent; inspect manifest before no-PR cleanup" };
+  }
+  const integrated = git(["merge-base", "--is-ancestor", manifest.branch, context.baseRef], { cwd: cleanupCwd });
+  if (integrated.code !== 0) {
+    return {
+      ...base,
+      cleanupCwd,
+      worktree: cleanupWorktreeSummary(worktreeStatus),
+      localBranchSha,
+      expectedHeadSha: localBranchSha,
+      reason: `branch is not an ancestor of ${context.baseRef}`,
+    };
+  }
+
+  return {
+    ...base,
+    status: "ready",
+    reason: `clean no-PR workspace already integrated into ${context.baseRef}`,
+    cleanupCwd,
+    worktree: cleanupWorktreeSummary(worktreeStatus),
+    localBranchSha,
+    expectedHeadSha: localBranchSha,
+    remoteBranchSha: branchSha(`origin/${manifest.branch}`, cleanupCwd) || null,
+  };
+}
+
+function cleanupIntegratedPlanLines(result) {
+  return [
+    `${result.taskId}: integrated into ${result.baseRef}`,
+    `owner ${result.owner || "unowned"}`,
+    `local branch ${result.branch} (${result.localBranchSha || "absent"})`,
+    `remote branch origin/${result.branch} (${result.remoteBranchSha || "absent"}; not deleted by cleanup-integrated)`,
+    `clean generated artifacts under ${result.worktreePath}`,
+    `git worktree remove ${result.worktreePath}`,
+    `git update-ref -d refs/heads/${result.branch} ${result.expectedHeadSha}`,
+    `close manifest ${result.taskId}`,
+  ];
+}
+
+function buildCleanupIntegratedSummary({ state, currentOwner, baseRef, query, results }) {
+  return {
+    generatedAt: new Date().toISOString(),
+    stateRoot: state.root,
+    currentOwner,
+    mode: "cleanup-integrated",
+    baseRef,
+    query: query || null,
+    counts: {
+      total: results.length,
+      cleanupReady: results.filter((result) => result.status === "ready").length,
+      skipped: results.filter((result) => result.status !== "ready").length,
+    },
+    statusCounts: countByField(results, "status"),
+    skippedReasonCounts: countByField(results.filter((result) => result.status !== "ready"), "reason"),
+    results: results.slice(0, 10),
+    resultsTruncated: results.length > 10,
+    mutation: "none; summary only",
+    remoteBranchPolicy: "remote branches are reported but not deleted by cleanup-integrated",
+  };
+}
+
+function applyCleanupIntegrated(state, plan, options) {
+  withManifestLock(state, plan.taskId, () => {
+    const manifest = readManifest(plan.manifestPath);
+    validateManifest(manifest, plan.manifestPath);
+    assertLaneOwner(manifest, options);
+    claimLaneOwner(manifest, options);
+    const freshPlan = cleanupIntegratedPlan({ manifest, path: plan.manifestPath }, state, {
+      baseRef: plan.baseRef,
+      currentOwner: currentLaneOwner(options),
+      options,
+    });
+    if (freshPlan.status !== "ready") {
+      throw new Error(`${plan.taskId} is no longer cleanup-ready: ${freshPlan.reason}`);
+    }
+
+    try {
+      const cleanupStartedAt = new Date().toISOString();
+      manifest.cleanup_started_at = manifest.cleanup_started_at || cleanupStartedAt;
+      manifest.cleanup_owner = manifest.owner || null;
+      manifest.cleanup_branch = manifest.branch;
+      manifest.cleanup_base_ref = plan.baseRef;
+      manifest.cleanup_expected_head_sha = freshPlan.expectedHeadSha;
+      manifest.cleanup_local_branch_sha = freshPlan.localBranchSha;
+      manifest.cleanup_remote_branch_sha = freshPlan.remoteBranchSha || null;
+      manifest.cleanup_remote_branch_deleted_at = null;
+      manifest.cleanup_remote_branch_policy = "not-deleted-no-pr-integrated-cleanup";
+
+      removeWorktreeIfPresent(manifest, state, freshPlan.cleanupCwd);
+      deleteLocalBranchIfPresent(manifest, freshPlan.cleanupCwd, freshPlan.expectedHeadSha);
+
+      manifest.status = "closed";
+      manifest.closed_at = new Date().toISOString();
+      manifest.updated_at = manifest.closed_at;
+      manifest.cleanup_completed_at = manifest.closed_at;
+      manifest.cleanup_error = null;
+      const assignmentClosure = closeAssignmentForCleanedManifest(state, manifest, {
+        lastResult: `closed after integrated cleanup of ${manifest.task_id}`,
+        eventMessage: `cleaned integrated workspace ${manifest.task_id}`,
+      });
+      if (assignmentClosure?.closed) {
+        manifest.source_assignment_closed_at = assignmentClosure.closedAt;
+        appendTaskEvent(manifest, "assignment_closed", assignmentClosure.assignmentId);
+      }
+      appendTaskEvent(manifest, "closed", `cleaned no-PR integrated workspace against ${plan.baseRef}`);
+    } catch (error) {
+      manifest.status = "cleanup_partial";
+      manifest.cleanup_error = error.message;
+      manifest.updated_at = new Date().toISOString();
+      appendTaskEvent(manifest, "cleanup_partial", error.message);
+      writeManifest(plan.manifestPath, manifest);
+      throw error;
+    }
+    writeManifest(plan.manifestPath, manifest);
+  });
+}
+
 
 function cleanupRepositoryRoot(worktreePath) {
   const main = mainWorktreePath();
